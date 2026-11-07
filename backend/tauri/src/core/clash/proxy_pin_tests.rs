@@ -109,6 +109,112 @@ async fn rejected_unpin_refreshes_and_preserves_original_error() {
 }
 
 #[tokio::test]
+async fn rejected_selection_rereads_actual_route_without_replaying_the_put() {
+    // Simulate a controller which applied the selection but then returned a
+    // failure: the operation must return the PUT error AND publish the real
+    // route obtained from a fresh GET, not keep a falsely fresh old route.
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let mut paths = Vec::new();
+        for _ in 0..4 {
+            let (mut stream, _) = tokio::time::timeout(TEST_DEADLINE, listener.accept())
+                .await
+                .expect("expected PUT and three snapshot reads")
+                .unwrap();
+            let mut buffer = [0u8; 8192];
+            let size = stream.read(&mut buffer).await.unwrap();
+            let line = String::from_utf8_lossy(&buffer[..size])
+                .lines()
+                .next()
+                .expect("request line")
+                .to_owned();
+            let (status, body) = if line.starts_with("PUT /proxies/Auto ") {
+                ("409 Conflict", r#"{"message":"selection outcome unknown"}"#)
+            } else if line.starts_with("GET /proxies ") {
+                (
+                    "200 OK",
+                    r#"{"proxies":{"DIRECT":{"name":"DIRECT","type":"Direct","history":[],"udp":false},"REJECT":{"name":"REJECT","type":"Reject","history":[],"udp":false},"GLOBAL":{"name":"GLOBAL","type":"Selector","history":[],"udp":false,"all":["Auto"]},"Auto":{"name":"Auto","type":"Selector","history":[],"udp":false,"all":["DIRECT","REJECT"],"now":"DIRECT"}}}"#,
+                )
+            } else if line.starts_with("GET /providers/proxies ") {
+                ("200 OK", r#"{"providers":{}}"#)
+            } else if line.starts_with("GET /group ") {
+                ("404 Not Found", r#"{"message":"not supported"}"#)
+            } else {
+                panic!("unexpected controller route: {line}");
+            };
+            paths.push(line);
+            let response = format!(
+                "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            stream.write_all(response.as_bytes()).await.unwrap();
+        }
+        paths
+    });
+
+    let (sender, mut updates) = broadcast::channel(1);
+    let mut previous = Proxies::default();
+    previous.groups.push(ProxyGroupItem {
+        name: "Auto".into(),
+        now: Some("REJECT".into()),
+        ..Default::default()
+    });
+    let guard = Arc::new(RwLock::new(ProxiesGuard::test_guard(
+        previous,
+        Some(42),
+        chrono::Utc::now().timestamp() as u64,
+        0,
+        sender,
+    )));
+    let generation = guard.read().generation();
+    let api = ApiClient::new(crate::config::clash::ClashInfo {
+        port: address.port(),
+        server: address.to_string(),
+        secret: None,
+    })
+    .unwrap();
+
+    let error = tokio::time::timeout(
+        TEST_DEADLINE,
+        (&guard).select_proxy(&api, generation, "Auto", "DIRECT"),
+    )
+    .await
+    .expect("selection must complete")
+    .expect_err("the controller's rejected PUT must stay an error");
+    assert!(
+        error.to_string().contains("409") || error.to_string().contains("update_proxy"),
+        "original PUT failure must be preserved: {error:#}"
+    );
+    assert_eq!(guard.read().generation(), generation);
+    assert_eq!(
+        guard.read().inner().groups[0].now.as_deref(),
+        Some("DIRECT")
+    );
+    assert!(
+        guard.read().is_updated(),
+        "successful GET should refresh the cache"
+    );
+    updates
+        .try_recv()
+        .expect("the refreshed controller route must notify the UI subscriber");
+
+    let paths = tokio::time::timeout(TEST_DEADLINE, server)
+        .await
+        .expect("mock server must finish")
+        .unwrap();
+    assert_eq!(paths.len(), 4);
+    assert_eq!(
+        paths.iter().filter(|line| line.starts_with("PUT ")).count(),
+        1
+    );
+    assert_eq!(
+        paths.iter().filter(|line| line.starts_with("GET ")).count(),
+        3
+    );
+}
+
+#[tokio::test]
 async fn stale_proxy_generation_rejects_unpin_before_any_http_request() {
     let guard = guard();
     let previous = guard.read().generation();

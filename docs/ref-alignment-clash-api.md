@@ -1749,3 +1749,41 @@ against the committed code completed on the Windows host:
   TypeScript, persistence, OS adapter or runtime submodule changes; revert
   the two Rust changes and this status entry. The unrelated
   `pnpm-lock.yaml` worktree diff remains preserved.
+
+## 2026-11-07 ProxiesActor rejected selection reread (partial production parity)
+
+- **Reference:** pinned local `ref@a8dd5d58ac86baa7a7e9333dc3332fe98755ef3b`,
+  verified as official `main` in the preceding round. Fresh GitHub
+  `ls-remote` retries timed out this round, so no claim that it is still
+  the latest official commit and no gitlink advance.
+  Reference `backend/nyanpasu-core/src/proxies.rs` implements
+  `reread_after_rejection`: an unsuccessful mutation can still have applied
+  at the controller; reread truth while returning the original error.
+- **Production path / L2:** the Tauri
+  `backend/tauri/src/core/clash/proxies.rs::ProxiesGuardExt::select_proxy`
+  invoked from real `backend/tauri/src/ipc.rs::select_proxy` now rereads
+  with the same instance-bound API client even when the PUT rejects or times
+  out. It never retries the side-effecting PUT; it only publishes a cache
+  replacement if the profile generation still matches and emits the
+  existing UI update notification. The original controller failure remains
+  an error. The previously migrated clear-fixed selection uses the same
+  reconciliation rule; no new IPC wire or front-end compatibility shim.
+- **Regression:** new mock-controller test in
+  `backend/tauri/src/core/clash/proxy_pin_tests.rs`: PUT reports 409
+  after applying DIRECT; exactly one PUT plus three GET snapshot requests;
+  cached selection changes from REJECT to DIRECT; subscribed UI receiver
+  is notified and the rejected PUT error is retained. Tauri proxy **15/15**,
+  core library **174/174**, Specta binding freshness **1/1**,
+  Agent diagnostics **6/6**, interface **56/56**, main traffic **16/16**,
+  E2E harness unit **33/33**, whole-workspace TypeScript,
+  main/legacy IPC boundary, Rustfmt, full Clippy and whitespace checks
+  passed (existing warnings). Tauri used transient sidecar-free
+  `TAURI_CONFIG`; no real Service/desktop process was launched.
+- **Unfinished / rollback:** this is not a full ProxiesActor mailbox,
+  unified provider cache, TTL coalescing or all UI consumers. A failed
+  post-mutation GET still needs explicit cache freshness invalidation,
+  and physical controller/Windows/Service/main/legacy/Agent E2E is pending.
+  CoreActor, StreamsActor, Client workflows/state, Unified RPC, independent
+  rpc/query/platform and the full architecture backlog remain open.
+  Revert the two Rust changes and this documentation entry to roll back.
+  The existing unrelated `pnpm-lock.yaml` diff is untouched.

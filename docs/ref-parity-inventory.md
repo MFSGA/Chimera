@@ -517,3 +517,43 @@ pnpm-lock.yaml 改动按用户授权丢弃；原工作差异保留在 stash 备�
   实际 Windows/Service E2E 仍未完成。
   无 wire/schema/持久化变化，回滚仅需该两份 Rust 文件和本段文档；
   用户已有 `pnpm-lock.yaml` 差异未触碰。
+
+## 2026-11-07 ProxiesActor：失败选择后的真实状态重读（部分迁移）
+
+**参考基线：** 本地 `ref@a8dd5d58ac86baa7a7e9333dc3332fe98755ef3b`
+（上一轮已验证官方 main；本轮 `git ls-remote` 重试超时，
+无法重新确认官方是否已有更新，因此未移动 gitlink）。
+参考 `ref/backend/nyanpasu-core/src/proxies.rs`
+的 `reread_after_rejection` 和
+`a_rejected_mutation_rereads_the_core_instead_of_emptying_the_snapshot`。
+
+- **目标 / L2：** 代理选择 PUT 被拒绝或超时，不一定证明写操作未生效。
+  后续必须通过新 GET 读取真实选路，保留原 PUT 错误且不重发写入；
+  已撤销的 Profile generation 不能被旧请求刷新覆盖。
+- **生产路径：** `backend/tauri/src/core/clash/proxies.rs` 的
+  `ProxiesGuardExt::select_proxy` 现与已有取消固定操作遵循相同的
+  失败后重读语义，始终用当次 instance-bound `ApiClient`，
+  仅在同代际快照内更新缓存及发出变更事件；
+  写操作失败则即便 GET 成功仍返回原错误。
+  真实 Tauri 命令入口为 `backend/tauri/src/ipc.rs::select_proxy`
+  （main/legacy 的生成 IPC 合约仍不变），并非闲置新增类型。
+- **回归：** `backend/tauri/src/core/clash/proxy_pin_tests.rs`
+  新增 mock-controller 用例：单次 PUT 返回 409，但控制器实际
+  已切到 DIRECT；后续仅 3 次状态 GET，将此前 REJECT 的缓存
+  更新为 DIRECT，通知已订阅的 UI，并保留原写入错误。
+  Tauri Proxy 测试 **15/15**；独立 core 全量 **174/174**，
+  Specta 绑定新鲜度 **1/1**，Agent diagnostics **6/6**，
+  interface **56/56**，main traffic **16/16**，
+  E2E 框架单测 **33/33**，完整 TypeScript、main/legacy
+  IPC 边界、Rustfmt、Clippy（既有警告）、差异检查均通过。
+  Tauri 使用仅本次测试命令有效的 sidecar-free `TAURI_CONFIG`。
+- **仍待：** 此次只迁移 `ProxiesActor` 的拒绝 mutation 后读回行为，
+  不是完整 actor/mailbox、缓存单一所有权、Provider mutation、
+  TTL 去重及订阅整合。刷新 GET 本身失败时旧缓存的失效策略、
+  旧 profile 切换后的所有页面缓存语义、真实控制器及
+  Windows/Service/main/legacy UI E2E 仍需专项验收。
+  其余 Actor V2、StreamsActor、Client workflows/state、Unified RPC、
+  独立前端 rpc/query/platform 与 Agent 全链路继续保留待办。
+  未改持久化、IPC wire 或 Service/runtime 子模块；
+  本批仅两份后端 Rust 文件和两份文档可独立回滚，
+  既有 `pnpm-lock.yaml` 未提交差异保持不变。

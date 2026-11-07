@@ -726,8 +726,18 @@ impl ProxiesGuardExt for &Arc<RwLock<ProxiesGuard>> {
         name: &str,
     ) -> Result<()> {
         self.read().ensure_generation_matches(generation)?;
-        api.update_proxy(group, name).await?;
-        if !self.update_if_generation(api, generation).await? {
+        let mutation = api.update_proxy(group, name).await;
+        // A rejected or timed-out PUT might already have changed the route.
+        // Read the source controller again rather than leaving a stale UI
+        // selection or optimistically assuming that the write was rejected.
+        let refresh = self.update_if_generation(api, generation).await;
+        if let Err(error) = mutation {
+            if let Err(refresh_error) = refresh {
+                tracing::debug!(%refresh_error, "proxy refresh after unconfirmed selection failed");
+            }
+            return Err(error.into());
+        }
+        if !refresh? {
             anyhow::bail!("proxy snapshot changed while selection was in flight");
         }
         Ok(())
