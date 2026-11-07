@@ -6,7 +6,6 @@ import type {
   NativeProxies_Serialize,
   Proxy_Serialize,
 } from './bindings.js';
-import { testNativeGroupDelay } from './native-group-delay.js';
 import { mutations, queries } from './query-bindings.js';
 import { invokeMutation, invokeQuery } from './query-options.js';
 
@@ -133,28 +132,13 @@ export const useNativeProxyActions = () => {
 
   const { mutateAsync: testGroupDelay, isPending: isTestingGroupDelay } =
     useMutation({
-      mutationKey: ['nativeGroupDelay'],
-      mutationFn: (groupName: string) =>
-        testNativeGroupDelay(groupName, {
-          // Always read controller state here: a pin may be added from an
-          // external dashboard while the React Query cache is still fresh.
-          refresh: async () =>
-            unwrapResult(await invokeQuery(queries.getNativeProxies())),
-          groupDelay: async (group, url, expected) =>
-            unwrapResult(
-              await invokeQuery(
-                queries.clashApiGetGroupDelay(group, url, expected),
-              ),
-            ) ?? {},
-          proxyDelay: async (name, provider, url, expected) => {
-            const result = unwrapResult(
-              await invokeQuery(
-                queries.clashApiGetProxyDelay(name, url, provider, expected),
-              ),
-            );
-            return result?.delay ?? 0;
-          },
-        }),
+      mutationKey: mutations.testNativeProxyGroupDelay.mutationKey,
+      mutationFn: async (groupName: string) =>
+        unwrapResult(
+          await invokeMutation(mutations.testNativeProxyGroupDelay, [
+            groupName,
+          ]),
+        ) ?? {},
       onSettled: async () => {
         // The controller records the per-node history. Read its real state,
         // including after partial failures, instead of writing fake samples.

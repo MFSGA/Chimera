@@ -334,6 +334,14 @@ export const commands = {
     typedError<{ [key in string]: number }, string>(
       __TAURI_INVOKE('clash_api_get_group_delay', { group, url, expected }),
     ),
+  /**
+   *  One instance-bound group delay operation. All member requests share the
+   *  same running core even if an external profile switch races the test.
+   */
+  testNativeProxyGroupDelay: (group: string) =>
+    typedError<{ [key in string]: number }, string>(
+      __TAURI_INVOKE('test_native_proxy_group_delay', { group }),
+    ),
   clashApiDeleteConnections: (id: string | null) =>
     typedError<null, string>(
       __TAURI_INVOKE('clash_api_delete_connections', { id }),

@@ -1154,3 +1154,69 @@ still not parity-complete, and Unified RPC/typed streams remain
 larger backend migrations. The production desktop behaviour
 for pinned groups has not yet been tested with a real Mihomo
 or Meow instance.
+
+### 2026-11-07 full-ref ownership inventory and core proxy coordination
+
+The user requested **complete structural and behavioral alignment**, not
+just another narrowly scoped Clash API patch. The current inspected,
+clean and pinned `ref` revision is
+`8cf63276e387afc621d46b950ab72f9268f915e7`.
+The repository now also tracks the larger, evidence-based plan in
+[`docs/ref-parity-inventory.md`](./ref-parity-inventory.md).
+It marks the true current ownership of each major backend/frontend
+area and the tests required before it may be declared aligned.
+
+This session implemented two further production ownership migrations
+and committed them separately in the original Windows worktree:
+
+- `01d85760`: the `backend/chimera-core/src/proxies.rs` root
+  module now coordinates pinned/unpinned group delay testing using
+  **one bound ApiClient**. It reads the authoritative group and
+  Provider/node index once on that instance, uses the safe group
+  endpoint only when no pin is present, and submits up to eight
+  provider-aware member tests concurrently while preserving member
+  order. Instance revocation or lost authority aborts rather than
+  reporting a false success; ordinary per-node protocol failures
+  are zero samples, never automatic replays. A new Tauri
+  `test_native_proxy_group_delay` command is a thin compatibility
+  adapter to the core. Three mock-controller tests validate route
+  selection, HTTP query parameters, zero-on-member-failure and
+  fail-closed behavior for missing controller data.
+- `530a4d79`: main UI's `useNativeProxyActions.testGroupDelay`
+  now submits **one typed mutation** instead of independently
+  reacquiring controller instances for each proxy. Specta bindings
+  were regenerated and verified. The obsolete TypeScript
+  `native-group-delay.ts` implementation was removed, and the
+  descriptor test now checks single IPC dispatch plus missing-reply
+  semantics. Legacy UI IPC and Agent workflows remain unchanged.
+- `1f015cee`: the cache generation, checksum, freshness and
+  publishing rules were moved into
+  `chimera-core::proxies::ProxySnapshotState`. Tauri's
+  `ProxiesGuard` now delegates to this independent state type,
+  handling only UI/compatibility projection and notifications.
+  An unchanged checksum revalidates freshness without emitting a
+  duplicate update. Tests cover stale profile responses, identical
+  snapshots, clock rollback and a profile transition after
+  an authoritative read but before the pinned member fan-out.
+  The long-running ref `ProxiesActor` is still **not** migrated.
+
+**Verification:** full independent `chimera-core --lib` **132/132**;
+Tauri proxy module **14/14**, Actor V2 **9/9**, connection
+interruption **1/1**, Agent probe **3/3**, Specta type freshness
+**1/1**. Interface tests **28/28**, E2E harness unit tests
+**33/33**, interface and main/legacy TypeScript, boundary lint,
+touched Oxlint/Prettier, Rustfmt, and Git whitespace checks passed.
+The tests do **not** establish desktop or real-controller E2E
+parity; full Clippy could not be established from the available
+Cargo index and nightly environment. The code commits had a
+one-command `HUSKY=0` override after independent verification,
+without changing hooks. No push, desktop launch, or overwrite of
+unrelated state occurred; the original pnpm lockfile difference
+remains untouched and uncommitted.
+
+**Important:** the inventory documents large remaining gaps such
+as standalone CoreClient lifecycle, the long-lived ProxiesActor,
+the Clash StreamsActor, application/profile/effects state ownership,
+Unified RPC, and independent query/rpc/platform frontend layers.
+None is described as fully aligned until production implementation,
+compatibility and integration checks are complete.

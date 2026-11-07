@@ -9,13 +9,7 @@ const TEST_DEADLINE: Duration = Duration::from_secs(5);
 
 fn guard() -> Arc<RwLock<ProxiesGuard>> {
     let (sender, _) = broadcast::channel(1);
-    Arc::new(RwLock::new(ProxiesGuard {
-        inner: Proxies::default(),
-        checksum: None,
-        updated_at: 0,
-        generation: 0,
-        sender,
-    }))
+    Arc::new(RwLock::new(ProxiesGuard::new(sender)))
 }
 
 async fn exercise_unpin(status: &str, success: bool) {

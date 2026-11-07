@@ -90,6 +90,7 @@ macro_rules! build_builder {
                 crate::ipc::update_proxy_provider,
                 crate::ipc::clash_api_get_proxy_delay,
                 crate::ipc::clash_api_get_group_delay,
+                crate::ipc::test_native_proxy_group_delay,
                 crate::ipc::clash_api_delete_connections,
                 crate::ipc::get_traffic_summary,
                 crate::ipc::query_traffic_report,
