@@ -1408,3 +1408,46 @@ bypass Chimera-specific authorization, runtime ownership and
 Agent integration. Their host transport must be adapted and
 validated as a separate migration batch. No push, app launch
 or change to unrelated `pnpm-lock.yaml` was made.
+
+### 2026-11-07 branch push and removal of the duplicate Tauri service version gate
+
+The user explicitly instructed the assistant to push the committed feature
+branch **before** continuing and removed the prior requirement to preserve
+legacy Chimera API/architecture compatibility. The existing verified HEAD
+`89051f0f8c504888f0ae2e8b98761e35ce649e93` was pushed as a new
+`origin/codex/clash-api-ipc-dev-1106` branch. A remote
+`git ls-remote` confirmed the exact SHA; upstream tracking is configured.
+The unrelated, user-modified `pnpm-lock.yaml` hunk remains unstaged.
+
+The follow-on source migration is local commit `9842d0d5`:
+`refactor(core): own service compatibility gate and remove Tauri duplicate`.
+The complete existing Tauri implementation in
+`backend/tauri/src/core/service/compat.rs` was moved to
+`backend/chimera-core/src/service/compat.rs` (Git recognized a
+94% rename), taking all 7 regression tests with it. This consolidates
+the ref-shaped `service/compat.rs` version gate in the independent core
+and **deletes** the old implementation. Production Service IPC,
+lifecycle state projection, startup update checks and IPC response
+types now reference the core directly. Added the explicit
+`semver` dependency and lockfile entry.
+
+The checked-out upstream Service requires `2.0.2`, while
+Chimera's **still-bundled, not-yet-migrated** daemon is on its own
+`1.10.x` line. The core gate deliberately remains at the
+`1.10.1` minimum until the Service executable/protocol is migrated,
+rather than declaring an upstream binary to have been installed or
+breaking the current runtime prematurely. This is a staging
+dependency, not a promise to retain legacy compatibility.
+
+Verification: full `chimera-core --lib` **155/155**;
+Tauri Service IPC **7/7** (including foreign-runtime and incompatible
+daemon rejection), core lifecycle **33/33**, Actor V2 **28/28**,
+Agent core probe **3/3**, Specta binding freshness **1/1**,
+frontend selected tests **28/28**, interface/main TypeScript,
+frontend boundary validation and Rustfmt passed.
+One new Tauri test binary rebuild exceeded the execution window
+twice; a subsequent 295-second run linked successfully and all
+7 targeted Service IPC tests passed. No real desktop/privileged
+Service E2E and no full Clippy pass were performed.
+The full upstream ServiceActor, OS process-control contract and
+CoreActor mailbox remain unported.

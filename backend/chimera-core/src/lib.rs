@@ -4,4 +4,5 @@ pub mod client;
 pub mod connections;
 pub mod format;
 pub mod proxies;
+pub mod service;
 pub mod state;

@@ -8,7 +8,7 @@ use tracing::instrument;
 
 use crate::{client::ChimeraClient, core::RunType};
 
-use super::compat::ServiceCompat;
+use chimera_core::service::compat::ServiceCompat;
 
 #[derive(PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -335,10 +335,8 @@ mod tests {
         IpcState, ServiceBackendObservation, WarnLevel, next_ineligible_warning_state,
         should_rebuild_for_ipc_event, should_rebuild_for_ipc_transition, target_ipc_state,
     };
-    use crate::core::{
-        RunType,
-        service::compat::{REQUIRED_SERVICE_MIN, ServiceCompat},
-    };
+    use crate::core::RunType;
+    use chimera_core::service::compat::{REQUIRED_SERVICE_MIN, ServiceCompat};
 
     fn running_status(server_version: &str) -> StatusInfo<'static> {
         StatusInfo {
@@ -467,7 +465,7 @@ mod tests {
                 compat: ServiceCompat::Incompatible {
                     server_version: "2.0.0".to_owned(),
                     required_major: 1,
-                    required_min: crate::core::service::compat::REQUIRED_SERVICE_MIN.to_owned(),
+                    required_min: chimera_core::service::compat::REQUIRED_SERVICE_MIN.to_owned(),
                 },
                 runtime_owned: true,
             }

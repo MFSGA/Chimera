@@ -223,10 +223,10 @@ pub fn init_service(client: crate::client::ChimeraClient) -> Result<()> {
                     );
                     if let Some(info) = status.server
                         && let (Some(server_ver), Some(app_ver)) = (
-                            crate::core::service::compat::parse_service_version(
+                            chimera_core::service::compat::parse_service_version(
                                 info.version.as_ref(),
                             ),
-                            crate::core::service::compat::parse_service_version(
+                            chimera_core::service::compat::parse_service_version(
                                 status.version.as_ref(),
                             ),
                         )

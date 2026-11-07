@@ -61,7 +61,7 @@ pub(crate) struct ServiceHostStatus {
     pub(crate) status: chimera_ipc::types::ServiceStatus,
     pub(crate) server: Option<chimera_ipc::api::status::StatusResBody<'static>>,
     pub(crate) phase: ServicePhase,
-    pub(crate) compat: crate::core::service::compat::ServiceCompat,
+    pub(crate) compat: chimera_core::service::compat::ServiceCompat,
     pub(crate) runtime_owned: bool,
     pub(crate) restart_attempts: u8,
     /// Internal ref ServiceActor readiness fence; never exposed on the UI wire.
@@ -81,7 +81,7 @@ impl ServiceHostStatus {
             status: chimera_ipc::types::ServiceStatus::NotInstalled,
             server: None,
             phase: ServicePhase::Probing,
-            compat: crate::core::service::compat::ServiceCompat::Unknown,
+            compat: chimera_core::service::compat::ServiceCompat::Unknown,
             runtime_owned: false,
             restart_attempts: 0,
             settled_ready: false,
@@ -90,7 +90,7 @@ impl ServiceHostStatus {
     }
 
     fn from_probe(info: chimera_ipc::types::StatusInfo<'static>) -> Self {
-        let compat = crate::core::service::compat::ServiceCompat::classify(&info);
+        let compat = chimera_core::service::compat::ServiceCompat::classify(&info);
         let runtime_owned = crate::core::service::is_service_runtime_owned(&info);
         let phase = chimera_core::actor_v2::service_policy::phase_for_probe(
             info.status,
@@ -120,7 +120,7 @@ impl ServiceHostStatus {
             status: previous.status,
             server: previous.server.clone(),
             phase: ServicePhase::Unknown,
-            compat: crate::core::service::compat::ServiceCompat::Unknown,
+            compat: chimera_core::service::compat::ServiceCompat::Unknown,
             runtime_owned: false,
             restart_attempts: previous.restart_attempts,
             settled_ready: previous.settled_ready,
@@ -287,7 +287,7 @@ impl ApplicationWorkflowState {
             status: current.status,
             server: current.server,
             phase,
-            compat: crate::core::service::compat::ServiceCompat::Unknown,
+            compat: chimera_core::service::compat::ServiceCompat::Unknown,
             runtime_owned: current.runtime_owned,
             restart_attempts: current.restart_attempts,
             settled_ready,

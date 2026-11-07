@@ -10,7 +10,6 @@ use crate::{
     utils::dirs::{app_config_dir, app_data_dir, app_install_dir},
 };
 
-pub mod compat;
 pub mod control;
 pub mod ipc;
 
