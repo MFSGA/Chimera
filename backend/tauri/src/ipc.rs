@@ -1644,6 +1644,29 @@ pub async fn clash_api_get_group_delay(
         .collect())
 }
 
+/// One instance-bound group delay operation. All member requests share the
+/// same running core even if an external profile switch races the test.
+#[tauri::command]
+#[specta::specta]
+pub async fn test_native_proxy_group_delay(
+    group: String,
+    client: State<'_, ChimeraClient>,
+) -> Result<HashMap<String, u32>> {
+    let default_url = client.get_app_config()?.default_latency_test;
+    let api = client.clash_api_client().await?;
+    let delays = chimera_core::proxies::test_group_delay(
+        &api,
+        &clash_api::ProxyName::new(group),
+        &default_url,
+        std::time::Duration::from_secs(10),
+    )
+    .await?;
+    Ok(delays
+        .into_iter()
+        .map(|(name, delay)| (name.to_string(), u32::from(delay)))
+        .collect())
+}
+
 #[tauri::command]
 #[specta::specta]
 pub async fn clash_api_delete_connections(

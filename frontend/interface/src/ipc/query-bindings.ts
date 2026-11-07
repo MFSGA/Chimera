@@ -98,6 +98,13 @@ export const mutations = {
     mutationFn: (input: Parameters<typeof commands.clearProxyFixed>) =>
       commands.clearProxyFixed(...input),
   }),
+  /** One native group operation on one bound core, even for pinned members. */
+  testNativeProxyGroupDelay: mutationOptions({
+    mutationKey: ['testNativeProxyGroupDelay'],
+    mutationFn: (
+      input: Parameters<typeof commands.testNativeProxyGroupDelay>,
+    ) => commands.testNativeProxyGroupDelay(...input),
+  }),
   patchRuntimeOverrides: mutationOptions({
     mutationKey: ['patchRuntimeOverrides'],
     mutationFn: (input: Parameters<typeof commands.patchRuntimeOverrides>) =>

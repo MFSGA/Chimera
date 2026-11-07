@@ -149,69 +149,87 @@ impl Proxies {
     }
 }
 
+/// UI and tray adapter: generation/checksum/freshness live in chimera-core.
 pub struct ProxiesGuard {
-    inner: Proxies,
-    checksum: Option<u32>,
-    updated_at: u64,
-    generation: u64,
+    snapshot: chimera_core::proxies::ProxySnapshotState<Proxies>,
     sender: broadcast::Sender<()>,
 }
 
 impl ProxiesGuard {
+    fn new(sender: broadcast::Sender<()>) -> Self {
+        Self {
+            snapshot: chimera_core::proxies::ProxySnapshotState::new(Proxies::default()),
+            sender,
+        }
+    }
+
+    #[cfg(test)]
+    fn test_guard(
+        value: Proxies,
+        checksum: Option<u32>,
+        updated_at: u64,
+        generation: u64,
+        sender: broadcast::Sender<()>,
+    ) -> Self {
+        Self {
+            snapshot: chimera_core::proxies::ProxySnapshotState::from_parts(
+                value, generation, checksum, updated_at,
+            ),
+            sender,
+        }
+    }
+
     pub fn global() -> &'static Arc<RwLock<ProxiesGuard>> {
         static PROXIES: OnceLock<Arc<RwLock<ProxiesGuard>>> = OnceLock::new();
         PROXIES.get_or_init(|| {
-            let (tx, _) = broadcast::channel(5); // 默认提供 5 个消费位置，提供一定的缓冲
-            Arc::new(RwLock::new(ProxiesGuard {
-                checksum: None,
-                sender: tx,
-                inner: Proxies::default(),
-                updated_at: 0,
-                generation: 0,
-            }))
+            let (tx, _) = broadcast::channel(5);
+            Arc::new(RwLock::new(Self::new(tx)))
         })
     }
 
     pub fn is_updated(&self) -> bool {
         let now = chrono::Utc::now().timestamp() as u64;
-        now - self.updated_at <= 3
+        self.snapshot.is_fresh(now, 3)
     }
 
     pub fn inner(&self) -> &Proxies {
-        &self.inner
+        self.snapshot.value()
     }
 
     pub(crate) fn generation(&self) -> u64 {
-        self.generation
+        self.snapshot.generation()
     }
 
     fn ensure_generation_matches(&self, generation: u64) -> Result<()> {
-        if self.generation != generation {
-            anyhow::bail!("proxy selection was invalidated by a profile change")
-        }
-        Ok(())
+        self.snapshot.ensure_generation(generation)
     }
 
     pub(crate) fn invalidate(&mut self) {
-        self.generation = self.generation.wrapping_add(1);
-        self.checksum = None;
-        self.updated_at = 0;
+        self.snapshot.invalidate();
     }
 
     fn replace_if_generation(&mut self, generation: u64, proxies: Proxies, checksum: u32) -> bool {
-        if self.generation != generation {
-            return false;
+        let now = chrono::Utc::now().timestamp() as u64;
+        match self
+            .snapshot
+            .publish_if_generation(generation, proxies, checksum, now)
+        {
+            chimera_core::proxies::SnapshotPublish::Stale => false,
+            chimera_core::proxies::SnapshotPublish::Unchanged => true,
+            chimera_core::proxies::SnapshotPublish::Published => {
+                self.notify_update();
+                true
+            }
         }
-        self.replace(proxies, checksum);
-        true
     }
 
     pub fn replace(&mut self, proxies: Proxies, checksum: u32) {
         let now = chrono::Utc::now().timestamp() as u64;
-        self.inner = proxies;
-        self.checksum = Some(checksum);
-        self.updated_at = now;
+        self.snapshot.replace(proxies, checksum, now);
+        self.notify_update();
+    }
 
+    fn notify_update(&self) {
         if let Err(e) = self.sender.send(()) {
             log::warn!(
                 target: "clash::proxies",
@@ -493,45 +511,45 @@ mod tests {
     #[test]
     fn invalidation_marks_the_cached_snapshot_stale() {
         let (sender, _) = broadcast::channel(1);
-        let mut guard = ProxiesGuard {
-            inner: Proxies {
+        let mut guard = ProxiesGuard::test_guard(
+            Proxies {
                 global: ProxyGroupItem {
                     name: "cached profile".into(),
                     ..Default::default()
                 },
                 ..Default::default()
             },
-            checksum: Some(1),
-            updated_at: chrono::Utc::now().timestamp() as u64,
-            generation: 0,
+            Some(1),
+            chrono::Utc::now().timestamp() as u64,
+            0,
             sender,
-        };
+        );
 
         assert!(guard.is_updated());
 
         guard.invalidate();
 
         assert!(!guard.is_updated());
-        assert_eq!(guard.checksum, None);
+        assert_eq!(guard.snapshot.checksum(), None);
         assert_eq!(guard.inner().global.name, "cached profile");
     }
 
     #[test]
     fn invalidated_refresh_cannot_replace_the_snapshot() {
         let (sender, _) = broadcast::channel(1);
-        let mut guard = ProxiesGuard {
-            inner: Proxies {
+        let mut guard = ProxiesGuard::test_guard(
+            Proxies {
                 global: ProxyGroupItem {
                     name: "previous profile".into(),
                     ..Default::default()
                 },
                 ..Default::default()
             },
-            checksum: Some(1),
-            updated_at: chrono::Utc::now().timestamp() as u64,
-            generation: 0,
+            Some(1),
+            chrono::Utc::now().timestamp() as u64,
+            0,
             sender,
-        };
+        );
         let refresh_generation = guard.generation();
 
         guard.invalidate();
@@ -554,13 +572,13 @@ mod tests {
     #[test]
     fn invalidated_selection_generation_is_rejected() {
         let (sender, _) = broadcast::channel(1);
-        let mut guard = ProxiesGuard {
-            inner: Proxies::default(),
-            checksum: Some(1),
-            updated_at: chrono::Utc::now().timestamp() as u64,
-            generation: 0,
+        let mut guard = ProxiesGuard::test_guard(
+            Proxies::default(),
+            Some(1),
+            chrono::Utc::now().timestamp() as u64,
+            0,
             sender,
-        };
+        );
         let selection_generation = guard.generation();
 
         guard.invalidate();
@@ -617,13 +635,13 @@ mod tests {
         });
 
         let (sender, _) = broadcast::channel(1);
-        let guard = Arc::new(RwLock::new(ProxiesGuard {
-            inner: Proxies::default(),
-            checksum: None,
-            updated_at: 0,
-            generation: 0,
+        let guard = Arc::new(RwLock::new(ProxiesGuard::test_guard(
+            Proxies::default(),
+            None,
+            0,
+            0,
             sender,
-        }));
+        )));
         let generation = guard.read().generation();
         let api = ApiClient::new(crate::config::clash::ClashInfo {
             port: address.port(),
@@ -696,9 +714,6 @@ impl ProxiesGuardExt for &Arc<RwLock<ProxiesGuard>> {
         let mut writer = self.write();
         if writer.generation() != generation {
             return Ok(false);
-        }
-        if writer.checksum == Some(checksum) {
-            return Ok(true);
         }
         Ok(writer.replace_if_generation(generation, proxies, checksum))
     }
