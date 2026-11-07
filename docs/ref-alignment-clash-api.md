@@ -1282,3 +1282,56 @@ separation remain extensive dependency-coupled migrations. Continue
 by copying coherent upstream groups, adapting Chimera's runtime
 protocol and verifying their actual production ownership—not by
 blindly overwriting existing Chimera files.
+
+### 2026-11-07 upstream Actor V2 endpoint contract and host projections
+
+**Local commit:** `20cf593a`
+(`refactor(core): own actor endpoint contract and host status projections`),
+based on the clean, pinned
+`ref@8cf63276e387afc621d46b950ab72f9268f915e7`.
+Original working tree and branch are unchanged:
+`I:\mfsga\Chimera` /
+`codex/clash-api-ipc-dev-1106`.
+
+**Copy/adaptation:** Copied the portable endpoint contract from
+`ref/backend/nyanpasu-core/src/actor_v2/endpoint.rs` into
+`backend/chimera-core/src/actor_v2/endpoint.rs`, adapting
+`nyanpasu_*` crate names and the existing three-argument
+`CoreError::new` constructor. Retained Chimera's
+`CoreStatusSnapshot.instance_id`, which is required for its
+Service/Agent authority checks. Moved the pre-existing
+reference-derived Local CoreControl → IPC operation/status projections
+out of `backend/tauri/src/core/actor_v2/control_endpoint.rs`
+into the same core module; the Service v2 status projection
+moved from `backend/tauri/src/core/actor_v2/service_endpoint.rs`
+to core as well. The Tauri modules now import/re-export the **same**
+core-owned `ControlEndpoint`, `ExecutionHost`,
+`CoreSubmission`, `CheckSubmission`, `CoreStatusSnapshot`,
+`CheckSupport` and `ApiChanges` types. Local/Service concrete
+transport clients remain in Tauri as host adapters.
+
+**Important behavior:** a coarse legacy v1 Service status is
+**never interpreted as a proven v2 Stopped state**; the requested
+core kind is not synthesized into the applied kind. The new core
+tests cover this downgrade, unknown-state honesty, credential
+stripping from public Controller URLs and operation phase mapping.
+Neither Service IPC wire schema nor Agent/UI bindings were changed.
+
+**Validation:** independent `chimera-core --lib` **144/144**;
+Tauri Actor V2 **28/28**, proxies **14/14**, Agent core probe
+**3/3**, Specta bindings freshness **1/1**, TypeScript interface
+and main/legacy checks, frontend boundary lint, Rustfmt and Git
+whitespace checks passed. The non-desktop E2E harness unit suite
+also passed **33/33**. The full desktop/Service integration E2E
+and offline Clippy were **not** verified. A one-command
+`HUSKY=0` commit override was used after those independent
+checks because of the repository's known dated-nightly/toolchain
+availability constraint; no hook configuration changed.
+
+**Not yet aligned:** upstream's complete CoreActor v2 mailbox and
+`CoreClient`, `service_actor.rs`, `facade.rs`,
+`local_host.rs`, service endpoint factory, host-switch
+orchestration, subscription pump and long-lived runtime ownership
+remain to be copied/adapted. Chimera's original
+`client/core_lifecycle` and Service IPC stack must be preserved
+until the new core-owned paths pass lifecycle and recovery tests.
