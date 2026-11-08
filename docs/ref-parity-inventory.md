@@ -1,5 +1,14 @@
 # Chimera ↔ ref 全量架构对齐清单
 
+## 2026-11-08 ProxiesActor 停机中的代理写入隔离
+
+- 官方 `libnyanpasu/clash-nyanpasu` `main` 与本地 `ref` 均核实为 `59724e85c34abb6995c22d101c876cc06dc16576`；未更新 gitlink。
+- `backend/chimera-core/src/proxies_actor.rs::State::change_route` 在 controller 写入返回后、连接中断副作用前检查 owner shutdown；在拒绝写入的读回之后再次检查。停机期间不再继续触发连接中断，也不将已退休 owner 的写入结果报告为成功。控制器可能已执行该写入，新 owner 必须自行重新核对真实状态；不自动重试 PUT/DELETE。
+- `backend/chimera-core/src/proxies_actor_tests.rs` 新增阻塞 PUT 后触发 shutdown 的 mailbox 回归，证明不会读取连接、关闭连接或发布代理缓存。
+- 本批独立 core 完整单测 **203/203**、core Clippy（stable、all-targets/all-features）、目标文件 Rustfmt 和 `git diff --check` 通过。完整 workspace Rustfmt 因既有 Tauri vendor 格式差异未通过；Tauri/TS/Specta 与真实 Windows/Service E2E 未复测。默认 nightly manifest 缺失，改用 stable。
+- **未完成：** Provider 写操作停机竞态、连接中断进行中途的 owner 取消、完整 StreamsActor、CoreActor 生命周期、Client workflows/state、Unified RPC、独立前端包、main/legacy/Agent 与真实 Service E2E；不得将此批视为全量对齐。
+
+
 **最新核对基线（2026-11-07）：** 原 Windows 工作区 `I:\mfsga\Chimera`、分支 `codex/clash-api-ipc-dev-1106`，参考子模块 `ref@59724e85c34abb6995c22d101c876cc06dc16576`。已查询官方 `libnyanpasu/clash-nyanpasu` 的 `refs/heads/main` 并 fetch、检查提交对象及原基线 `68e82014aeaf340a990e4ebf05ca34217366fc97` 的祖先关系。新增上游提交 `chore(deps): update rust to nightly-2026-11-08 (#6245)` **只修改 ref 内 `rust-toolchain.toml`**，没有新 Rust/TS 架构源代码变化；Chimera 的实际 toolchain 尚未升级，不能声称已通过新 nightly 的测试。保留已有用户 `pnpm-lock.yaml` 修改，历史测试数字只适用于当时环境。
 
 **最新目标（用户已明确修改）：** 以 `ref` 的代码职责、协议契约、事务语义、状态、前端接口与运行时行为作为迁移基准。**无需保留 Chimera 旧架构、旧 API 或旧 Service IPC 的兼容性**；允许连同调用方和运行时执行破坏性替换，删除被取代的旧实现，不构造长期双轨适配。迁移仍应避免无关改动、用户数据意外损毁和未测试状态下的功能失效；不应因为复制文件或编译通过就宣称整个架构已对齐。Chimera 的产品身份可独立于底层旧协议。

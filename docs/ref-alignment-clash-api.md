@@ -1,5 +1,13 @@
 # Clash API crate ref-alignment record
 
+## 2026-11-08 ProxiesActor 停机中的代理写入隔离
+
+- 官方 `libnyanpasu/clash-nyanpasu` `main` 与本地 `ref` 均核实为 `59724e85c34abb6995c22d101c876cc06dc16576`；未更新 gitlink。
+- `backend/chimera-core/src/proxies_actor.rs::State::change_route` 在 controller 写入返回后、连接中断副作用前检查 owner shutdown；在拒绝写入的读回之后再次检查。停机期间不再继续触发连接中断，也不将已退休 owner 的写入结果报告为成功。控制器可能已执行该写入，新 owner 必须自行重新核对真实状态；不自动重试 PUT/DELETE。
+- `backend/chimera-core/src/proxies_actor_tests.rs` 新增阻塞 PUT 后触发 shutdown 的 mailbox 回归，证明不会读取连接、关闭连接或发布代理缓存。
+- 本批独立 core 完整单测 **203/203**、core Clippy（stable、all-targets/all-features）、目标文件 Rustfmt 和 `git diff --check` 通过。完整 workspace Rustfmt 因既有 Tauri vendor 格式差异未通过；Tauri/TS/Specta 与真实 Windows/Service E2E 未复测。默认 nightly manifest 缺失，改用 stable。
+- **未完成：** Provider 写操作停机竞态、连接中断进行中途的 owner 取消、完整 StreamsActor、CoreActor 生命周期、Client workflows/state、Unified RPC、独立前端包、main/legacy/Agent 与真实 Service E2E；不得将此批视为全量对齐。
+
 ## 2026-11-07 reference baseline refresh
 
 - **Latest verified upstream `main` and local `ref` gitlink (2026-11-07):** `59724e85c34abb6995c22d101c876cc06dc16576`. Verified against official `refs/heads/main`, fetched object and ancestry from `68e82014aeaf340a990e4ebf05ca34217366fc97`. The only newly reachable commit, `chore(deps): update rust to nightly-2026-11-08 (#6245)`, changes **ref-internal** `rust-toolchain.toml` only, not Rust/TypeScript architecture source. Chimera's toolchain was not changed and no claim of new nightly verification is made. Earlier TanStack Router update and its test limitations remain historical context.
