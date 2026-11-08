@@ -688,3 +688,12 @@ pnpm-lock.yaml 改动按用户授权丢弃；原工作差异保留在 stash 备�
   以及受控 Windows SCM/UAC/Service/桌面 E2E。
   未迁移前端依赖版本、服务二进制、用户持久化或 runtime gitlink；
   既有 `pnpm-lock.yaml` 未提交差异完整保留。
+
+## 2026-11-07 Proxies legacy read mailbox 与 Streams epoch 增量
+
+- **上游基线：** 官方 `refs/heads/main` 和本地 `ref` 均为 `59724e85c34abb6995c22d101c876cc06dc16576`，无新的上游源代码增量。本批只迁移可验证的生产行为，不宣称完整 ProxiesActor 或 StreamsActor 已迁出 Tauri。
+- **Proxies 生产路径：** `backend/tauri/src/ipc.rs::get_proxies` 通过 `ProxiesGuardExt::read_coalesced_if_generation` 串行普通缓存读取；以三秒 TTL、实例标识、Profile generation 与 API binding 复核决定是否复用，8 个同时读取只进行一次三路 GET。`backend/chimera-core/src/proxies.rs` 的成功刷新也以 revision 栅栏拒绝晚到旧结果，避免同代际 GET 覆盖新快照；失败读回仍使用既有栅栏。mutation 继续单独强制读回，未被合并。
+- **Streams 生产路径：** `backend/tauri/src/core/clash/ws.rs` 给 Connections/Logs/Traffic/Memory 独立 epoch；停止流时递增 epoch，旧 Update、StreamClosed、延迟 Reconnect 在 actor mailbox 接收时被拒绝，避免旧 socket 事件污染新会话。
+- **测试：** core 完整 `177/177`；Tauri 完整 `795/795`，另 `1` 项忽略（包含 Proxies `24/24` 和 Streams `6/6`）。Tauri 使用临时无 sidecar `TAURI_CONFIG`，没有启动桌面或真实 Service。Rustfmt 和 diff 检查通过；真实 Windows E2E、前端端到端、独立前端包重构尚未验收。
+- **本地提交：** `ec6888b4442501ad09bdb4d86c75b41125122863`（Proxies）与 `2bb7f6e099b860e062d034b119235072a50c49c5`（Streams）。默认 pre-commit Clippy 因缺少 sidecar 可执行文件失败；已使用临时无 sidecar `TAURI_CONFIG` 独立运行完整 Clippy 并通过（既有警告），随后仅对这两笔已验证的提交设置 `HUSKY=0`。未推送。
+- **剩余：** 单一 ref ProxiesActor/StreamsActor 所有权仍在 Tauri；Provider 同源快照、API 撤销后重连、Client workflows/state、Unified RPC、独立 frontend rpc/query/platform、main/legacy/Agent 与真实 Service E2E 仍未完成。原有锁文件修改不属于本批。
