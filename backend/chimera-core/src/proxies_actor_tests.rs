@@ -759,6 +759,29 @@ async fn shutdown_during_controller_read_cannot_publish_a_snapshot() {
 }
 
 #[tokio::test]
+async fn shutdown_during_route_write_skips_connection_effects_and_cache_publication() {
+    let (client, _core, _, fixture, server) = setup().await;
+    fixture.hold_select.store(true, Ordering::SeqCst);
+    let pending = {
+        let client = client.clone();
+        tokio::spawn(async move {
+            client
+                .select(GROUP.into(), NODE.into(), ProxyChangeBreakMode::All)
+                .await
+        })
+    };
+    fixture.entered.notified().await;
+    client.0.shutdown.cancel();
+    fixture.hold_select.store(false, Ordering::SeqCst);
+    fixture.release.notify_one();
+    assert!(pending.await.unwrap().is_err());
+    assert_eq!(*fixture.calls.lock().unwrap(), ["select"]);
+    assert!(fixture.closed.lock().unwrap().is_empty());
+    assert!(client.snapshot().nodes.is_empty());
+    server.abort();
+}
+
+#[tokio::test]
 async fn queued_cancelled_mutation_is_not_executed_and_shutdown_closes_subscriptions() {
     let (client, _core, _, fixture, server) = setup().await;
     fixture.hold_select.store(true, Ordering::SeqCst);

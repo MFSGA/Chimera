@@ -303,8 +303,19 @@ impl State {
             RouteChange::ClearFixed => api.clear_proxy_selection(&group_name).await,
         }
         .map_err(anyhow::Error::from);
+        // A controller may finish the write while its owning application is shutting down.
+        // Never start follow-up connection interruption or publish a success for that retired
+        // owner; the next owner must reconcile the controller state independently.
+        anyhow::ensure!(
+            !self.shutdown.is_cancelled(),
+            "proxy owner shut down during route mutation"
+        );
         self.reread_after_rejection(actor, api.clone(), applied)
             .await?;
+        anyhow::ensure!(
+            !self.shutdown.is_cancelled(),
+            "proxy owner shut down before route effects"
+        );
         // Keep every follow-up on the change's revocable source capability.
         let interruption = match strategy {
             ProxyChangeBreakMode::Off => Ok(()),
