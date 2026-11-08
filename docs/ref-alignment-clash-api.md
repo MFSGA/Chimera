@@ -1851,3 +1851,54 @@ against the committed code completed on the Windows host:
   frontend rpc/query/platform, main/legacy/Agent real integration and
   Windows/Service E2E remain outstanding. No wire, generated binding,
   persistence, runtime gitlink or unrelated lockfile changes.
+
+## 2026-11-07 Source-bound provider healthcheck through IPC, Query and main UI (partial)
+
+- **Pinned upstream:** official `libnyanpasu/clash-nyanpasu` main and
+  local `ref` both verified at
+  `68e82014aeaf340a990e4ebf05ca34217366fc97`;
+  this bump changes only ref's TanStack Router dependencies and lock.
+  The behavior reference is
+  `ref/backend/nyanpasu-core/src/proxies.rs::ProviderAction::Healthcheck`,
+  not a claim that the complete ProxiesActor has been ported.
+- **Production path / L2:** independent
+  `backend/chimera-core/src/actor_v2/api.rs::ApiClient` now exposes
+  provider-wide healthcheck via its deadline, revocation and pre/postflight
+  lease-fenced executor. Tauri `ProxiesGuardExt::healthcheck_provider`
+  captures one instance/profile generation, issues one request, rereads the
+  source proxy graph even on rejection, returns the original operation error,
+  and refuses an old-generation publication. Failed rereads revoke
+  freshness via the existing revision guard. This is actually invoked via
+  `ChimeraClient` and `backend/tauri/src/ipc.rs::healthcheck_proxy_provider`.
+- **Specta/Query/UI:** the Tauri command is registered in
+  `backend/tauri/src/specta_export.rs` and generated into
+  `frontend/interface/src/ipc/bindings.ts`. A typed
+  `healthcheckProxyProvider` mutation and
+  `useHealthcheckClashProxiesProvider` hook reach the main Provider detail
+  card, using its existing task/error UI. Both the new healthcheck and
+  existing provider update invalidate provider, legacy-proxies and
+  native-proxies caches on **settlement**, including rejected or lost replies.
+  Same-card update and healthcheck controls are mutually disabled during
+  a pending task. No new legacy UI/Agent command compatibility layer.
+- **Verification:** core **176/176**, Tauri proxy-pin **9/9** including
+  rejected one-shot healthcheck + three source GETs, notification and
+  retired-generation rejection; Actor V2 **30/30**, Agent **6/6**,
+  Specta generation + freshness **1/1** each, Query **12/12**,
+  interface **58/58**, main traffic **16/16**, E2E harness unit
+  **33/33**. Full TypeScript, main/legacy IPC boundary, Rustfmt, complete
+  Clippy, Oxlint, Prettier and diff validation passed (pre-existing
+  warnings remain). Initial E0599 was a real missing core API method,
+  corrected before the successful rerun. Tauri tests used a transient
+  sidecar-free `TAURI_CONFIG` and did not start the desktop/Service.
+- **Commits:** verified ref `c5d06bb857ffadb059fadac1fa94367a13d6e659`;
+  backend + generated binding
+  `87b48e4642401218a3064e0979ea39eae2deef2b`;
+  Query + main UI `6efb28e62d71f788a5c7d9c02097885562c89ef9`.
+  All are local and unpushed.
+- **Not yet parity / rollback:** single actor mailbox, unified provider
+  metadata and proxy snapshots, TTL refresh coalescing, lifecycle ownership,
+  full Streams/CoreActor/Client/state/Unified RPC, separated
+  frontend rpc/query/platform packages, physical Windows SCM/UAC/Service,
+  main/legacy/Agent integration and cross-platform E2E remain pending.
+  No runtime binary, user persistence, product branding or unrelated lockfile
+  changes; this feature can be reverted by its backend and Query/UI commits.

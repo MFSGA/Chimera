@@ -633,3 +633,58 @@ pnpm-lock.yaml 改动按用户授权丢弃；原工作差异保留在 stash 备�
   请求合并、mailbox/生命周期所有权、StreamsActor、
   Client/state、Unified RPC、前端独立包与真实 Windows E2E
   均待迁移。未修改 wire、生成绑定、持久化、runtime 或锁文件。
+
+## 2026-11-07 Provider 健康检查：实例绑定 API → IPC/Query → main UI（局部）
+
+**最新已核实官方 main / ref：**
+`68e82014aeaf340a990e4ebf05ca34217366fc97`，经 fetch、
+对象类型与 `a8dd5d58ac86baa7a7e9333dc3332fe98755ef3b`
+祖先关系确认。本轮新上游仅更新 TanStack Router 依赖和 ref 内锁文件；
+`ref/backend/nyanpasu-core/src/proxies.rs` 的
+`ProviderAction::Healthcheck` 是本批行为参照。
+
+- **生产路径 / L2：**
+  `backend/chimera-core/src/actor_v2/api.rs::ApiClient::healthcheck_proxy_provider`
+  通过 `execute` 保证实例租约的执行前后校验、截止时间与失效撤销，
+  不重发可能已生效的 Provider 健康检查。
+  `backend/tauri/src/core/clash/proxies.rs::ProxiesGuardExt::healthcheck_provider`
+  在同一 API 实例与 Profile generation 上执行一次 healthcheck；
+  成功或拒绝后均重新获取真实代理图，过期实例不得发布，
+  GET 失败按既有 revision fence 撤销 freshness，原错误保留。
+  `backend/tauri/src/client/clash_api.rs` 和 `backend/tauri/src/ipc.rs`
+  将该操作接入真正的 `ChimeraClient` / Tauri 命令。
+- **绑定、Query 与 UI：**
+  `backend/tauri/src/specta_export.rs` 注册命令，
+  重新生成 `frontend/interface/src/ipc/bindings.ts`；
+  `query-bindings.ts` 提供类型化显式 mutation，
+  `use-clash-proxies-provider.ts` 在 **成功与失败** 后均使 Provider、
+  legacy 与 native 代理图查询失效，防止无确认回执仍已生效时旧缓存冒充真实状态。
+  main Provider 详情页 `info-card.tsx` 引入独立健康检查操作，
+  与现有 Provider 更新按钮互相禁用以避免同页并行提交；
+  `use-proxies-provider-healthcheck.tsx` 保留 Chimera 的任务阻塞和错误通知。
+  此批没有删除现有 legacy UI、Agent 或 Service IPC。
+- **回归/验收：** core 新增旧实例禁止健康检查测试，
+  全量 core **176/176**；Tauri ProxyPin **9/9**，
+  mock-controller 模拟健康检查 GET 返回 409、只发一次健康检查、
+  后续 3 次快照 GET、缓存/订阅者通知、原错误保留、旧代际网络前拒绝。
+  Specta **生成及新鲜度各 1/1**，
+  Query 契约 **12/12**、interface **58/58**、
+  Tauri Actor V2 **30/30**、Agent **6/6**、
+  main traffic **16/16**、E2E 框架单测 **33/33**，
+  完整 TypeScript、main/legacy IPC 边界、Rustfmt、
+  完整 Clippy、Oxlint 和 Prettier 均通过（编译仍有既有警告）。
+  编译初次因 core ApiClient 缺方法报 E0599，补齐实例绑定方法后
+  重新编译并通过，失败未当作通过。
+  Tauri 测试仅临时设置 sidecar-free `TAURI_CONFIG`。
+- **本轮本地提交：**
+  `c5d06bb857ffadb059fadac1fa94367a13d6e659` 更新 ref 基线；
+  `87b48e4642401218a3064e0979ea39eae2deef2b` 提交后端与 Specta；
+  `6efb28e62d71f788a5c7d9c02097885562c89ef9` 提交 Query/UI。
+  均未推送。新功能和完整 ref ProxiesActor 仍不是同一回事。
+- **待办/回滚：** 仍需 ref 的单一 ProxiesActor mailbox、Provider
+  元数据同源快照、缓存 TTL/去重和生命周期撤销、完整 StreamsActor、
+  CoreActor、Client application/workflows/state、Unified RPC、
+  独立前端 rpc/query/platform、main/legacy 与 Agent 真实集成，
+  以及受控 Windows SCM/UAC/Service/桌面 E2E。
+  未迁移前端依赖版本、服务二进制、用户持久化或 runtime gitlink；
+  既有 `pnpm-lock.yaml` 未提交差异完整保留。
