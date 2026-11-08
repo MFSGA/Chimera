@@ -2,7 +2,7 @@
 
 ## 2026-11-07 reference baseline refresh
 
-- **Latest verified upstream `main` and local `ref` gitlink (2026-11-07):** `68e82014aeaf340a990e4ebf05ca34217366fc97`. Verified via official `refs/heads/main`, fetch, object and ancestry checks from `a8dd5d58ac86baa7a7e9333dc3332fe98755ef3b`. The newly reachable `chore(deps): update tanstack-router monorepo (#6246)` changes only `frontend/nyanpasu/package.json` and the **ref-internal** `pnpm-lock.yaml`. No new Rust architecture code is added; frontend dependency/runtime compatibility remains unverified, not assumed. Historical test evidence stays tied to its old SHA.
+- **Latest verified upstream `main` and local `ref` gitlink (2026-11-07):** `59724e85c34abb6995c22d101c876cc06dc16576`. Verified against official `refs/heads/main`, fetched object and ancestry from `68e82014aeaf340a990e4ebf05ca34217366fc97`. The only newly reachable commit, `chore(deps): update rust to nightly-2026-11-08 (#6245)`, changes **ref-internal** `rust-toolchain.toml` only, not Rust/TypeScript architecture source. Chimera's toolchain was not changed and no claim of new nightly verification is made. Earlier TanStack Router update and its test limitations remain historical context.
 - The upstream delta adds a Network Info dashboard widget and modifies network contracts, client traffic, Unified RPC, and frontend RPC bindings. **No Chimera production behavior has been migrated or validated for this delta.** Follow-up requires contract/error/cache review, Service/Agent compatibility, and targeted Rust/TS tests before claiming parity.
 - This baseline-only change does not update `backend/chimera-runtime`, generated Specta bindings, or the unrelated local `pnpm-lock.yaml` edit.
 
