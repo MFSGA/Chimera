@@ -39,6 +39,12 @@ pub fn setup<R: Runtime, M: Manager<R>>(manager: &M) -> anyhow::Result<()> {
         .state::<crate::client::ChimeraClient>()
         .inner()
         .clone();
+    let mut proxy_changes = client.subscribe_proxy_changes();
+    tauri::async_runtime::spawn(async move {
+        while proxy_changes.changed().await.is_ok() {
+            crate::core::handle::Handle::mutate_proxies();
+        }
+    });
     let streams = client.streams().clone();
     if let Err(error) = client.start_traffic(streams.subscribe_connection_frames()) {
         tracing::error!(%error, "failed to start optional traffic recording");

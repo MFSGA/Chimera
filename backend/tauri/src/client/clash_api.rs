@@ -7,8 +7,8 @@ use std::sync::Arc;
 
 use anyhow::Result;
 
-use super::ChimeraClient;
-use crate::client::core_lifecycle::CoreLifecyclePort;
+use super::{ChimeraClient, core_lifecycle::CoreLifecyclePort};
+use crate::client::runtime::{Degradation, DegradationPhase, MutationOutcome};
 use crate::core::{
     actor_v2::api::ApiClient,
     clash::{
@@ -18,6 +18,40 @@ use crate::core::{
 };
 use chimera_core::clash::ws::ClashApiClientSource;
 use chimera_core::client::clash_api::{config_item, rule_provider_item};
+use chimera_core::proxies_actor::{
+    CoreClient as ProxyCoreClient, ProxyApiClientSource, ProxyDegradationPhase,
+    ProxyMutationOutcome,
+};
+
+struct LifecycleProxyApiClientSource(Arc<dyn CoreLifecyclePort>);
+
+#[async_trait::async_trait]
+impl ProxyApiClientSource for LifecycleProxyApiClientSource {
+    async fn api_client(&self) -> Result<chimera_core::actor_v2::api::ApiClient> {
+        Ok(self.0.clash_api_client().await?.core_client())
+    }
+}
+
+pub(crate) fn proxy_core_client(core: Arc<dyn CoreLifecyclePort>) -> ProxyCoreClient {
+    ProxyCoreClient::new(Arc::new(LifecycleProxyApiClientSource(core)))
+}
+
+fn into_mutation_outcome(outcome: ProxyMutationOutcome) -> MutationOutcome<()> {
+    let degradations = outcome
+        .degradations
+        .into_iter()
+        .map(|degradation| Degradation {
+            phase: match degradation.phase {
+                ProxyDegradationPhase::SystemEffect => DegradationPhase::SystemEffect,
+                ProxyDegradationPhase::UiEffect => DegradationPhase::UiEffect,
+            },
+            code: degradation.code,
+            message: degradation.message,
+            retryable: degradation.retryable,
+        })
+        .collect();
+    MutationOutcome::from_parts((), degradations)
+}
 
 struct LifecycleStreamsApiClientSource(Arc<dyn CoreLifecyclePort>);
 
@@ -96,31 +130,63 @@ impl ChimeraClient {
             .map_err(Into::into)
     }
 
+    /// Read the single actor-owned proxy snapshot and project it to the
+    /// existing Chimera legacy UI DTO at the IPC boundary.
+    pub async fn clash_proxies(&self) -> Result<crate::core::clash::proxies::Proxies> {
+        let native = self.inner.proxies.get(false).await?;
+        Ok(crate::core::clash::proxies::Proxies::from_native(native))
+    }
+
+    pub async fn clash_native_proxies(
+        &self,
+    ) -> Result<chimera_core::clash::proxies::NativeProxies> {
+        self.inner.proxies.get(false).await
+    }
+
     pub async fn proxy_providers(
         &self,
     ) -> Result<indexmap::IndexMap<clash_api::ProviderName, ProxyProviderSummary>> {
-        let providers = self.clash_api_client().await?.proxy_providers().await?;
-        Ok(providers
-            .into_iter()
-            .map(|(name, provider)| (name, provider.into()))
-            .collect())
+        self.inner.proxies.providers().await
     }
 
     pub async fn update_proxy_provider(&self, name: String) -> Result<()> {
-        use crate::core::clash::proxies::{ProxiesGuard, ProxiesGuardExt};
-
-        let api = self.clash_api_client().await?;
-        let guard = ProxiesGuard::global();
-        let generation = guard.read().generation();
-        guard.update_provider(&api, generation, &name).await
+        self.inner.proxies.update_provider(name).await
     }
 
     pub async fn healthcheck_proxy_provider(&self, name: String) -> Result<()> {
-        use crate::core::clash::proxies::{ProxiesGuard, ProxiesGuardExt};
+        self.inner.proxies.healthcheck_provider(name).await
+    }
 
-        let api = self.clash_api_client().await?;
-        let guard = ProxiesGuard::global();
-        let generation = guard.read().generation();
-        guard.healthcheck_provider(&api, generation, &name).await
+    pub async fn select_proxy(
+        &self,
+        group: String,
+        name: String,
+        strategy: chimera_config::clash::config::clash_strategy::ProxyChangeBreakMode,
+    ) -> Result<crate::client::runtime::MutationOutcome<()>> {
+        Ok(into_mutation_outcome(
+            self.inner.proxies.select(group, name, strategy).await?,
+        ))
+    }
+
+    pub async fn clear_proxy_fixed(
+        &self,
+        group: String,
+        strategy: chimera_config::clash::config::clash_strategy::ProxyChangeBreakMode,
+    ) -> Result<crate::client::runtime::MutationOutcome<()>> {
+        Ok(into_mutation_outcome(
+            self.inner.proxies.clear_fixed(group, strategy).await?,
+        ))
+    }
+
+    pub(crate) fn request_proxy_refresh(&self) {
+        self.inner.proxies.request_refresh();
+    }
+
+    pub(crate) fn subscribe_proxy_changes(&self) -> tokio::sync::watch::Receiver<()> {
+        self.inner.proxies.subscribe()
+    }
+
+    pub(crate) fn notify_proxy_rearranged(&self) {
+        self.inner.proxies.notify_rearranged();
     }
 }

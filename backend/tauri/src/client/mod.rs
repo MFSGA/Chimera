@@ -167,6 +167,7 @@ struct ChimeraClientInner {
     core: Arc<dyn CoreLifecyclePort>,
     streams: chimera_core::clash::ws::StreamsClient,
     streams_shutdown: tokio_util::sync::CancellationToken,
+    proxies: chimera_core::proxies_actor::ProxiesClient,
     typed_profiles: Option<profiles::ProfilesClient>,
     profile_service: Arc<ProfileFileService>,
     system_dns: Arc<dyn SystemDnsCache>,
@@ -290,12 +291,19 @@ impl ChimeraClient {
                 streams_shutdown.clone(),
                 &tasks,
             ))?;
+        let proxies =
+            tauri::async_runtime::block_on(chimera_core::proxies_actor::ProxiesClient::spawn(
+                clash_api::proxy_core_client(core.clone()),
+                shutdown.clone(),
+                &tasks,
+            ))?;
         let client = Self::with_parts_and_typed_config(
             typed,
             core_lifecycle,
             core,
             streams,
             streams_shutdown,
+            proxies,
             profile_service,
             Some(typed_profiles),
             system_dns,
@@ -364,6 +372,15 @@ impl ChimeraClient {
             typed.clash_config.clone(),
             runtime_paths,
         );
+        let proxy_shutdown = tokio_util::sync::CancellationToken::new();
+        let proxy_tasks = tokio_util::task::TaskTracker::new();
+        let proxies = chimera_core::proxies_actor::ProxiesClient::spawn(
+            clash_api::proxy_core_client(core.clone()),
+            proxy_shutdown,
+            &proxy_tasks,
+        )
+        .await
+        .expect("test proxy actor should start");
 
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
         let effects = {
@@ -400,6 +417,7 @@ impl ChimeraClient {
             core,
             streams,
             streams_shutdown,
+            proxies,
             profile_service,
             None,
             system_dns,
@@ -422,6 +440,7 @@ impl ChimeraClient {
         core: Arc<dyn CoreLifecyclePort>,
         streams: chimera_core::clash::ws::StreamsClient,
         streams_shutdown: tokio_util::sync::CancellationToken,
+        proxies: chimera_core::proxies_actor::ProxiesClient,
         profile_service: Arc<ProfileFileService>,
         typed_profiles: Option<profiles::ProfilesClient>,
         system_dns: Arc<dyn SystemDnsCache>,
@@ -447,6 +466,7 @@ impl ChimeraClient {
             core,
             streams,
             streams_shutdown,
+            proxies,
             typed_profiles,
             profile_service,
             system_dns,
@@ -502,9 +522,7 @@ impl ChimeraClient {
     }
 
     fn refresh_profiles(&self) {
-        crate::core::clash::proxies::ProxiesGuard::global()
-            .write()
-            .invalidate();
+        self.inner.proxies.invalidate();
         self.inner.ui_sink.refresh_profiles();
     }
 

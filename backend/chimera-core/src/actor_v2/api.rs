@@ -383,15 +383,20 @@ impl ApiClient {
         }
     }
 
-    pub async fn update_proxy(&self, group: &str, name: &str) -> ApiResult<()> {
-        let group = clash_api::ProxyName::new(group);
-        let target = clash_api::ProxyName::new(name);
+    pub async fn select_proxy(&self, group: &ProxyName, target: &ProxyName) -> ApiResult<()> {
         self.execute(
             DEFAULT_API_TIMEOUT,
-            self.client.select_proxy(clash_api::ProxySelection {
-                group: &group,
-                target: &target,
-            }),
+            self.client
+                .select_proxy(clash_api::ProxySelection { group, target }),
+        )
+        .await
+    }
+
+    /// Existing application-facing spelling; the actor uses the ref method name.
+    pub async fn update_proxy(&self, group: &str, name: &str) -> ApiResult<()> {
+        self.select_proxy(
+            &clash_api::ProxyName::new(group),
+            &clash_api::ProxyName::new(name),
         )
         .await
     }

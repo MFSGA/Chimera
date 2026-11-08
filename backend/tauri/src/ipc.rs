@@ -900,22 +900,7 @@ pub async fn patch_clash_core_config(
 pub async fn get_proxies(
     client: State<'_, ChimeraClient>,
 ) -> Result<crate::core::clash::proxies::Proxies> {
-    use crate::core::clash::proxies::{ProxiesGuard, ProxiesGuardExt};
-
-    for _ in 0..3 {
-        let generation = ProxiesGuard::global().read().generation();
-        let api = client.clash_api_client().await?;
-        // Serialize only ordinary cache misses and repeat the source-instance
-        // check before returning. A retired core's still-fresh graph must not
-        // be served to main/legacy UI after an endpoint handoff.
-        if let Some(snapshot) = ProxiesGuard::global()
-            .read_coalesced_if_generation(&api, generation)
-            .await?
-        {
-            return Ok(snapshot);
-        }
-    }
-    Err(anyhow!("proxy snapshot changed repeatedly while refreshing").into())
+    Ok(client.clash_proxies().await?)
 }
 
 /// Additive native proxy view for typed consumers. The legacy `get_proxies`
@@ -925,10 +910,7 @@ pub async fn get_proxies(
 pub async fn get_native_proxies(
     client: State<'_, ChimeraClient>,
 ) -> Result<crate::core::clash::proxies::NativeProxies> {
-    let api = client.clash_api_client().await?;
-    crate::core::clash::proxies::fetch_native_proxies(&api)
-        .await
-        .map_err(Into::into)
+    Ok(client.clash_native_proxies().await?)
 }
 
 #[tauri::command]
@@ -938,18 +920,16 @@ pub async fn select_proxy(
     name: String,
     client: State<'_, ChimeraClient>,
 ) -> Result<()> {
-    use crate::core::clash::proxies::{ProxiesGuard, ProxiesGuardExt};
     let break_when = client.get_clash_config()?.break_connection.on_proxy_change;
-    let generation = ProxiesGuard::global().read().generation();
-    let api = client.clash_api_client().await?;
-    ProxiesGuard::global()
-        .select_proxy(&api, generation, &group, &name)
-        .await?;
-    handle::Handle::mutate_proxies();
-    let _ = crate::core::connection_interruption::ConnectionInterruptionService::on_proxy_change(
-        &api, break_when, &group,
-    )
-    .await;
+    let outcome = client.select_proxy(group, name, break_when).await?;
+    for degradation in outcome.degradations() {
+        tracing::warn!(
+            code = %degradation.code,
+            message = %degradation.message,
+            retryable = degradation.retryable,
+            "proxy selection committed with a degraded follow-up",
+        );
+    }
     Ok(())
 }
 
@@ -958,21 +938,15 @@ pub async fn select_proxy(
 #[tauri::command]
 #[specta::specta]
 pub async fn clear_proxy_fixed(group: String, client: State<'_, ChimeraClient>) -> Result<()> {
-    use crate::core::clash::proxies::{ProxiesGuard, ProxiesGuardExt};
     let break_when = client.get_clash_config()?.break_connection.on_proxy_change;
-    let generation = ProxiesGuard::global().read().generation();
-    let api = client.clash_api_client().await?;
-    ProxiesGuard::global()
-        .clear_proxy_fixed(&api, generation, &group)
-        .await?;
-    handle::Handle::mutate_proxies();
-    if let Err(error) =
-        crate::core::connection_interruption::ConnectionInterruptionService::on_proxy_change(
-            &api, break_when, &group,
-        )
-        .await
-    {
-        tracing::warn!(%error, group, "pin removed, but connection interruption failed");
+    let outcome = client.clear_proxy_fixed(group, break_when).await?;
+    for degradation in outcome.degradations() {
+        tracing::warn!(
+            code = %degradation.code,
+            message = %degradation.message,
+            retryable = degradation.retryable,
+            "proxy pin cleared with a degraded follow-up",
+        );
     }
     Ok(())
 }
