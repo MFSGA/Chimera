@@ -479,9 +479,19 @@ impl Actor for ProxiesActor {
                         ProviderAction::Healthcheck => api.healthcheck_proxy_provider(&name).await,
                     }
                     .map_err(anyhow::Error::from);
+                    // The controller may have applied the request before the owner retired.
+                    // Do not reread or publish from that retired owner, and never replay it.
+                    anyhow::ensure!(
+                        !state.shutdown.is_cancelled(),
+                        "proxy owner shut down during provider mutation"
+                    );
                     state
                         .reread_after_rejection(&actor, api.clone(), requested)
                         .await?;
+                    anyhow::ensure!(
+                        !state.shutdown.is_cancelled(),
+                        "proxy owner shut down before provider refresh"
+                    );
                     state.refresh(&actor, api).await.context(match action {
                         ProviderAction::Update => {
                             "provider update succeeded but cache refresh failed"

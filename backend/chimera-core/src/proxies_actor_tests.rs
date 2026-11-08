@@ -47,6 +47,7 @@ struct Fixture {
     closed: Mutex<Vec<uuid::Uuid>>,
     hold_read: AtomicBool,
     hold_select: AtomicBool,
+    hold_provider: AtomicBool,
     entered: Notify,
     release: Notify,
     calls: Mutex<Vec<&'static str>>,
@@ -126,6 +127,10 @@ async fn clear(HttpState(f): HttpState<Arc<Fixture>>, Path(group): Path<String>)
 async fn update(HttpState(f): HttpState<Arc<Fixture>>, Path(name): Path<String>) -> StatusCode {
     assert_eq!(name, PROVIDER);
     f.calls.lock().unwrap().push("update");
+    if f.hold_provider.load(Ordering::SeqCst) {
+        f.entered.notify_one();
+        f.release.notified().await;
+    }
     if f.fail_mutation.load(Ordering::SeqCst) {
         StatusCode::SERVICE_UNAVAILABLE
     } else {
@@ -138,6 +143,10 @@ async fn healthcheck(
 ) -> StatusCode {
     assert_eq!(name, PROVIDER);
     f.calls.lock().unwrap().push("healthcheck");
+    if f.hold_provider.load(Ordering::SeqCst) {
+        f.entered.notify_one();
+        f.release.notified().await;
+    }
     if f.fail_mutation.load(Ordering::SeqCst) {
         StatusCode::SERVICE_UNAVAILABLE
     } else if f.accepted.load(Ordering::SeqCst) {
@@ -779,6 +788,35 @@ async fn shutdown_during_route_write_skips_connection_effects_and_cache_publicat
     assert!(fixture.closed.lock().unwrap().is_empty());
     assert!(client.snapshot().nodes.is_empty());
     server.abort();
+}
+
+#[tokio::test]
+async fn shutdown_during_provider_mutation_skips_reread_and_cache_publication() {
+    for healthcheck in [false, true] {
+        let (client, _core, _, fixture, server) = setup().await;
+        fixture.hold_provider.store(true, Ordering::SeqCst);
+        let pending = {
+            let client = client.clone();
+            tokio::spawn(async move {
+                if healthcheck {
+                    client.healthcheck_provider(PROVIDER.into()).await
+                } else {
+                    client.update_provider(PROVIDER.into()).await
+                }
+            })
+        };
+        fixture.entered.notified().await;
+        client.0.shutdown.cancel();
+        fixture.hold_provider.store(false, Ordering::SeqCst);
+        fixture.release.notify_one();
+        assert!(pending.await.unwrap().is_err());
+        assert_eq!(
+            *fixture.calls.lock().unwrap(),
+            [if healthcheck { "healthcheck" } else { "update" }]
+        );
+        assert!(client.snapshot().nodes.is_empty());
+        server.abort();
+    }
 }
 
 #[tokio::test]
