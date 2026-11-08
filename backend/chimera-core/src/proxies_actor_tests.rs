@@ -743,6 +743,22 @@ async fn replacement_during_read_never_publishes_the_old_response() {
     server.abort();
 }
 #[tokio::test]
+async fn shutdown_during_controller_read_cannot_publish_a_snapshot() {
+    let (client, _core, _, fixture, server) = setup().await;
+    fixture.hold_read.store(true, Ordering::SeqCst);
+    let pending = {
+        let client = client.clone();
+        tokio::spawn(async move { client.get(true).await })
+    };
+    fixture.entered.notified().await;
+    client.0.shutdown.cancel();
+    fixture.release.notify_one();
+    assert!(pending.await.unwrap().is_err());
+    assert!(client.snapshot().nodes.is_empty());
+    server.abort();
+}
+
+#[tokio::test]
 async fn queued_cancelled_mutation_is_not_executed_and_shutdown_closes_subscriptions() {
     let (client, _core, _, fixture, server) = setup().await;
     fixture.hold_select.store(true, Ordering::SeqCst);

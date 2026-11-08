@@ -216,6 +216,10 @@ impl State {
                 !api.is_revoked(),
                 "core instance retired during proxy assembly"
             );
+            anyhow::ensure!(
+                !self.shutdown.is_cancelled(),
+                "proxy owner shut down during snapshot assembly"
+            );
             Ok::<_, anyhow::Error>(Arc::new(Snapshot {
                 api: api.clone(),
                 proxies,
@@ -227,6 +231,10 @@ impl State {
         .await;
         match result {
             Ok(snapshot) => {
+                anyhow::ensure!(
+                    !self.shutdown.is_cancelled(),
+                    "proxy owner shut down before snapshot publication"
+                );
                 let changed = self
                     .cache
                     .as_ref()
