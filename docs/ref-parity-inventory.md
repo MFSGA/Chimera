@@ -707,6 +707,13 @@ pnpm-lock.yaml 改动按用户授权丢弃；原工作差异保留在 stash 备�
 - **验证：** `chimera-core` 全量 **201/201**（其中新迁入 actor **24/24**，覆盖并发读取共用快照与 profile invalidation）；Tauri lib **778 passed / 1 ignored**（含 Specta 生成/新鲜度）；Agent diagnostics **6/6**；完整 `pnpm typecheck`、main/legacy IPC boundary、完整 `pnpm lint:clippy`、Rustfmt 和 `git diff --check` 通过。Clippy 仍报告仓库既有 warning；没有以 `-D warnings` 将这些既有 warning 误报为零。
 - **边界：** 未启动桌面程序或真实 Service，未做 SCM/UAC/跨平台 E2E；未推送。`pnpm-lock.yaml` 原有 25 行未提交差异不属于本批，未纳入提交。
 
+## 2026-11-08 ProxiesActor shutdown publication fence
+
+- **基线：** 官方 `libnyanpasu/clash-nyanpasu` main 经 `git ls-remote` 核实为 `59724e85c34abb6995c22d101c876cc06dc16576`，与本地 `ref` gitlink 一致；不更新子模块。
+- **生产差异：** `backend/chimera-core/src/proxies_actor.rs` 在控制器快照组装后和实际发布前检查 owner shutdown token。停机中的旧 read 即使控制器返回成功，也不得重新发布代理/Provider 缓存。
+- **回归：** `proxies_actor_tests.rs::shutdown_during_controller_read_cannot_publish_a_snapshot` 用阻塞 mock-controller GET，在停机后释放请求并验证调用失败、快照仍为空。完整 core lib **202/202** 通过；单文件 stable Rustfmt 和 `git diff --check` 通过。全工作区 Rustfmt 因既有 Tauri vendor 格式差异失败；本批未重新执行 Tauri/TS/Specta/真实 Service E2E。
+- **待办：** shutdown 与 route/provider 写操作竞态、完整 StreamsActor、actor_v2 生命周期、Client workflows/state、Unified RPC、前端独立包与 Windows/Service E2E 仍未对齐。
+
 ## 2026-11-08 Core-owned ProxiesActor and Tauri production adapter (incremental)
 
 - **Baseline:** checked-out `ref` is `59724e85c34abb6995c22d101c876cc06dc16576`; GitHub `ls-remote` failed with a network timeout, so this run does **not** claim a fresh upstream main verification or update the gitlink.

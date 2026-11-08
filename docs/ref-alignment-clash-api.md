@@ -1928,3 +1928,10 @@ against the committed code completed on the Windows host:
 - **Failure semantics:** rejected operations are reconciled by same-instance reread without replay, while original mutation errors survive; successful select/unpin reports interruption and cache-refresh degradations independently. Source lease revocation prevents stale publication; ordinary refresh requests are coalesced.
 - **Evidence:** `cargo +stable test --offline --locked -p chimera-core --lib` **199 passed**; `-p chimera --lib` with temporary sidecar-free `TAURI_CONFIG` **778 passed / 1 ignored**; Clippy core/Tauri finished with existing warnings; interface `tsc --noEmit` passed. No real desktop or Service E2E.
 - **Not yet aligned:** complete ref StreamsActor and CoreActor lifecycle, Client application/workflows/state, Unified RPC, separated frontend rpc/query/platform packages, real main/legacy/Agent and Windows Service E2E. Existing unrelated pnpm lockfile modifications remain excluded.
+
+## 2026-11-08 ProxiesActor shutdown snapshot publication guard
+
+- Verified official `main` and local `ref` gitlink at `59724e85c34abb6995c22d101c876cc06dc16576`; no submodule change.
+- The core-owned production ProxiesActor now rejects snapshot assembly/publication after owner shutdown. A delayed controller GET can no longer publish a new proxy/provider view after shutdown cancellation.
+- Added a mock-controller blocked-read regression. `chimera-core --lib` **202/202** passed; targeted stable Rustfmt and `git diff --check` passed. Workspace-wide fmt failed on pre-existing vendored Tauri files; Tauri/TypeScript/Specta and real Windows/Service E2E were not rerun for this narrow core-only change.
+- Pending: mutation/shutdown races, complete ref StreamsActor and lifecycle ownership, Unified RPC and frontend package migration.
