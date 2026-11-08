@@ -903,19 +903,16 @@ pub async fn get_proxies(
     use crate::core::clash::proxies::{ProxiesGuard, ProxiesGuardExt};
 
     for _ in 0..3 {
-        let generation = {
-            let guard = ProxiesGuard::global().read();
-            if guard.is_updated() {
-                return Ok(guard.inner().clone());
-            }
-            guard.generation()
-        };
+        let generation = ProxiesGuard::global().read().generation();
         let api = client.clash_api_client().await?;
-        if ProxiesGuard::global()
-            .update_if_generation(&api, generation)
+        // Serialize only ordinary cache misses and repeat the source-instance
+        // check before returning. A retired core's still-fresh graph must not
+        // be served to main/legacy UI after an endpoint handoff.
+        if let Some(snapshot) = ProxiesGuard::global()
+            .read_coalesced_if_generation(&api, generation)
             .await?
         {
-            return Ok(ProxiesGuard::global().read().inner().clone());
+            return Ok(snapshot);
         }
     }
     Err(anyhow!("proxy snapshot changed repeatedly while refreshing").into())

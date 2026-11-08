@@ -208,6 +208,23 @@ impl<T> ProxySnapshotState<T> {
         self.revision = self.revision.wrapping_add(1);
     }
 
+    /// An older successful read must not overwrite a newer completed one,
+    /// even when both used the same profile generation. This is the success
+    /// counterpart of mark_unverified_if_revision's failure fence.
+    pub fn publish_if_generation_and_revision(
+        &mut self,
+        generation: u64,
+        revision: u64,
+        value: T,
+        checksum: u32,
+        now: u64,
+    ) -> SnapshotPublish {
+        if self.revision != revision {
+            return SnapshotPublish::Stale;
+        }
+        self.publish_if_generation(generation, value, checksum, now)
+    }
+
     pub fn publish_if_generation(
         &mut self,
         generation: u64,

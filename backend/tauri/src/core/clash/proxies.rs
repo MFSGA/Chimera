@@ -153,6 +153,12 @@ impl Proxies {
 pub struct ProxiesGuard {
     snapshot: chimera_core::proxies::ProxySnapshotState<Proxies>,
     sender: broadcast::Sender<()>,
+    /// Serialize ordinary legacy UI cache misses; mutations still reconcile
+    /// independently and are not silently folded into an earlier read.
+    read_turn: Arc<tokio::sync::Mutex<()>>,
+    /// A fresh timestamp is not sufficient when the running core is replaced
+    /// without a corresponding profile-generation change.
+    source_instance: Option<String>,
 }
 
 impl ProxiesGuard {
@@ -160,6 +166,8 @@ impl ProxiesGuard {
         Self {
             snapshot: chimera_core::proxies::ProxySnapshotState::new(Proxies::default()),
             sender,
+            read_turn: Arc::new(tokio::sync::Mutex::new(())),
+            source_instance: None,
         }
     }
 
@@ -176,6 +184,8 @@ impl ProxiesGuard {
                 value, generation, checksum, updated_at,
             ),
             sender,
+            read_turn: Arc::new(tokio::sync::Mutex::new(())),
+            source_instance: None,
         }
     }
 
@@ -219,13 +229,20 @@ impl ProxiesGuard {
 
     pub(crate) fn invalidate(&mut self) {
         self.snapshot.invalidate();
+        self.source_instance = None;
     }
 
-    fn replace_if_generation(&mut self, generation: u64, proxies: Proxies, checksum: u32) -> bool {
+    fn replace_if_generation(
+        &mut self,
+        generation: u64,
+        revision: u64,
+        proxies: Proxies,
+        checksum: u32,
+    ) -> bool {
         let now = chrono::Utc::now().timestamp() as u64;
         match self
             .snapshot
-            .publish_if_generation(generation, proxies, checksum, now)
+            .publish_if_generation_and_revision(generation, revision, proxies, checksum, now)
         {
             chimera_core::proxies::SnapshotPublish::Stale => false,
             chimera_core::proxies::SnapshotPublish::Unchanged => true,
@@ -239,6 +256,9 @@ impl ProxiesGuard {
     pub fn replace(&mut self, proxies: Proxies, checksum: u32) {
         let now = chrono::Utc::now().timestamp() as u64;
         self.snapshot.replace(proxies, checksum, now);
+        // A manual update without an instance receipt cannot authorize reuse
+        // on a later bound API client, even if its checksum is identical.
+        self.source_instance = None;
         self.notify_update();
     }
 
@@ -569,6 +589,7 @@ mod tests {
 
         assert!(!guard.replace_if_generation(
             refresh_generation,
+            0,
             Proxies {
                 global: ProxyGroupItem {
                     name: "stale profile response".into(),
@@ -703,7 +724,19 @@ mod tests {
 #[path = "proxy_pin_tests.rs"]
 mod proxy_pin_tests;
 
+#[cfg(test)]
+#[path = "proxy_read_tests.rs"]
+mod proxy_read_tests;
+
 pub trait ProxiesGuardExt {
+    /// The legacy IPC read lane, parallel to ref ProxiesActor::Read: a burst of
+    /// ordinary reads refreshes once, then uses the same 3-second snapshot.
+    /// Mutations intentionally bypass this lane and always reconcile writes.
+    async fn read_coalesced_if_generation(
+        &self,
+        api: &ApiClient,
+        generation: u64,
+    ) -> Result<Option<Proxies>>;
     async fn update_if_generation(&self, api: &ApiClient, generation: u64) -> Result<bool>;
     async fn select_proxy(
         &self,
@@ -723,6 +756,44 @@ pub trait ProxiesGuardExt {
 }
 
 impl ProxiesGuardExt for &Arc<RwLock<ProxiesGuard>> {
+    async fn read_coalesced_if_generation(
+        &self,
+        api: &ApiClient,
+        generation: u64,
+    ) -> Result<Option<Proxies>> {
+        let lane = self.read().read_turn.clone();
+        let _turn = lane.lock().await;
+        // A profile may have been replaced while this read waited its turn.
+        if self.read().generation() != generation {
+            return Ok(None);
+        }
+        api.check_binding().await?;
+        let cached = {
+            let guard = self.read();
+            (guard.is_updated() && guard.source_instance.as_deref() == api.instance_id())
+                .then(|| guard.inner().clone())
+        };
+        if let Some(cached) = cached {
+            api.check_binding().await?;
+            if self.read().generation() == generation {
+                return Ok(Some(cached));
+            }
+            return Ok(None);
+        }
+        if !self.update_if_generation(api, generation).await? {
+            return Ok(None);
+        }
+        api.check_binding().await?;
+        let guard = self.read();
+        if guard.generation() != generation
+            || !guard.is_updated()
+            || guard.source_instance.as_deref() != api.instance_id()
+        {
+            return Ok(None);
+        }
+        Ok(Some(guard.inner().clone()))
+    }
+
     async fn update_if_generation(&self, api: &ApiClient, generation: u64) -> Result<bool> {
         if self.read().generation() != generation {
             return Ok(false);
@@ -742,7 +813,12 @@ impl ProxiesGuardExt for &Arc<RwLock<ProxiesGuard>> {
                 if writer.generation() != generation {
                     return Ok(false);
                 }
-                Ok(writer.replace_if_generation(generation, proxies, checksum))
+                let published =
+                    writer.replace_if_generation(generation, revision, proxies, checksum);
+                if published {
+                    writer.source_instance = api.instance_id().map(str::to_owned);
+                }
+                Ok(published)
             }
             Err(error) => {
                 // The controller may have applied an earlier mutation even

@@ -251,6 +251,59 @@ fn proxy_cache_rejects_clock_rollback_and_empty_snapshots() {
 }
 
 #[test]
+fn late_success_cannot_overwrite_a_newer_snapshot_or_same_checksum_revision() {
+    let mut cache = ProxySnapshotState::new("initial");
+    cache.replace("original", 11, 100);
+    let generation = cache.generation();
+    let stale_revision = cache.revision();
+
+    assert_eq!(
+        cache.publish_if_generation_and_revision(generation, stale_revision, "latest", 12, 102,),
+        SnapshotPublish::Published
+    );
+    assert_eq!(
+        cache.publish_if_generation_and_revision(
+            generation,
+            stale_revision,
+            "late previous",
+            13,
+            103,
+        ),
+        SnapshotPublish::Stale,
+        "a slower GET must not roll back a newer controller observation"
+    );
+    assert_eq!(cache.value(), &"latest");
+    assert_eq!(cache.checksum(), Some(12));
+    assert!(cache.is_fresh(103, 3));
+
+    // A fresh identical response also advances revision; the old request
+    // cannot replace it with an outdated different value afterward.
+    let identical_revision = cache.revision();
+    assert_eq!(
+        cache.publish_if_generation_and_revision(
+            generation,
+            identical_revision,
+            "ignored identical",
+            12,
+            104,
+        ),
+        SnapshotPublish::Unchanged
+    );
+    assert_eq!(
+        cache.publish_if_generation_and_revision(
+            generation,
+            identical_revision,
+            "late wrong value",
+            14,
+            105,
+        ),
+        SnapshotPublish::Stale
+    );
+    assert_eq!(cache.value(), &"latest");
+    assert!(cache.is_fresh(105, 3));
+}
+
+#[test]
 fn failed_read_marks_only_its_own_revision_unverified() {
     let mut cache = ProxySnapshotState::new("initial");
     cache.replace("verified", 12, 100);
