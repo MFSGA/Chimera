@@ -57,7 +57,6 @@ function RouteComponent() {
       : 'yaml';
   const schemaType = transform?.type === 'overlay' ? 'merge' : 'clash';
   const markers = useRef<editor.IMarker[]>([]);
-  const skipCloseGuard = useRef(false);
   const loadedContent = useRef<{ uid: string; value: string } | undefined>(
     undefined,
   );
@@ -89,32 +88,7 @@ function RouteComponent() {
   }, [dirty]);
 
   const beforeClose = useCallback(async () => {
-    const accepted = await confirmDirtyClose();
-    if (accepted) skipCloseGuard.current = true;
-    return accepted;
-  }, [confirmDirtyClose]);
-
-  useEffect(() => {
-    let disposed = false;
-    let unlisten: (() => void) | undefined;
-
-    void currentWindow
-      .onCloseRequested(async (event) => {
-        if (skipCloseGuard.current) {
-          skipCloseGuard.current = false;
-          return;
-        }
-        if (!(await confirmDirtyClose())) event.preventDefault();
-      })
-      .then((dispose) => {
-        if (disposed) dispose();
-        else unlisten = dispose;
-      });
-
-    return () => {
-      disposed = true;
-      unlisten?.();
-    };
+    return confirmDirtyClose();
   }, [confirmDirtyClose]);
 
   const saveTask = useBlockTask(`save-profile-content-${uid}`, async () => {
@@ -133,7 +107,6 @@ function RouteComponent() {
         await diagnostics.refetch();
         return;
       }
-      skipCloseGuard.current = true;
       await currentWindow.close();
     } catch (error) {
       await diagnostics.refetch();
@@ -147,7 +120,6 @@ function RouteComponent() {
 
   const cancel = useLockFn(async () => {
     if (!(await confirmDirtyClose())) return;
-    skipCloseGuard.current = true;
     await currentWindow.close();
   });
 
