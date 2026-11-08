@@ -1,4 +1,7 @@
-use chimera_core::actor_v2::{service_policy::ServicePhase, service_status::ServiceHostStatus};
+use chimera_core::{
+    actor_v2::{service_policy::ServicePhase, service_status::ServiceHostStatus},
+    clash::ws::ClashConnectionsConnectorState,
+};
 use std::net::{IpAddr, Ipv6Addr};
 
 use chimera_ipc::{api::status::CoreState, types::ServiceStatus};
@@ -9,13 +12,7 @@ use tauri::{AppHandle, Manager};
 use crate::{
     client::ChimeraClient,
     config::core::Config,
-    core::{
-        clash::{
-            core::RunType,
-            ws::{ClashConnectionsConnector, ClashConnectionsConnectorState},
-        },
-        service,
-    },
+    core::{clash::core::RunType, service},
 };
 
 use super::{
@@ -380,7 +377,7 @@ fn summarize_telemetry(
     app: &AppHandle,
     failures: &mut Vec<AgentProbeFailure>,
 ) -> AgentTelemetrySnapshot {
-    let Some(connector) = app.try_state::<ClashConnectionsConnector>() else {
+    let Some(client) = app.try_state::<ChimeraClient>() else {
         failures.push(AgentProbeFailure {
             code: AgentProbeCode::TelemetryUnavailable,
         });
@@ -394,7 +391,7 @@ fn summarize_telemetry(
             recent_error_count: 0,
         };
     };
-    let snapshot = connector.snapshot();
+    let snapshot = client.streams().snapshot();
     let latest = snapshot.connections.last();
     AgentTelemetrySnapshot {
         state: match snapshot.state {

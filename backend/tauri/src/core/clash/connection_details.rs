@@ -12,7 +12,7 @@ use std::{
 use tauri::ipc::Channel;
 use tokio::{sync::watch, task::JoinHandle};
 
-use super::ws::ClashConnectionDetails;
+use chimera_core::clash::connection_rates::ClashConnectionDetails;
 
 pub type SubscriptionId = u64;
 

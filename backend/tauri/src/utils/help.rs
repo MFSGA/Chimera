@@ -170,16 +170,13 @@ pub async fn cleanup_processes_async(app_handle: &AppHandle) -> anyhow::Result<(
     debug!(target: "app", "cleanup processes");
     // let _ = super::resolve::save_window_state(app_handle, true);
     /* let widget_manager = app_handle.state::<crate::widget::WidgetManager>(); */
-    let connector = app_handle
-        .try_state::<crate::core::clash::ws::ClashConnectionsConnector>()
-        .map(|state| state.inner().clone());
     let client = app_handle
         .try_state::<ChimeraClient>()
-        .map(|state| state.inner().clone());
-    if let Some(connector) = connector {
-        connector.stop().await;
+        .map(|state| state.inner().clone())
+        .ok_or_else(|| anyhow!("ChimeraClient is not managed"))?;
+    if let Err(error) = client.streams().stop().await {
+        log::warn!(target: "app", "failed to stop Clash streams during cleanup: {error:?}");
     }
-    let client = client.ok_or_else(|| anyhow!("ChimeraClient is not managed"))?;
     if let Err(error) = crate::window::persist_active_window_state(app_handle, &client).await {
         log::error!(target: "app", "failed to persist active window state during cleanup: {error:?}");
     }

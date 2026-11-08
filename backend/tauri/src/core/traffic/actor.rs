@@ -16,8 +16,8 @@ use super::{
     ports::{Clock, LocalSourceLocation, ProfileSelection, RetentionPolicy},
     source::frame_from_snapshot,
 };
-use crate::core::clash::ws::ClashConnectionsFrame;
 use crate::core::geo::{CoreGeodataModeSource, CountryIndexSnapshot, GeoIndexClient};
+use chimera_core::clash::ws::ClashConnectionsFrame;
 
 const FLUSH_INTERVAL: Duration = Duration::from_secs(30);
 /// Dimension combinations that no usage row refers to are collected at most this often.

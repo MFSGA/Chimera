@@ -6,7 +6,7 @@ use chimera_traffic::{Bytes, Dimensions, Frame, RuleKey, Sample};
 use clash_api::{ConfigEnum, Connection, ConnectionNetwork};
 
 use super::geo;
-use crate::core::clash::ws::ClashConnectionsFrame;
+use chimera_core::clash::ws::ClashConnectionsFrame;
 
 const UNKNOWN: &str = "unknown";
 
@@ -125,10 +125,9 @@ fn network(network: &ConfigEnum<ConnectionNetwork>) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::{
-        clash::ws::{ClashConnectionsFrame, ClashWsConnectionSnapshot},
-        traffic::geo::tests::Countries,
-    };
+    use chimera_core::clash::ws::ClashWsConnectionSnapshot;
+
+    use crate::core::traffic::geo::tests::Countries;
 
     #[test]
     fn frame_uses_the_core_country_index_for_each_connection() {

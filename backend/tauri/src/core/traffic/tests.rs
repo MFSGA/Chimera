@@ -18,11 +18,11 @@ use super::{
     Clock, LocalSourceIps, LocalSourceLocation, ProfileSelection, RetentionPolicy, TrafficArgs,
     TrafficClient,
 };
-use crate::core::clash::ws::{ClashConnectionsFrame, ClashWsConnectionSnapshot};
 use crate::core::geo::{
     CoreGeodataBinding, CoreGeodataModeSource, CountryIndexSnapshot, GeoIndexArgs, GeoIndexClient,
     GeodataMode, IndexKey, Loaded, MockCountryIndexSource,
 };
+use chimera_core::clash::ws::{ClashConnectionsFrame, ClashWsConnectionSnapshot};
 
 struct WaitingCore;
 
