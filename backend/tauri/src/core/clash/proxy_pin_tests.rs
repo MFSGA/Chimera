@@ -312,6 +312,109 @@ async fn failed_selection_reread_invalidates_freshness_but_preserves_last_view()
 }
 
 #[tokio::test]
+async fn rejected_provider_update_rereads_controller_and_preserves_error() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let mut routes = Vec::new();
+        for _ in 0..4 {
+            let (mut stream, _) = tokio::time::timeout(TEST_DEADLINE, listener.accept())
+                .await
+                .expect("provider PUT plus snapshot GETs")
+                .unwrap();
+            let mut buffer = [0u8; 8192];
+            let size = stream.read(&mut buffer).await.unwrap();
+            let line = String::from_utf8_lossy(&buffer[..size])
+                .lines()
+                .next()
+                .unwrap()
+                .to_owned();
+            let (status, body) = if line.starts_with("PUT /providers/proxies/Subscription ") {
+                ("409 Conflict", r#"{"message":"provider already updated"}"#)
+            } else if line.starts_with("GET /proxies ") {
+                (
+                    "200 OK",
+                    r#"{"proxies":{"DIRECT":{"name":"DIRECT","type":"Direct","history":[],"udp":false},"REJECT":{"name":"REJECT","type":"Reject","history":[],"udp":false},"GLOBAL":{"name":"GLOBAL","type":"Selector","history":[],"udp":false,"all":["Auto"]},"Auto":{"name":"Auto","type":"Selector","history":[],"udp":false,"all":["DIRECT"],"now":"DIRECT"}}}"#,
+                )
+            } else if line.starts_with("GET /providers/proxies ") {
+                ("200 OK", r#"{"providers":{}}"#)
+            } else if line.starts_with("GET /group ") {
+                ("404 Not Found", r#"{"message":"not supported"}"#)
+            } else {
+                panic!("unexpected route: {line}");
+            };
+            routes.push(line);
+            let response = format!(
+                "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            stream.write_all(response.as_bytes()).await.unwrap();
+        }
+        routes
+    });
+    let (sender, mut changes) = broadcast::channel(2);
+    let guard = Arc::new(RwLock::new(ProxiesGuard::new(sender)));
+    let generation = guard.read().generation();
+    let api = ApiClient::new(crate::config::clash::ClashInfo {
+        port: address.port(),
+        server: address.to_string(),
+        secret: None,
+    })
+    .unwrap();
+    let error = tokio::time::timeout(
+        TEST_DEADLINE,
+        (&guard).update_provider(&api, generation, "Subscription"),
+    )
+    .await
+    .expect("provider update should complete")
+    .unwrap_err();
+    assert!(
+        error.to_string().contains("409") || error.to_string().contains("update_proxy_provider"),
+        "{error:#}"
+    );
+    assert_eq!(guard.read().inner().groups[0].name, "Auto");
+    changes
+        .try_recv()
+        .expect("provider refresh should notify subscribers");
+    let routes = tokio::time::timeout(TEST_DEADLINE, server)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        routes
+            .iter()
+            .filter(|route| route.starts_with("PUT "))
+            .count(),
+        1
+    );
+    assert_eq!(
+        routes
+            .iter()
+            .filter(|route| route.starts_with("GET "))
+            .count(),
+        3
+    );
+}
+
+#[tokio::test]
+async fn stale_proxy_generation_rejects_provider_update_before_any_http_request() {
+    let guard = guard();
+    let previous = guard.read().generation();
+    guard.write().invalidate();
+    let api = ApiClient::new(crate::config::clash::ClashInfo {
+        port: 1,
+        server: "127.0.0.1:1".into(),
+        secret: None,
+    })
+    .unwrap();
+    let error = (&guard)
+        .update_provider(&api, previous, "Subscription")
+        .await
+        .expect_err("stale generation cannot dispatch provider update");
+    assert!(error.to_string().contains("profile change"));
+}
+
+#[tokio::test]
 async fn stale_proxy_generation_rejects_unpin_before_any_http_request() {
     let guard = guard();
     let previous = guard.read().generation();

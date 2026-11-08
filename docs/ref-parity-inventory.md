@@ -602,3 +602,34 @@ pnpm-lock.yaml 改动按用户授权丢弃；原工作差异保留在 stash 备�
   迁移时需进一步统一快照可见性和缓存失效通知。
   无持久化或 IPC wire 变更，用户 `pnpm-lock.yaml`
   差异未触碰。
+
+## 2026-11-07 ProxiesActor：Provider 更新纳入实例绑定读回（部分）
+
+**上游基线：** 官方 `libnyanpasu/clash-nyanpasu` main
+经本轮 `git -C ref ls-remote origin refs/heads/main` 再次核实为
+`a8dd5d58ac86baa7a7e9333dc3332fe98755ef3b`，与本地 ref 一致。
+参照 `ref/backend/nyanpasu-core/src/proxies.rs` 的
+`update_provider` / `reread_after_rejection`。
+
+- **生产迁移：** `backend/tauri/src/client/clash_api.rs`
+  的 `ChimeraClient::update_proxy_provider` 不再仅直接转发 PUT；
+  从同一 `clash_api_client` 捕获活跃实例，进入
+  `backend/tauri/src/core/clash/proxies.rs` 的
+  `ProxiesGuardExt::update_provider`，沿用代际门禁及
+  `update_if_generation`。无论 PUT 成功还是失败都从同一
+  实例读回；失败保留原错误、绝不重放 PUT，读回失败沿用
+  前轮的 freshness 失效及订阅通知机制。实际入口仍是
+  `backend/tauri/src/ipc.rs::update_proxy_provider`。
+- **回归：** `backend/tauri/src/core/clash/proxy_pin_tests.rs`
+  增加模拟 Provider PUT 409 后三路 GET、仅一次 PUT、
+  发布新快照并通知订阅者，以及旧 generation 拒绝网络请求。
+  Tauri proxy-pin **7/7**，core **175/175**，
+  Specta **1/1**，interface **56/56**，
+  main traffic **16/16**，E2E 框架 **33/33**，
+  全量 TS、main/legacy IPC 边界和完整 Clippy 均通过
+  （Clippy 仍有既有警告）。
+- **未完成：** Provider metadata 尚未与代理图合并为 ref
+  actor 的单一快照，健康检查、Provider 缓存 TTL、
+  请求合并、mailbox/生命周期所有权、StreamsActor、
+  Client/state、Unified RPC、前端独立包与真实 Windows E2E
+  均待迁移。未修改 wire、生成绑定、持久化、runtime 或锁文件。

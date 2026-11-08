@@ -1825,3 +1825,29 @@ against the committed code completed on the Windows host:
   state/Unified RPC and frontend packages remain outstanding, as do
   real Windows SCM/UAC/Service/main/legacy/Agent E2E tests.
   No IPC wire, persistence, ref/runtime gitlink or lockfile changes.
+
+## 2026-11-07 ProxiesActor provider mutation reconciliation (partial)
+
+- **Reference:** official upstream main and local ref both verified at
+  `a8dd5d58ac86baa7a7e9333dc3332fe98755ef3b`.
+  Upstream `backend/nyanpasu-core/src/proxies.rs` has
+  `update_provider` / `reread_after_rejection` in the actor mailbox.
+- **Production call path:** `backend/tauri/src/ipc.rs::update_proxy_provider`
+  → `backend/tauri/src/client/clash_api.rs::ChimeraClient::update_proxy_provider`
+  → `backend/tauri/src/core/clash/proxies.rs::ProxiesGuardExt::update_provider`.
+  Capture one instance-bound API client and proxy generation, perform one
+  provider PUT, then reread via the existing guarded snapshot refresh.
+  Rejected/uncertain PUTs retain their error but still reconcile the
+  controller truth; failed GETs revoke freshness, and retired generations
+  cannot publish. No retry of a side-effecting PUT.
+- **Tests:** new mock-controller test covers rejected PUT, exactly three
+  snapshot GETs, UI change notification and retained error; stale generation
+  fails before HTTP. Proxy-pin **7/7**, core **175/175**, Specta **1/1**,
+  interface **56/56**, main traffic **16/16**, E2E harness **33/33**,
+  full TypeScript, frontend boundary and full Clippy pass (existing warnings).
+- **Limitations:** provider metadata is not yet a unified actor-owned
+  snapshot with proxies. Provider healthcheck, TTL/coalescing, mailbox,
+  CoreActor, StreamsActor, Client workflows/state, Unified RPC, standalone
+  frontend rpc/query/platform, main/legacy/Agent real integration and
+  Windows/Service E2E remain outstanding. No wire, generated binding,
+  persistence, runtime gitlink or unrelated lockfile changes.

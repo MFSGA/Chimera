@@ -107,10 +107,11 @@ impl ChimeraClient {
     }
 
     pub async fn update_proxy_provider(&self, name: String) -> Result<()> {
-        self.clash_api_client()
-            .await?
-            .update_proxy_provider(&clash_api::ProviderName::new(name))
-            .await
-            .map_err(Into::into)
+        use crate::core::clash::proxies::{ProxiesGuard, ProxiesGuardExt};
+
+        let api = self.clash_api_client().await?;
+        let guard = ProxiesGuard::global();
+        let generation = guard.read().generation();
+        guard.update_provider(&api, generation, &name).await
     }
 }
