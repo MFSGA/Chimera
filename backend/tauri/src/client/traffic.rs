@@ -16,13 +16,13 @@ use super::{ChimeraClient, application::ApplicationClient, profiles::ProfilesCli
 use crate::client::core_lifecycle::CoreLifecyclePort;
 use crate::core::geo::GeodataMode;
 use crate::core::{
-    clash::ws::ClashConnectionsFrame,
     geo::{CoreGeodataBinding, CoreGeodataModeSource, CountryIndexSnapshot, GeoIndexClient},
     traffic::{
         Clock, LocalSourceIps, LocalSourceLocation, ProfileSelection, RetentionPolicy, TrafficArgs,
         TrafficClient,
     },
 };
+use chimera_core::clash::ws::ClashConnectionsFrame;
 
 struct SelectedProfile(ProfilesClient);
 

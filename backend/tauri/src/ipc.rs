@@ -1467,44 +1467,36 @@ pub fn clear_storage(app_handle: AppHandle) -> Result {
 #[tauri::command]
 #[specta::specta]
 pub async fn get_clash_ws_connections_state(
-    app_handle: AppHandle,
-) -> Result<crate::core::clash::ws::ClashConnectionsConnectorState> {
-    Ok(app_handle
-        .state::<crate::core::clash::ws::ClashConnectionsConnector>()
-        .state())
+    client: State<'_, ChimeraClient>,
+) -> Result<chimera_core::clash::ws::ClashConnectionsConnectorState> {
+    Ok(client.streams().state())
 }
 
 #[tauri::command]
 #[specta::specta]
 pub async fn get_clash_ws_snapshot(
-    app_handle: AppHandle,
-) -> Result<crate::core::clash::ws::ClashWsSnapshot> {
-    Ok(app_handle
-        .state::<crate::core::clash::ws::ClashConnectionsConnector>()
-        .snapshot())
+    client: State<'_, ChimeraClient>,
+) -> Result<chimera_core::clash::ws::ClashWsSnapshot> {
+    Ok(client.streams().snapshot())
 }
 
 #[tauri::command]
 #[specta::specta]
 pub async fn set_clash_ws_recording(
-    app_handle: AppHandle,
-    kind: crate::core::clash::ws::ClashWsKind,
+    client: State<'_, ChimeraClient>,
+    kind: chimera_core::clash::ws::ClashWsKind,
     enabled: bool,
-) -> Result<crate::core::clash::ws::ClashWsRecording> {
-    Ok(app_handle
-        .state::<crate::core::clash::ws::ClashConnectionsConnector>()
-        .set_recording(kind, enabled))
+) -> Result<chimera_core::clash::ws::ClashWsRecording> {
+    Ok(client.streams().set_recording(kind, enabled).await?)
 }
 
 #[tauri::command]
 #[specta::specta]
 pub async fn clear_clash_ws_history(
-    app_handle: AppHandle,
-    kind: crate::core::clash::ws::ClashWsKind,
+    client: State<'_, ChimeraClient>,
+    kind: chimera_core::clash::ws::ClashWsKind,
 ) -> Result {
-    app_handle
-        .state::<crate::core::clash::ws::ClashConnectionsConnector>()
-        .clear_history(kind);
+    client.streams().clear_history(kind).await?;
     Ok(())
 }
 
@@ -1514,11 +1506,11 @@ pub async fn clear_clash_ws_history(
 #[specta::specta]
 pub async fn subscribe_clash_connection_details(
     window: tauri::Window,
-    connector: State<'_, crate::core::clash::ws::ClashConnectionsConnector>,
+    client: State<'_, ChimeraClient>,
     subscriptions: State<'_, crate::core::clash::connection_details::ConnectionDetailSubscriptions>,
-    on_frame: tauri::ipc::Channel<crate::core::clash::ws::ClashConnectionDetails>,
+    on_frame: tauri::ipc::Channel<chimera_core::clash::connection_rates::ClashConnectionDetails>,
 ) -> Result<crate::core::clash::connection_details::SubscriptionId> {
-    let receiver = connector.subscribe_connection_details();
+    let receiver = client.streams().subscribe_connection_details().await?;
     let task = tokio::spawn(crate::core::clash::connection_details::forward_details(
         receiver, on_frame,
     ));

@@ -3,9 +3,12 @@
 //! This follows the reference client ownership direction and reads the active
 //! runtime through the shared CoreFacade host boundary.
 
+use std::sync::Arc;
+
 use anyhow::Result;
 
 use super::ChimeraClient;
+use crate::client::core_lifecycle::CoreLifecyclePort;
 use crate::core::{
     actor_v2::api::ApiClient,
     clash::{
@@ -13,7 +16,23 @@ use crate::core::{
         proxies::ProxyProviderSummary,
     },
 };
+use chimera_core::clash::ws::ClashApiClientSource;
 use chimera_core::client::clash_api::{config_item, rule_provider_item};
+
+struct LifecycleStreamsApiClientSource(Arc<dyn CoreLifecyclePort>);
+
+#[async_trait::async_trait]
+impl ClashApiClientSource for LifecycleStreamsApiClientSource {
+    async fn api_client(&self) -> Result<chimera_core::actor_v2::api::ApiClient> {
+        Ok(self.0.clash_api_client().await?.core_client())
+    }
+}
+
+pub(crate) fn streams_api_client_source(
+    core: Arc<dyn CoreLifecyclePort>,
+) -> Arc<dyn ClashApiClientSource> {
+    Arc::new(LifecycleStreamsApiClientSource(core))
+}
 
 impl ChimeraClient {
     pub(crate) async fn active_core_binding(

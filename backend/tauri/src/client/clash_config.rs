@@ -590,7 +590,9 @@ impl ChimeraClient {
         } else {
             None
         };
-        self.inner.clash_config.patch(self, patch).await
+        self.inner.clash_config.patch(self, patch).await?;
+        self.refresh_stream_log_level().await;
+        Ok(())
     }
 
     pub(crate) async fn patch_clash_overrides(
@@ -600,17 +602,40 @@ impl ChimeraClient {
         self.inner
             .clash_config
             .patch_overrides(self, overrides)
-            .await
+            .await?;
+        self.refresh_stream_log_level().await;
+        Ok(())
     }
 
     pub(crate) async fn patch_running_clash_overrides(
         &self,
         overrides: ClashConfigOverrides,
     ) -> TransactionOutcome {
-        self.inner
+        let outcome = self
+            .inner
             .clash_config
             .patch_running_overrides(self, overrides)
-            .await
+            .await;
+        self.refresh_stream_log_level().await;
+        outcome
+    }
+
+    async fn refresh_stream_log_level(&self) {
+        match self.get_clash_config() {
+            Ok(config) => {
+                if let Err(error) = self
+                    .inner
+                    .streams
+                    .set_log_level(config.overrides.log_level())
+                    .await
+                {
+                    tracing::warn!(%error, "failed to update the Clash logs WebSocket level");
+                }
+            }
+            Err(error) => {
+                tracing::warn!(%error, "failed to read Clash log level after config update");
+            }
+        }
     }
 }
 

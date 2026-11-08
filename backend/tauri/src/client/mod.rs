@@ -165,6 +165,8 @@ struct ChimeraClientInner {
     clash_config: ClashConfigClient,
     core_lifecycle: CoreLifecycleClient,
     core: Arc<dyn CoreLifecyclePort>,
+    streams: chimera_core::clash::ws::StreamsClient,
+    streams_shutdown: tokio_util::sync::CancellationToken,
     typed_profiles: Option<profiles::ProfilesClient>,
     profile_service: Arc<ProfileFileService>,
     system_dns: Arc<dyn SystemDnsCache>,
@@ -188,6 +190,12 @@ struct ChimeraClientInner {
     window: Arc<dyn hotkey::ports::WindowControl>,
     #[cfg(test)]
     _test_profile_dir: Option<Arc<tempfile::TempDir>>,
+}
+
+impl Drop for ChimeraClientInner {
+    fn drop(&mut self) {
+        self.streams_shutdown.cancel();
+    }
 }
 
 #[cfg(test)]
@@ -274,10 +282,20 @@ impl ChimeraClient {
                 service,
             ))?;
         tauri::async_runtime::block_on(mutations.connect(core_lifecycle.clone()))?;
+        let streams_shutdown = shutdown.child_token();
+        let streams =
+            tauri::async_runtime::block_on(chimera_core::clash::ws::StreamsClient::spawn(
+                clash_api::streams_api_client_source(core.clone()),
+                typed.clash_config.get()?.overrides.log_level(),
+                streams_shutdown.clone(),
+                &tasks,
+            ))?;
         let client = Self::with_parts_and_typed_config(
             typed,
             core_lifecycle,
             core,
+            streams,
+            streams_shutdown,
             profile_service,
             Some(typed_profiles),
             system_dns,
@@ -367,10 +385,23 @@ impl ChimeraClient {
             .expect("test effects actor should start")
         };
 
+        let streams_shutdown = tokio_util::sync::CancellationToken::new();
+        let streams_tasks = tokio_util::task::TaskTracker::new();
+        let streams = chimera_core::clash::ws::StreamsClient::spawn(
+            clash_api::streams_api_client_source(core.clone()),
+            chimera_config::clash::config::overrides::LogLevel::Info,
+            streams_shutdown.clone(),
+            &streams_tasks,
+        )
+        .await
+        .expect("test streams actor should start");
+
         Self::with_parts_and_typed_config(
             typed,
             core_lifecycle,
             core,
+            streams,
+            streams_shutdown,
             profile_service,
             None,
             system_dns,
@@ -391,6 +422,8 @@ impl ChimeraClient {
         typed: TypedConfigClients,
         core_lifecycle: CoreLifecycleClient,
         core: Arc<dyn CoreLifecyclePort>,
+        streams: chimera_core::clash::ws::StreamsClient,
+        streams_shutdown: tokio_util::sync::CancellationToken,
         profile_service: Arc<ProfileFileService>,
         typed_profiles: Option<profiles::ProfilesClient>,
         system_dns: Arc<dyn SystemDnsCache>,
@@ -414,6 +447,8 @@ impl ChimeraClient {
             clash_config: typed.clash_config,
             core_lifecycle,
             core,
+            streams,
+            streams_shutdown,
             typed_profiles,
             profile_service,
             system_dns,
@@ -457,6 +492,10 @@ impl ChimeraClient {
 }
 
 impl ChimeraClient {
+    pub(crate) fn streams(&self) -> &chimera_core::clash::ws::StreamsClient {
+        &self.inner.streams
+    }
+
     fn profiles_client(&self) -> anyhow::Result<&profiles::ProfilesClient> {
         self.inner
             .typed_profiles
