@@ -17,6 +17,7 @@ tokio.workspace = true
 tracing.workspace = true
 serde = { version = "1.0", features = ["derive"] }
 specta = { version = "^2.0.0-rc.25", features = ["serde_json", "serde_yaml", "uuid", "url", "indexmap"] }
+specta-typescript = { version = "0.0.12", features = ["serde"] }
 clash-api = { workspace = true }
 chimera-core-manager = { workspace = true }
 chimera-utils = { workspace = true, features = ["core_manager"] }
@@ -29,6 +30,8 @@ semver = "1"
 tokio-util = { workspace = true }
 chrono = { version = "0.4", features = ["serde"] }
 url = "2"
+ractor = "0.16"
+uuid = { version = "1", features = ["serde", "v4"] }
 atomicwrites = "0.4.4"
 camino = { version = "1.1.9", features = ["serde1"] }
 fs-err.workspace = true
@@ -37,3 +40,4 @@ serde_yaml_ng.workspace = true
 [dev-dependencies]
 tokio = { workspace = true, features = ["full", "test-util"] }
 tempfile = "3"
+axum = "0.8"
