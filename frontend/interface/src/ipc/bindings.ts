@@ -312,6 +312,10 @@ export const commands = {
     >(__TAURI_INVOKE('clash_api_get_providers_proxies')),
   updateProxyProvider: (name: string) =>
     typedError<null, string>(__TAURI_INVOKE('update_proxy_provider', { name })),
+  healthcheckProxyProvider: (name: string) =>
+    typedError<null, string>(
+      __TAURI_INVOKE('healthcheck_proxy_provider', { name }),
+    ),
   clashApiGetProxyDelay: (
     name: string,
     url: string | null,

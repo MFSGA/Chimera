@@ -88,6 +88,7 @@ macro_rules! build_builder {
                 crate::ipc::clash_api_update_providers_rules,
                 crate::ipc::clash_api_get_providers_proxies,
                 crate::ipc::update_proxy_provider,
+                crate::ipc::healthcheck_proxy_provider,
                 crate::ipc::clash_api_get_proxy_delay,
                 crate::ipc::clash_api_get_group_delay,
                 crate::ipc::test_native_proxy_group_delay,

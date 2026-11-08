@@ -291,6 +291,19 @@ impl ApiClient {
             .await
     }
 
+    /// Provider-wide healthchecks can alter delay history even if their reply
+    /// is lost. Keep the same lease checks and no-retry boundary as writes.
+    pub async fn healthcheck_proxy_provider(
+        &self,
+        name: &clash_api::ProviderName,
+    ) -> ApiResult<()> {
+        self.execute(
+            DEFAULT_API_TIMEOUT,
+            self.client.healthcheck_proxy_provider(name),
+        )
+        .await
+    }
+
     /// The complete data required to assemble a proxy view. Preflight,
     /// all network reads, decoding and postflight share one lifecycle lease.
     pub async fn proxy_snapshot(&self) -> ApiResult<ProxySnapshot> {
@@ -921,6 +934,18 @@ Connection: close
                 Some("https://example.test/generate_204")
             );
         }
+    }
+
+    #[tokio::test]
+    async fn retired_instance_rejects_provider_healthcheck_before_dispatch() {
+        let (api, endpoint) = bound();
+        *endpoint.binding.lock().unwrap() = None;
+        let result = api
+            .healthcheck_proxy_provider(&clash_api::ProviderName::new("Subscription"))
+            .await;
+        assert!(matches!(result, Err(ApiError::Stale)));
+        assert_eq!(endpoint.checks.load(Ordering::SeqCst), 1);
+        assert!(api.revoked.is_cancelled());
     }
 
     #[tokio::test]

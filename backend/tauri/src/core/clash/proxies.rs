@@ -714,6 +714,12 @@ pub trait ProxiesGuardExt {
     ) -> Result<()>;
     async fn clear_proxy_fixed(&self, api: &ApiClient, generation: u64, group: &str) -> Result<()>;
     async fn update_provider(&self, api: &ApiClient, generation: u64, name: &str) -> Result<()>;
+    async fn healthcheck_provider(
+        &self,
+        api: &ApiClient,
+        generation: u64,
+        name: &str,
+    ) -> Result<()>;
 }
 
 impl ProxiesGuardExt for &Arc<RwLock<ProxiesGuard>> {
@@ -790,6 +796,32 @@ impl ProxiesGuardExt for &Arc<RwLock<ProxiesGuard>> {
         }
         if !refresh? {
             anyhow::bail!("proxy snapshot changed while provider update was in flight");
+        }
+        Ok(())
+    }
+
+    async fn healthcheck_provider(
+        &self,
+        api: &ApiClient,
+        generation: u64,
+        name: &str,
+    ) -> Result<()> {
+        self.read().ensure_generation_matches(generation)?;
+        let mutation = api
+            .healthcheck_proxy_provider(&clash_api::ProviderName::new(name))
+            .await;
+        // A timed-out health check may already have refreshed the controller.
+        // Re-read exactly once from the same source instance, retaining its
+        // original failure and retiring cache freshness if the read fails.
+        let refresh = self.update_if_generation(api, generation).await;
+        if let Err(error) = mutation {
+            if let Err(refresh_error) = refresh {
+                tracing::debug!(%refresh_error, "proxy refresh after provider healthcheck failed");
+            }
+            return Err(error.into());
+        }
+        if !refresh? {
+            anyhow::bail!("proxy snapshot changed while provider healthcheck was in flight");
         }
         Ok(())
     }

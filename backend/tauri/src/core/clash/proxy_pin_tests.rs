@@ -397,6 +397,139 @@ async fn rejected_provider_update_rereads_controller_and_preserves_error() {
 }
 
 #[tokio::test]
+async fn rejected_provider_healthcheck_rereads_source_and_keeps_original_error() {
+    // A healthcheck can finish even when the controller returns an error.
+    // One source-bound healthcheck request is followed by fresh proxy reads;
+    // the original error remains visible and the cache is not optimistic.
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let mut routes = Vec::new();
+        for _ in 0..4 {
+            let (mut stream, _) = tokio::time::timeout(TEST_DEADLINE, listener.accept())
+                .await
+                .expect("one healthcheck and three snapshot reads")
+                .unwrap();
+            let mut buffer = [0u8; 8192];
+            let size = stream.read(&mut buffer).await.unwrap();
+            let line = String::from_utf8_lossy(&buffer[..size])
+                .lines()
+                .next()
+                .unwrap()
+                .to_owned();
+            let (status, body) = if line
+                .starts_with("GET /providers/proxies/Subscription/healthcheck ")
+            {
+                (
+                    "409 Conflict",
+                    r#"{"message":"healthcheck result unknown"}"#,
+                )
+            } else if line.starts_with("GET /proxies ") {
+                (
+                    "200 OK",
+                    r#"{"proxies":{"DIRECT":{"name":"DIRECT","type":"Direct","history":[],"udp":false},"REJECT":{"name":"REJECT","type":"Reject","history":[],"udp":false},"GLOBAL":{"name":"GLOBAL","type":"Selector","history":[],"udp":false,"all":["Auto"]},"Auto":{"name":"Auto","type":"Selector","history":[],"udp":false,"all":["DIRECT","REJECT"],"now":"DIRECT"}}}"#,
+                )
+            } else if line.starts_with("GET /providers/proxies ") {
+                ("200 OK", r#"{"providers":{}}"#)
+            } else if line.starts_with("GET /group ") {
+                ("404 Not Found", r#"{"message":"not supported"}"#)
+            } else {
+                panic!("unexpected controller route: {line}");
+            };
+            routes.push(line);
+            let response = format!(
+                "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            stream.write_all(response.as_bytes()).await.unwrap();
+        }
+        routes
+    });
+
+    let (sender, mut changes) = broadcast::channel(2);
+    let mut previous = Proxies::default();
+    previous.groups.push(ProxyGroupItem {
+        name: "Auto".into(),
+        now: Some("REJECT".into()),
+        ..Default::default()
+    });
+    let guard = Arc::new(RwLock::new(ProxiesGuard::test_guard(
+        previous,
+        Some(10),
+        chrono::Utc::now().timestamp() as u64,
+        0,
+        sender,
+    )));
+    let generation = guard.read().generation();
+    let api = ApiClient::new(crate::config::clash::ClashInfo {
+        port: address.port(),
+        server: address.to_string(),
+        secret: None,
+    })
+    .unwrap();
+
+    let error = tokio::time::timeout(
+        TEST_DEADLINE,
+        (&guard).healthcheck_provider(&api, generation, "Subscription"),
+    )
+    .await
+    .expect("healthcheck must complete")
+    .expect_err("the rejected healthcheck remains an error");
+    assert!(
+        error.to_string().contains("409")
+            || error.to_string().contains("healthcheck_proxy_provider"),
+        "original healthcheck failure must be retained: {error:#}"
+    );
+    assert_eq!(guard.read().generation(), generation);
+    assert_eq!(
+        guard.read().inner().groups[0].now.as_deref(),
+        Some("DIRECT")
+    );
+    changes
+        .try_recv()
+        .expect("the source reread must notify the subscriber");
+
+    let routes = tokio::time::timeout(TEST_DEADLINE, server)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        routes
+            .iter()
+            .filter(|route| route.contains("/healthcheck "))
+            .count(),
+        1,
+        "never replay provider-wide healthchecks"
+    );
+    assert_eq!(
+        routes
+            .iter()
+            .filter(|route| route.starts_with("GET "))
+            .count(),
+        4,
+        "one healthcheck plus three controller snapshot GETs"
+    );
+}
+
+#[tokio::test]
+async fn stale_generation_rejects_provider_healthcheck_before_http() {
+    let guard = guard();
+    let stale_generation = guard.read().generation();
+    guard.write().invalidate();
+    let api = ApiClient::new(crate::config::clash::ClashInfo {
+        port: 1,
+        server: "127.0.0.1:1".into(),
+        secret: None,
+    })
+    .unwrap();
+    let error = (&guard)
+        .healthcheck_provider(&api, stale_generation, "Subscription")
+        .await
+        .expect_err("old-profile healthchecks must never be dispatched");
+    assert!(error.to_string().contains("profile change"));
+}
+
+#[tokio::test]
 async fn stale_proxy_generation_rejects_provider_update_before_any_http_request() {
     let guard = guard();
     let previous = guard.read().generation();

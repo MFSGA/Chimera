@@ -1583,6 +1583,15 @@ pub async fn update_proxy_provider(client: State<'_, ChimeraClient>, name: Strin
 
 #[tauri::command]
 #[specta::specta]
+pub async fn healthcheck_proxy_provider(
+    client: State<'_, ChimeraClient>,
+    name: String,
+) -> Result<()> {
+    Ok(client.healthcheck_proxy_provider(name).await?)
+}
+
+#[tauri::command]
+#[specta::specta]
 pub async fn clash_api_get_proxy_delay(
     name: String,
     url: Option<String>,

@@ -114,4 +114,13 @@ impl ChimeraClient {
         let generation = guard.read().generation();
         guard.update_provider(&api, generation, &name).await
     }
+
+    pub async fn healthcheck_proxy_provider(&self, name: String) -> Result<()> {
+        use crate::core::clash::proxies::{ProxiesGuard, ProxiesGuardExt};
+
+        let api = self.clash_api_client().await?;
+        let guard = ProxiesGuard::global();
+        let generation = guard.read().generation();
+        guard.healthcheck_provider(&api, generation, &name).await
+    }
 }
