@@ -331,8 +331,6 @@ impl ChimeraClient {
                 Err(error) => tracing::warn!(%error, "traffic geography index is unavailable"),
             }
         }
-        #[cfg(not(any(target_os = "android", target_os = "ios")))]
-        tauri::async_runtime::block_on(client.reconcile_hotkeys());
         Ok(client)
     }
 

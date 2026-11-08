@@ -296,6 +296,16 @@ pub fn run() -> std::io::Result<()> {
         .expect("error while running tauri application");
 
     app.run(|app_handle, e| match e {
+        // todo: will change to keep align with ref.
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        tauri::RunEvent::Ready => {
+            // Shortcut registration synchronously dispatches to the UI thread.
+            // Start it only after setup returns and the event loop can run.
+            let client = app_handle.state::<crate::client::ChimeraClient>().inner().clone();
+            tauri::async_runtime::spawn(async move {
+                client.reconcile_hotkeys().await;
+            });
+        }
         // pay attention to this event order, otherwise the app will quit immediately after all windows are closed
         tauri::RunEvent::ExitRequested { api, code, .. } => {
             utils::exit::on_exit_requested(app_handle, code, &api);
