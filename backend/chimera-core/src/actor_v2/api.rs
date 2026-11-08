@@ -76,6 +76,9 @@ pub struct ApiClient {
     client: clash_api::Client,
     binding: Option<chimera_ipc::api::core::v2::CoreApiConnection>,
     endpoint: Option<Arc<dyn CoreApiEndpoint>>,
+    /// Clones share identity; separately acquired leases with the same
+    /// authoritative CoreApiConnection compare equal by their binding.
+    identity: Arc<()>,
     revoked: CancellationToken,
     /// Cache a conclusive `/group` availability answer per running core.
     group_list: Arc<OnceLock<bool>>,
@@ -96,6 +99,24 @@ impl ApiClient {
         self.binding
             .as_ref()
             .map(|binding| binding.instance_id.as_str())
+    }
+
+    /// Whether two leases refer to the same running controller instance.
+    /// Bound leases compare their full authority receipt; unbound startup/test
+    /// clients compare only when they are clones of the same client.
+    pub fn same_instance(&self, other: &Self) -> bool {
+        if self.is_revoked() || other.is_revoked() {
+            return false;
+        }
+        match (&self.binding, &other.binding) {
+            (Some(left), Some(right)) => left == right,
+            (None, None) => Arc::ptr_eq(&self.identity, &other.identity),
+            _ => false,
+        }
+    }
+
+    pub fn is_revoked(&self) -> bool {
+        self.revoked.is_cancelled()
     }
 
     /// Explicitly unbound client for startup readiness probes and tests.
@@ -141,6 +162,7 @@ impl ApiClient {
             client: builder.build()?,
             binding: None,
             endpoint: None,
+            identity: Arc::new(()),
             revoked: CancellationToken::new(),
             group_list: Arc::default(),
         })
@@ -311,6 +333,13 @@ impl ApiClient {
         }
     }
 
+    async fn execute_stream_frame<T>(&self, frame: clash_api::Result<T>) -> ApiResult<T> {
+        self.check_binding().await?;
+        let result = frame.map_err(ApiError::Protocol);
+        self.check_binding().await?;
+        result
+    }
+
     pub async fn get_connections(&self) -> Result<ConnectionsRes> {
         let snapshot = self
             .execute(DEFAULT_API_TIMEOUT, self.client.connections())
@@ -450,6 +479,44 @@ impl ApiClient {
             .collect())
     }
 
+    pub async fn connections_ws(&self) -> ApiResult<ApiStream<clash_api::ConnectionsSnapshot>> {
+        let stream = self
+            .execute(
+                DEFAULT_API_TIMEOUT,
+                self.client
+                    .connections_ws(clash_api::ConnectionStreamQuery::default()),
+            )
+            .await?;
+        Ok(ApiStream::new(self.clone(), stream))
+    }
+
+    pub async fn logs_ws(
+        &self,
+        level: clash_api::LogLevel,
+    ) -> ApiResult<ApiStream<clash_api::LogEntry>> {
+        let stream = self
+            .execute(
+                DEFAULT_API_TIMEOUT,
+                self.client.logs_ws(clash_api::LogQuery::new(level)),
+            )
+            .await?;
+        Ok(ApiStream::new(self.clone(), stream))
+    }
+
+    pub async fn traffic_ws(&self) -> ApiResult<ApiStream<clash_api::Traffic>> {
+        let stream = self
+            .execute(DEFAULT_API_TIMEOUT, self.client.traffic_ws())
+            .await?;
+        Ok(ApiStream::new(self.clone(), stream))
+    }
+
+    pub async fn memory_ws(&self) -> ApiResult<ApiStream<clash_api::Memory>> {
+        let stream = self
+            .execute(DEFAULT_API_TIMEOUT, self.client.memory_ws())
+            .await?;
+        Ok(ApiStream::new(self.clone(), stream))
+    }
+
     pub async fn connect_ws(
         &self,
         kind: ApiStreamKind,
@@ -506,6 +573,40 @@ impl ApiClient {
     }
 }
 
+/// An owned subscription bound to the same capability for its entire lifetime.
+/// Revocation interrupts both idle reads and in-flight frame delivery.
+pub struct ApiStream<T> {
+    api: ApiClient,
+    stream: Option<clash_api::WebSocketStream<T>>,
+}
+
+impl<T> ApiStream<T> {
+    fn new(api: ApiClient, stream: clash_api::WebSocketStream<T>) -> Self {
+        Self {
+            api,
+            stream: Some(stream),
+        }
+    }
+
+    pub async fn next(&mut self) -> Option<ApiResult<T>> {
+        let stream = self.stream.as_mut()?;
+        let result = tokio::select! {
+            biased;
+            _ = self.api.cancelled() => Some(Err(ApiError::Stale)),
+            frame = stream.next() => match frame {
+                Some(frame) => Some(self.api.execute_stream_frame(frame).await),
+                None => None,
+            },
+        };
+        if result.is_none()
+            || matches!(&result, Some(Err(error)) if !matches!(error, ApiError::Protocol(clash_api::Error::Decode { .. })))
+        {
+            self.stream.take();
+        }
+        result
+    }
+}
+
 pub fn forward_api_stream<T, S, F>(
     api: ApiClient,
     mut stream: S,
@@ -559,7 +660,7 @@ pub fn serialize_api_sample<T: Serialize>(sample: T) -> Result<serde_json::Value
     serde_json::to_value(sample).context("failed to serialize API sample")
 }
 
-fn connection_snapshot_value(
+pub(crate) fn connection_snapshot_value(
     snapshot: clash_api::ConnectionsSnapshot,
 ) -> Result<serde_json::Value> {
     let mut value =
@@ -721,6 +822,23 @@ mod typed_error_tests {
             ApiClient::from_connection(binding, endpoint.clone()).unwrap(),
             endpoint,
         )
+    }
+
+    #[test]
+    fn same_instance_requires_the_same_live_capability() {
+        let unbound = ApiClient::new_unbound("127.0.0.1:1".into(), None).unwrap();
+        let unbound_clone = unbound.clone();
+        let unrelated = ApiClient::new_unbound("127.0.0.1:1".into(), None).unwrap();
+        assert!(unbound.same_instance(&unbound_clone));
+        assert!(!unbound.same_instance(&unrelated));
+
+        unbound.revoke();
+        assert!(!unbound.same_instance(&unbound_clone));
+
+        let (bound, endpoint) = bound();
+        let receipt = endpoint.binding.lock().unwrap().clone().unwrap();
+        let same_receipt = ApiClient::from_connection(receipt, endpoint).unwrap();
+        assert!(bound.same_instance(&same_receipt));
     }
 
     #[tokio::test]

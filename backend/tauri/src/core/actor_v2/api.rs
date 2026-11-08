@@ -13,7 +13,7 @@ use chimera_core::actor_v2::api::{
 use chimera_ipc::api::core::v2::CoreApiConnection;
 use futures_util::StreamExt;
 
-pub(crate) use chimera_core::actor_v2::api::{ApiStreamKind, ProxySnapshot};
+pub(crate) use chimera_core::actor_v2::api::ProxySnapshot;
 #[cfg(test)]
 use chimera_core::actor_v2::api::{forward_api_stream, serialize_api_sample};
 #[cfg(test)]
@@ -85,6 +85,12 @@ impl ApiClient {
         Ok(Self {
             inner: CoreApiClient::from_connection(binding, check)?,
         })
+    }
+
+    /// Transfer the instance-bound core lease to core-owned actors without
+    /// exposing the Tauri ControlEndpoint adapter.
+    pub(crate) fn core_client(&self) -> CoreApiClient {
+        self.inner.clone()
     }
 }
 
