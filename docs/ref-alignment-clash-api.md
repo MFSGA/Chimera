@@ -1,5 +1,11 @@
 # Clash API crate ref-alignment record
 
+## 2026-11-08 连接中断进行中的 ProxiesActor owner 取消
+
+- `backend/chimera-core/src/proxies_actor.rs::State::change_route` 在异步连接中断完成后、缓存刷新与成功返回前重新验证 shutdown；退休 owner 不再继续刷新或报告成功。控制器可能已经执行部分或全部连接关闭，不能声称回滚或自动重放。
+- `backend/chimera-core/src/proxies_actor_tests.rs` 新增真实 mock-controller + mailbox 回归，阻塞连接读取后取消 owner，确认旧 owner 返回错误、没有刷新发布；测试明确允许已经发生的连接关闭副作用。
+- 本批 core 完整单测 **205/205 通过**；官方 main Git 远程查询连接被重置，仅核实本地 `ref@59724e85c34abb6995c22d101c876cc06dc16576`。完整 StreamsActor、actor_v2、Client workflows/state、Unified RPC、前端独立包及真实 Windows/Service E2E 仍待迁移。
+
 ## 2026-11-08 Provider 更新与健康检查的 shutdown 隔离
 
 - 在 `backend/chimera-core/src/proxies_actor.rs` 的生产 Actor mailbox 中，Provider Update/Healthcheck 控制器响应后先验证 owner 未取消，再执行拒绝写入读回；读回后再次验证 owner，才允许后续刷新。旧 owner 不再继续读回或发布缓存，也不将停机中的成功控制器响应报告为成功；可能已生效的控制器请求不重试。

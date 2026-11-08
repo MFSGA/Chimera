@@ -717,6 +717,33 @@ async fn replacement_during_chain_read_never_receives_closure_or_cache() {
     server.abort();
 }
 #[tokio::test]
+async fn shutdown_during_connection_interruption_does_not_refresh_or_report_success() {
+    let (client, _core, _, fixture, server) = setup().await;
+    fixture.hold_connections.store(true, Ordering::SeqCst);
+    let pending = {
+        let client = client.clone();
+        tokio::spawn(async move {
+            client
+                .select(GROUP.into(), NODE.into(), ProxyChangeBreakMode::ProxyGroup)
+                .await
+        })
+    };
+    fixture.entered.notified().await;
+    client.0.shutdown.cancel();
+    fixture.release.notify_one();
+    assert!(pending.await.unwrap().is_err());
+    // The controller may have completed connection closes before cancellation;
+    // never claim those side effects were rolled back or retry them.
+    assert_eq!(
+        *fixture.calls.lock().unwrap(),
+        ["select", "connections", "close", "close"]
+    );
+    assert_eq!(fixture.closed.lock().unwrap().len(), 2);
+    assert!(client.snapshot().nodes.is_empty());
+    server.abort();
+}
+
+#[tokio::test]
 async fn idle_cache_is_cleared_when_its_capability_is_revoked() {
     let (client, _core, source, _, server) = setup().await;
     client.get(false).await.unwrap();

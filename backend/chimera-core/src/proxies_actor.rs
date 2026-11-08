@@ -330,6 +330,13 @@ impl State {
             }
             ProxyChangeBreakMode::All => interrupt_connections(&api, &ConnectionScope::All).await,
         };
+        // Interruption can suspend while the owner is retired. Do not refresh or
+        // report success from that old owner, even if the controller already closed
+        // some connections. The replacement owner must reconcile independently.
+        anyhow::ensure!(
+            !self.shutdown.is_cancelled(),
+            "proxy owner shut down during connection interruption"
+        );
         let mut degradations = Vec::new();
         if let Err(error) = interruption {
             degradations.push(ProxyDegradation {
