@@ -7,7 +7,7 @@
 ## 核对方法
 
 - 参考 Rust 独立 core：`ref/backend/nyanpasu-core/src/`（本次审查为 **168** 个 Rust 文件）。
-- Chimera 独立 core：`backend/chimera-core/src/`（本次审查为 **31** 个 Rust 文件，含本轮新增的同实例代理组协调；文件数不是完成率）。
+- Chimera 独立 core：`backend/chimera-core/src/`（本次审查为 **42** 个 Rust 文件，含同实例代理组协调与本轮 Clash Streams Actor；文件数不是完成率）。
 - 参考 Tauri 适配层：`ref/backend/tauri/src/`（**83** 个 Rust 文件）；Chimera Tauri：`backend/tauri/src/`（**211** 个 Rust 文件）。
 - 参考独立前端包：`ref/frontend/query/src`（**64** 个 TS/TSX）、`ref/frontend/rpc/src`（**9** 个）、`ref/frontend/platform/src`（**1** 个）。Chimera 当前相应能力主要合并在 `frontend/interface/src`（**70** 个 TS/TSX）及 Tauri IPC 中。
 - 完整迁移需要比较架构与调用关系、端到端契约及其测试；文件统计不构成任何路径或行为完成比例。
@@ -19,7 +19,8 @@
 | 原生 Clash DTO 和 Provider 元数据 | `backend/chimera-core/src/clash/{api,proxies}.rs`                                                           | 原生/legacy 代理图组装、Provider-only 节点、Group 类型                               | 对应 Tauri legacy DTO 暂时保留        |
 | 实例绑定的 Clash API              | `backend/chimera-core/src/actor_v2/api.rs`                                                                  | Stale/Unavailable/Timeout/Protocol；请求前后身份校验                                 | 实例获取/宿主生命周期端点仍在 Tauri   |
 | Client 协议投影和延迟参数         | `backend/chimera-core/src/client/clash_api.rs`                                                              | Provider、URL、expected、timeout                                                     | 其他 Client 工作流仍在 Tauri          |
-| 连接速率衍生                      | `backend/chimera-core/src/clash/connection_rates.rs`                                                        | Tauri WebSocket 生产路径使用 core 算法                                               | 类型化 Stream Actor 仍未迁出          |
+| 连接速率衍生                      | `backend/chimera-core/src/clash/connection_rates.rs`                                                        | core Streams Actor 生产路径使用 core 算法                                             | 连接速率算法与历史状态现由 core 拥有  |
+| Clash WebSocket Streams Actor     | `backend/chimera-core/src/clash/ws.rs`                                                                      | 实例绑定 API lease、四路类型化流、history/snapshot、重连、录制开关、事件与 traffic frames | Tauri 仅保留 Tauri Event/Channel 桥接；真实 core/跨平台 E2E 未验证 |
 | 连接中断规则                      | `backend/chimera-core/src/connections.rs`                                                                   | 实例绑定、按组精准匹配                                                               | 由 Tauri 配置/窗口动作触发            |
 | 固定组取消固定                    | `backend/chimera-core/src/actor_v2/api.rs` + Tauri adapter                                                  | DELETE 单次派发、代际保护、真实状态刷新                                              | 未并入 ref 的完整 ProxiesActor        |
 | 同实例原生组延迟测试              | `backend/chimera-core/src/proxies.rs`                                                                       | 一个 ApiClient；固定组 8 并发；Provider/URL/expected；失败节点记零；实例撤销失败关闭 | 新旧 UI 仍分别调用不同的缓存视图      |
@@ -32,14 +33,13 @@
 | ---- | -------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
 | 1    | `backend/nyanpasu-core/src/actor_v2/{facade,endpoint,service_actor,local_host,...}.rs`                         | `backend/tauri/src/core/actor_v2/`、`backend/tauri/src/client/core_lifecycle/`                      | 将核心实例/能力所有权、Local/Service 生命周期与接口抽入独立 core；通过服务重连、失效租约、回滚与启动失败测试                                 |
 | 2    | `backend/nyanpasu-core/src/proxies.rs`                                                                         | `backend/tauri/src/core/clash/proxies.rs` + 新的 `chimera-core/src/proxies.rs`                      | 迁移长生命周期 **ProxiesActor** 与单一快照/Provider 缓存、去重刷新、变更事件、选择/取消固定后重读及中断降级；以同一状态驱动 native 和 legacy |
-| 3    | `backend/nyanpasu-core/src/clash/ws.rs`                                                                        | `backend/tauri/src/core/clash/ws.rs`                                                                | 抽出实例绑定 Stream Actor、类型化帧、history/sequence、流量/内存/日志事件；Tauri 仅做 Channel/Event 桥接；保证断线重连和 Agent 统计连续性    |
-| 4    | `backend/nyanpasu-core/src/client/{application,application_workflow,profiles,system_proxy,hotkey,effects,...}` | `backend/tauri/src/client/` 和部分 `core/`                                                          | 将应用事务参与者、profiles、热键、系统代理、运行状态等核心流程迁到无 Tauri 依赖的 core；Tauri 提供 OS/UI adapter，保护 Chimera 特性          |
-| 5    | `backend/nyanpasu-core/src/state/{application,profiles,mutation,clash_config,...}`                             | `backend/chimera-core/src/state/`、`backend/tauri/src/config/`                                      | 迁移多参与者事务、持久化和失败结算、Profile jobs、状态变更广播；允许新格式，必要时明确迁移用户数据而非保留旧 API                             |
-| 6    | `backend/nyanpasu-core/src/{service,logs,geo,traffic,storage,utils,profile_import,...}`                        | `backend/tauri/src/{core,client,feat,...}`，独立 `chimera-traffic`/`chimera-jobs`/`chimera-geodata` | 按职责迁移业务处理，不重写已有独立 crates；检验 service IPC、geo 缓存、traffic 持久化及恢复，保留用户数据                                    |
-| 7    | `backend/tauri/src/{unified_rpc.rs,adapters/}`                                                                 | `backend/tauri/src/ipc.rs`、`specta_export.rs`、`frontend/interface/src/ipc/`                       | 以 ref Unified RPC/typed errors/transport 作为新契约，**同步迁移并删除**旧 Tauri 命令与调用方；不保留旧兼容层                                |
-| 8    | `frontend/{query,rpc,platform}/src`                                                                            | `frontend/interface/src`、`frontend/chimera/src`                                                    | 抽离 query/rpc/platform 层、统一缓存键、mutation 结果和失联处理；逐页迁移 main/legacy；测试窗口、系统代理、profiles、连接/流与设置           |
-| 9    | `frontend/nyanpasu/src`                                                                                        | `frontend/chimera/src`                                                                              | 按行为逐页检查差异；保留 Chimera 主题、标识、Agent 诊断及功能，避免换回 Nyanpasu 品牌                                                        |
-| 10   | 跨系统集成测试与文档                                                                                           | 现有 `frontend/chimera/tests`、`tauri-e2e` 等                                                       | Windows 主/旧 UI + Service 模式的真正端到端用例、实例切换/升级、数据迁移、权限、流量历史与回滚；再视 CI 能力扩展其他平台                     |
+| 3    | `backend/nyanpasu-core/src/client/{application,application_workflow,profiles,system_proxy,hotkey,effects,...}` | `backend/tauri/src/client/` 和部分 `core/`                                                          | 将应用事务参与者、profiles、热键、系统代理、运行状态等核心流程迁到无 Tauri 依赖的 core；Tauri 提供 OS/UI adapter，保护 Chimera 特性          |
+| 4    | `backend/nyanpasu-core/src/state/{application,profiles,mutation,clash_config,...}`                             | `backend/chimera-core/src/state/`、`backend/tauri/src/config/`                                      | 迁移多参与者事务、持久化和失败结算、Profile jobs、状态变更广播；允许新格式，必要时明确迁移用户数据而非保留旧 API                             |
+| 5    | `backend/nyanpasu-core/src/{service,logs,geo,traffic,storage,utils,profile_import,...}`                        | `backend/tauri/src/{core,client,feat,...}`，独立 `chimera-traffic`/`chimera-jobs`/`chimera-geodata` | 按职责迁移业务处理，不重写已有独立 crates；检验 service IPC、geo 缓存、traffic 持久化及恢复，保留用户数据                                    |
+| 6    | `backend/tauri/src/{unified_rpc.rs,adapters/}`                                                                 | `backend/tauri/src/ipc.rs`、`specta_export.rs`、`frontend/interface/src/ipc/`                       | 以 ref Unified RPC/typed errors/transport 作为新契约，**同步迁移并删除**旧 Tauri 命令与调用方；不保留旧兼容层                                |
+| 7    | `frontend/{query,rpc,platform}/src`                                                                            | `frontend/interface/src`、`frontend/chimera/src`                                                    | 抽离 query/rpc/platform 层、统一缓存键、mutation 结果和失联处理；逐页迁移 main/legacy；测试窗口、系统代理、profiles、连接/流与设置           |
+| 8    | `frontend/nyanpasu/src`                                                                                        | `frontend/chimera/src`                                                                              | 按行为逐页检查差异；保留 Chimera 主题、标识、Agent 诊断及功能，避免换回 Nyanpasu 品牌                                                        |
+| 9    | 跨系统集成测试与文档                                                                                           | 现有 `frontend/chimera/tests`、`tauri-e2e` 等                                                       | Windows 主/旧 UI + Service 模式的真正端到端用例、实例切换/升级、数据迁移、权限、流量历史与回滚；再视 CI 能力扩展其他平台                     |
 
 ## 每批迁移的验收门槛
 
@@ -314,3 +314,41 @@ E2E 框架 **33/33**、runtime 版本一致性、
 前端边界和 Rustfmt 通过。尚未执行真实
 Service/SCM/提权 E2E、全项目 Clippy；
 `v1.11.1` 已发布的二进制仍需单独更新/验证。
+
+## 2026-11-08 Clash WebSocket Streams Actor 迁入独立 core
+
+本批基于 ref@b7f54a4b0baf06f86c2e1675b5c5f86f96b0b866，在隔离分支
+codex/ref-streams-actor-20261108 完成本地迁移；原分支的 29 个本地提交不在此分支历史中，
+ref gitlink 保持不变，也没有改动 runtime 子模块。
+
+**所有权与生产调用路径：**
+- 将四路 Clash WebSocket streams、实例绑定 API capability、流 worker、
+  reconnect、stream epoch、history/snapshot、recording、memory/log/traffic
+  事件和连接 frames 迁入 backend/chimera-core/src/clash/ws.rs。
+- Core ApiClient 增加 capability identity / revocation 判断与有界流读取；
+  Actor 只接受当前有效实例的消息，切换或撤销后清空旧快照并拒绝迟到帧。
+- Tauri ChimeraClient 持有 StreamsClient 与独立 child cancellation token；
+  ChimeraClientInner drop 时取消 Streams Actor，避免客户端销毁后流任务遗留。
+  Tauri 层只保留 Event 转发、连接详情 Channel、CoreLifecycle API lease source
+  和流量 recorder 的 frames 订阅。配置变更会更新日志 WebSocket 等级；Agent
+  诊断和 IPC 直接读取 core snapshot，不再持有旧 Tauri Stream Actor.
+- 新增 capability 同实例、旧实例撤销、断线/重连、四路流、录制开关、
+  history 清理、订阅者关闭、日志等级重启和迟到帧 fence 测试。
+
+**验证（Windows，本机）：**
+- cargo +stable test --offline --manifest-path backend/Cargo.toml -p chimera-core --lib：
+  **176 passed, 0 failed**。
+- TAURI_CONFIG={"bundle":{"externalBin":[]}} cargo +stable test --offline
+  --manifest-path backend/Cargo.toml -p chimera --lib：
+  **773 passed, 0 failed, 1 ignored**；Specta bindings freshness 在该套件内通过。
+- cargo +stable clippy --offline ... -p chimera-core --all-targets 与
+  TAURI_CONFIG=... cargo +stable clippy --offline ... -p chimera --all-targets
+  均完成；只有现存 workspace warnings。Tauri clippy 使用空 externalBin
+  配置避开当前 checkout 缺失的 sidecar 资源。
+- Interface tsc --noEmit、前端 IPC boundary、rustfmt +stable --check
+  和 git diff --check 通过。仓库 hook 所要求的
+  nightly-2026-11-06 未安装，因此 pnpm lint:rustfmt hook 无法启动；
+  已用本机 stable Rustfmt 独立检查。未运行真实 core/桌面 E2E 或跨平台测试。
+
+本批只作本地提交，不推送、不启动桌面程序。无关的
+pnpm-lock.yaml 改动按用户授权丢弃；原工作差异保留在 stash 备份中。
