@@ -29,6 +29,19 @@ export const useClashProxiesProvider = (
   });
 };
 
+export const invalidateProxyProviderViews = (
+  queryClient: ReturnType<typeof useQueryClient>,
+) =>
+  Promise.all([
+    queryClient.invalidateQueries({
+      queryKey: queries.clashApiGetProvidersProxies().queryKey,
+    }),
+    queryClient.invalidateQueries({ queryKey: queries.getProxies().queryKey }),
+    queryClient.invalidateQueries({
+      queryKey: queries.getNativeProxies().queryKey,
+    }),
+  ]);
+
 export const useUpdateClashProxiesProvider = () => {
   const queryClient = useQueryClient();
   const update = mutations.updateProxyProvider;
@@ -36,19 +49,20 @@ export const useUpdateClashProxiesProvider = () => {
     mutationKey: update.mutationKey,
     mutationFn: async (name: string) =>
       unwrapResult(await invokeMutation(update, [name])),
-    // The provider may add/remove proxies. Refresh both graph schemas too,
-    // since provider updates are not guaranteed to emit a proxy-state event.
-    onSuccess: () =>
-      Promise.all([
-        queryClient.invalidateQueries({
-          queryKey: queries.clashApiGetProvidersProxies().queryKey,
-        }),
-        queryClient.invalidateQueries({
-          queryKey: queries.getProxies().queryKey,
-        }),
-        queryClient.invalidateQueries({
-          queryKey: queries.getNativeProxies().queryKey,
-        }),
-      ]),
+    // The controller may apply the update despite a rejected or missing
+    // reply. Always revalidate the UI's provider and both proxy caches.
+    onSettled: () => invalidateProxyProviderViews(queryClient),
+  });
+};
+
+export const useHealthcheckClashProxiesProvider = () => {
+  const queryClient = useQueryClient();
+  const healthcheck = mutations.healthcheckProxyProvider;
+  return useMutation({
+    mutationKey: healthcheck.mutationKey,
+    mutationFn: async (name: string) =>
+      unwrapResult(await invokeMutation(healthcheck, [name])),
+    // A healthcheck changes per-node histories even if its reply is lost.
+    onSettled: () => invalidateProxyProviderViews(queryClient),
   });
 };

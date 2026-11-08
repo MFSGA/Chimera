@@ -2,16 +2,22 @@ import type { ClashProxiesProviderQueryItem } from '@chimera/interface';
 import { Button } from '@chimera/ui/button';
 import { Card, CardContent, CardFooter, CardHeader } from '@chimera/ui/card';
 import RefreshRounded from '~icons/material-symbols/refresh-rounded';
+import SpeedRounded from '~icons/material-symbols/speed-rounded';
 import dayjs from 'dayjs';
 import { useLockFn } from '@/hooks/use-lock-fn';
 import * as m from '@/paraglide/messages';
+import { useProxiesProviderHealthcheck } from '../../_modules/use-proxies-provider-healthcheck';
 import { useProxiesProviderUpdate } from '../../_modules/use-proxies-provider-update';
 
 export const InfoCard = ({ data }: { data: ClashProxiesProviderQueryItem }) => {
   const blockTask = useProxiesProviderUpdate(data);
+  const healthcheckTask = useProxiesProviderHealthcheck(data);
 
   const handleRefreshClick = useLockFn(async () => {
     await blockTask.execute();
+  });
+  const handleHealthcheckClick = useLockFn(async () => {
+    await healthcheckTask.execute();
   });
 
   return (
@@ -37,9 +43,19 @@ export const InfoCard = ({ data }: { data: ClashProxiesProviderQueryItem }) => {
           className="flex items-center gap-2"
           onClick={handleRefreshClick}
           loading={blockTask.isPending}
+          disabled={healthcheckTask.isPending}
         >
           <RefreshRounded />
           <span>{m.providers_update_provider()}</span>
+        </Button>
+        <Button
+          className="flex items-center gap-2"
+          onClick={handleHealthcheckClick}
+          loading={healthcheckTask.isPending}
+          disabled={blockTask.isPending}
+        >
+          <SpeedRounded />
+          <span>{m.proxies_group_delay_test_title()}</span>
         </Button>
 
         <div className="flex-1" />

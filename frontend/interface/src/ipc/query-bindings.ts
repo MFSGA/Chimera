@@ -121,6 +121,11 @@ export const mutations = {
     mutationFn: (input: Parameters<typeof commands.updateProxyProvider>) =>
       commands.updateProxyProvider(...input),
   }),
+  healthcheckProxyProvider: mutationOptions({
+    mutationKey: ['healthcheckProxyProvider'],
+    mutationFn: (input: Parameters<typeof commands.healthcheckProxyProvider>) =>
+      commands.healthcheckProxyProvider(...input),
+  }),
   saveProfileFile: mutationOptions({
     mutationKey: ['saveProfileFile'],
     mutationFn: (input: Parameters<typeof commands.saveProfileFile>) =>

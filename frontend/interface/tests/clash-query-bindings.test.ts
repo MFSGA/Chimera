@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { QueryClient } from '@tanstack/react-query';
 import { commands, type NativeProxies_Serialize } from '../src/ipc/bindings.js';
 import {
   CLASH_CONFIG_QUERY_KEY,
@@ -15,6 +16,7 @@ import {
   MutationUnconfirmedError,
   unwrapQueryOptions,
 } from '../src/ipc/query-options.js';
+import { invalidateProxyProviderViews } from '../src/ipc/use-clash-proxies-provider.js';
 import { unwrapResult } from '../src/utils/index.js';
 
 /**
@@ -311,6 +313,59 @@ test('provider queries retain invalidation keys; provider updates are explicit m
     commands.clashApiUpdateProvidersRules = oldRuleUpdate;
     commands.updateProxyProvider = oldProxyUpdate;
   }
+});
+
+test('provider healthcheck is one typed mutation; unknown delivery is never replayed', async () => {
+  const previous = commands.healthcheckProxyProvider;
+  const calls: string[] = [];
+  commands.healthcheckProxyProvider = async (name) => {
+    calls.push(name);
+    return { status: 'error', error: 'controller returned 409' };
+  };
+  try {
+    assert.deepEqual(mutations.healthcheckProxyProvider.mutationKey, [
+      'healthcheckProxyProvider',
+    ]);
+    const rejected = await invokeMutation(mutations.healthcheckProxyProvider, [
+      'Subscription',
+    ]);
+    assert.equal(rejected.status, 'error');
+    assert.throws(() => unwrapResult(rejected), /controller returned 409/);
+    assert.deepEqual(calls, ['Subscription']);
+
+    commands.healthcheckProxyProvider = async (name) => {
+      calls.push(name);
+      throw new Error('IPC reply lost');
+    };
+    await assert.rejects(
+      invokeMutation(mutations.healthcheckProxyProvider, ['Subscription']),
+      (error: unknown) =>
+        error instanceof MutationUnconfirmedError &&
+        error.cause instanceof Error &&
+        error.cause.message === 'IPC reply lost',
+    );
+    assert.deepEqual(calls, ['Subscription', 'Subscription']);
+  } finally {
+    commands.healthcheckProxyProvider = previous;
+  }
+});
+
+test('provider reconciliation invalidates provider and both proxy graph caches', async () => {
+  const client = new QueryClient();
+  const keys = [
+    queries.clashApiGetProvidersProxies().queryKey,
+    queries.getProxies().queryKey,
+    queries.getNativeProxies().queryKey,
+  ];
+  for (const key of keys) {
+    client.setQueryData(key, {});
+    assert.equal(client.getQueryState(key)?.isInvalidated, false);
+  }
+  await invalidateProxyProviderViews(client);
+  for (const key of keys) {
+    assert.equal(client.getQueryState(key)?.isInvalidated, true);
+  }
+  client.clear();
 });
 
 test('lost provider mutation reply is unconfirmed; no automatic retry', async () => {
