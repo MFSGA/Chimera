@@ -1,6 +1,6 @@
 # Chimera ↔ ref 全量架构对齐清单
 
-**最新核对基线（2026-11-07）：** Chimera 原 Windows 工作区 `I:\mfsga\Chimera`、分支 `codex/clash-api-ipc-dev-1106`，参考子模块 `ref@a8dd5d58ac86baa7a7e9333dc3332fe98755ef3b`。已从官方 `libnyanpasu/clash-nyanpasu` 的 `refs/heads/main` 查询、fetch 并验证原基线 `b7f54a4b0baf06f86c2e1675b5c5f86f96b0b866` 是其祖先。此轮新上游提交仅修改 `manifest/version.json`（版本清单），**没有新上游架构源码变化**。历史记录保留其原 SHA；旧测试数字不是对未来版本的通过保证。
+**最新核对基线（2026-11-07）：** 原 Windows 工作区 `I:\mfsga\Chimera`、分支 `codex/clash-api-ipc-dev-1106`，子模块 `ref@68e82014aeaf340a990e4ebf05ca34217366fc97`。已从官方 `libnyanpasu/clash-nyanpasu` 的 `refs/heads/main` 查询并 fetch 提交对象，确认原基线 `a8dd5d58ac86baa7a7e9333dc3332fe98755ef3b` 是其祖先。最新一笔上游提交 `chore(deps): update tanstack-router monorepo (#6246)` 仅修改 `frontend/nyanpasu/package.json` 和 ref 内 `pnpm-lock.yaml`；本轮**没有新增 Rust 架构源码差异**，但前端依赖升级的行为兼容性尚未验收。历史条目保留其各自旧 SHA，历史测试数字不等于新依赖版本的回归结果。
 
 **最新目标（用户已明确修改）：** 以 `ref` 的代码职责、协议契约、事务语义、状态、前端接口与运行时行为作为迁移基准。**无需保留 Chimera 旧架构、旧 API 或旧 Service IPC 的兼容性**；允许连同调用方和运行时执行破坏性替换，删除被取代的旧实现，不构造长期双轨适配。迁移仍应避免无关改动、用户数据意外损毁和未测试状态下的功能失效；不应因为复制文件或编译通过就宣称整个架构已对齐。Chimera 的产品身份可独立于底层旧协议。
 

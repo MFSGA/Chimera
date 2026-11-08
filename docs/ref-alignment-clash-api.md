@@ -2,7 +2,7 @@
 
 ## 2026-11-07 reference baseline refresh
 
-- **Latest verified upstream `main` and local `ref` gitlink (2026-11-07):** `a8dd5d58ac86baa7a7e9333dc3332fe98755ef3b`. The previous `b7f54a4b0baf06f86c2e1675b5c5f86f96b0b866` is an ancestor; its only newly reachable upstream commit is `chore(manifest): update manifest [skip ci]`, touching `manifest/version.json` only. No new Rust/frontend architecture delta is introduced by this ref bump. Historical evidence below remains tied to the SHA it states.
+- **Latest verified upstream `main` and local `ref` gitlink (2026-11-07):** `68e82014aeaf340a990e4ebf05ca34217366fc97`. Verified via official `refs/heads/main`, fetch, object and ancestry checks from `a8dd5d58ac86baa7a7e9333dc3332fe98755ef3b`. The newly reachable `chore(deps): update tanstack-router monorepo (#6246)` changes only `frontend/nyanpasu/package.json` and the **ref-internal** `pnpm-lock.yaml`. No new Rust architecture code is added; frontend dependency/runtime compatibility remains unverified, not assumed. Historical test evidence stays tied to its old SHA.
 - The upstream delta adds a Network Info dashboard widget and modifies network contracts, client traffic, Unified RPC, and frontend RPC bindings. **No Chimera production behavior has been migrated or validated for this delta.** Follow-up requires contract/error/cache review, Service/Agent compatibility, and targeted Rust/TS tests before claiming parity.
 - This baseline-only change does not update `backend/chimera-runtime`, generated Specta bindings, or the unrelated local `pnpm-lock.yaml` edit.
 
