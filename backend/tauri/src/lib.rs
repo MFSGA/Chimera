@@ -7,10 +7,7 @@ use tauri::{Emitter, Manager};
 #[cfg(any(target_os = "macos", target_os = "linux", windows))]
 use tauri_plugin_deep_link::DeepLinkExt;
 
-use crate::{
-    config::core::Config,
-    utils::{init, path::PathResolver, resolve},
-};
+use crate::utils::{init, path::PathResolver, resolve};
 
 #[cfg(feature = "e2e")]
 mod e2e_test;
@@ -41,6 +38,11 @@ mod state;
 mod utils;
 /// 9
 mod window;
+
+mod host_paths;
+
+mod bundle;
+
 rust_i18n::i18n!("./locales");
 
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
@@ -79,56 +81,36 @@ fn setup_frontend_console_bridge(app: &mut tauri::App) {
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
-pub fn run() -> std::io::Result<()> {
+pub fn run() -> std::process::ExitCode {
     // Nothing before the logger reaches a trace, so its share is logged.
     let started = std::time::Instant::now();
     rust_i18n::set_locale(utils::help::detect_system_i18n_key());
-    // Resolve once before startup initialization, then pass the same roots to
-    // configuration and the Tauri composition root (as in the pinned ref).
-    let paths = PathResolver::from_env().map_err(std::io::Error::other)?;
-    paths.create_base_dirs().map_err(std::io::Error::other)?;
-    init::init_config(&paths).map_err(std::io::Error::other)?;
 
-    /* if let Some(lang) = Config::verge().latest().language.clone() {
-        let locale = crate::bridge::verge::locale_key_from_legacy(&lang)
-            .map(str::to_owned)
-            .unwrap_or_else(|| lang.to_ascii_lowercase());
-        rust_i18n::set_locale(&locale);
-    } */
+    // The one resolver: every later stage is given it, none looks the directories up again.
+    // Every stage needs both roots, so a host that has none ends the process here.
+    let paths = match host_paths::discover() {
+        Ok(paths) => paths,
+        Err(error) => {
+            let path = match &error {
+                chimera_paths::DiscoverError::NotUtf8 { path, .. } => Some(path.clone()),
+                chimera_paths::DiscoverError::PortableInstallDir {
+                    source: chimera_paths::InstallDirError::NotUtf8 { path },
+                } => Some(path.clone()),
+                _ => None,
+            };
+            startup_failure::show_one_shot(
+                startup_failure::FailureKind::Directories,
+                path,
+                &error,
+                None,
+            );
+            return std::process::ExitCode::FAILURE;
+        }
+    };
+    // Defer filesystem initialization until Tauri has initialized the
+    // single-instance plugin. A losing secondary process must not write config.
 
     let specta_builder = specta_export::build_specta_builder();
-
-    #[cfg(all(debug_assertions, not(feature = "e2e")))]
-    {
-        const SPECTA_BINDINGS_PATH: &str = "../../frontend/interface/src/ipc/bindings.ts";
-
-        match specta_builder.export(
-            specta_typescript::Typescript::default().header("/* oxlint-disable */\n// @ts-nocheck"),
-            SPECTA_BINDINGS_PATH,
-        ) {
-            Ok(_) => {
-                let npx_command = if cfg!(target_os = "windows") {
-                    "npx.cmd"
-                } else {
-                    "npx"
-                };
-                let output = std::process::Command::new(npx_command)
-                    .args(["prettier", "--write", SPECTA_BINDINGS_PATH])
-                    .output()
-                    .expect("failed to format TypeScript bindings");
-                assert!(
-                    output.status.success(),
-                    "Prettier failed for TypeScript bindings"
-                );
-                specta_export::normalize_typescript_bindings(SPECTA_BINDINGS_PATH)
-                    .expect("failed to normalize TypeScript bindings");
-                log::debug!("Exported typescript bindings, path: {SPECTA_BINDINGS_PATH}");
-            }
-            Err(e) => {
-                panic!("Failed to export typescript bindings: {e}");
-            }
-        };
-    }
 
     #[allow(unused_mut)]
     let mut builder = tauri::Builder::default();
@@ -144,10 +126,12 @@ pub fn run() -> std::io::Result<()> {
         not(feature = "e2e")
     ))]
     {
+        // The deep-link plugin must exist before a secondary invocation reaches
+        // the single-instance callback.
+        builder = builder.plugin(tauri_plugin_deep_link::init());
         builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             resolve::create_window(app);
         }));
-        builder = builder.plugin(tauri_plugin_deep_link::init());
     }
 
     #[cfg(all(
@@ -201,9 +185,38 @@ pub fn run() -> std::io::Result<()> {
         .plugin(tauri_plugin_os::init())
         .plugin(tauri_plugin_global_shortcut::Builder::default().build())
         .setup(move |app| {
-            specta_builder.mount_events(app);
+            // Only the primary instance reaches this callback. Keep the legacy
+            // implementation's PathBuf API as a narrow compatibility adapter:
+            // both owners use the exact roots discovered once by chimera-paths.
+            let setup_paths = PathResolver::with_base_dirs(
+                paths.app_config_dir().as_std_path().to_path_buf(),
+                paths.app_data_dir().as_std_path().to_path_buf(),
+            );
+            // Do not use the reference directory helper here: it can remove a
+            // file obstructing a root. Chimera must preserve user data on error.
+            setup_paths.create_base_dirs()?;
+            init::init_config(&setup_paths)?;
 
-            setup::setup(app, paths.clone())?;
+            #[cfg(all(debug_assertions, not(feature = "e2e")))]
+            {
+                const SPECTA_BINDINGS_PATH: &str = "../../frontend/interface/src/ipc/bindings.ts";
+                specta_builder.export(
+                    specta_typescript::Typescript::default()
+                        .header("/* oxlint-disable */\n// @ts-nocheck"),
+                    SPECTA_BINDINGS_PATH,
+                )?;
+                let npx_command = if cfg!(target_os = "windows") { "npx.cmd" } else { "npx" };
+                let status = std::process::Command::new(npx_command)
+                    .args(["prettier", "--write", SPECTA_BINDINGS_PATH])
+                    .status()?;
+                if !status.success() {
+                    return Err(format!("Prettier failed for {SPECTA_BINDINGS_PATH}").into());
+                }
+                specta_export::normalize_typescript_bindings(SPECTA_BINDINGS_PATH)?;
+            }
+
+            specta_builder.mount_events(app);
+            setup::setup(app, setup_paths)?;
             core::updater::recover_interrupted_update();
             core::clash::setup(app)?;
 
@@ -295,9 +308,18 @@ pub fn run() -> std::io::Result<()> {
             Ok(())
         });
 
-    let app = builder
-        .build(tauri::generate_context!())
-        .expect("error while running tauri application");
+    let app = match builder.build(tauri::generate_context!()) {
+        Ok(app) => app,
+        Err(error) => {
+            startup_failure::show_one_shot(
+                startup_failure::FailureKind::Internal,
+                None,
+                &error,
+                None,
+            );
+            return std::process::ExitCode::FAILURE;
+        }
+    };
 
     app.run(|app_handle, e| match e {
         // todo: will change to keep align with ref.
@@ -354,5 +376,5 @@ pub fn run() -> std::io::Result<()> {
         }
     });
 
-    Ok(())
+    std::process::ExitCode::SUCCESS
 }

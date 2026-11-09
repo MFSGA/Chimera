@@ -4,7 +4,7 @@ use chimera_config::application::ReleaseChannel;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BundleMetadata {
-    /// Host release version from `chimera_VERSION`, including prerelease and build metadata.
+    /// Host release version from `CHIMERA_VERSION`, including prerelease and build metadata.
     pub app_version: &'static str,
     /// Host Cargo package version from `CARGO_PKG_VERSION`, used by updater HTTP User-Agents.
     pub package_version: &'static str,

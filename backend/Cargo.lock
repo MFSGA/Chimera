@@ -1050,12 +1050,14 @@ dependencies = [
  "bolt-load",
  "camino",
  "chimera-config",
+ "chimera-contracts",
  "chimera-core",
  "chimera-core-manager",
  "chimera-geodata",
  "chimera-ipc",
  "chimera-jobs",
  "chimera-macro",
+ "chimera-paths",
  "chimera-traffic",
  "chimera-utils",
  "chrono",
@@ -1104,6 +1106,7 @@ dependencies = [
  "rayon",
  "redb",
  "reqwest",
+ "rfd",
  "rquickjs",
  "runas",
  "rust-i18n",
@@ -1214,6 +1217,27 @@ dependencies = [
  "url",
  "uuid",
  "zstd 0.14.0",
+]
+
+[[package]]
+name = "chimera-contracts"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "bytes",
+ "chimera-config",
+ "chimera-paths",
+ "mockall",
+ "semver 1.0.28",
+ "serde",
+ "serde_json",
+ "snafu",
+ "specta",
+ "tempfile",
+ "tokio-util",
+ "url",
+ "whoami",
 ]
 
 [[package]]
