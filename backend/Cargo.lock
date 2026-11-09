@@ -1362,6 +1362,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "chimera-paths"
+version = "0.1.0"
+dependencies = [
+ "camino",
+ "chimera-utils",
+ "convert_case",
+ "dunce",
+ "fs-err",
+ "fs_extra",
+ "log",
+ "snafu",
+ "tempfile",
+ "winreg 0.56.0",
+]
+
+[[package]]
 name = "chimera-serde"
 version = "0.1.2"
 dependencies = [
