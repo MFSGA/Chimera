@@ -842,6 +842,95 @@ mod typed_error_tests {
         )
     }
 
+    #[tokio::test]
+    async fn bound_controller_reads_rules_and_version_through_authorized_routes() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("test controller binds to an isolated port");
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let mut requests = Vec::new();
+            for (expected_path, body) in [
+                (
+                    "/rules/",
+                    r#"{"rules":[{"type":"DOMAIN-SUFFIX","payload":"example.test","proxy":"DIRECT"}]}"#,
+                ),
+                (
+                    "/version",
+                    r#"{"version":"1.2.3","premium":false,"meta":true}"#,
+                ),
+            ] {
+                let (mut socket, _) =
+                    tokio::time::timeout(Duration::from_secs(3), listener.accept())
+                        .await
+                        .expect("controller request timed out")
+                        .expect("controller accept failed");
+                let mut buffer = [0_u8; 2048];
+                let count = socket.read(&mut buffer).await.expect("request should read");
+                let request = String::from_utf8_lossy(&buffer[..count]);
+                let request_line = request.lines().next().unwrap_or_default().to_owned();
+                assert!(
+                    request_line.starts_with(&format!("GET {expected_path} ")),
+                    "unexpected request: {request_line}"
+                );
+                requests.push(request_line);
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                socket.write_all(response.as_bytes()).await.unwrap();
+            }
+            requests
+        });
+
+        let binding = CoreApiConnection {
+            instance_id: "rules-version-fixture".into(),
+            controller: CoreControllerInfo::Http(format!("http://{address}/")),
+            secret: None,
+        };
+        let endpoint = Arc::new(Endpoint {
+            binding: Mutex::new(Some(binding.clone())),
+            unavailable: AtomicBool::new(false),
+            checks: AtomicUsize::new(0),
+        });
+        let client = ApiClient::from_connection(binding, endpoint.clone()).unwrap();
+
+        let rules = tokio::time::timeout(Duration::from_secs(5), client.rules())
+            .await
+            .expect("rules read should complete")
+            .expect("rules must decode");
+        assert_eq!(rules.len(), 1);
+        assert_eq!(rules[0].rule_type, "DOMAIN-SUFFIX");
+        assert_eq!(rules[0].payload, "example.test");
+        assert_eq!(rules[0].proxy, "DIRECT");
+
+        let version = tokio::time::timeout(Duration::from_secs(5), client.version())
+            .await
+            .expect("version read should complete")
+            .expect("version must decode");
+        assert_eq!(version.version, "1.2.3");
+        assert_eq!(version.premium, Some(false));
+        assert!(version.meta);
+        let requests = server.await.expect("controller fixture must finish");
+        assert_eq!(requests.len(), 2, "one request per route, no retry");
+        assert_eq!(
+            endpoint.checks.load(Ordering::SeqCst),
+            4,
+            "each request must check its instance binding before and after"
+        );
+    }
+
+    #[tokio::test]
+    async fn retired_controller_denies_rules_and_version_reads() {
+        let (client, endpoint) = bound();
+        *endpoint.binding.lock().unwrap() = None;
+        assert!(matches!(client.rules().await, Err(ApiError::Stale)));
+        assert!(matches!(client.version().await, Err(ApiError::Stale)));
+        assert_eq!(endpoint.checks.load(Ordering::SeqCst), 1);
+    }
+
     #[test]
     fn same_instance_requires_the_same_live_capability() {
         let unbound = ApiClient::new_unbound("127.0.0.1:1".into(), None).unwrap();
