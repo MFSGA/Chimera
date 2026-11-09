@@ -397,3 +397,54 @@ test('fitting marquee renders one truncated copy without animation', async () =>
     }
   });
 });
+
+test('dropdown exposes the historical main E2E locator on the reference menu surface', async () => {
+  await withFixture(async ({ root, load }) => {
+    const {
+      DropdownMenu,
+      DropdownMenuTrigger,
+      DropdownMenuContent,
+      DropdownMenuItem,
+    } = await load('dropdown-menu.tsx');
+    const { createRoot } = await import('react-dom/client');
+    const reactRoot = createRoot(root);
+    try {
+      await act(async () => {
+        reactRoot.render(
+          h(
+            DropdownMenu as React.ComponentType<{
+              defaultOpen: boolean;
+              children?: React.ReactNode;
+            }>,
+            { defaultOpen: true },
+            h(
+              DropdownMenuTrigger as React.ComponentType<{ children: string }>,
+              null,
+              'Open',
+            ),
+            h(
+              DropdownMenuContent as React.ComponentType<{
+                children: React.ReactNode;
+              }>,
+              null,
+              h(
+                DropdownMenuItem as React.ComponentType<{ children: string }>,
+                null,
+                'Reset',
+              ),
+            ),
+          ),
+        );
+      });
+      assert.match(root.textContent ?? '', /Open/);
+      const menu = document.querySelector<HTMLElement>(
+        '[data-slot="main-dropdown-menu-motion-content"]',
+      );
+      assert.ok(menu, 'MenuSurface must retain the desktop E2E locator');
+      assert.ok(menu.className.includes('rounded'));
+      assert.match(menu.textContent ?? '', /Reset/);
+    } finally {
+      await act(async () => reactRoot.unmount());
+    }
+  });
+});
