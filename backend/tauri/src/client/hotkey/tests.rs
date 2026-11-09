@@ -192,6 +192,7 @@ impl RecordingRegistrar {
     }
 }
 
+#[async_trait::async_trait]
 impl ShortcutRegistrar for RecordingRegistrar {
     fn validate(&self, accelerator: &str) -> Result<(), HotkeyParseError> {
         self.calls
@@ -209,7 +210,7 @@ impl ShortcutRegistrar for RecordingRegistrar {
         Ok(())
     }
 
-    fn register(
+    async fn register(
         &self,
         accelerator: &str,
         action: HotkeyAction,
@@ -235,7 +236,7 @@ impl ShortcutRegistrar for RecordingRegistrar {
         Ok(())
     }
 
-    fn unregister(&self, accelerator: &str) -> anyhow::Result<()> {
+    async fn unregister(&self, accelerator: &str) -> anyhow::Result<()> {
         self.calls
             .lock()
             .expect("registrar call log")
@@ -247,7 +248,7 @@ impl ShortcutRegistrar for RecordingRegistrar {
         Ok(())
     }
 
-    fn unregister_all(&self) -> anyhow::Result<()> {
+    async fn unregister_all(&self) -> anyhow::Result<()> {
         self.calls
             .lock()
             .expect("registrar call log")

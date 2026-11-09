@@ -20,8 +20,10 @@ use crate::{
 use crate::client::hotkey::{
     HotkeyArgs, HotkeyClient,
     adapters::{
-        ChannelActionSink, PlatformAcceleratorValidator, TauriShortcutRegistrar, TauriWindowControl,
+        ChannelActionSink, PlatformAcceleratorValidator, TauriMainThread, TauriShortcutRegistrar,
+        TauriWindowControl,
     },
+    main_thread::{MainThreadExecutor, MainThreadHandoff},
     ports::{HotkeyAction, WindowControl},
 };
 
@@ -111,10 +113,22 @@ pub fn setup(app: &mut tauri::App, paths: PathResolver) -> anyhow::Result<()> {
     let core_facade_monitor = core_facade.clone();
 
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    let main_thread_handoff = Arc::new(MainThreadHandoff::default());
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    app.manage(Arc::clone(&main_thread_handoff));
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    let main_thread: Arc<dyn MainThreadExecutor> = Arc::new(TauriMainThread::new(
+        app.handle().clone(),
+        main_thread_handoff,
+    ));
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
     let (hotkey_tx, hotkey_rx) = tokio::sync::mpsc::unbounded_channel();
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     let hotkeys = tauri::async_runtime::block_on(HotkeyClient::spawn(HotkeyArgs {
-        registrar: Arc::new(TauriShortcutRegistrar::new(app.handle().clone())),
+        registrar: Arc::new(TauriShortcutRegistrar::new(
+            app.handle().clone(),
+            main_thread,
+        )),
         sink: Arc::new(ChannelActionSink::new(hotkey_tx)),
     }))
     .context("failed to start the global shortcut owner")?;

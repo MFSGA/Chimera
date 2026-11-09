@@ -344,6 +344,7 @@ mod tests {
 
     struct NoopRegistrar;
 
+    #[async_trait::async_trait]
     impl ShortcutRegistrar for NoopRegistrar {
         fn validate(
             &self,
@@ -352,7 +353,7 @@ mod tests {
             Ok(())
         }
 
-        fn register(
+        async fn register(
             &self,
             _accelerator: &str,
             _action: HotkeyAction,
@@ -361,11 +362,11 @@ mod tests {
             Ok(())
         }
 
-        fn unregister(&self, _accelerator: &str) -> anyhow::Result<()> {
+        async fn unregister(&self, _accelerator: &str) -> anyhow::Result<()> {
             Ok(())
         }
 
-        fn unregister_all(&self) -> anyhow::Result<()> {
+        async fn unregister_all(&self) -> anyhow::Result<()> {
             Ok(())
         }
     }
