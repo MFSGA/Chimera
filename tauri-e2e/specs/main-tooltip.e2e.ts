@@ -18,22 +18,95 @@ describe('main tooltip reference surface', () => {
   it('keeps ref padding on the animated inner surface', async () => {
     const firstSidebarLink = await $('[data-slot="slider-sidebar"] a');
     await firstSidebarLink.waitForDisplayed({ timeout: 15_000 });
-    await browser.execute((element) => {
-      element.dispatchEvent(
-        new PointerEvent('pointermove', {
-          bubbles: true,
-          pointerType: 'mouse',
-        }),
+    const target = await browser.execute((element) => {
+      const rect = element.getBoundingClientRect();
+      const x = Math.round(rect.left + rect.width / 2);
+      const y = Math.round(rect.top + rect.height / 2);
+      const hit = document.elementFromPoint(x, y);
+      element.dataset.e2ePointerMoves = '0';
+      element.dataset.e2ePointerType = 'none';
+      element.dataset.e2ePointerTrusted = 'none';
+      document.addEventListener(
+        'pointermove',
+        (event) => {
+          if (event.target instanceof Node && element.contains(event.target)) {
+            element.dataset.e2ePointerMoves = String(
+              Number(element.dataset.e2ePointerMoves ?? 0) + 1,
+            );
+            element.dataset.e2ePointerType = event.pointerType;
+            element.dataset.e2ePointerTrusted = String(event.isTrusted);
+          }
+        },
+        true,
       );
+      return {
+        x,
+        y,
+        hitTarget: hit === element || element.contains(hit),
+        viewport: { width: innerWidth, height: innerHeight },
+      };
     }, firstSidebarLink);
+    assert.equal(target.hitTarget, true, JSON.stringify(target));
 
-    await browser.waitUntil(
-      async () =>
-        browser.execute(() =>
-          Boolean(document.querySelector<HTMLElement>('[role="tooltip"]')),
-        ),
-      { timeout: 15_000, timeoutMsg: 'Tooltip did not open.' },
+    // Move from a known safe viewport point to the trigger using W3C mouse
+    // actions. Explicit viewport origins avoid the pointer-origin ambiguity
+    // in the earlier failing E2E attempts; no synthetic DOM event is sent.
+    const safeX = Math.max(1, target.viewport.width - 12);
+    const safeY = Math.max(
+      1,
+      Math.min(
+        target.viewport.height - 8,
+        Math.round(target.viewport.height * 0.5),
+      ),
     );
+    const pointer = browser.action('pointer', {
+      parameters: { pointerType: 'mouse' },
+    });
+    await pointer
+      .move({ origin: 'viewport', x: safeX, y: safeY, duration: 0 })
+      .pause(100)
+      .move({ origin: 'viewport', x: target.x, y: target.y, duration: 200 })
+      .pause(250)
+      .perform();
+
+    try {
+      await browser.waitUntil(
+        async () =>
+          browser.execute(
+            (element) =>
+              Number(element.dataset.e2ePointerMoves ?? 0) > 0 &&
+              element.dataset.e2ePointerType === 'mouse' &&
+              element.dataset.e2ePointerTrusted === 'true' &&
+              Boolean(document.querySelector<HTMLElement>('[role="tooltip"]')),
+            firstSidebarLink,
+          ),
+        {
+          timeout: 15_000,
+          timeoutMsg: 'Real WebDriver mouse pointer did not open the Tooltip.',
+        },
+      );
+    } catch (cause) {
+      const observed = await browser.execute((element) => {
+        const rect = element.getBoundingClientRect();
+        const x = Math.round(rect.left + rect.width / 2);
+        const y = Math.round(rect.top + rect.height / 2);
+        const hit = document.elementFromPoint(x, y);
+        return {
+          pointerMoves: element.dataset.e2ePointerMoves ?? null,
+          pointerType: element.dataset.e2ePointerType ?? null,
+          pointerTrusted: element.dataset.e2ePointerTrusted ?? null,
+          triggerState: element.getAttribute('data-state'),
+          centerHitsTrigger: hit === element || element.contains(hit),
+          topTag: hit?.tagName ?? null,
+          tooltipCount: document.querySelectorAll('[role="tooltip"]').length,
+          viewport: { width: innerWidth, height: innerHeight },
+        };
+      }, firstSidebarLink);
+      throw new Error(
+        'Real WebDriver Tooltip hover failed: ' + JSON.stringify(observed),
+        { cause },
+      );
+    }
 
     const state = await browser.execute(() => {
       const tooltip = document.querySelector<HTMLElement>('[role="tooltip"]');
@@ -66,7 +139,8 @@ describe('main tooltip reference surface', () => {
           : [],
         surfaceOverflow: surfaceStyle?.overflow ?? '',
         contentText: content?.textContent?.trim() ?? '',
-        borderRadius: tooltipStyle?.borderRadius ?? '',
+        tooltipBorderRadius: tooltipStyle?.borderRadius ?? '',
+        surfaceBorderRadius: surfaceStyle?.borderRadius ?? '',
         viewport: { width: innerWidth, height: innerHeight },
       };
     });
@@ -77,7 +151,11 @@ describe('main tooltip reference surface', () => {
     assert.equal(state.tooltipChildren, 1, JSON.stringify(state, null, 2));
     assert.equal(state.surfaceChildren, 1, JSON.stringify(state, null, 2));
     assert.ok(state.contentText.length > 0, JSON.stringify(state, null, 2));
-    assert.notEqual(state.borderRadius, '0px', JSON.stringify(state, null, 2));
+    assert.notEqual(
+      state.surfaceBorderRadius,
+      '0px',
+      JSON.stringify(state, null, 2),
+    );
     assert.ok(state.viewport.width >= 1200, JSON.stringify(state, null, 2));
     assert.ok(state.viewport.height >= 600, JSON.stringify(state, null, 2));
 
@@ -86,5 +164,22 @@ describe('main tooltip reference surface', () => {
       fs.mkdirSync(path.dirname(evidencePath), { recursive: true });
       await browser.saveScreenshot(evidencePath);
     }
+
+    // Leave the trigger with another real pointer action. The closed Tooltip
+    // must finish its exit animation and unmount the portalled content.
+    await browser
+      .action('pointer', { parameters: { pointerType: 'mouse' } })
+      .move({ origin: 'viewport', x: safeX, y: safeY, duration: 200 })
+      .perform();
+    await browser.waitUntil(
+      async () =>
+        browser.execute(
+          () => document.querySelector('[role="tooltip"]') === null,
+        ),
+      {
+        timeout: 5_000,
+        timeoutMsg: 'Tooltip portal remained mounted after real pointer exit.',
+      },
+    );
   });
 });
