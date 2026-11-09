@@ -151,8 +151,11 @@ export function DropdownMenuSubTrigger({
 export function DropdownMenuSubContent({
   children,
   className,
+  'data-slot': dataSlot,
   ...props
-}: ComponentProps<typeof DropdownMenuPrimitive.SubContent>) {
+}: ComponentProps<typeof DropdownMenuPrimitive.SubContent> & {
+  'data-slot'?: string;
+}) {
   const { open } = useDropdownMenuSubContext();
 
   return (
@@ -161,7 +164,7 @@ export function DropdownMenuSubContent({
         <DropdownMenuPortal forceMount>
           <DropdownMenuPrimitive.SubContent {...props} asChild>
             <MenuSurface
-              data-slot="main-dropdown-menu-motion-content"
+              data-slot={dataSlot ?? 'main-dropdown-menu-motion-content'}
               className={className}
             >
               {children}
@@ -216,8 +219,11 @@ export const DropdownMenuContent = ({
   children,
   className,
   align: alignProp,
+  'data-slot': dataSlot,
   ...props
-}: ComponentProps<typeof DropdownMenuPrimitive.Content>) => {
+}: ComponentProps<typeof DropdownMenuPrimitive.Content> & {
+  'data-slot'?: string;
+}) => {
   const { open, width, align } = useDropdownMenuContext();
 
   return (
@@ -230,7 +236,7 @@ export const DropdownMenuContent = ({
             asChild
           >
             <MenuSurface
-              data-slot="main-dropdown-menu-motion-content"
+              data-slot={dataSlot ?? 'main-dropdown-menu-motion-content'}
               className={className}
               style={{
                 width:
