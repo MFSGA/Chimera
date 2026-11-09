@@ -322,15 +322,15 @@ pub fn run() -> std::process::ExitCode {
     };
 
     app.run(|app_handle, e| match e {
-        // todo: will change to keep align with ref.
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
-        tauri::RunEvent::Ready => {
-            // Shortcut registration synchronously dispatches to the UI thread.
-            // Start it only after setup returns and the event loop can run.
-            let client = app_handle.state::<crate::client::ChimeraClient>().inner().clone();
-            tauri::async_runtime::spawn(async move {
-                client.reconcile_hotkeys().await;
-            });
+        tauri::RunEvent::Exit => {
+            // The event loop can no longer complete scheduled UI work.
+            // Release hotkey actors awaiting a main-thread result.
+            if let Some(handoff) = app_handle.try_state::<
+                std::sync::Arc<crate::client::hotkey::main_thread::MainThreadHandoff>,
+            >() {
+                handoff.mark_event_loop_lost();
+            }
         }
         // pay attention to this event order, otherwise the app will quit immediately after all windows are closed
         tauri::RunEvent::ExitRequested { api, code, .. } => {
