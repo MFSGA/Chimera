@@ -16,7 +16,7 @@ else
   warn 'Host is not NixOS; Linux dependency checks still apply'
 fi
 
-for tool in node pnpm deno cargo rustc pkg-config; do
+for tool in node pnpm deno cargo rustc pkg-config file xdotool; do
   if command -v "$tool" >/dev/null 2>&1; then
     ok "$tool available"
   else
@@ -35,7 +35,7 @@ if command -v node >/dev/null 2>&1; then
 fi
 
 if command -v pkg-config >/dev/null 2>&1; then
-  for dependency in gtk+-3.0 webkit2gtk-4.1 libsoup-3.0 ayatana-appindicator3-0.1 openssl; do
+  for dependency in gtk+-3.0 webkit2gtk-4.1 libsoup-3.0 ayatana-appindicator3-0.1 librsvg-2.0 openssl; do
     if pkg-config --exists "$dependency"; then
       ok "$dependency available"
     else
@@ -66,7 +66,15 @@ if [[ -e /dev/net/tun ]]; then
 else
   warn '/dev/net/tun unavailable; TUN mode needs host configuration'
 fi
-if [[ -z "${DISPLAY:-}" && -z "${WAYLAND_DISPLAY:-}" ]]; then
+display_detected=0
+if [[ -n "${DISPLAY:-}" || -n "${WAYLAND_DISPLAY:-}" ]]; then
+  display_detected=1
+elif command -v systemctl >/dev/null 2>&1 &&
+  systemctl --user show-environment 2>/dev/null | grep -Eq '^(DISPLAY|WAYLAND_DISPLAY)='; then
+  display_detected=1
+  ok 'Graphical session detected via systemd user environment'
+fi
+if ((display_detected == 0)); then
   warn 'No graphical display detected in this shell; desktop UI cannot be verified here'
 fi
 
