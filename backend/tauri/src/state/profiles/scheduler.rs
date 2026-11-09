@@ -115,8 +115,31 @@ impl ExternalWatchers {
 
 fn watch_path(target: &ExternalProfilePath, mode: ExternalMode) -> PathBuf {
     match mode {
-        ExternalMode::Symlink => std::fs::canonicalize(target.as_path())
+        ExternalMode::Symlink | ExternalMode::Mirror => std::fs::canonicalize(target.as_path())
             .unwrap_or_else(|_| target.as_path().to_path_buf()),
-        ExternalMode::Mirror => target.as_path().to_path_buf(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mirror_watch_path_uses_the_canonical_target_when_available() {
+        let directory = tempfile::tempdir().unwrap();
+        let parent = directory.path().join("profiles");
+        std::fs::create_dir(&parent).unwrap();
+        let target_path = directory
+            .path()
+            .join("profiles")
+            .join("..")
+            .join("profiles")
+            .join("external.yaml");
+        std::fs::write(&target_path, "proxies: []\n").unwrap();
+        let target = ExternalProfilePath::new(target_path.to_string_lossy().into_owned()).unwrap();
+        let canonical_path = std::fs::canonicalize(target.as_path()).unwrap();
+
+        assert_ne!(target_path, canonical_path);
+        assert_eq!(watch_path(&target, ExternalMode::Mirror), canonical_path);
     }
 }
