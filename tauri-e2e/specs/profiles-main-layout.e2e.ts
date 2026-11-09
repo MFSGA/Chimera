@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import type { MutationOutcome } from '../../frontend/interface/src/ipc/bindings.js';
+import { readAppMessageCatalog, xpathLiteral } from './app-message-catalog.js';
 import { clickElement, displayedElement } from './interaction.js';
 import { openMainRoute } from './main-window.js';
 import {
@@ -258,13 +259,20 @@ describe('main profiles reference layout', () => {
       await originalCard.waitForDisplayed({ timeout: 15_000 });
       await originalCard.click({ button: 'right' });
 
+      const messages = await readAppMessageCatalog();
+      const moveToFolder = messages.profile_move_to_folder;
+      const newFolderLabel = messages.profile_move_new_folder;
+      assert.ok(typeof moveToFolder === 'string' && moveToFolder.length > 0);
+      assert.ok(
+        typeof newFolderLabel === 'string' && newFolderLabel.length > 0,
+      );
       const moveMenu = await $(
-        '//*[@role="menuitem" and contains(normalize-space(.),"移动到文件夹")]',
+        `//*[@role="menuitem" and contains(normalize-space(.),${xpathLiteral(moveToFolder)})]`,
       );
       await moveMenu.waitForDisplayed({ timeout: 15_000 });
       await moveMenu.click();
       const newFolder = await $(
-        '//*[@role="menuitem" and contains(normalize-space(.),"新建文件夹")]',
+        `//*[@role="menuitem" and contains(normalize-space(.),${xpathLiteral(newFolderLabel)})]`,
       );
       await newFolder.waitForClickable({ timeout: 15_000 });
       await newFolder.click();
