@@ -45,6 +45,7 @@ release.sh
 !/docs/ref-alignment-ui-menus.md
 !/docs/ref-alignment-ui-shared-foundations.md
 !/docs/ref-alignment-ui-dashboard.md
+!/docs/ref-alignment-ui-tooltip.md
 !/docs/ui-header-alignment.md
 !/docs/macos-tun-authorization.md
 !/docs/nixos.md
