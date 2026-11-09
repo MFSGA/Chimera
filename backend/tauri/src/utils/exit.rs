@@ -87,6 +87,14 @@ impl ExitGate {
         self.phase = ExitPhase::Finished;
     }
 
+    /// The updater may install only after a successful cleanup. A failed core
+    /// shutdown must not unlock exit/restart or report a completed shutdown.
+    fn finish_external_cleanup(&mut self, cleanup: anyhow::Result<()>) -> anyhow::Result<()> {
+        cleanup?;
+        self.cleaned_up();
+        Ok(())
+    }
+
     pub fn has_shut_down(&self) -> bool {
         self.phase == ExitPhase::Finished
     }
@@ -158,10 +166,14 @@ pub async fn shutdown_before_exit(app_handle: &AppHandle) -> anyhow::Result<()> 
     }
     unregister_hotkeys(app_handle).await;
     let result = crate::utils::help::cleanup_processes_async(app_handle).await;
-    app_handle.state::<ExitBoundary>().gate.lock().cleaned_up();
+    app_handle
+        .state::<ExitBoundary>()
+        .gate
+        .lock()
+        .finish_external_cleanup(result)?;
     #[cfg(windows)]
     crate::shutdown_hook::set_ready_for_shutdown();
-    result
+    Ok(())
 }
 
 /// Synchronous counterpart for callers that must block before ending the
@@ -286,10 +298,21 @@ mod tests {
     }
 
     #[test]
+    fn failed_external_cleanup_does_not_unlock_exit_or_install() {
+        let mut gate = ExitGate::default();
+        let failure = gate
+            .finish_external_cleanup(Err(anyhow::anyhow!("core shutdown failed")))
+            .unwrap_err();
+        assert_eq!(failure.to_string(), "core shutdown failed");
+        assert!(!gate.has_shut_down());
+        assert_eq!(gate.on_exit_requested(Some(0)), ExitDecision::Shutdown);
+    }
+
+    #[test]
     fn a_restart_after_external_cleanup_relaunches_on_the_next_exit() {
         let mut gate = ExitGate::default();
         assert!(!gate.has_shut_down());
-        gate.cleaned_up();
+        gate.finish_external_cleanup(Ok(())).unwrap();
         assert!(gate.has_shut_down());
         assert_eq!(gate.on_exit_requested(None), ExitDecision::Prevent);
         gate.request_restart();
