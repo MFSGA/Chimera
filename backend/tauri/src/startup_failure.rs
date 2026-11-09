@@ -23,6 +23,7 @@ use crate::{
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum FailureKind {
+    Directories,
     MigrationFailed,
     NewerVersion,
     UserConfig,
@@ -30,6 +31,15 @@ pub(crate) enum FailureKind {
     Permission,
     Busy,
     Internal,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct StartupFailure {
+    pub stage: StartupStage,
+    pub kind: FailureKind,
+    pub path: Option<PathBuf>,
+    pub detail: String,
+    pub revision: Option<RevisionFailure>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -81,15 +91,6 @@ impl RevisionFailure {
     fn is_newer(&self) -> bool {
         !matches!(self, Self::OlderStoreSchema { .. })
     }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct StartupFailure {
-    pub stage: StartupStage,
-    pub kind: FailureKind,
-    pub path: Option<PathBuf>,
-    pub detail: String,
-    pub revision: Option<RevisionFailure>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -330,6 +331,42 @@ pub(crate) fn report_boundary_with_backup<T>(
             report.failure.stage, report.failure.kind
         ))
     })
+}
+
+/// Presents pre-Tauri failures without starting a reporter or event loop.
+pub(crate) fn show_one_shot(
+    kind: FailureKind,
+    path: Option<PathBuf>,
+    error: &(dyn StdError + 'static),
+    recovery_key: Option<&str>,
+) {
+    let detail = snafu::Report::from_error(error).to_string();
+    tracing::error!(?kind, ?path, %detail, "application startup failed before Tauri setup");
+    let message = one_shot_message(kind, path.as_deref(), &detail, recovery_key);
+    eprintln!("{message}");
+    crate::utils::dialog::error_dialog(message);
+}
+
+/// The pre-Tauri discovery stage has no Setup owner or migration revision.
+/// Keep it distinct from the structured reports created at actual Setup boundaries.
+fn one_shot_message(
+    kind: FailureKind,
+    path: Option<&std::path::Path>,
+    detail: &str,
+    recovery_key: Option<&str>,
+) -> String {
+    let location = path
+        .map(|path| path.display().to_string())
+        .unwrap_or_else(|| "unresolved path".to_owned());
+    let recovery = recovery_key
+        .map(|key| format!("Recovery action: {key}"))
+        .unwrap_or_else(|| {
+            "Check the reported path and permissions; do not remove existing configuration files."
+                .to_owned()
+        });
+    format!(
+        "Clash Chimera could not start ({kind:?}).\n\nPath: {location}\n\n{recovery}\n\n{detail}"
+    )
 }
 
 #[cfg(test)]

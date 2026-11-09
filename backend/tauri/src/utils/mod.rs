@@ -25,3 +25,5 @@ pub mod sudo;
 /// 10
 #[cfg(target_os = "windows")]
 pub mod winreg;
+
+pub mod dialog;

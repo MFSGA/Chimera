@@ -60,6 +60,7 @@ chimera-config = { path = "../chimera-config" }
 chimera-geodata = { path = "../chimera-geodata" }
 chimera-traffic = { path = "../chimera-traffic", features = ["specta"] }
 chimera-jobs = { path = "../chimera-jobs", features = ["specta"] }
+chimera-paths = { path = '../chimera-paths' }
 
 clash-api = { workspace = true }
 
@@ -200,6 +201,16 @@ tar = "0.4"
 zip = "8"
 num_cpus = "1"
 sysinfo = "0.39"
+
+chimera-contracts = { path = '../chimera-contracts', default-features = false, features = [
+  'test-support'
+] }
+
+# GUI Utilities
+rfd = { version = '0.17', default-features = false, features = [
+  'gtk3',
+  'common-controls-v6',
+] }  # cross platform dialog
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-single-instance = { version = "2.4.2", features = ["deep-link"] }
