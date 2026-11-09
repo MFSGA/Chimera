@@ -1243,6 +1243,7 @@ dependencies = [
  "serde_json",
  "serde_yaml",
  "serde_yaml_ng",
+ "snafu",
  "specta",
  "specta-typescript",
  "tempfile",
