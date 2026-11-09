@@ -169,7 +169,7 @@
               fi
 
               echo "Chimera dev shell ($system): Node $(node --version); pnpm via corepack (packageManager pin); Deno $(deno --version | head -n 1)"
-              echo "Rust: rustup follows rust-toolchain.toml (nightly-2026-11-06); rustfmt and clippy are available through the pinned toolchain."
+              echo "Rust: rustup follows rust-toolchain.toml (nightly-2026-11-09); rustfmt and clippy are available through the pinned toolchain."
               echo "Network: inherited proxy variables are respected; set CHIMERA_HTTP_PROXY and CHIMERA_NO_PROXY to override inside this shell."
             '';
           };
