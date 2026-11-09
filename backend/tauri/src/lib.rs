@@ -80,17 +80,21 @@ fn setup_frontend_console_bridge(app: &mut tauri::App) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() -> std::io::Result<()> {
+    // Nothing before the logger reaches a trace, so its share is logged.
+    let started = std::time::Instant::now();
+    rust_i18n::set_locale(utils::help::detect_system_i18n_key());
     // Resolve once before startup initialization, then pass the same roots to
     // configuration and the Tauri composition root (as in the pinned ref).
     let paths = PathResolver::from_env().map_err(std::io::Error::other)?;
     paths.create_base_dirs().map_err(std::io::Error::other)?;
     init::init_config(&paths).map_err(std::io::Error::other)?;
-    if let Some(lang) = Config::verge().latest().language.clone() {
+
+    /* if let Some(lang) = Config::verge().latest().language.clone() {
         let locale = crate::bridge::verge::locale_key_from_legacy(&lang)
             .map(str::to_owned)
             .unwrap_or_else(|| lang.to_ascii_lowercase());
         rust_i18n::set_locale(&locale);
-    }
+    } */
 
     let specta_builder = specta_export::build_specta_builder();
 

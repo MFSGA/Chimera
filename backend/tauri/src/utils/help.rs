@@ -242,3 +242,11 @@ pub fn restart_application(app_handle: &AppHandle) {
         .request_restart();
     app_handle.exit(0);
 }
+
+/// Resolve the UI language from the OS locale, as the canonical i18n key.
+///
+/// The key names a `rust_i18n` bundle in `backend/tauri/locales` and a paraglide
+/// locale in the frontend; both use the same lowercase spelling.
+pub fn detect_system_i18n_key() -> &'static str {
+    chimera_config::application::default_i18n_language().as_str()
+}
