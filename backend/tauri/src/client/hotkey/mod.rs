@@ -6,6 +6,7 @@
 
 mod actor;
 pub mod adapters;
+pub(crate) mod main_thread;
 pub mod ports;
 
 #[cfg(test)]
