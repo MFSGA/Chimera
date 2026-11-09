@@ -13,6 +13,22 @@ describe('main tooltip reference surface', () => {
     });
     await openMainRoute(targetPath);
     await browser.setWindowSize(1240, 638);
+
+    // The preceding main-dropdown-menu spec deliberately leaves its menu
+    // open after measuring it. Dismiss that prior suite state before checking
+    // hit-testing or real pointer delivery to a Tooltip trigger.
+    await browser.keys('Escape');
+    await browser.waitUntil(
+      async () =>
+        browser.execute(
+          () =>
+            document.querySelector('[role="menu"][data-state="open"]') === null,
+        ),
+      {
+        timeout: 5_000,
+        timeoutMsg: 'A previous E2E dropdown menu remained open.',
+      },
+    );
   });
 
   it('keeps ref padding on the animated inner surface', async () => {
@@ -39,10 +55,20 @@ describe('main tooltip reference surface', () => {
         },
         true,
       );
+      const hitElement = hit instanceof HTMLElement ? hit : null;
       return {
         x,
         y,
         hitTarget: hit === element || element.contains(hit),
+        hitTag: hit?.tagName ?? null,
+        hitSlot: hitElement?.dataset.slot ?? null,
+        hitClass: hitElement?.className ?? null,
+        targetRect: {
+          x: rect.x,
+          y: rect.y,
+          width: rect.width,
+          height: rect.height,
+        },
         viewport: { width: innerWidth, height: innerHeight },
       };
     }, firstSidebarLink);
