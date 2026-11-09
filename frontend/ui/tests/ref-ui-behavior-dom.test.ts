@@ -443,6 +443,49 @@ test('dropdown exposes the historical main E2E locator on the reference menu sur
       assert.ok(menu, 'MenuSurface must retain the desktop E2E locator');
       assert.ok(menu.className.includes('rounded'));
       assert.match(menu.textContent ?? '', /Reset/);
+
+      // Named consumers (theme/language selectors) need their own locator;
+      // the shared legacy main locator only applies when no slot is passed.
+      await act(async () => {
+        reactRoot.render(
+          h(
+            DropdownMenu as React.ComponentType<{
+              defaultOpen: boolean;
+              children?: React.ReactNode;
+            }>,
+            { defaultOpen: true },
+            h(
+              DropdownMenuTrigger as React.ComponentType<{ children: string }>,
+              null,
+              'Open',
+            ),
+            h(
+              DropdownMenuContent as React.ComponentType<{
+                children: React.ReactNode;
+                'data-slot'?: string;
+              }>,
+              { 'data-slot': 'theme-mode-selector-menu' },
+              h(
+                DropdownMenuItem as React.ComponentType<{ children: string }>,
+                null,
+                'Dark',
+              ),
+            ),
+          ),
+        );
+      });
+      const namedMenu = document.querySelector<HTMLElement>(
+        '[data-slot="theme-mode-selector-menu"]',
+      );
+      assert.ok(namedMenu, 'Caller data-slot must survive Radix asChild');
+      assert.equal(
+        document.querySelector(
+          '[data-slot="main-dropdown-menu-motion-content"]',
+        ),
+        null,
+        'The default locator must not override a named selector',
+      );
+      assert.match(namedMenu.textContent ?? '', /Dark/);
     } finally {
       await act(async () => reactRoot.unmount());
     }
