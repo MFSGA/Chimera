@@ -1,3 +1,93 @@
+## [0.28.1] - 2026-11-09 05:25:48
+
+### ✅ Testing
+
+- **e2e:** Handle visible updater prompt in legacy navigation by @MFSGA
+
+### ✨ Features
+
+- **clash-api:** Adopt runtime API and pin reference baseline by @MFSGA
+
+- **proxies:** Test pinned groups with provider-aware bounded delays by @MFSGA
+
+- **proxies:** Sync reference and safely clear fixed group selection by @MFSGA
+
+- **proxies:** Support provider-aware delay tests through typed core IPC by @MFSGA
+
+- **proxies:** Integrate instance-bound native proxy graph and UI by @MFSGA
+
+- **toolchain:** Use nightly by @MFSGA
+
+### 🐛 Bug Fixes
+
+- **ci:** Include Node types in Chimera frontend typecheck by @MFSGA in [#634](https://github.com/MFSGA/Chimera/pull/634)
+
+- **editor:** Solve the closing window issue by @MFSGA
+
+- **prepare:** Back off rolling Alpha asset 404s by @MFSGA
+
+- **setup:** Solve the blocking problem by @MFSGA
+
+### 📚 Documentation
+
+- **ref:** Record Clash streams actor migration by @MFSGA
+
+- **ref:** Record runtime main merge and service control port by @MFSGA
+
+- **ref:** Record core ownership of service watch state by @MFSGA
+
+- **ui:** Record signed UI slices and next ref migration queue by @MFSGA in [#621](https://github.com/MFSGA/Chimera/pull/621)
+
+- **ui:** Snapshot pinned reference migration gaps by @MFSGA
+
+### 🔨 Refactor
+
+- **client:** Own Clash streams through ChimeraClient by @MFSGA
+
+- **core:** Move Clash streams actor into core by @MFSGA
+
+- **core:** Bind Clash streams to revocable API instances by @MFSGA
+
+- **core:** Own ServiceProcessControl and typed host failures by @MFSGA
+
+- **core:** Own ServiceActor status projection and readiness state by @MFSGA
+
+- **core:** Centralize Service compatibility gate and new migration policy by @MFSGA
+
+- **core:** Sync upstream and move Service readiness policy to core by @MFSGA
+
+- **core:** Move Actor V2 endpoint contract and host projections to core by @MFSGA
+
+- **core:** Import upstream runtime intent and controller information by @MFSGA
+
+- **core:** Unify runtime-bound group latency and proxy snapshot publication by @MFSGA
+
+- **core:** Sync reference and classify Clash API failures by @MFSGA
+
+- **core:** Own scoped Clash API clients and connection interruption by @MFSGA
+
+- **core:** Extract Clash DTOs, client projections and connection rates by @MFSGA
+
+- **logs:** Align seven level filters and visible navigation by @MFSGA
+
+- **runtime:** Pin upstream-aligned graceful Service lifecycle by @MFSGA
+
+- **tauri:** Adapt consumers to core Clash streams by @MFSGA
+
+- **ui:** Integrate ScrollArea state and sticky headers by @MFSGA
+
+- **ui:** Integrate Modal layout contract with cumulative tests by @MFSGA in [#628](https://github.com/MFSGA/Chimera/pull/628)
+
+- **ui:** Integrate Slider with cumulative test contract by @MFSGA in [#627](https://github.com/MFSGA/Chimera/pull/627)
+
+- **ui:** Align SearchField and NavigationSidebar with pinned ref by @MFSGA
+
+- **ui:** Align HighlightText, legacy consumers and SSR coverage by @MFSGA
+
+---
+
+**Full Changelog**: https://github.com/MFSGA/Chimera/compare/v0.28.0...v0.28.1
+
 ## [0.28.0] - 2026-11-06 03:39:25
 
 ### ✅ Testing
