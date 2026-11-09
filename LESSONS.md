@@ -1082,3 +1082,23 @@ backend/Cargo.toml -p chimera --lib core::clash::proxies::tests:: -- --nocapture
 - 修复与验证：维护者已清出原构建盘空间；仅删除本次创建的临时 C 盘 Cargo target，按 `cargo metadata` 确认默认输出为 `backend/target` 后，`cargo test --locked --quiet --manifest-path backend/Cargo.toml --workspace --all-features` 在默认目录退出码 0。Tauri 测试二进制 **777 passed / 1 ignored**，其他 workspace 测试与 doctests 均通过；其中包含 local host 配置优先级/错误测试和启动诊断测试。`specta_export::tests::typescript_bindings_are_fresh` 的内部 pnpm 打印 supply-chain metadata fetch 超时及“可能需要安装”的警告，但随后 Prettier 成功处理生成文件，绑定相等断言通过（1/1）。发布版本快进后，pnpm 1,642 条锁文件策略检查通过；`pnpm test:manifest` 的 Deno 测试阶段因持续无输出被中止，相关 assertions 未验证。不要把 pnpm 内部元数据告警或未完成的 Deno 测试记成成功。
 - 防复发：运行全量 Cargo 测试前同时检查 `backend/target` 和 pnpm store 所在盘的剩余空间；若切换 `CARGO_TARGET_DIR`，仍需为项目盘上的 pnpm store 留出空间。代理/缓存失败时记录实际下载目标和有效 store，不把未完成运行称为测试通过。
 - 风险/回滚和清理证据：未触碰用户配置、宿主代理/TUN 或服务进程；清理目标仅为本次创建的临时 Cargo 构建目录。
+
+### LESSON-20261106-001：嵌套 ScrollArea 的 WebDriver wheel 不等于原生浏览器滚轮
+
+- 日期与时区：2026-11-06 Asia/Shanghai
+- 状态：Investigating（驱动补丁和取消场景已在隔离工作树准备；新 SHA Windows desktop E2E 尚未验证）
+- 严重度：Medium（主分支 56 个 hermetic spec 文件中有 1 个回归失败；没有证据表明实际用户物理滚轮故障）
+- 模块：vendored `tauri-plugin-wdio-webdriver` wheel executor / Settings ScrollArea E2E
+- 关联运行：主分支 `08c4146d` 的 [42205988924](https://github.com/MFSGA/Chimera/actions/runs/42205988924)，#630 的 [42210921125](https://github.com/MFSGA/Chimera/actions/runs/42210921125)，#633 的 [42221575246](https://github.com/MFSGA/Chimera/actions/runs/42221575246)。已读取失败 job 日志，并下载打开 #633 的失败截图、HTML 快照和错误文本。截图显示主窗口仍在 Chimera 设置页顶部、展开标题未切换，HTML 中实际 Settings 根容器保持 `data-top="true"`、`data-scroll-direction="none"`；此截图与失败钩子保存的错误文本对应，尚不代表新候选已经通过桌面验证。
+- 已观测的事实：#633 的 Windows WebView2 执行真实 WebDriver wheel command，页面接收到合成的 `WheelEvent`（`isTrusted=false`，未取消），但 `scrollTop=0`、`scrollEventCount=0`，内容 1954px / 视口 541px，且命中点属于目标 viewport。定位目标点和扩大滚轮幅度仍失败，排除“仅靠修改 wheel origin 就能修复”的假设。
+- 已核对的实现问题：vendored `executor.rs::dispatch_scroll_event` 仅 `dispatchEvent(new WheelEvent)`，随后 `window.scrollBy`，未滚动内部 Radix viewport。合成事件不会获得浏览器的受信任默认动作；这解释了测试始终停在 0 的机制。没有由此得出物理鼠标/触控板在正式应用中也无法滚动的结论。
+- 修复候选：在仅 E2E 可用的嵌入式驱动层，取消事件不处理，未取消事件沿目标祖先滚动可滚动容器，保留必要的窗口回退；测试明确使用视口坐标、负向取消验证、向下/向上滚动及标题可见性断言。严格称为“WebDriver wheel command”而非可信系统输入。
+- 已执行：`pnpm --filter @chimera/tauri-e2e typecheck`、`pnpm --filter @chimera/tauri-e2e test:unit`（37/37，新增 4 项 wheel script 回归）、Prettier、`rustfmt --check`（仅修改的 Rust 文件）、`git diff --check` 全部通过。`cargo check --locked --offline -p tauri-plugin-wdio-webdriver` 因隔离工作树未初始化 `backend/chimera-runtime`、找不到 `chimera-utils` 而阻塞，并非 Rust 编译错误。未运行候选新 SHA 的 Windows 桌面 E2E；既有全工作区 `cargo fmt --all --check` 在未修改的 vendored macOS/Windows 文件有格式差异，不能把它算作本补丁的格式错误或全局通过。
+- 防复发：新增 [embedded wheel 契约](docs/testing/contracts/scroll-area-embedded-wheel.md)；看 WDIO 供应商实际 executor 源码，分清指令发送与浏览器默认动作；回归必须失败于嵌套 viewport 不滚动，并保留取消、滚动状态及可见标题断言。新提交/重写 SHA 必须重新完成 CI、桌面 E2E 和独立审查。
+- 风险/回滚：仅独立 worktree 的 E2E 驱动、测试及证据文档，未改生产 ScrollArea、主分支、用户脏工作树、ref、Service、代理/TUN、tag。回滚为撤销这组候选改动。
+
+#### 2026-11-09 follow-up
+
+- Current base is master@03d6e641 and current ref is 911644c8. The original PR #633 Windows harness failure was caused by a CRLF-sensitive source extractor, not by the wheel algorithm; the unit test now normalizes CRLF before extracting the Rust raw string.
+- On the current candidate, 39/39 E2E harness unit tests pass, including four executable-script tests for nested scrolling, preventDefault, overscroll containment and residual window scrolling. E2E TypeScript, Prettier, Oxlint, single-file rustfmt, and offline cargo check -p tauri-plugin-wdio-webdriver pass.
+- Still pending: a new Windows WebView2 settings-suite run on this exact commit. The WebDriver event remains synthetic (isTrusted=false); do not claim native physical mouse-wheel or trackpad validation.

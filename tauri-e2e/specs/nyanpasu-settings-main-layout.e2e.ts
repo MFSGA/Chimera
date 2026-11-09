@@ -146,4 +146,288 @@ describe('main Chimera settings reference layout', () => {
       await browser.saveScreenshot(evidencePath);
     }
   });
+
+  it('updates ScrollArea direction and sticky title after WebDriver wheel actions', async () => {
+    const viewport = await $(
+      '[data-slot="settings-content-scroll-area"] [data-slot="scroll-area-viewport"]',
+    );
+    await viewport.waitForDisplayed({ timeout: 15_000 });
+
+    const initial = await browser.execute(() => {
+      const root = document.querySelector<HTMLElement>(
+        '[data-slot="settings-content-scroll-area"]',
+      );
+      const element = root?.querySelector<HTMLElement>(
+        '[data-slot="scroll-area-viewport"]',
+      );
+      if (!root || !element) {
+        throw new Error('The real settings ScrollArea viewport is missing.');
+      }
+      return {
+        availableScroll: element.scrollHeight - element.clientHeight,
+        scrollTop: element.scrollTop,
+        top: root.dataset.top,
+      };
+    });
+    assert.ok(
+      initial.availableScroll > 120,
+      'Settings page must actually overflow before wheel testing: ' +
+        JSON.stringify(initial),
+    );
+    assert.equal(initial.scrollTop, 0, JSON.stringify(initial));
+    assert.equal(initial.top, 'true');
+
+    // Use a visible point inside the right-hand viewport instead of relying
+    // on element-origin conversion. This is the embedded WebDriver wheel path,
+    // not trusted OS-wheel input; the DOM only measures target and results.
+    const bounds = await browser.execute(() => {
+      const element = document.querySelector<HTMLElement>(
+        '[data-slot="settings-content-scroll-area"] [data-slot="scroll-area-viewport"]',
+      );
+      if (!element) throw new Error('Settings viewport disappeared.');
+      const rect = element.getBoundingClientRect();
+      return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
+    });
+    const wheelPoint = {
+      x: Math.round(bounds.x + bounds.width * 0.65),
+      y: Math.round(bounds.y + bounds.height * 0.6),
+    };
+    const wheelTarget = await browser.execute(
+      (x, y) => {
+        const element = document.elementFromPoint(x, y);
+        const scrollArea = document.querySelector<HTMLElement>(
+          '[data-slot="settings-content-scroll-area"]',
+        );
+        return {
+          insideViewport:
+            element?.closest('[data-slot="scroll-area-viewport"]') ===
+            scrollArea?.querySelector('[data-slot="scroll-area-viewport"]'),
+          tagName: element?.tagName ?? null,
+        };
+      },
+      wheelPoint.x,
+      wheelPoint.y,
+    );
+    assert.equal(
+      wheelTarget.insideViewport,
+      true,
+      'Wheel origin is not inside the Settings scroll viewport: ' +
+        JSON.stringify({ bounds, wheelPoint, wheelTarget }),
+    );
+
+    // The vendored embedded driver synthesizes an untrusted WheelEvent. First
+    // prove that canceling it suppresses the simulated scroll default action.
+    await browser.execute(() => {
+      const viewport = document.querySelector<HTMLElement>(
+        '[data-slot="settings-content-scroll-area"] [data-slot="scroll-area-viewport"]',
+      );
+      if (!viewport) {
+        throw new Error(
+          'Settings viewport vanished before wheel cancellation.',
+        );
+      }
+      viewport.dataset.e2eCancelWheelReceived = 'false';
+      viewport.dataset.e2eCancelWheelPrevented = 'false';
+      viewport.addEventListener(
+        'wheel',
+        (event) => {
+          viewport.dataset.e2eCancelWheelReceived = 'true';
+          event.preventDefault();
+          viewport.dataset.e2eCancelWheelPrevented = String(
+            event.defaultPrevented,
+          );
+        },
+        { once: true, capture: true },
+      );
+    });
+    await browser
+      .action('wheel')
+      .scroll({
+        x: wheelPoint.x,
+        y: wheelPoint.y,
+        deltaX: 0,
+        deltaY: 360,
+        duration: 0,
+      })
+      .perform();
+    const afterCancelledWheel = await browser.execute(() => {
+      const viewport = document.querySelector<HTMLElement>(
+        '[data-slot="settings-content-scroll-area"] [data-slot="scroll-area-viewport"]',
+      );
+      return {
+        scrollTop: viewport?.scrollTop ?? null,
+        received: viewport?.dataset.e2eCancelWheelReceived ?? null,
+        prevented: viewport?.dataset.e2eCancelWheelPrevented ?? null,
+      };
+    });
+    assert.deepEqual(
+      afterCancelledWheel,
+      { scrollTop: 0, received: 'true', prevented: 'true' },
+      'Canceling the delivered wheel event must suppress nested scrolling.',
+    );
+
+    // Diagnostic-only listeners: capture uncanceled WebDriver wheel delivery
+    // and transient scrolls. They never synthesize scrolling or set scrollTop.
+    await browser.execute(() => {
+      const root = document.querySelector<HTMLElement>(
+        '[data-slot="settings-content-scroll-area"]',
+      );
+      const viewport = root?.querySelector<HTMLElement>(
+        '[data-slot="scroll-area-viewport"]',
+      );
+      if (!root || !viewport) {
+        throw new Error('Missing scroll diagnostics target');
+      }
+      root.dataset.e2eWheelReceived = 'false';
+      root.dataset.e2eScrollCount = '0';
+      root.dataset.e2eMaxScrollTop = '0';
+      viewport.addEventListener('scroll', () => {
+        root.dataset.e2eScrollCount = String(
+          Number(root.dataset.e2eScrollCount ?? 0) + 1,
+        );
+        root.dataset.e2eMaxScrollTop = String(
+          Math.max(
+            Number(root.dataset.e2eMaxScrollTop ?? 0),
+            viewport.scrollTop,
+          ),
+        );
+      });
+      document.addEventListener(
+        'wheel',
+        (event) => {
+          root.dataset.e2eWheelReceived = 'true';
+          root.dataset.e2eWheelDelta = String(event.deltaY);
+          root.dataset.e2eWheelTrusted = String(event.isTrusted);
+          root.dataset.e2eWheelCancelable = String(event.cancelable);
+          root.dataset.e2eWheelTarget =
+            (event.target as HTMLElement | null)?.tagName ?? 'unknown';
+          // Read the final defaultPrevented state after bubbling has finished.
+          queueMicrotask(() => {
+            root.dataset.e2eWheelCanceled = String(event.defaultPrevented);
+          });
+        },
+        { once: true, capture: true },
+      );
+    });
+
+    await browser
+      .action('pointer')
+      .move({ x: wheelPoint.x, y: wheelPoint.y, duration: 0 })
+      .perform();
+    await browser
+      .action('wheel')
+      .scroll({
+        x: wheelPoint.x,
+        y: wheelPoint.y,
+        deltaX: 0,
+        deltaY: 360,
+        duration: 0,
+      })
+      .perform();
+
+    try {
+      await browser.waitUntil(
+        async () =>
+          browser.execute(() => {
+            const root = document.querySelector<HTMLElement>(
+              '[data-slot="settings-content-scroll-area"]',
+            );
+            const element = root?.querySelector<HTMLElement>(
+              '[data-slot="scroll-area-viewport"]',
+            );
+            const titles = document.querySelectorAll<HTMLElement>(
+              '[data-slot="settings-title"]',
+            );
+            return (
+              (element?.scrollTop ?? 0) > 40 &&
+              root?.dataset.top === 'false' &&
+              root?.dataset.scrollDirection === 'down' &&
+              titles[0]?.dataset.showTitle === 'true' &&
+              titles[1]?.dataset.showTitle === 'false'
+            );
+          }),
+        {
+          timeout: 15_000,
+          timeoutMsg:
+            'The embedded WebDriver wheel-down action did not reveal the compact sticky Settings title.',
+        },
+      );
+    } catch (cause) {
+      const observed = await browser.execute(() => {
+        const root = document.querySelector<HTMLElement>(
+          '[data-slot="settings-content-scroll-area"]',
+        );
+        const viewport = root?.querySelector<HTMLElement>(
+          '[data-slot="scroll-area-viewport"]',
+        );
+        const titles = Array.from(
+          document.querySelectorAll<HTMLElement>(
+            '[data-slot="settings-title"]',
+          ),
+        );
+        return {
+          scrollTop: viewport?.scrollTop ?? null,
+          scrollHeight: viewport?.scrollHeight ?? null,
+          clientHeight: viewport?.clientHeight ?? null,
+          top: root?.dataset.top ?? null,
+          direction: root?.dataset.scrollDirection ?? null,
+          wheelReceived: root?.dataset.e2eWheelReceived ?? null,
+          wheelDelta: root?.dataset.e2eWheelDelta ?? null,
+          wheelTrusted: root?.dataset.e2eWheelTrusted ?? null,
+          wheelCancelable: root?.dataset.e2eWheelCancelable ?? null,
+          wheelCanceled: root?.dataset.e2eWheelCanceled ?? null,
+          wheelTarget: root?.dataset.e2eWheelTarget ?? null,
+          scrollEventCount: root?.dataset.e2eScrollCount ?? null,
+          maxScrollTop: root?.dataset.e2eMaxScrollTop ?? null,
+          viewportOverflowY: viewport
+            ? getComputedStyle(viewport).overflowY
+            : null,
+          titles: titles.map((element) => element.dataset.showTitle),
+        };
+      });
+      throw new Error(
+        'Embedded WebDriver wheel-down failed: ' +
+          JSON.stringify({ wheelPoint, wheelTarget, observed }),
+        { cause },
+      );
+    }
+
+    await browser
+      .action('wheel')
+      .scroll({
+        x: wheelPoint.x,
+        y: wheelPoint.y,
+        deltaX: 0,
+        deltaY: -1400,
+        duration: 0,
+      })
+      .perform();
+
+    await browser.waitUntil(
+      async () =>
+        browser.execute(() => {
+          const root = document.querySelector<HTMLElement>(
+            '[data-slot="settings-content-scroll-area"]',
+          );
+          const element = root?.querySelector<HTMLElement>(
+            '[data-slot="scroll-area-viewport"]',
+          );
+          const titles = document.querySelectorAll<HTMLElement>(
+            '[data-slot="settings-title"]',
+          );
+          return (
+            element?.scrollTop === 0 &&
+            root?.dataset.top === 'true' &&
+            root?.dataset.scrollDirection === 'up' &&
+            titles[0]?.dataset.showTitle === 'false' &&
+            titles[1]?.dataset.showTitle === 'true'
+          );
+        }),
+      {
+        timeout: 15_000,
+        timeoutMsg:
+          'The embedded WebDriver wheel-up action did not restore the expanded Settings title.',
+      },
+    );
+  });
 });
