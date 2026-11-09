@@ -1050,12 +1050,14 @@ dependencies = [
  "bolt-load",
  "camino",
  "chimera-config",
+ "chimera-contracts",
  "chimera-core",
  "chimera-core-manager",
  "chimera-geodata",
  "chimera-ipc",
  "chimera-jobs",
  "chimera-macro",
+ "chimera-paths",
  "chimera-traffic",
  "chimera-utils",
  "chrono",
@@ -1104,6 +1106,7 @@ dependencies = [
  "rayon",
  "redb",
  "reqwest",
+ "rfd",
  "rquickjs",
  "runas",
  "rust-i18n",
@@ -1217,6 +1220,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "chimera-contracts"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "bytes",
+ "chimera-config",
+ "chimera-paths",
+ "mockall",
+ "semver 1.0.28",
+ "serde",
+ "serde_json",
+ "snafu",
+ "specta",
+ "tempfile",
+ "tokio-util",
+ "url",
+ "whoami",
+]
+
+[[package]]
 name = "chimera-core"
 version = "0.1.0"
 dependencies = [
@@ -1243,6 +1267,7 @@ dependencies = [
  "serde_json",
  "serde_yaml",
  "serde_yaml_ng",
+ "snafu",
  "specta",
  "specta-typescript",
  "tempfile",
@@ -1359,6 +1384,22 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 3.0.6",
+]
+
+[[package]]
+name = "chimera-paths"
+version = "0.1.0"
+dependencies = [
+ "camino",
+ "chimera-utils",
+ "convert_case",
+ "dunce",
+ "fs-err",
+ "fs_extra",
+ "log",
+ "snafu",
+ "tempfile",
+ "winreg 0.56.0",
 ]
 
 [[package]]
