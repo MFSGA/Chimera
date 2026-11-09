@@ -1,50 +1,270 @@
-/**
- * Sparkline 迷你趋势图组件
- *
- * 迁移自 ref: `src/components/ui/sparkline.tsx`
- *
- * 职责：
- * - 使用 D3.js 渲染平滑的迷你趋势曲线（带面积填充）
- * - 支持数据追加动画：旧数据滑出左侧，新数据切入右侧
- * - 智能 y 轴缩放：稳定数据占上方 1/3，波动数据占满高度
- * - 使用 Catmull-Rom 样条曲线生成平滑线条
- * - 护点（guard points）技术消除端点切线抖动
- *
- * 动画机制：
- * 1. SVG translateX 实现水平滚动（线性缓动，恒定速度）
- * 2. D3 easeCubicInOut 实现 yMax 插值（非线性缓动，自然感）
- * 3. 二者解耦，互不影响
- * 4. 使用 requestAnimationFrame 驱动动画
- */
-
 import { cn } from '@chimera/utils';
-import { deviation, max, mean } from 'd3-array';
-import { scaleLinear } from 'd3-scale';
-import { area, curveCatmullRom, line } from 'd3-shape';
-import { cloneDeep } from 'lodash-es';
+import * as d3 from 'd3';
+import { isEqual } from 'lodash-es';
 import { useEffect, useRef, type ComponentPropsWithoutRef } from 'react';
 
 /**
- * 变异系数（标准差/均值）阈值
- * 低于此阈值认为序列"稳定"，图表只占 SVG 高度的下方 1/3
+ * Coefficient of variation threshold (std / mean) below which the series is
+ * considered "stable".  CV is scale-independent: 1–2 and 9 000–11 000 are
+ * evaluated on the same relative basis regardless of their absolute magnitude.
  */
 const STABLE_CV_THRESHOLD = 0.15;
 
 /**
- * 稳定序列时，图表占用 SVG 高度的比例
- * topFactor = 2/3 → 可用波段 = height - height * (2/3) = h/3
+ * When the series is stable, the chart only occupies the bottom third of the
+ * SVG height (topFactor = 2/3 — usable band = height - height*(2/3) = h/3).
  */
 const STABLE_TOP_FACTOR = 2 / 3;
 
-/** 波动序列时，图表占用 SVG 高度的比例 */
+/** When the series has a wide range, use most of the available height. */
 const ACTIVE_TOP_FACTOR = 0.35;
 
+/** Vertical mapping of the chart: y = 0 at the bottom, y = yMax at topFactor. */
+type Scale = { yMax: number; topFactor: number };
+
+const computeScale = (points: number[]): Scale => {
+  const mean = d3.mean(points) ?? 0;
+  const std = d3.deviation(points) ?? 0;
+  const cv = mean > 0 ? std / mean : 0;
+
+  return {
+    yMax: Math.max(d3.max(points) ?? 0, 1),
+    topFactor: cv < STABLE_CV_THRESHOLD ? STABLE_TOP_FACTOR : ACTIVE_TOP_FACTOR,
+  };
+};
+
 /**
- * D3 easeCubicInOut 的轻量实现，避免为了单个缓动函数引入额外运行时。
+ * Number of samples `next` has advanced past `prev` in a fixed-size sliding
+ * window, or 0 when `next` is not a continuation of `prev`.
  */
-const easeCubicInOut = (t: number) => {
-  const x = Math.min(Math.max(t, 0), 1);
-  return x < 0.5 ? 4 * x * x * x : 1 - (-2 * x + 2) ** 3 / 2;
+const findShift = (prev: number[], next: number[]) => {
+  if (prev.length !== next.length) {
+    return 0;
+  }
+
+  for (let k = 1; k < next.length; k++) {
+    if (next.slice(0, next.length - k).every((v, i) => v === prev[i + k])) {
+      return k;
+    }
+  }
+
+  return 0;
+};
+
+/** Vertical pixels per data unit, relative to the chart height. */
+const yDensity = ({ yMax, topFactor }: Scale) => (1 - topFactor) / yMax;
+
+const buildPaths = (
+  points: number[],
+  stepWidth: number,
+  height: number,
+  { yMax, topFactor }: Scale,
+  leftGuard?: number,
+) => {
+  const n = points.length;
+
+  // Prepend/append invisible guard points one step outside each edge so that
+  // every visible data point is treated as an interior spline node, eliminating
+  // the endpoint tangent discontinuity that causes boundary wobble.
+  // The root's overflow:hidden clips the guard region.
+  const guarded = [
+    leftGuard ?? 2 * points[0] - points[1],
+    ...points,
+    2 * points[n - 1] - points[n - 2],
+  ];
+
+  const x = (_: number, i: number) => (i - 1) * stepWidth;
+  const y = d3
+    .scaleLinear()
+    .domain([0, yMax])
+    .range([height, height * topFactor]);
+  const curve = d3.curveCatmullRom.alpha(0.5);
+
+  return {
+    line:
+      d3
+        .line<number>()
+        .x(x)
+        .y((d) => y(d))
+        .curve(curve)(guarded) ?? '',
+    area:
+      d3
+        .area<number>()
+        .x(x)
+        .y0(height)
+        .y1((d) => y(d))
+        .curve(curve)(guarded) ?? '',
+  };
+};
+
+/** d3.easeCubicInOut as a CSS easing. */
+const RESCALE_EASING = 'cubic-bezier(0.65, 0, 0.35, 1)';
+
+type Chart = {
+  // Slides the chart left (linear) and, inside it, stretches it vertically
+  // about the bottom edge (eased), so the two axes never couple.
+  slide: HTMLDivElement;
+  stretch: HTMLDivElement;
+  area: SVGPathElement;
+  line: SVGPathElement;
+  // Tracked by a ResizeObserver, so drawing never reads layout.
+  size: { width: number; height: number } | null;
+  data: number[] | null;
+  // Every point currently drawn; its last N points always equal the latest
+  // series, and the ones before them are still scrolling off to the left.
+  buf: number[] | null;
+  // The point just before buf[0], so the curve shape at the left edge stays
+  // the same when scrolled-off points are dropped from the buffer.
+  leftGuard: number | null;
+  // The scale the paths are drawn with.
+  scale: Scale | null;
+  slideAnim: { animation: Animation; from: number; to: number } | null;
+  stretchAnim: { animation: Animation; from: number } | null;
+};
+
+const progressOf = (animation: Animation) =>
+  animation.effect?.getComputedTiming().progress ?? 1;
+
+// Scroll position of the buffer in steps, as on screen.
+const currentOffset = ({ slideAnim }: Chart) =>
+  slideAnim
+    ? slideAnim.from +
+      (slideAnim.to - slideAnim.from) * progressOf(slideAnim.animation)
+    : 0;
+
+// Vertical stretch of the drawn paths, as on screen.
+const currentStretch = ({ stretchAnim }: Chart) =>
+  stretchAnim
+    ? stretchAnim.from +
+      (1 - stretchAnim.from) * progressOf(stretchAnim.animation)
+    : 1;
+
+const stopAnimations = (chart: Chart) => {
+  chart.slideAnim?.animation.cancel();
+  chart.slideAnim = null;
+  chart.stretchAnim?.animation.cancel();
+  chart.stretchAnim = null;
+};
+
+const drawPaths = (chart: Chart, points: number[], scale: Scale) => {
+  const { size, data } = chart;
+  if (!size || !data) {
+    return;
+  }
+
+  const stepWidth = size.width / (data.length - 1);
+  const { line, area } = buildPaths(
+    points,
+    stepWidth,
+    size.height,
+    scale,
+    chart.leftGuard ?? undefined,
+  );
+
+  // Wide enough for the points still scrolling off.
+  chart.slide.style.width = `${Math.max(size.width, stepWidth * (points.length - 1))}px`;
+  chart.area.setAttribute('d', area);
+  chart.line.setAttribute('d', line);
+};
+
+// Draw the latest series at rest.
+const drawSettled = (chart: Chart) => {
+  stopAnimations(chart);
+
+  const { data } = chart;
+  if (!data || data.length < 2) {
+    chart.area.removeAttribute('d');
+    chart.line.removeAttribute('d');
+    chart.buf = null;
+    chart.leftGuard = null;
+    chart.scale = null;
+    return;
+  }
+
+  chart.buf = data.slice();
+  chart.scale = computeScale(data);
+  drawPaths(chart, data, chart.scale);
+};
+
+// Scroll in the samples `data` has over the previous series. Each sample draws
+// the paths once; the scroll and any rescale run as Web Animations on the
+// wrappers' transforms, which the compositor runs with no per-frame work on
+// the main thread.
+const scrollIn = (
+  chart: Chart,
+  data: number[],
+  shift: number,
+  duration: number,
+) => {
+  const { size } = chart;
+  let buf = chart.buf;
+  if (!size || !buf) {
+    return;
+  }
+
+  // A new sample may arrive before the previous scroll finished. Continue from
+  // the current position instead of snapping to a cycle boundary: drop the
+  // points that have fully scrolled off, append the new samples and scroll on.
+  const offset = currentOffset(chart);
+  const stretch = currentStretch(chart);
+  stopAnimations(chart);
+
+  const scrolled = Math.floor(offset);
+  if (scrolled > 0) {
+    chart.leftGuard = buf[scrolled - 1];
+    buf = buf.slice(scrolled);
+  }
+  buf = [...buf, ...data.slice(-shift)];
+  chart.buf = buf;
+
+  const fromOffset = offset - scrolled;
+  const toOffset = buf.length - data.length;
+  const stepWidth = size.width / (data.length - 1);
+
+  // Continue an in-flight rescale from the scale currently on screen.
+  const toScale = computeScale(data);
+  const previousScale = chart.scale ?? toScale;
+  // A new peak cannot be displayed at the old scale without overflowing the
+  // chart, especially when the first nonzero sample follows an empty history.
+  const fromStretch =
+    toScale.yMax > previousScale.yMax
+      ? 1
+      : (stretch * yDensity(previousScale)) / yDensity(toScale);
+  chart.scale = toScale;
+  drawPaths(chart, buf, toScale);
+
+  if (Math.abs(fromStretch - 1) > 1e-3) {
+    const animation = chart.stretch.animate(
+      [{ transform: `scaleY(${fromStretch})` }, { transform: 'scaleY(1)' }],
+      { duration, easing: RESCALE_EASING },
+    );
+    chart.stretchAnim = { animation, from: fromStretch };
+  }
+
+  // X-axis: pure linear translation — the scroll must feel constant-speed.
+  const animation = chart.slide.animate(
+    [
+      { transform: `translateX(${-stepWidth * fromOffset}px)` },
+      { transform: `translateX(${-stepWidth * toOffset}px)` },
+    ],
+    // Hold the end position until the settled paths replace the buffer.
+    { duration, easing: 'linear', fill: 'forwards' },
+  );
+  chart.slideAnim = { animation, from: fromOffset, to: toOffset };
+
+  animation.onfinish = () => {
+    if (chart.slideAnim?.animation !== animation) {
+      return;
+    }
+
+    // The last scrolled-off point becomes the left guard for the next cycle
+    // so the curve shape at x=0 stays consistent across animation boundaries.
+    // At the end of the scroll the buffer path at -toOffset steps and the
+    // N-point path at x=0 occupy identical visual coordinates, so the swap
+    // is seamless.
+    chart.leftGuard = buf[toOffset - 1];
+    drawSettled(chart);
+  };
 };
 
 export const Sparkline = ({
@@ -52,279 +272,96 @@ export const Sparkline = ({
   animationDuration = 1,
   className,
   ...props
-}: ComponentPropsWithoutRef<'svg'> & {
+}: ComponentPropsWithoutRef<'div'> & {
   data: number[];
   animationDuration?: number;
 }) => {
-  const svgRef = useRef<SVGSVGElement | null>(null);
-  const gRef = useRef<SVGGElement | null>(null);
-  const prevDataRef = useRef<number[] | null>(null);
-  // 最近一次滚动到左侧之外的点值，用于保持 x=0 处的曲线连续
-  const leftGuardRef = useRef<number | null>(null);
-  const animRef = useRef<number | null>(null);
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  const slideRef = useRef<HTMLDivElement | null>(null);
+  const stretchRef = useRef<HTMLDivElement | null>(null);
+  const areaRef = useRef<SVGPathElement | null>(null);
+  const lineRef = useRef<SVGPathElement | null>(null);
+  const chartRef = useRef<Chart | null>(null);
 
+  // Declared before the data effect so the chart exists when that runs.
   useEffect(() => {
-    if (!svgRef.current || !gRef.current) {
-      return;
-    }
-
-    const g = {
-      attr(name: string, value: string | number) {
-        gRef.current?.setAttribute(name, String(value));
-        return g;
-      },
-      select(selector: string) {
-        const node = gRef.current?.querySelector<SVGPathElement>(selector);
-        return {
-          attr(name: string, value: string | number) {
-            node?.setAttribute(name, String(value));
-            return this;
-          },
-        };
-      },
-      selectAll(_selector: string) {
-        return {
-          remove() {
-            gRef.current?.replaceChildren();
-          },
-        };
-      },
-      append(tag: string) {
-        const node = document.createElementNS(
-          'http://www.w3.org/2000/svg',
-          tag,
-        );
-        gRef.current?.appendChild(node);
-        return {
-          attr(name: string, value: string | number) {
-            node.setAttribute(name, String(value));
-            return this;
-          },
-        };
-      },
+    const chart: Chart = {
+      slide: slideRef.current!,
+      stretch: stretchRef.current!,
+      area: areaRef.current!,
+      line: lineRef.current!,
+      size: null,
+      data: null,
+      buf: null,
+      leftGuard: null,
+      scale: null,
+      slideAnim: null,
+      stretchAnim: null,
     };
-    const { width, height } = svgRef.current.getBoundingClientRect();
+    chartRef.current = chart;
 
-    if (!width || !height) {
-      return;
-    }
-
-    /**
-     * 生成折线和面积路径字符串
-     */
-    const makePaths = (
-      points: number[],
-      xRange: [number, number],
-      yMax: number,
-    ) => {
-      const meanValue = mean(points) ?? 0;
-      const std = deviation(points) ?? 0;
-      const cv = meanValue > 0 ? std / meanValue : 0;
-      // 稳定序列只占底部 1/3，波动序列占满
-      const topFactor =
-        yMax === 0
-          ? 1
-          : cv < STABLE_CV_THRESHOLD
-            ? STABLE_TOP_FACTOR
-            : ACTIVE_TOP_FACTOR;
-
-      const x = scaleLinear()
-        .domain([0, points.length - 1])
-        .range(xRange);
-      const y = scaleLinear()
-        .domain([0, yMax])
-        .range([height, height * topFactor]);
-
-      // Catmull-Rom 样条（alpha=0.5）生成平滑曲线
-      const lineGen = line<number>()
-        .x((_, i) => x(i))
-        .y((d) => y(d))
-        .curve(curveCatmullRom.alpha(0.5));
-
-      const areaGen = area<number>()
-        .x((_, i) => x(i))
-        .y0(height)
-        .y1((d) => y(d))
-        .curve(curveCatmullRom.alpha(0.5));
-
-      return {
-        line: lineGen(points) ?? '',
-        area: areaGen(points) ?? '',
-      };
-    };
-
-    /**
-     * 构建带护点的路径
-     *
-     * 护点（guard points）技术：
-     * 在数据序列两端各添加一个虚拟点（线性外推），使所有真实数据点成为样条曲线的
-     * 内部节点，消除端点切向不连续性导致的边界抖动。
-     * SVG overflow:hidden 自动裁剪护点区域。
-     */
-    const buildPaths = (
-      points: number[],
-      xRange: [number, number],
-      yMax: number,
-      step: number,
-      leftGuard?: number,
-    ) => {
-      const n = points.length;
-
-      // 空数据或单点数据直接返回
-      if (n === 0) {
-        return { line: '', area: '' };
-      }
-
-      if (n === 1) {
-        return makePaths(points, xRange, yMax);
-      }
-
-      // 左侧护点：线性外推（2 * p0 - p1）
-      // 右侧护点：线性外推（2 * pn-1 - pn-2）
-      const lGuard = leftGuard ?? 2 * points[0] - points[1];
-      const rGuard = 2 * points[n - 1] - points[n - 2];
-
-      return makePaths(
-        [lGuard, ...points, rGuard],
-        [xRange[0] - step, xRange[1] + step],
-        yMax,
-      );
-    };
-
-    const prevData = prevDataRef.current;
-    prevDataRef.current = cloneDeep(data);
-
-    // 停止正在进行的动画
-    if (animRef.current !== null) {
-      cancelAnimationFrame(animRef.current);
-      animRef.current = null;
-    }
-
-    // 短数据序列（<2 点）直接渲染，无动画
-    if (data.length < 2) {
-      g.selectAll('*').remove();
-      g.attr('transform', 'translate(0,0)');
-      leftGuardRef.current = null;
-      return;
-    }
-
-    if (!prevData || prevData.length !== data.length) {
-      // 初次渲染或数据长度变化：直接绘制，无动画
-      const yMax = Math.max(max(data) ?? 0, 1);
-      const step = width / (data.length - 1);
-      const { line, area } = buildPaths(
-        data,
-        [0, width],
-        yMax,
-        step,
-        leftGuardRef.current ?? undefined,
-      );
-
-      g.selectAll('*').remove();
-      g.attr('transform', 'translate(0,0)');
-      g.append('path').attr('class', 'area fill-primary/10').attr('d', area);
-      g.append('path')
-        .attr('class', 'line stroke-primary')
-        .attr('fill', 'none')
-        .attr('stroke-width', 2)
-        .attr('d', line);
-      return;
-    }
-
-    // 数据追加动画：
-    // N+1 个点 = 旧数据首点（即将滑出）+ 完整新数据集
-    const stepWidth = width / (data.length - 1);
-    const extPoints = [...prevData, data[data.length - 1]];
-    const fromYMax = Math.max(max(extPoints) ?? 0, 1);
-    const toYMax = Math.max(max(data) ?? 0, 1);
-    const yMaxChanges = Math.abs(fromYMax - toYMax) > 1;
-
-    const leftGuard = leftGuardRef.current ?? undefined;
-
-    // 渲染动画初始状态（N+1 点路径）
-    const { line: initLine, area: initArea } = buildPaths(
-      extPoints,
-      [0, width + stepWidth],
-      fromYMax,
-      stepWidth,
-      leftGuard,
-    );
-
-    g.attr('transform', 'translate(0,0)');
-    g.select('.area').attr('d', initArea);
-    g.select('.line').attr('d', initLine);
-
-    let cancelled = false;
-
-    // 使用 requestAnimationFrame 驱动动画，避免为单个组件引入 animation runtime
-    const start = performance.now();
-    const duration = Math.max(animationDuration * 1000, 1);
-
-    const frame = (now: number) => {
-      const t = Math.min((now - start) / duration, 1);
-
-      // X 轴：线性平移（恒定速度滑动）
-      g.attr('transform', `translate(${-stepWidth * t},0)`);
-
-      // Y 轴：使用缓动函数插值 yMax
-      if (yMaxChanges) {
-        const easedT = easeCubicInOut(t);
-        const currentYMax = fromYMax + (toYMax - fromYMax) * easedT;
-        const { line, area } = buildPaths(
-          extPoints,
-          [0, width + stepWidth],
-          currentYMax,
-          stepWidth,
-          leftGuard,
-        );
-
-        g.select('.area').attr('d', area);
-        g.select('.line').attr('d', line);
-      }
-
-      if (t < 1 && !cancelled) {
-        animRef.current = requestAnimationFrame(frame);
+    const observer = new ResizeObserver(([entry]) => {
+      const { width, height } = entry.contentRect;
+      if (chart.size?.width === width && chart.size.height === height) {
         return;
       }
 
-      if (cancelled) {
-        return;
-      }
-
-      // 保存滑出的点作为下一个周期的左护点
-      leftGuardRef.current = prevData[0];
-
-      const { line, area } = buildPaths(
-        data,
-        [0, width],
-        toYMax,
-        stepWidth,
-        prevData[0],
-      );
-
-      g.attr('transform', 'translate(0,0)');
-      g.select('.area').attr('d', area);
-      g.select('.line').attr('d', line);
-    };
-
-    animRef.current = requestAnimationFrame(frame);
+      chart.size = width && height ? { width, height } : null;
+      drawSettled(chart);
+    });
+    observer.observe(rootRef.current!);
 
     return () => {
-      cancelled = true;
-      if (animRef.current !== null) {
-        cancelAnimationFrame(animRef.current);
-      }
+      observer.disconnect();
+      stopAnimations(chart);
+      chartRef.current = null;
     };
+  }, []);
+
+  useEffect(() => {
+    const chart = chartRef.current!;
+    const prevData = chart.data;
+    // Widgets re-render on every clash ws event and pass a freshly built array,
+    // so only a change in content means a new sample arrived. Leave the running
+    // animation untouched otherwise.
+    if (prevData && isEqual(prevData, data)) {
+      return;
+    }
+    chart.data = data.slice();
+
+    const shift =
+      prevData && chart.buf && data.length >= 2 ? findShift(prevData, data) : 0;
+
+    if (shift) {
+      scrollIn(chart, data, shift, animationDuration * 1000);
+    } else {
+      drawSettled(chart);
+    }
   }, [data, animationDuration]);
 
   return (
-    <svg
-      ref={svgRef}
+    <div
+      ref={rootRef}
       data-slot="sparkline"
       className={cn('size-full overflow-hidden', className)}
       {...props}
     >
-      <g ref={gRef} />
-    </svg>
+      <div ref={slideRef} className="h-full will-change-transform">
+        <div
+          ref={stretchRef}
+          className="size-full origin-bottom will-change-transform"
+        >
+          <svg className="size-full overflow-visible">
+            <path ref={areaRef} className="area fill-primary/10" />
+            <path
+              ref={lineRef}
+              className="line stroke-primary"
+              fill="none"
+              strokeWidth={2}
+            />
+          </svg>
+        </div>
+      </div>
+    </div>
   );
 };

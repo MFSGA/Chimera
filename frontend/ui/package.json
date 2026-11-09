@@ -21,7 +21,7 @@
   "scripts": {
     "build": "tsc",
     "typecheck": "tsc --noEmit",
-    "test:unit": "tsx --test tests/progress-switch.test.ts tests/ref-primitives.test.ts tests/ref-menu-primitives.test.ts tests/ref-remaining-primitives.test.ts tests/ref-highlight-text.test.ts tests/ref-slider-contract.test.cjs tests/ref-modal-layout.test.cjs tests/ref-scroll-area.test.ts tests/ref-scroll-area-dom.test.ts tests/ref-ui-behavior-dom.test.ts tests/ref-tooltip-contract.test.ts"
+    "test:unit": "tsx --test tests/progress-switch.test.ts tests/ref-primitives.test.ts tests/ref-menu-primitives.test.ts tests/ref-remaining-primitives.test.ts tests/ref-highlight-text.test.ts tests/ref-slider-contract.test.cjs tests/ref-modal-layout.test.cjs tests/ref-scroll-area.test.ts tests/ref-scroll-area-dom.test.ts tests/ref-ui-behavior-dom.test.ts tests/ref-tooltip-contract.test.ts tests/ref-sparkline-contract.test.ts tests/ref-sparkline-dom.test.ts tests/ref-dnd-grid-contract.test.ts"
   },
   "dependencies": {
     "@chimera/utils": "workspace:^",

@@ -628,6 +628,30 @@ describe('main dashboard reference layout', () => {
       { timeout: 15_000, timeoutMsg: 'Dashboard widgets did not render.' },
     );
 
+    await browser.waitUntil(
+      async () =>
+        browser.execute(() => {
+          const charts = Array.from(
+            document.querySelectorAll<HTMLElement>(
+              '[data-slot="widget-sparkline-card"] [data-slot="sparkline"]',
+            ),
+          );
+          return (
+            charts.length >= 4 &&
+            charts.every(
+              (chart) =>
+                Boolean(chart.querySelector('path.line')?.getAttribute('d')) &&
+                Boolean(chart.querySelector('path.area')?.getAttribute('d')),
+            )
+          );
+        }),
+      {
+        timeout: 15_000,
+        timeoutMsg:
+          'Dashboard Sparkline paths were not drawn after ResizeObserver measurement.',
+      },
+    );
+
     const state = await browser.execute(() => {
       const dashboard = document.querySelector<HTMLElement>(
         '[data-slot="dashboard-container"]',
@@ -638,6 +662,11 @@ describe('main dashboard reference layout', () => {
       const sparklines = Array.from(
         document.querySelectorAll<HTMLElement>(
           '[data-slot="widget-sparkline-card"]',
+        ),
+      );
+      const sparklineCharts = Array.from(
+        document.querySelectorAll<HTMLElement>(
+          '[data-slot="widget-sparkline-card"] [data-slot="sparkline"]',
         ),
       );
       const currentCore = document.querySelector<HTMLElement>(
@@ -701,6 +730,18 @@ describe('main dashboard reference layout', () => {
         firstValueStyle: style(firstValue),
         sparklineCount: sparklines.length,
         sparklineRects: sparklines.map(rect),
+        sparklineCharts: sparklineCharts.map((chart) => ({
+          tagName: chart.tagName,
+          hasSvg: Boolean(chart.querySelector('svg')),
+          hasLinePath: Boolean(
+            chart.querySelector('path.line')?.getAttribute('d'),
+          ),
+          hasAreaPath: Boolean(
+            chart.querySelector('path.area')?.getAttribute('d'),
+          ),
+          overflow: getComputedStyle(chart).overflow,
+          rect: rect(chart),
+        })),
         currentCore: rect(currentCore),
         coreIcon: coreIcon
           ? {
@@ -743,6 +784,18 @@ describe('main dashboard reference layout', () => {
     assert.equal(state.firstValueStyle?.fontWeight, '700');
     assert.equal(state.firstValueStyle?.lineHeight, '32px');
     assert.ok(state.sparklineCount >= 4, JSON.stringify(state, null, 2));
+    assert.ok(
+      state.sparklineCharts.length >= 4 &&
+        state.sparklineCharts.every(
+          (chart) =>
+            chart.tagName === 'DIV' &&
+            chart.hasSvg &&
+            chart.hasLinePath &&
+            chart.hasAreaPath &&
+            chart.overflow === 'hidden',
+        ),
+      JSON.stringify(state.sparklineCharts, null, 2),
+    );
     assert.equal(state.hasSystemLink, true, JSON.stringify(state, null, 2));
     assert.equal(state.hasClashLink, true, JSON.stringify(state, null, 2));
     assert.ok(state.shortcutHeaderCount >= 2, JSON.stringify(state, null, 2));
