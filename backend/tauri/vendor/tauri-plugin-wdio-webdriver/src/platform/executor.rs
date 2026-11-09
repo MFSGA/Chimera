@@ -1562,10 +1562,20 @@ pub trait PlatformExecutor<R: Runtime>: Send + Sync {
         } else {
             0
         };
-        let pointer_event_script = if matches!(event_type, PointerEventType::Down) {
-            format!(
-                r#"
-                    var pointerEvent = new PointerEvent('pointerdown', {{
+        // The embedded driver uses synthetic events (isTrusted=false). Mouse
+        // events alone never notify React/Radix PointerEvent handlers. Emit the
+        // corresponding pointer lifecycle, including hover transitions, before
+        // the compatibility mouse event below.
+        let pointer_event_script = match event_type {
+            PointerEventType::Down | PointerEventType::Up => {
+                let pointer_name = if matches!(event_type, PointerEventType::Down) {
+                    "pointerdown"
+                } else {
+                    "pointerup"
+                };
+                format!(
+                    r#"
+                    el.dispatchEvent(new PointerEvent('{pointer_name}', {{
                         bubbles: true,
                         cancelable: true,
                         clientX: {x},
@@ -1575,12 +1585,73 @@ pub trait PlatformExecutor<R: Runtime>: Send + Sync {
                         pointerId: 1,
                         pointerType: 'mouse',
                         isPrimary: true
-                    }});
-                    el.dispatchEvent(pointerEvent);
+                    }}));
                 "#
-            )
-        } else {
-            String::new()
+                )
+            }
+            PointerEventType::Move => format!(
+                r#"
+                    // WebView2 will not create pointerover/out from a synthetic
+                    // mousemove. Keep the last hovered DOM target per WebView.
+                    var previous = window.__chimeraE2eHoveredElement;
+                    if (previous && !previous.isConnected) previous = null;
+                    if (previous !== el) {{
+                        if (previous) {{
+                            previous.dispatchEvent(new PointerEvent('pointerout', {{
+                                bubbles: true,
+                                cancelable: true,
+                                clientX: {x},
+                                clientY: {y},
+                                button: 0,
+                                buttons: 0,
+                                pointerId: 1,
+                                pointerType: 'mouse',
+                                isPrimary: true,
+                                relatedTarget: el
+                            }}));
+                            previous.dispatchEvent(new MouseEvent('mouseout', {{
+                                bubbles: true,
+                                cancelable: true,
+                                clientX: {x},
+                                clientY: {y},
+                                relatedTarget: el
+                            }}));
+                        }}
+                        el.dispatchEvent(new PointerEvent('pointerover', {{
+                            bubbles: true,
+                            cancelable: true,
+                            clientX: {x},
+                            clientY: {y},
+                            button: 0,
+                            buttons: 0,
+                            pointerId: 1,
+                            pointerType: 'mouse',
+                            isPrimary: true,
+                            relatedTarget: previous
+                        }}));
+                        el.dispatchEvent(new MouseEvent('mouseover', {{
+                            bubbles: true,
+                            cancelable: true,
+                            clientX: {x},
+                            clientY: {y},
+                            relatedTarget: previous
+                        }}));
+                    }}
+                    el.dispatchEvent(new PointerEvent('pointermove', {{
+                        bubbles: true,
+                        cancelable: true,
+                        clientX: {x},
+                        clientY: {y},
+                        button: 0,
+                        buttons: 0,
+                        pointerId: 1,
+                        pointerType: 'mouse',
+                        isPrimary: true
+                    }}));
+                    window.__chimeraE2eHoveredElement = el;
+                "#
+            ),
+            PointerEventType::Click | PointerEventType::ContextMenu => String::new(),
         };
         let script = format!(
             r"(function() {{

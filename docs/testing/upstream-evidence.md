@@ -172,6 +172,18 @@ React scroll 状态及可见标题，并增加取消事件不滚动的反向检�
 当前候选在 Windows 开发工作区的 harness unit 39/39、E2E TypeScript、Prettier、Oxlint、单文件 rustfmt 和 offline Cargo check 均通过；尚未运行新 SHA 的 Windows settings desktop suite。
 限制、证据及移除条件见 [wheel 驱动测试契约](contracts/scroll-area-embedded-wheel.md)。
 
+## U12 Embedded WebDriver 指针事件与 DropdownMenu 命名槽位
+
+参见 [指针事件测试契约](contracts/embedded-pointer-events.md)。原有
+WebDriver dispatch_pointer_event 只在 Move 分支发送 mousemove，
+没有发送 pointermove / pointerover / pointerout，不能验证 Radix Tooltip。
+新驱动合成 PointerEvent（isTrusted=false）及命中目标切换事件，
+下游测试从实际 Tooltip DOM 读取打开/卸载状态，不能冒充 OS 可信输入。
+另外，DropdownMenuContent 在 Radix asChild 中原本用固定历史
+data-slot 覆盖 language-selector-menu 与 theme-mode-selector-menu；
+现在优先保留调用者命名槽位，未命名菜单仍保留历史定位符。
+这两项已通过本地单元与静态检查，新 HEAD 的桌面 E2E 仍需确认。
+
 ## 升级依赖时必须复核
 
 升级 WebdriverIO、service、Rust 插件、Mocha 或断言依赖时，同步核对锁文件并更新本记录。至少检查点击/输入事件、窗口切换、等待异常、session 与进程生命周期、mock 恢复、hook 次序和日志采集。用最小兼容性用例验证受影响行为，再按 T14 运行对应套件。

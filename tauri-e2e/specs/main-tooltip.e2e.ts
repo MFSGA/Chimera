@@ -74,9 +74,9 @@ describe('main tooltip reference surface', () => {
     }, firstSidebarLink);
     assert.equal(target.hitTarget, true, JSON.stringify(target));
 
-    // Move from a known safe viewport point to the trigger using W3C mouse
-    // actions. Explicit viewport origins avoid the pointer-origin ambiguity
-    // in the earlier failing E2E attempts; no synthetic DOM event is sent.
+    // Move from a known safe viewport point using W3C mouse actions. The
+    // embedded WebView2 driver translates those actions to synthetic DOM
+    // PointerEvents; the test itself does not directly dispatch events.
     const safeX = Math.max(1, target.viewport.width - 12);
     const safeY = Math.max(
       1,
@@ -102,13 +102,16 @@ describe('main tooltip reference surface', () => {
             (element) =>
               Number(element.dataset.e2ePointerMoves ?? 0) > 0 &&
               element.dataset.e2ePointerType === 'mouse' &&
-              element.dataset.e2ePointerTrusted === 'true' &&
+              // The embedded WebView2 driver dispatches JS-created pointer
+              // events; W3C actions here are not trusted OS-level input.
+              element.dataset.e2ePointerTrusted === 'false' &&
               Boolean(document.querySelector<HTMLElement>('[role="tooltip"]')),
             firstSidebarLink,
           ),
         {
           timeout: 15_000,
-          timeoutMsg: 'Real WebDriver mouse pointer did not open the Tooltip.',
+          timeoutMsg:
+            'Embedded WebDriver synthetic mouse pointer did not open the Tooltip.',
         },
       );
     } catch (cause) {
@@ -129,7 +132,7 @@ describe('main tooltip reference surface', () => {
         };
       }, firstSidebarLink);
       throw new Error(
-        'Real WebDriver Tooltip hover failed: ' + JSON.stringify(observed),
+        'Embedded WebDriver Tooltip hover failed: ' + JSON.stringify(observed),
         { cause },
       );
     }
