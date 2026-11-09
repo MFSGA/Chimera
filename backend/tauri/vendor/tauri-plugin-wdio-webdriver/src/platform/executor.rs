@@ -1628,9 +1628,39 @@ pub trait PlatformExecutor<R: Runtime>: Send + Sync {
                     deltaY: {delta_y},
                     deltaMode: 0
                 }});
-                el.dispatchEvent(event);
+                // Synthetic WheelEvent does not trigger native scrolling in WebView2.
+                // Emulate the default action on the nearest scrollable ancestor,
+                // instead of scrolling only the top-level window. Respect any
+                // consumer that cancels the event (e.g. an overlay or zoom UI).
+                if (el.dispatchEvent(event)) {{
+                    var remainingX = {delta_x};
+                    var remainingY = {delta_y};
+                    for (var node = el; node && (remainingX || remainingY); node = node.parentElement) {{
+                        if (!(node instanceof HTMLElement)) continue;
+                        var style = getComputedStyle(node);
+                        var scrollX = /^(auto|scroll|overlay)$/.test(style.overflowX) &&
+                            node.scrollWidth > node.clientWidth;
+                        var scrollY = /^(auto|scroll|overlay)$/.test(style.overflowY) &&
+                            node.scrollHeight > node.clientHeight;
+                        if (!scrollX && !scrollY) continue;
 
-                window.scrollBy({delta_x}, {delta_y});
+                        var beforeX = node.scrollLeft;
+                        var beforeY = node.scrollTop;
+                        node.scrollBy({{
+                            left: scrollX ? remainingX : 0,
+                            top: scrollY ? remainingY : 0,
+                            behavior: 'instant'
+                        }});
+                        remainingX -= node.scrollLeft - beforeX;
+                        remainingY -= node.scrollTop - beforeY;
+
+                        if (scrollX && /^(contain|none)$/.test(style.overscrollBehaviorX)) remainingX = 0;
+                        if (scrollY && /^(contain|none)$/.test(style.overscrollBehaviorY)) remainingY = 0;
+                    }}
+                    if (remainingX || remainingY) {{
+                        window.scrollBy({{ left: remainingX, top: remainingY, behavior: 'instant' }});
+                    }}
+                }}
                 return true;
             }})()"
         );

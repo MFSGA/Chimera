@@ -149,6 +149,29 @@ PR #490 的 Windows run `39116055509` 因 E2E 尝试替换该函数而在拦截�
 测试通过触发计数确认故障命中了真实 IPC，再由可见 UI Retry 验证恢复。新 SHA 的 Windows E2E
 通过后更新该结论与 `LESSON-20261017-007` 状态。
 
+## U11 Embedded WebDriver 的合成 wheel 与嵌套滚动边界
+
+固定 `tauri-plugin-wdio-webdriver@1.4.0` 的本地 vendored 实现位于
+`backend/tauri/vendor/tauri-plugin-wdio-webdriver/src/platform/executor.rs::dispatch_scroll_event`。
+原有实现只用 `new WheelEvent(...)` 合成不可信事件，再执行
+`window.scrollBy(deltaX, deltaY)`。这不会执行浏览器原生滚轮默认动作，且只能滚动顶层窗口，
+无法滚动 Chimera Settings 实际使用的 Radix 嵌套 `scroll-area-viewport`。
+Windows WebView2 的 #633 运行 [42221575246](https://github.com/MFSGA/Chimera/actions/runs/42221575246)
+记录 `wheelReceived=true`、`wheelTrusted=false`、`wheelCanceled=false`、
+`scrollEventCount=0`、`scrollTop=0`；视口高度 541、内容高度 1954，证明存在滚动范围。
+旧代码的顶层窗口滚动逻辑与该失败相符；新驱动补丁仍需新 SHA 桌面 E2E 验证。
+
+本项目临时驱动补丁模拟合成滚轮的**未取消**默认行为：从命中元素向父级查找
+`overflow: auto|scroll|overlay` 的可滚动容器、将滚动量传递给下一级，尊重
+`preventDefault()` 和 `overscroll-behavior`，最后才回退到窗口。
+E2E 用 WebDriver wheel command 操作真实嵌套目标，观察真实 `scrollTop`、
+React scroll 状态及可见标题，并增加取消事件不滚动的反向检查。
+但其 `WheelEvent.isTrusted` 依旧是 `false`；**这不是原生 OS 输入证明**。
+不能宣称物理滚轮、触控板、可信 PointerEvent 或系统级滚动可用。
+在后续 master@03d6e641 复核中，发现原候选的脚本提取单测依赖 LF 行尾；Windows CRLF checkout 会在 harness 阶段失败。候选测试现先规范化行尾，再解析 vendored JS 脚本。该测试修复不等于驱动行为已通过；新的 Windows settings suite 仍是验收门槛。
+当前候选在 Windows 开发工作区的 harness unit 39/39、E2E TypeScript、Prettier、Oxlint、单文件 rustfmt 和 offline Cargo check 均通过；尚未运行新 SHA 的 Windows settings desktop suite。
+限制、证据及移除条件见 [wheel 驱动测试契约](contracts/scroll-area-embedded-wheel.md)。
+
 ## 升级依赖时必须复核
 
 升级 WebdriverIO、service、Rust 插件、Mocha 或断言依赖时，同步核对锁文件并更新本记录。至少检查点击/输入事件、窗口切换、等待异常、session 与进程生命周期、mock 恢复、hook 次序和日志采集。用最小兼容性用例验证受影响行为，再按 T14 运行对应套件。
