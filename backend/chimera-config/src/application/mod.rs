@@ -7,12 +7,14 @@ mod clash_core;
 mod i18n;
 mod logging;
 mod traffic;
+mod update;
 mod widget;
 
 pub use clash_core::*;
 pub use i18n::*;
 pub use logging::*;
 pub use traffic::*;
+pub use update::*;
 pub use widget::*;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, Default, Type)]
@@ -31,6 +33,24 @@ pub enum ThemeMode {
     Dark,
     #[default]
     System,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, Type)]
+#[serde(rename_all = "snake_case")]
+pub enum ReleaseChannel {
+    Stable,
+    Beta,
+    Nightly,
+}
+
+impl ReleaseChannel {
+    pub fn resolve(self, preference: Option<Self>) -> Self {
+        if self == Self::Nightly {
+            Self::Nightly
+        } else {
+            preference.unwrap_or(self)
+        }
+    }
 }
 
 /// Whether the tray menu uses the system-native menu or the WebView menu.
