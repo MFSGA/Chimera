@@ -13,6 +13,7 @@ import FieldFilterCard from './_modules/field-filter-card';
 import FieldFilterSwitch from './_modules/field-filter-switch';
 import IPv6Switch from './_modules/ipv6-switch';
 import LogLevelSelector from './_modules/log-level-selector';
+import ManagedGuardFieldSelector from './_modules/managed-guard-field-selector';
 import MixedPortConfig from './_modules/mixed-port-config';
 import RandomPortSwitch from './_modules/random-port-switch';
 import TransparentProxyConfigSettings from './_modules/transparent-proxy-config';
@@ -43,6 +44,19 @@ const PatchSettings = () => {
         <TunStackSelector />
 
         <LogLevelSelector />
+      </SettingsGroup>
+    </div>
+  );
+};
+
+const CoreBehaviorSettings = () => {
+  return (
+    <div data-slot="core-behavior-settings-container">
+      <SettingsLabel>{m.settings_clash_core_behavior_label()}</SettingsLabel>
+
+      <SettingsGroup>
+        <ManagedGuardFieldSelector field="unified-delay" />
+        <ManagedGuardFieldSelector field="tcp-concurrent" />
       </SettingsGroup>
     </div>
   );
@@ -107,6 +121,8 @@ function RouteComponent() {
 
       <div className="space-y-4 px-4 pb-4">
         <PatchSettings />
+
+        <CoreBehaviorSettings />
 
         <PortSettings />
 

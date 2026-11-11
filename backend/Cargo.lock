@@ -1191,6 +1191,7 @@ dependencies = [
 name = "chimera-config"
 version = "0.1.0"
 dependencies = [
+ "chimera-macro",
  "chimera-utils",
  "ciborium",
  "csscolorparser",

@@ -17,7 +17,7 @@ use chimera_config::{
     clash::config::{
         ClashConfig, ClashConfigPatch, ClashControlChannel,
         clash_strategy::port::{ExternalControllerStrategy, PortStrategy},
-        overrides::{ClashGuardOverrides, ClashGuardOverridesPatch},
+        overrides::{ClashGuardOverrides, ClashGuardOverridesPatch, TunOverrides},
         tun_stack::TunStack,
     },
     profile::{ManagedProfilePath, ProfileDefinition, ProfileId, Profiles},
@@ -179,9 +179,10 @@ impl RequestedRuntimeFields {
     pub fn of_clash(patch: &ClashConfigPatch) -> Self {
         use struct_patch::Status as _;
         Self {
-            named: patch.overrides.is_some()
+            named: !patch.overrides.is_empty()
                 || patch.enable_clash_fields.is_some()
                 || patch.enable_tun_mode.is_some()
+                || !patch.tun.is_empty()
                 || patch.tun_stack.is_some()
                 || patch.mixed_port.kind.is_some()
                 || patch.mixed_port.start_port.is_some()
@@ -322,7 +323,7 @@ pub(crate) fn classify_application(
 ///
 /// Enumerated from the real consumers rather than from a field whitelist:
 /// `RuntimeBuilder::build` reads `overrides`, `enable_clash_fields`,
-/// `enable_tun_mode` and `tun_stack`; `SessionPortResolver::resolve` turns the
+/// `enable_tun_mode`, `tun`, and `tun_stack`; `SessionPortResolver::resolve` turns the
 /// four port strategies into the bindings written into the generated config;
 /// and `RuntimePreparation::prepare` turns the two channel fields into the
 /// core's local-IPC settings.
@@ -336,6 +337,7 @@ struct ClashRuntimeInputs<'a> {
     overrides: &'a ClashGuardOverrides,
     enable_clash_fields: bool,
     enable_tun_mode: bool,
+    tun: &'a TunOverrides,
     tun_stack: TunStack,
     mixed_port: &'a PortStrategy,
     socks_port: Option<&'a PortStrategy>,
@@ -354,6 +356,7 @@ impl<'a> ClashRuntimeInputs<'a> {
             overrides: &clash.overrides,
             enable_clash_fields: clash.enable_clash_fields,
             enable_tun_mode: clash.enable_tun_mode,
+            tun: &clash.tun,
             tun_stack: clash.tun_stack,
             mixed_port: &clash.mixed_port,
             socks_port: clash.socks_port.as_ref(),
@@ -506,6 +509,59 @@ struct ProfilesRuntimeInputs<'a> {
     /// would resolve for it. A member that dangles in this document resolves to
     /// nothing, exactly as the classification reads it.
     definitions: Vec<(&'a ProfileId, Option<&'a ProfileDefinition>)>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn empty_clash_patch_does_not_name_runtime_fields() {
+        use struct_patch::Patch;
+
+        let patch = ClashConfig::new_empty_patch();
+        assert!(!RequestedRuntimeFields::of_clash(&patch).names_any());
+    }
+
+    #[test]
+    fn tun_auto_route_changes_the_runtime_target() {
+        let before = ClashConfig::default();
+        let mut after = before.clone();
+        after.tun.auto_route =
+            chimera_config::clash::config::overrides::ManageableField::Managed(false);
+
+        assert_eq!(classify_clash(&before, &after), RuntimeImpact::Reconcile);
+        assert_ne!(clash_target(&before), clash_target(&after));
+    }
+
+    #[cfg(feature = "default-meta")]
+    #[test]
+    fn nested_tun_auto_route_patch_names_runtime_fields() {
+        let patch: ClashConfigPatch =
+            serde_yaml_ng::from_str("tun:\n  auto-route:\n    kind: managed\n    value: true\n")
+                .expect("nested TUN auto-route patch must deserialize");
+
+        assert!(RequestedRuntimeFields::of_clash(&patch).names_any());
+    }
+
+    #[cfg(feature = "default-meta")]
+    #[test]
+    fn empty_nested_tun_patch_does_not_name_runtime_fields() {
+        let patch: ClashConfigPatch =
+            serde_yaml_ng::from_str("tun: {}\n").expect("empty nested TUN patch must deserialize");
+
+        assert!(!RequestedRuntimeFields::of_clash(&patch).names_any());
+    }
+
+    #[cfg(feature = "default-meta")]
+    #[test]
+    fn nested_manageable_override_patch_names_runtime_fields() {
+        let patch: ClashConfigPatch =
+            serde_yaml_ng::from_str("overrides:\n  unified-delay:\n    kind: unmanaged\n")
+                .expect("nested manageable override patch must deserialize");
+
+        assert!(RequestedRuntimeFields::of_clash(&patch).names_any());
+    }
 }
 
 fn digest<T: serde::Serialize>(inputs: &T) -> Option<String> {

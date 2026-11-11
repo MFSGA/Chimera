@@ -215,8 +215,14 @@ impl RuntimeBuilder {
                     .then_some(0x20000),
             },
             whitelist_enabled: input.clash.enable_clash_fields,
+            core_supports_mmdb: matches!(
+                input.app.core,
+                chimera_config::application::ClashCore::ChimeraClient
+                    | chimera_config::application::ClashCore::ChimeraClientAlpha
+            ),
             tun: TunParams {
                 enable: input.clash.enable_tun_mode,
+                overrides: input.clash.tun,
                 flavor: derive_tun_flavor(input.app.core, input.clash.tun_stack),
                 windows_fake_ip_filter: cfg!(windows),
             },
@@ -315,6 +321,7 @@ mod tests {
     use super::*;
     use crate::enhance::{EnhanceScriptRunner, FsProfileContentSource};
     use chimera_config::{
+        clash::config::overrides::ManageableField,
         profile::{
             ConfigDefinition, FileConfig, LocalBinding, ManagedProfilePath, MaterializedFile,
             ProfileDefinition, ProfileId, ProfileItem, ProfileMetadata, ProfileSource,
@@ -330,6 +337,14 @@ mod tests {
     impl ProfileContentSource for EmptyContent {
         fn read(&self, path: &ManagedProfilePath) -> Result<String, PortError> {
             Err(format!("no content for {path}").into())
+        }
+    }
+
+    struct StaticContent(String);
+
+    impl ProfileContentSource for StaticContent {
+        fn read(&self, _path: &ManagedProfilePath) -> Result<String, PortError> {
+            Ok(self.0.clone())
         }
     }
 
@@ -460,6 +475,143 @@ mod tests {
     }
 
     #[test]
+    fn mihomo_runtime_builder_drops_chimera_client_mmdb_extension() {
+        let mut profiles = Profiles::default();
+        profiles.current = Some(ProfileId("profile".into()));
+        profiles.append_item(ProfileItem {
+            uid: ProfileId("profile".into()),
+            metadata: ProfileMetadata {
+                name: "Profile".into(),
+                desc: None,
+                custom_name: true,
+            },
+            definition: ProfileDefinition::Config {
+                config: ConfigDefinition::File(FileConfig {
+                    source: ProfileSource::Local {
+                        binding: LocalBinding::Managed {
+                            materialized: MaterializedFile {
+                                file: ManagedProfilePath::new("profile.yaml").unwrap(),
+                                updated_at: None,
+                            },
+                        },
+                    },
+                    transforms: Vec::new(),
+                }),
+            },
+        });
+
+        let input = RuntimeBuildInput {
+            profiles: Arc::new(profiles),
+            clash: ClashConfig {
+                enable_clash_fields: true,
+                ..ClashConfig::default()
+            },
+            app: ChimeraAppConfig {
+                core: chimera_config::application::ClashCore::Mihomo,
+                enable_builtin_enhanced: false,
+                ..ChimeraAppConfig::default()
+            },
+            resolved_ports: ResolvedPortBindings {
+                mixed_port: 7890,
+                ..Default::default()
+            },
+        };
+        let artifact = RuntimeBuilder::build(
+            &input,
+            &StaticContent("mmdb: Country.mmdb\nproxies: []\n".into()),
+            &EchoRunner,
+        )
+        .unwrap();
+
+        assert!(
+            artifact.final_config.to_json().get("mmdb").is_none(),
+            "stock Mihomo must not receive Chimera Client's top-level MMDB extension"
+        );
+
+        let (runtime_config, _, _, _) = artifact_to_legacy_output_with_inspection(
+            artifact,
+            &input.profiles,
+            input.app.core,
+            input.app.enable_builtin_enhanced,
+        )
+        .unwrap();
+        let runtime_yaml = serde_yaml::to_string(&runtime_config).unwrap();
+        assert!(
+            !runtime_yaml.contains("mmdb:"),
+            "the stock Mihomo runtime YAML must not contain Chimera Client's MMDB field: {runtime_yaml}"
+        );
+    }
+
+    #[test]
+    fn chimera_client_runtime_preserves_explicit_mmdb_in_runtime_yaml() {
+        let mut profiles = Profiles::default();
+        profiles.current = Some(ProfileId("profile".into()));
+        profiles.append_item(ProfileItem {
+            uid: ProfileId("profile".into()),
+            metadata: ProfileMetadata {
+                name: "Profile".into(),
+                desc: None,
+                custom_name: true,
+            },
+            definition: ProfileDefinition::Config {
+                config: ConfigDefinition::File(FileConfig {
+                    source: ProfileSource::Local {
+                        binding: LocalBinding::Managed {
+                            materialized: MaterializedFile {
+                                file: ManagedProfilePath::new("profile.yaml").unwrap(),
+                                updated_at: None,
+                            },
+                        },
+                    },
+                    transforms: Vec::new(),
+                }),
+            },
+        });
+
+        let input = RuntimeBuildInput {
+            profiles: Arc::new(profiles),
+            clash: ClashConfig {
+                enable_clash_fields: true,
+                ..ClashConfig::default()
+            },
+            app: ChimeraAppConfig {
+                core: chimera_config::application::ClashCore::ChimeraClient,
+                enable_builtin_enhanced: false,
+                ..ChimeraAppConfig::default()
+            },
+            resolved_ports: ResolvedPortBindings {
+                mixed_port: 7890,
+                ..Default::default()
+            },
+        };
+        let artifact = RuntimeBuilder::build(
+            &input,
+            &StaticContent("mmdb: Country.mmdb\nproxies: []\n".into()),
+            &EchoRunner,
+        )
+        .unwrap();
+
+        assert_eq!(
+            artifact.final_config.to_json()["mmdb"],
+            json!("Country.mmdb"),
+            "Chimera Client must retain its supported top-level MMDB path"
+        );
+
+        let (runtime_config, _, _, _) = artifact_to_legacy_output_with_inspection(
+            artifact,
+            &input.profiles,
+            input.app.core,
+            input.app.enable_builtin_enhanced,
+        )
+        .unwrap();
+        let runtime_yaml = serde_yaml::to_string(&runtime_config).unwrap();
+        assert!(
+            runtime_yaml.contains("mmdb: Country.mmdb"),
+            "the runtime YAML must retain Chimera Client's MMDB path: {runtime_yaml}"
+        );
+    }
+
+    #[test]
     fn chimera_client_runtime_uses_its_custom_tun_contract_in_shared_executor() {
         let mut input = RuntimeBuildInput {
             profiles: Arc::new(Profiles::default()),
@@ -491,6 +643,70 @@ mod tests {
                 "8.8.8.8"
             ])
         );
+    }
+
+    #[test]
+    fn runtime_builder_threads_tun_auto_route_ownership_into_executor() {
+        for (ownership, expected) in [
+            (ManageableField::Managed(false), json!(false)),
+            (ManageableField::Unmanaged, json!("global")),
+        ] {
+            let mut profiles = Profiles::default();
+            profiles.current = Some(ProfileId("profile".into()));
+            profiles.append_item(ProfileItem {
+                uid: ProfileId("profile".into()),
+                metadata: ProfileMetadata {
+                    name: "Profile".into(),
+                    desc: None,
+                    custom_name: true,
+                },
+                definition: ProfileDefinition::Config {
+                    config: ConfigDefinition::File(FileConfig {
+                        source: ProfileSource::Local {
+                            binding: LocalBinding::Managed {
+                                materialized: MaterializedFile {
+                                    file: ManagedProfilePath::new("profile.yaml").unwrap(),
+                                    updated_at: None,
+                                },
+                            },
+                        },
+                        transforms: Vec::new(),
+                    }),
+                },
+            });
+
+            let input = RuntimeBuildInput {
+                profiles: Arc::new(profiles),
+                clash: ClashConfig {
+                    enable_tun_mode: true,
+                    enable_clash_fields: true,
+                    tun: chimera_config::clash::config::overrides::TunOverrides {
+                        auto_route: ownership,
+                    },
+                    ..ClashConfig::default()
+                },
+                app: ChimeraAppConfig {
+                    core: chimera_config::application::ClashCore::Mihomo,
+                    enable_builtin_enhanced: false,
+                    ..ChimeraAppConfig::default()
+                },
+                resolved_ports: ResolvedPortBindings {
+                    mixed_port: 7890,
+                    ..Default::default()
+                },
+            };
+            let artifact = RuntimeBuilder::build(
+                &input,
+                &StaticContent("proxies: []\ntun: { auto-route: global }\n".into()),
+                &EchoRunner,
+            )
+            .unwrap();
+
+            assert_eq!(
+                artifact.final_config.to_json()["tun"]["auto-route"],
+                expected
+            );
+        }
     }
 
     #[test]

@@ -1,8 +1,14 @@
 use serde_json::json;
 
+#[cfg(feature = "default-meta")]
+use crate::clash::config::overrides::ClashGuardOverridesPatch;
+
 use super::support::*;
 use crate::{
-    clash::config::tun_stack::TunStack,
+    clash::config::{
+        overrides::{ClashGuardOverrides, ManageableField, TunOverrides},
+        tun_stack::TunStack,
+    },
     profile::{Profiles, ScriptRuntime},
     runtime::{
         executor::{
@@ -36,8 +42,10 @@ pub fn base_inputs<'a>(
             routing_mark: None,
         },
         whitelist_enabled: true,
+        core_supports_mmdb: false,
         tun: TunParams {
             enable: false,
+            overrides: TunOverrides::default(),
             flavor: TunFlavor::Standard {
                 stack: TunStack::Gvisor,
             },
@@ -47,8 +55,19 @@ pub fn base_inputs<'a>(
     }
 }
 
-fn overrides() -> crate::clash::config::overrides::ClashGuardOverrides {
+fn overrides() -> ClashGuardOverrides {
     super::builtin::fixed_overrides()
+}
+
+#[cfg(feature = "default-meta")]
+fn overrides_with_patch(yaml: &str) -> ClashGuardOverrides {
+    use struct_patch::Patch;
+
+    let mut overrides = overrides();
+    let patch: ClashGuardOverridesPatch =
+        serde_yaml_ng::from_str(yaml).expect("guard override patch must deserialize");
+    overrides.apply(patch);
+    overrides
 }
 
 #[test]
@@ -139,6 +158,76 @@ fn selected_file_config_records_canonical_mainline() {
     // applied_fields：全局变换后采样(proxies/rules/dns)，确定序。
     let applied: Vec<&str> = artifact.applied_fields.iter().map(String::as_str).collect();
     assert_eq!(applied, vec!["proxies", "rules", "dns"]);
+}
+
+#[cfg(feature = "default-meta")]
+#[test]
+fn unmanaged_guard_fields_keep_profile_values_after_field_filtering() {
+    let profiles = profiles_with(
+        Some("sub-a"),
+        &[],
+        &[],
+        vec![config_file_item("sub-a", "sub-a.yaml", &[])],
+    );
+    let content = MapContentSource::from_pairs(&[(
+        "sub-a.yaml",
+        "proxies: []\nunified-delay: false\ntcp-concurrent: false\n",
+    )]);
+    let ov = overrides_with_patch(
+        "unified-delay: { kind: unmanaged }\ntcp-concurrent: { kind: unmanaged }\n",
+    );
+    let inputs = base_inputs(&profiles, ExecutionTarget::Selected(pid("sub-a")), &ov, &[]);
+
+    let artifact = execute(&inputs, &content, &FakeScriptRunner::default()).unwrap();
+    let config = artifact.final_config.to_json();
+
+    assert_eq!(config["unified-delay"], json!(false));
+    assert_eq!(config["tcp-concurrent"], json!(false));
+}
+
+#[cfg(feature = "default-meta")]
+#[test]
+fn unmanaged_guard_fields_do_not_create_missing_profile_values() {
+    let profiles = profiles_with(
+        Some("sub-a"),
+        &[],
+        &[],
+        vec![config_file_item("sub-a", "sub-a.yaml", &[])],
+    );
+    let content = MapContentSource::from_pairs(&[("sub-a.yaml", "proxies: []\n")]);
+    let ov = overrides_with_patch(
+        "unified-delay: { kind: unmanaged }\ntcp-concurrent: { kind: unmanaged }\n",
+    );
+    let inputs = base_inputs(&profiles, ExecutionTarget::Selected(pid("sub-a")), &ov, &[]);
+
+    let artifact = execute(&inputs, &content, &FakeScriptRunner::default()).unwrap();
+    let config = artifact.final_config.to_json();
+
+    assert!(config.get("unified-delay").is_none());
+    assert!(config.get("tcp-concurrent").is_none());
+}
+
+#[cfg(feature = "default-meta")]
+#[test]
+fn managed_guard_fields_override_profile_values() {
+    let profiles = profiles_with(
+        Some("sub-a"),
+        &[],
+        &[],
+        vec![config_file_item("sub-a", "sub-a.yaml", &[])],
+    );
+    let content = MapContentSource::from_pairs(&[(
+        "sub-a.yaml",
+        "proxies: []\nunified-delay: false\ntcp-concurrent: false\n",
+    )]);
+    let ov = overrides();
+    let inputs = base_inputs(&profiles, ExecutionTarget::Selected(pid("sub-a")), &ov, &[]);
+
+    let artifact = execute(&inputs, &content, &FakeScriptRunner::default()).unwrap();
+    let config = artifact.final_config.to_json();
+
+    assert_eq!(config["unified-delay"], json!(true));
+    assert_eq!(config["tcp-concurrent"], json!(true));
 }
 
 #[test]
@@ -351,9 +440,133 @@ fn missing_selected_content_is_strict_error() {
 }
 
 #[test]
+fn tun_auto_route_ownership_survives_profile_field_filtering() {
+    for (override_field, expected) in [
+        (ManageableField::Managed(false), json!(false)),
+        (ManageableField::Managed(true), json!(true)),
+        (ManageableField::Unmanaged, json!("global")),
+    ] {
+        let profiles = profiles_with(
+            Some("sub-a"),
+            &[],
+            &[],
+            vec![config_file_item("sub-a", "sub-a.yaml", &[])],
+        );
+        let content = MapContentSource::from_pairs(&[(
+            "sub-a.yaml",
+            "proxies: []\ntun: { auto-route: global, mtu: 1400 }\n",
+        )]);
+        let ov = overrides();
+        let mut inputs = base_inputs(&profiles, ExecutionTarget::Selected(pid("sub-a")), &ov, &[]);
+        inputs.tun.enable = true;
+        inputs.tun.overrides = TunOverrides {
+            auto_route: override_field,
+        };
+
+        let config = execute(&inputs, &content, &FakeScriptRunner::default())
+            .unwrap()
+            .final_config
+            .to_json();
+        assert_eq!(config["tun"]["auto-route"], expected);
+        assert_eq!(config["tun"]["enable"], json!(true));
+        assert!(config["tun"].get("mtu").is_none());
+    }
+}
+
+#[test]
+fn unmanaged_auto_route_does_not_create_a_missing_profile_field() {
+    let profiles = profiles_with(
+        Some("sub-a"),
+        &[],
+        &[],
+        vec![config_file_item("sub-a", "sub-a.yaml", &[])],
+    );
+    let content =
+        MapContentSource::from_pairs(&[("sub-a.yaml", "proxies: []\ntun: { mtu: 1400 }\n")]);
+    let ov = overrides();
+    let mut inputs = base_inputs(&profiles, ExecutionTarget::Selected(pid("sub-a")), &ov, &[]);
+    inputs.tun.enable = true;
+    inputs.tun.overrides = TunOverrides {
+        auto_route: ManageableField::Unmanaged,
+    };
+
+    let config = execute(&inputs, &content, &FakeScriptRunner::default())
+        .unwrap()
+        .final_config
+        .to_json();
+    assert!(config["tun"].get("auto-route").is_none());
+    assert_eq!(config["tun"]["enable"], json!(true));
+}
+
+#[test]
+fn mmdb_path_survives_enabled_field_filter_without_being_rewritten() {
+    for mmdb in ["Country.mmdb", "/home/user/chimera/geo/Country.mmdb"] {
+        let profiles = profiles_with(
+            Some("sub-a"),
+            &[],
+            &[],
+            vec![config_file_item("sub-a", "sub-a.yaml", &[])],
+        );
+        let yaml = format!("mmdb: {mmdb}\nproxies: []\n");
+        let content = MapContentSource::from_pairs(&[("sub-a.yaml", &yaml)]);
+        let ov = overrides();
+        let mut inputs = base_inputs(&profiles, ExecutionTarget::Selected(pid("sub-a")), &ov, &[]);
+        inputs.core_supports_mmdb = true;
+
+        // base_inputs enables the same two-pass field filter used by the app.
+        let artifact = execute(&inputs, &content, &FakeScriptRunner::default()).unwrap();
+        assert_eq!(
+            artifact.final_config.to_json()["mmdb"],
+            json!(mmdb),
+            "explicit MMDB path must survive unchanged"
+        );
+    }
+}
+
+#[test]
+fn unsupported_core_drops_top_level_mmdb_even_when_filtering_is_disabled() {
+    let profiles = profiles_with(
+        Some("sub-a"),
+        &[],
+        &[],
+        vec![config_file_item("sub-a", "sub-a.yaml", &[])],
+    );
+    let content =
+        MapContentSource::from_pairs(&[("sub-a.yaml", "mmdb: Country.mmdb\nproxies: []\n")]);
+    let ov = overrides();
+    let mut inputs = base_inputs(&profiles, ExecutionTarget::Selected(pid("sub-a")), &ov, &[]);
+    inputs.whitelist_enabled = false;
+
+    let config = execute(&inputs, &content, &FakeScriptRunner::default())
+        .unwrap()
+        .final_config
+        .to_json();
+    assert!(config.get("mmdb").is_none());
+}
+
+#[test]
+fn absent_mmdb_is_not_synthesized_by_field_filtering() {
+    let profiles = profiles_with(
+        Some("sub-a"),
+        &[],
+        &[],
+        vec![config_file_item("sub-a", "sub-a.yaml", &[])],
+    );
+    let content = MapContentSource::from_pairs(&[("sub-a.yaml", "proxies: []\n")]);
+    let ov = overrides();
+    let inputs = base_inputs(&profiles, ExecutionTarget::Selected(pid("sub-a")), &ov, &[]);
+
+    let config = execute(&inputs, &content, &FakeScriptRunner::default())
+        .unwrap()
+        .final_config
+        .to_json();
+    assert!(config.get("mmdb").is_none());
+}
+
+#[test]
 fn applied_fields_keep_prefilter_known_keys_and_drop_unknown_even_unfiltered() {
-    // D9：采样点在全局变换后；∩45 无条件（enable_filter=false 时 config 保留
-    // 未知键但 applied_fields 不列——旧 mod.rs:155-157 怪癖保留）。
+    // D9：采样点在全局变换后；按所选内核支持的字段集合取交集
+    // （enable_filter=false 时 config 保留未知键但 applied_fields 不列）。
     let profiles = profiles_with(
         Some("sub-a"),
         &[],

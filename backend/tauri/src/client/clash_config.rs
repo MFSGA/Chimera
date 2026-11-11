@@ -1030,6 +1030,14 @@ mod tests {
         tun_patch.enable_tun_mode = Some(current.enable_tun_mode);
         assert!(should_reconcile_clash_patch(&current, &current, &tun_patch));
 
+        let mut tun_auto_route_patch = ClashConfig::new_empty_patch();
+        tun_auto_route_patch.tun.auto_route = Some(current.tun.auto_route);
+        assert!(should_reconcile_clash_patch(
+            &current,
+            &current,
+            &tun_auto_route_patch
+        ));
+
         let mut runtime_patch = ClashConfig::new_empty_patch();
         runtime_patch.enable_clash_fields = Some(!current.enable_clash_fields);
         let mut runtime_changed = current.clone();

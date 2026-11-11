@@ -4,7 +4,7 @@
 
 **MUST（必须）和 MUST NOT（禁止）是项目审查要求；SHOULD（应当）允许有依据的偏离。** 本文件已经通过根目录 [AGENTS.md](../../AGENTS.md) 接入开发指引；这不代表所有规则已有自动检查。既有用例也不因此自动合规。新增或修改的测试应满足适用条款；未修改的历史缺口按文末清单逐步处理。
 
-依据核对日期：2026-09-13。“上游”专指 WebdriverIO、Tauri service、Rust WebDriver 插件、Mocha 等测试依赖。版本、源码定位和工具限制见[上游依据](upstream-evidence.md)。用例设计和交付记录使用[测试契约模板](test-contract-template.md)。
+依据核对日期：2026-09-13。“上游”专指 WebdriverIO、Tauri service、Rust WebDriver 插件、Mocha 等测试依赖。版本、源码定位和工具限制见[上游依据](upstream-evidence.md)。用例设计和交付记录使用[测试契约模板](test-contract-template.md)。Runtime 配置字段所有权的单元测试边界见[Runtime field ownership contract](contracts/runtime-field-ownership.md)。
 
 ## 1. 先定义测试能证明什么
 

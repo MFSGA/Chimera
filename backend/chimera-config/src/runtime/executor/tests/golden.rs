@@ -48,6 +48,7 @@ fn golden_profiles() -> crate::profile::Profiles {
     )
 }
 
+#[cfg(feature = "default-meta")]
 #[test]
 fn golden_clean_seed_composition_full_config() {
     let profiles = golden_profiles();
