@@ -30,6 +30,7 @@
 - **根因必须与 ref 和用户行为交叉验证**：按固定 ref SHA 对照对应 UI/路由/实现，再结合提交历史和真实用户路径区分产品缺陷、测试选择器错误、驱动/环境差异与时序问题；明确事实/假设/复现证据。E2E 优先由 WebDriver 点击、输入、导航、拖动和窗口操作驱动，最终验证可见与可操作的 UI；内部 DOM/IPC/React 数据仅用于准备、独立诊断或清理，不能绕过被测操作。禁止为变绿跳过测试、放宽断言、盲目延长超时或用内部状态替代用户验收。
 - Windows Service/TUN 的 `test:system` 可能安装/修改真实系统服务和路由，**禁止在一般 CI、日常机器或无明确授权的 Agent 中运行**；须按 E2E README 在专用一次性 VM 中人工开启。
 - `pnpm prepare:check`、`pnpm check:service-runtime`、Rust lock/core pin、生成代码/sidecar/updater 一致性属于实际边界；不可删掉失败校验来使 PR 通过。
+- 参照固定 `ref/.github/workflows/ci.yml` 的独立跨平台 Unit Test 矩阵：`ci.yaml` 的 `test_prepare` 作业在 `scripts` 或 `backend` 改动时，对 Ubuntu、macOS、Windows 运行 Node.js 24 类型检查及 `node:test` 资源准备测试。与上游一样，真实 `pnpm run prepare:check` 下载只在 backend 相关 lint/build 执行，避免脚本改动导致三个平台重复下载资源；原有 Ubuntu Deno `test:manifest` 保留为迁移兼容回归。CI 保持 `pnpm install --frozen-lockfile`、既有分支触发器和只读权限，正式构建及 E2E 仍调用根目录脚本入口。
 - PR/push 执行权限不等于有发布授权；Release/Dev 发布流程可能修改 Git tag、draft Release、资产、manifest 或签名，不能把预发布说成纯只读构建。
 
 ## 3. 新增 Codex 自动化的门槛（计划，不是现状）

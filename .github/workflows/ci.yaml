@@ -68,6 +68,8 @@ jobs:
       FRONTEND: ${{ needs.changes.outputs.frontend }}
       BACKEND: ${{ needs.changes.outputs.backend }}
       SCRIPTS: ${{ needs.changes.outputs.scripts }}
+      # Match ref: Ubuntu always runs formatting; non-Linux lint needs Rust changes.
+      # Script-only cross-platform coverage belongs in a separate unit-test matrix.
       RUN: ${{ startsWith(matrix.targets.os, 'ubuntu-') || needs.changes.outputs.backend == 'true' }}
     steps:
       - name: Verify change classification
@@ -174,8 +176,10 @@ jobs:
           NODE_OPTIONS: '--max_old_space_size=4096'
 
       - name: Prepare sidecar and resources
+        # Same as ref: real downloads remain backend-gated; script-only edits
+        # are validated with isolated Node tests in test_prepare instead.
         if: env.BACKEND == 'true'
-        run: pnpm prepare:check
+        run: pnpm run prepare:check
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -251,6 +255,53 @@ jobs:
       - name: Verify generated files are committed
         if: startsWith(matrix.targets.os, 'ubuntu-') && (env.FRONTEND == 'true' || env.BACKEND == 'true')
         run: git diff --exit-code
+
+  # Ref ci.yml uses a dedicated cross-platform unit-test matrix. Keep script
+  # fixtures isolated from the real sidecar download/installation job.
+  test_prepare:
+    name: Prepare Unit Test
+    needs: [changes, lint]
+    strategy:
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+          - windows-latest
+      fail-fast: false
+    runs-on: ${{ matrix.os }}
+    env:
+      SCRIPTS: ${{ needs.changes.outputs.scripts }}
+      BACKEND: ${{ needs.changes.outputs.backend }}
+      RUN: ${{ needs.changes.outputs.scripts == 'true' || needs.changes.outputs.backend == 'true' }}
+    steps:
+      - uses: actions/checkout@v7
+        if: env.RUN == 'true'
+        with:
+          persist-credentials: false
+
+      - name: Install Node.js
+        if: env.RUN == 'true'
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+
+      - name: Install pnpm
+        if: env.RUN == 'true'
+        uses: pnpm/action-setup@v6
+        with:
+          run_install: false
+
+      - name: Install dependencies
+        if: env.RUN == 'true'
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck resource preparation
+        if: env.RUN == 'true'
+        run: pnpm run typecheck:prepare
+
+      - name: Test resource preparation
+        if: env.RUN == 'true'
+        run: pnpm run test:prepare:node
 
   build:
     name: Build Tauri
@@ -333,7 +384,7 @@ jobs:
 
       - name: Prepare sidecar and resources
         if: env.BACKEND == 'true'
-        run: pnpm prepare:check
+        run: pnpm run prepare:check
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
