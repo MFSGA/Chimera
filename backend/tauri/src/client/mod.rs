@@ -27,10 +27,13 @@ pub(crate) mod traffic;
 use std::sync::Arc;
 
 use anyhow::{Context as _, anyhow};
+use chimera_config::application::ReleaseChannel;
 use chimera_config::profile::{
     FolderId, ProfileDefinition, ProfileId, ProfileLayout, ProfileMetadata, ProfileMetadataPatch,
     ProfileSource, Profiles, RemoteProfileOptions, RemoteProfileOptionsPatch,
 };
+use chimera_contracts::{bundle_metadata::BundleMetadata, net::ChangelogHttp};
+use chimera_core::client::app_update::{self, AppUpdateArgs, AppUpdateClient, AppUpdateSettings};
 use struct_patch::Patch as _;
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -75,6 +78,10 @@ pub(crate) struct LegacyBridgeSet {
 pub(crate) struct ClientSetupArgs {
     pub(crate) paths: PathResolver,
     pub runtime_paths: RuntimePaths,
+    pub(crate) bundle_metadata: BundleMetadata,
+    pub(crate) app_update_backend: Arc<dyn app_update::AppUpdateBackend>,
+    pub(crate) app_update_events: Arc<dyn app_update::AppUpdateEventSink>,
+    pub(crate) changelog_http: Arc<dyn ChangelogHttp>,
     pub(crate) bridges: LegacyBridgeSet,
     pub(crate) core: Arc<dyn CoreLifecyclePort>,
     pub(crate) service: Arc<dyn core_lifecycle::ServiceLifecyclePort>,
@@ -117,11 +124,13 @@ async fn new_typed_config_clients(
     paths: &PathResolver,
     bridges: &LegacyBridgeSet,
     core: Arc<dyn CoreLifecyclePort>,
+    build_channel: ReleaseChannel,
 ) -> anyhow::Result<TypedConfigClients> {
     let application = ApplicationClient::new(
         utf8_path(paths.application_config_path())?,
         bridges.verge.snapshot_legacy()?,
         bridges.verge.clone(),
+        build_channel,
     )
     .await?;
     let session_state = SessionStateClient::new(
@@ -163,6 +172,9 @@ struct ChimeraClientInner {
     application: ApplicationClient,
     session_state: SessionStateClient,
     clash_config: ClashConfigClient,
+    app_updater: Option<AppUpdateClient>,
+    changelog_http: Option<Arc<dyn ChangelogHttp>>,
+    bundle_metadata: Option<BundleMetadata>,
     core_lifecycle: CoreLifecycleClient,
     core: Arc<dyn CoreLifecyclePort>,
     streams: chimera_core::clash::ws::StreamsClient,
@@ -214,6 +226,10 @@ impl ChimeraClient {
         let ClientSetupArgs {
             paths,
             runtime_paths,
+            bundle_metadata,
+            app_update_backend,
+            app_update_events,
+            changelog_http,
             bridges,
             core,
             service,
@@ -237,6 +253,7 @@ impl ChimeraClient {
             &paths,
             &bridges,
             core.clone(),
+            bundle_metadata.release_channel,
         ))?;
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
         let effects = tauri::async_runtime::block_on(async {
@@ -297,6 +314,33 @@ impl ChimeraClient {
                 shutdown.clone(),
                 &tasks,
             ))?;
+        let app_config = typed.application.get_typed();
+        let channel = bundle_metadata
+            .release_channel
+            .resolve(app_config.release_channel);
+        let app_updater = tauri::async_runtime::block_on(AppUpdateClient::spawn(
+            AppUpdateArgs {
+                backend: app_update_backend,
+                events: app_update_events,
+                settings: AppUpdateSettings {
+                    channel,
+                    sources: app_config.update_sources,
+                    auto_check: app_config.enable_auto_check_update,
+                    auto_download: app_config.enable_auto_download_update,
+                },
+                supported: !bundle_metadata.is_portable
+                    && (cfg!(any(target_os = "windows", target_os = "macos"))
+                        || (cfg!(target_os = "linux") && bundle_metadata.is_appimage)),
+                endpoints: app_update::endpoints::update_endpoints_for_target(
+                    channel,
+                    bundle_metadata.sourceforge_project,
+                    bundle_metadata.is_fixed_webview,
+                ),
+                bundle_metadata,
+                shutdown: shutdown.child_token(),
+            },
+            &tasks,
+        ))?;
         let client = Self::with_parts_and_typed_config(
             typed,
             core_lifecycle,
@@ -308,6 +352,9 @@ impl ChimeraClient {
             Some(typed_profiles),
             system_dns,
             ui_sink,
+            Some(app_updater),
+            Some(changelog_http),
+            Some(bundle_metadata),
             #[cfg(test)]
             None,
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -422,6 +469,9 @@ impl ChimeraClient {
             None,
             system_dns,
             ui_sink,
+            None,
+            None,
+            None,
             Some(test_profile_dir),
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
             effects,
@@ -445,6 +495,9 @@ impl ChimeraClient {
         typed_profiles: Option<profiles::ProfilesClient>,
         system_dns: Arc<dyn SystemDnsCache>,
         ui_sink: Arc<dyn UiEventSink>,
+        app_updater: Option<AppUpdateClient>,
+        changelog_http: Option<Arc<dyn ChangelogHttp>>,
+        bundle_metadata: Option<BundleMetadata>,
         #[cfg(test)] _test_profile_dir: Option<Arc<tempfile::TempDir>>,
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
         effects: effects::actor::EffectsClient,
@@ -462,6 +515,9 @@ impl ChimeraClient {
             application: typed.application,
             session_state: typed.session_state,
             clash_config: typed.clash_config,
+            app_updater,
+            changelog_http,
+            bundle_metadata,
             core_lifecycle,
             core,
             streams,

@@ -14,6 +14,7 @@ mod e2e_test;
 mod ipc;
 mod network_probe;
 
+mod adapters;
 mod bridge;
 mod client;
 mod config;
@@ -115,6 +116,47 @@ pub fn run() -> std::process::ExitCode {
     // Defer filesystem initialization until Tauri has initialized the
     // single-instance plugin. A losing secondary process must not write config.
 
+    let mut context = tauri::generate_context!();
+    let executable_dir = match paths.app_install_dir() {
+        Ok(directory) => directory.as_std_path(),
+        Err(error) => {
+            startup_failure::show_one_shot(
+                startup_failure::FailureKind::Internal,
+                None,
+                &error,
+                None,
+            );
+            return std::process::ExitCode::FAILURE;
+        }
+    };
+    let metadata =
+        match bundle::resolve(cfg!(windows), context.config_mut(), executable_dir, || {
+            tauri::webview_version().is_ok()
+        }) {
+            Ok(metadata) => metadata,
+            Err(error) => {
+                startup_failure::show_one_shot(
+                    startup_failure::FailureKind::Internal,
+                    None,
+                    &error,
+                    None,
+                );
+                return std::process::ExitCode::FAILURE;
+            }
+        };
+    let updater = match bundle::setup(&metadata, context.config_mut()) {
+        Ok(updater) => updater,
+        Err(error) => {
+            startup_failure::show_one_shot(
+                startup_failure::FailureKind::Internal,
+                None,
+                &error,
+                None,
+            );
+            return std::process::ExitCode::FAILURE;
+        }
+    };
+
     let specta_builder = specta_export::build_specta_builder();
 
     // Secondary invocations may arrive before primary application setup finishes.
@@ -194,7 +236,7 @@ pub fn run() -> std::process::ExitCode {
         })
         .invoke_handler(invoke_handler)
         .plugin(tauri_plugin_opener::init())
-        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(updater.build())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_clipboard_manager::init())
@@ -235,7 +277,7 @@ pub fn run() -> std::process::ExitCode {
             }
 
             specta_builder.mount_events(app);
-            setup::setup(app, setup_paths)?;
+            setup::setup(app, setup_paths, metadata)?;
             core::updater::recover_interrupted_update();
             core::clash::setup(app)?;
 
@@ -334,7 +376,7 @@ pub fn run() -> std::process::ExitCode {
             Ok(())
         });
 
-    let app = match builder.build(tauri::generate_context!()) {
+    let app = match builder.build(context) {
         Ok(app) => app,
         Err(error) => {
             startup_failure::show_one_shot(

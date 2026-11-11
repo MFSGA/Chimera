@@ -9,7 +9,7 @@ use std::{sync::Arc, time::Duration};
 use anyhow::{Context as _, Result, bail};
 use camino::Utf8PathBuf;
 use chimera_config::{
-    application::{ChimeraAppConfig, ChimeraAppConfigPatch},
+    application::{ChimeraAppConfig, ChimeraAppConfigPatch, ReleaseChannel},
     clash::config::ClashConfig,
     state::PersistentState,
 };
@@ -68,15 +68,38 @@ impl ApplicationClient {
         config_path: Utf8PathBuf,
         seed: ChimeraAppConfig,
         bridge: Arc<dyn VergeLegacyBridge>,
+        build_channel: ReleaseChannel,
     ) -> anyhow::Result<Self> {
         // An existing but unreadable node, including a dangling symlink, must
         // fail rather than silently substituting the legacy/default seed.
         let should_load = crate::core::corrupt::config_node_exists(config_path.as_std_path())
             .with_context(|| format!("failed to inspect application config {config_path}"))?;
+        let config_path = if should_load {
+            let metadata = std::fs::symlink_metadata(config_path.as_std_path())
+                .with_context(|| format!("failed to inspect application config {config_path}"))?;
+            if metadata.file_type().is_symlink() && config_path.exists() {
+                let resolved =
+                    std::fs::canonicalize(config_path.as_std_path()).with_context(|| {
+                        format!("failed to resolve application config {config_path}")
+                    })?;
+                Utf8PathBuf::from_path_buf(resolved).map_err(|path| {
+                    anyhow::anyhow!(
+                        "resolved application config path is not UTF-8: {}",
+                        path.display()
+                    )
+                })?
+            } else {
+                config_path
+            }
+        } else {
+            config_path
+        };
         let setup = PersistentStateManagerSetup::<ChimeraAppConfig>::builder()
             .config_path(config_path)
             .assemble();
-        let manager = if should_load {
+        let mut seed = seed;
+        seed.release_channel = Some(build_channel.resolve(seed.release_channel));
+        let mut manager = if should_load {
             setup
                 .load()
                 .await
@@ -87,6 +110,20 @@ impl ApplicationClient {
                 .await
                 .context("failed to initialize application persistent state manager")?
         };
+        let mut initial = manager.snapshot_handle().load().state.clone();
+        let channel = match initial.release_channel {
+            Some(ReleaseChannel::Nightly) if build_channel != ReleaseChannel::Nightly => {
+                build_channel
+            }
+            preference => build_channel.resolve(preference),
+        };
+        if initial.release_channel != Some(channel) {
+            initial.release_channel = Some(channel);
+            manager
+                .upsert(initial)
+                .await
+                .context("failed to normalize installed release channel")?;
+        }
         let snapshot = manager.snapshot_handle();
 
         let (actor_ref, _handle) = Actor::spawn(
@@ -95,6 +132,7 @@ impl ApplicationClient {
             ApplicationActorArgs {
                 manager,
                 bridge: bridge.clone(),
+                build_channel,
             },
         )
         .await
@@ -108,6 +146,9 @@ impl ApplicationClient {
         };
 
         let loaded = client.get().await?.state;
+        chimera_config::application::validate_update_sources(&loaded.update_sources)
+            .map_err(anyhow::Error::msg)
+            .context("invalid persisted application update sources")?;
         bridge
             .prepare(&loaded)
             .context("failed to prepare loaded application legacy mirror")?
@@ -290,6 +331,115 @@ impl ChimeraClient {
         Ok(self.inner.application.get_typed())
     }
 
+    fn app_updater(&self) -> anyhow::Result<&chimera_core::client::app_update::AppUpdateClient> {
+        self.inner
+            .app_updater
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("application updater is unavailable"))
+    }
+
+    pub(crate) async fn get_app_update_state(
+        &self,
+    ) -> anyhow::Result<chimera_core::client::app_update::AppUpdateSnapshot> {
+        Ok(self.app_updater()?.state().await?)
+    }
+
+    pub(crate) async fn check_app_update(
+        &self,
+    ) -> anyhow::Result<chimera_core::client::app_update::AppUpdateSnapshot> {
+        Ok(self.app_updater()?.check().await?)
+    }
+
+    pub(crate) async fn download_app_update(
+        &self,
+    ) -> anyhow::Result<chimera_core::client::app_update::AppUpdateSnapshot> {
+        Ok(self.app_updater()?.download().await?)
+    }
+
+    pub(crate) async fn cancel_app_update_download(
+        &self,
+    ) -> anyhow::Result<chimera_core::client::app_update::AppUpdateSnapshot> {
+        Ok(self.app_updater()?.cancel_download().await?)
+    }
+
+    pub(crate) async fn install_app_update(
+        &self,
+    ) -> anyhow::Result<chimera_core::client::app_update::AppUpdateSnapshot> {
+        Ok(self.app_updater()?.install().await?)
+    }
+
+    pub(crate) async fn discard_app_update_package(
+        &self,
+    ) -> anyhow::Result<chimera_core::client::app_update::AppUpdateSnapshot> {
+        Ok(self.app_updater()?.discard().await?)
+    }
+
+    pub(crate) async fn get_app_update_changelog(
+        &self,
+        from: &str,
+        to: &str,
+    ) -> anyhow::Result<chimera_core::client::app_update::changelog::AppUpdateChangelog> {
+        let http = self
+            .inner
+            .changelog_http
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("application update changelog is unavailable"))?;
+        let sources = self.inner.application.get_typed().update_sources;
+        Ok(
+            chimera_core::client::app_update::changelog::resolve_changelog(
+                http.as_ref(),
+                &sources,
+                from,
+                to,
+            )
+            .await?,
+        )
+    }
+
+    pub(crate) fn installed_release_channel(
+        &self,
+    ) -> Option<chimera_config::application::ReleaseChannel> {
+        self.inner
+            .bundle_metadata
+            .map(|metadata| metadata.release_channel)
+    }
+
+    pub(crate) fn release_channel(
+        &self,
+    ) -> anyhow::Result<chimera_config::application::ReleaseChannel> {
+        let metadata = self
+            .inner
+            .bundle_metadata
+            .ok_or_else(|| anyhow::anyhow!("application bundle metadata is unavailable"))?;
+        Ok(metadata
+            .release_channel
+            .resolve(self.inner.application.get_typed().release_channel))
+    }
+
+    pub(crate) async fn set_release_channel(
+        &self,
+        channel: chimera_config::application::ReleaseChannel,
+    ) -> anyhow::Result<super::MutationOutcome<()>> {
+        self.patch_app_config(ChimeraAppConfigPatch {
+            release_channel: Some(Some(channel)),
+            ..Default::default()
+        })
+        .await
+    }
+
+    pub(crate) fn configure_app_update(&self, config: &ChimeraAppConfig) {
+        let (Some(updater), Some(metadata)) = (&self.inner.app_updater, self.inner.bundle_metadata)
+        else {
+            return;
+        };
+        updater.configure(chimera_core::client::app_update::AppUpdateSettings {
+            channel: config.release_channel.unwrap_or(metadata.release_channel),
+            sources: config.update_sources.clone(),
+            auto_check: config.enable_auto_check_update,
+            auto_download: config.enable_auto_download_update,
+        });
+    }
+
     pub(crate) fn application_config(&self) -> IVerge {
         self.inner.application.get_legacy()
     }
@@ -461,6 +611,7 @@ impl ChimeraClient {
             self.inner.application.patch_typed(patch).await?;
         }
         let snapshot = self.inner.application.get().await?;
+        self.configure_app_update(&snapshot.state);
         let mut degradations = Vec::new();
 
         // Keep the legacy Verge file current while existing service and agent
@@ -1349,12 +1500,67 @@ mod tests {
         });
 
         let path = Utf8PathBuf::from_path_buf(path).unwrap();
-        let client = ApplicationClient::new(path, bridge.snapshot_legacy().unwrap(), bridge)
-            .await
-            .unwrap();
+        let client = ApplicationClient::new(
+            path,
+            bridge.snapshot_legacy().unwrap(),
+            bridge,
+            ReleaseChannel::Stable,
+        )
+        .await
+        .unwrap();
 
         assert!(!client.get_typed().enable_auto_check_update);
         assert_eq!(*mirrored.lock().unwrap(), Some(false));
+    }
+
+    #[tokio::test]
+    async fn installed_channel_normalizes_and_persists_saved_preferences() {
+        for (saved, build, expected) in [
+            (
+                ReleaseChannel::Stable,
+                ReleaseChannel::Nightly,
+                ReleaseChannel::Nightly,
+            ),
+            (
+                ReleaseChannel::Nightly,
+                ReleaseChannel::Stable,
+                ReleaseChannel::Stable,
+            ),
+            (
+                ReleaseChannel::Nightly,
+                ReleaseChannel::Beta,
+                ReleaseChannel::Beta,
+            ),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("application.yaml");
+            let config = ChimeraAppConfig {
+                release_channel: Some(saved),
+                ..ChimeraAppConfig::default()
+            };
+            let expected_auto_check = config.enable_auto_check_update;
+            std::fs::write(&path, serde_yaml::to_string(&config).unwrap()).unwrap();
+
+            let mirrored = Arc::new(Mutex::new(None));
+            let bridge: Arc<dyn VergeLegacyBridge> = Arc::new(RecordingBridge {
+                legacy: ChimeraAppConfig::default(),
+                mirrored: mirrored.clone(),
+            });
+            let client = ApplicationClient::new(
+                Utf8PathBuf::from_path_buf(path.clone()).unwrap(),
+                bridge.snapshot_legacy().unwrap(),
+                bridge,
+                build,
+            )
+            .await
+            .unwrap();
+
+            assert_eq!(client.get_typed().release_channel, Some(expected));
+            let persisted: ChimeraAppConfig =
+                serde_yaml::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+            assert_eq!(persisted.release_channel, Some(expected));
+            assert_eq!(*mirrored.lock().unwrap(), Some(expected_auto_check));
+        }
     }
 
     #[tokio::test]
@@ -1372,6 +1578,7 @@ mod tests {
             Utf8PathBuf::from_path_buf(path.clone()).unwrap(),
             bridge.snapshot_legacy().unwrap(),
             bridge,
+            ReleaseChannel::Stable,
         )
         .await;
         let Err(error) = result else {
@@ -1400,6 +1607,7 @@ mod tests {
             Utf8PathBuf::from_path_buf(path.clone()).unwrap(),
             bridge.snapshot_legacy().unwrap(),
             bridge,
+            ReleaseChannel::Stable,
         )
         .await;
         let Err(error) = result else {
@@ -1434,12 +1642,17 @@ mod tests {
             Utf8PathBuf::from_path_buf(path.clone()).unwrap(),
             bridge.snapshot_legacy().unwrap(),
             bridge,
+            ReleaseChannel::Stable,
         )
         .await
         .unwrap();
         assert!(!client.get_typed().enable_auto_check_update);
         assert_eq!(*mirrored.lock().unwrap(), Some(false));
-        assert_eq!(std::fs::read_to_string(&target).unwrap(), original);
+        let persisted: ChimeraAppConfig =
+            serde_yaml::from_slice(&std::fs::read(&target).unwrap()).unwrap();
+        assert!(!persisted.enable_auto_check_update);
+        assert_eq!(persisted.release_channel, Some(ReleaseChannel::Stable));
+        assert_ne!(std::fs::read_to_string(&target).unwrap(), original);
         assert_eq!(std::fs::read_link(path).unwrap(), target);
     }
 }

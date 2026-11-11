@@ -614,79 +614,88 @@ pub fn get_clash_info(client: State<'_, ChimeraClient>) -> Result<ClashInfo> {
     Ok(client.clash_info())
 }
 
-#[derive(Default, Clone, serde::Serialize, serde::Deserialize, specta::Type)]
-pub struct UpdateWrapper {
-    rid: tauri::ResourceId,
-    available: bool,
-    current_version: String,
-    version: String,
-    date: Option<String>,
-    body: Option<String>,
-    #[specta(type = Any)]
-    raw_json: serde_json::Value,
+#[tauri::command]
+#[specta::specta]
+pub async fn get_app_update_state(
+    client: State<'_, ChimeraClient>,
+) -> Result<chimera_core::client::app_update::AppUpdateSnapshot> {
+    Ok(client.get_app_update_state().await?)
 }
 
 #[tauri::command]
 #[specta::specta]
-pub async fn check_update(webview: tauri::Webview) -> Result<Option<UpdateWrapper>> {
-    use crate::utils::config::{get_self_proxy, get_system_proxy};
-    use std::cmp::Ordering;
-    use tauri_plugin_updater::UpdaterExt;
-    let build_time = time::OffsetDateTime::parse(
-        crate::consts::BUILD_INFO.build_date,
-        &time::format_description::well_known::Rfc3339,
-    )
-    .context("failed to parse build time")?;
-    let mut builder = webview
-        .updater_builder()
-        .version_comparator(move |_, remote| {
-            use semver::Version;
-            let local = Version::parse(crate::consts::BUILD_INFO.pkg_version).ok();
-            log::trace!("[check] local: {:?}, remote: {:?}", local, remote.version);
-            match local {
-                Some(local) => {
-                    if !local.build.is_empty() && !remote.version.build.is_empty() {
-                        match local.cmp_precedence(&remote.version) {
-                            Ordering::Less => true,
-                            Ordering::Equal => match remote.pub_date {
-                                Some(pub_date) => {
-                                    local.build != remote.version.build && pub_date > build_time
-                                }
-                                None => local.build != remote.version.build,
-                            },
-                            Ordering::Greater => false,
-                        }
-                    } else {
-                        local < remote.version
-                    }
-                }
-                None => false,
-            }
-        });
-    if let Ok(proxy) = get_self_proxy() {
-        builder = builder.proxy(proxy.parse().context("failed to parse proxy")?);
-    }
-    if let Ok(Some(proxy)) = get_system_proxy() {
-        builder = builder.proxy(proxy.parse().context("failed to parse system proxy")?);
-    }
-    let updater = builder.build().context("failed to build updater")?;
-    let update = updater.check().await.context("failed to check update")?;
-    Ok(update.map(|u| {
-        let mut wrapper = UpdateWrapper {
-            available: true,
-            current_version: u.current_version.clone(),
-            version: u.version.clone(),
-            date: u.date.and_then(|d| {
-                d.format(&time::format_description::well_known::Rfc3339)
-                    .ok()
-            }),
-            body: u.body.clone(),
-            raw_json: u.raw_json.clone(),
-            ..Default::default()
-        };
-        wrapper.rid = webview.resources_table().add(u);
-        wrapper
-    }))
+pub async fn get_app_update_changelog(
+    client: State<'_, ChimeraClient>,
+    from: String,
+    to: String,
+) -> Result<chimera_core::client::app_update::changelog::AppUpdateChangelog> {
+    Ok(client.get_app_update_changelog(&from, &to).await?)
+}
+
+#[derive(Debug, Clone, serde::Serialize, specta::Type)]
+pub struct ReleaseChannelInfo {
+    pub current: chimera_config::application::ReleaseChannel,
+    pub installed: chimera_config::application::ReleaseChannel,
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn get_release_channel(client: State<'_, ChimeraClient>) -> Result<ReleaseChannelInfo> {
+    Ok(ReleaseChannelInfo {
+        current: client.release_channel()?,
+        installed: client
+            .installed_release_channel()
+            .ok_or_else(|| anyhow::anyhow!("application bundle metadata is unavailable"))?,
+    })
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn set_release_channel(
+    client: State<'_, ChimeraClient>,
+    channel: chimera_config::application::ReleaseChannel,
+) -> Result<MutationOutcome<()>> {
+    Ok(client.set_release_channel(channel).await?)
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn check_app_update(
+    client: State<'_, ChimeraClient>,
+) -> Result<chimera_core::client::app_update::AppUpdateSnapshot> {
+    Ok(client.check_app_update().await?)
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn download_app_update(
+    client: State<'_, ChimeraClient>,
+) -> Result<chimera_core::client::app_update::AppUpdateSnapshot> {
+    Ok(client.download_app_update().await?)
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn cancel_app_update_download(
+    client: State<'_, ChimeraClient>,
+) -> Result<chimera_core::client::app_update::AppUpdateSnapshot> {
+    Ok(client.cancel_app_update_download().await?)
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn install_app_update(
+    client: State<'_, ChimeraClient>,
+) -> Result<chimera_core::client::app_update::AppUpdateSnapshot> {
+    Ok(client.install_app_update().await?)
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn discard_app_update_package(
+    client: State<'_, ChimeraClient>,
+) -> Result<chimera_core::client::app_update::AppUpdateSnapshot> {
+    Ok(client.discard_app_update_package().await?)
 }
 
 #[tauri::command]

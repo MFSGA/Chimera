@@ -77,7 +77,7 @@ fn incomplete_runtime_fails_without_changing_configuration() {
 }
 
 #[test]
-fn setup_injects_runtime_and_preserves_compiled_feeds() {
+fn setup_injects_runtime_and_channel_feeds() {
     for fixed in [false, true] {
         let directory = tempfile::tempdir().unwrap();
         if fixed {
@@ -93,6 +93,10 @@ fn setup_injects_runtime_and_preserves_compiled_feeds() {
                 ReleaseChannel::Stable
             };
             setup(&metadata, &mut config).unwrap();
+            expected["plugins"]["updater"]["endpoints"] = json!(update_endpoints(
+                metadata.release_channel,
+                metadata.is_fixed_webview,
+            ));
             if fixed {
                 expected["bundle"]["windows"]["webviewInstallMode"] = json!({
                     "type": "fixedRuntime", "path": directory.path().join("WebView2"),
@@ -105,33 +109,48 @@ fn setup_injects_runtime_and_preserves_compiled_feeds() {
 
 #[test]
 fn metadata_selects_matching_update_downloads() {
-    let release: tauri_plugin_updater::RemoteRelease = serde_json::from_value(json!({
+    for (arch, standard_url, standard_signature) in [
+        (
+            "x86_64",
+            "https://example.com/standard-x86_64.zip",
+            "standard-x86_64",
+        ),
+        (
+            "aarch64",
+            "https://example.com/standard-aarch64.zip",
+            "standard-aarch64",
+        ),
+    ] {
+        let target = format!("windows-{arch}");
+        let release: tauri_plugin_updater::RemoteRelease = serde_json::from_value(json!({
+            "version": "2.0.0",
+            "platforms": {
+                target.clone(): {"url": standard_url, "signature": standard_signature},
+            },
+        }))
+        .unwrap();
+        assert_eq!(
+            release.download_url(&target).unwrap().as_str(),
+            standard_url
+        );
+        assert_eq!(release.signature(&target).unwrap(), standard_signature);
+    }
+
+    // Fixed WebView assets are isolated by the feed filename, but keep the
+    // same platform key as regular Windows x64 manifests.
+    let fixed_target = "windows-x86_64";
+    let fixed_release: tauri_plugin_updater::RemoteRelease = serde_json::from_value(json!({
         "version": "2.0.0",
         "platforms": {
-            "windows-x86_64": {"url": "https://example.com/standard-x86_64.zip", "signature": "standard"},
-            "windows-x86_64-fixed-webview": {"url": "https://example.com/fixed-x86_64.zip", "signature": "fixed"},
-            "windows-aarch64": {"url": "https://example.com/standard-aarch64.zip", "signature": "standard"},
-            "windows-aarch64-fixed-webview": {"url": "https://example.com/fixed-aarch64.zip", "signature": "fixed"},
+            fixed_target: {"url": "https://example.com/fixed-x86_64.zip", "signature": "fixed"},
         },
-    })).unwrap();
-    for arch in ["x86_64", "aarch64"] {
-        for fixed in [false, true] {
-            let metadata = BundleMetadata {
-                is_portable: false,
-                is_fixed_webview: fixed,
-                release_channel: ReleaseChannel::Stable,
-                sourceforge_project: None,
-                ..nyanpasu_contracts::bundle_metadata::TEST_BUNDLE_METADATA
-            };
-            let target = updater_target(&metadata, &format!("windows-{arch}"));
-            let variant = if fixed { "fixed" } else { "standard" };
-            assert_eq!(
-                release.download_url(&target).unwrap().as_str(),
-                format!("https://example.com/{variant}-{arch}.zip")
-            );
-            assert_eq!(release.signature(&target).unwrap(), variant);
-        }
-    }
+    }))
+    .unwrap();
+    assert_eq!(
+        fixed_release.download_url(fixed_target).unwrap().as_str(),
+        "https://example.com/fixed-x86_64.zip"
+    );
+    assert_eq!(fixed_release.signature(fixed_target).unwrap(), "fixed");
 }
 
 #[test]
@@ -167,24 +186,24 @@ fn release_channel_uses_compiled_feature_and_version() {
 
 #[test]
 fn update_download_urls_keep_the_artifact_and_selected_priority() {
-    let path = "/libnyanpasu/clash-nyanpasu/releases/download/pre-release/Clash%20Nyanpasu_2.0.0_x64-setup.nsis.zip";
-    for origin in ["github.com", "nyanpasu-script.majokeiko.com"] {
-        let announced = url::Url::parse(&format!("https://{origin}{path}")).unwrap();
+    let path = "/MFSGA/Chimera/releases/download/pre-release/Chimera_2.0.0_x64-setup.nsis.zip";
+    for prefix in ["https://github.com", "https://gh-proxy.com/github.com"] {
+        let announced = url::Url::parse(&format!("{prefix}{path}")).unwrap();
         for sources in [
             vec![UpdateSource::Github],
-            vec![UpdateSource::Nyanpasu],
+            vec![UpdateSource::Chimera],
             vec![UpdateSource::Ghfast],
-            vec![UpdateSource::Github, UpdateSource::Nyanpasu],
-            vec![UpdateSource::Nyanpasu, UpdateSource::Github],
+            vec![UpdateSource::Github, UpdateSource::Chimera],
+            vec![UpdateSource::Chimera, UpdateSource::Github],
             vec![
                 UpdateSource::Ghfast,
-                UpdateSource::Nyanpasu,
+                UpdateSource::Chimera,
                 UpdateSource::Github,
             ],
             vec![
                 UpdateSource::Github,
                 UpdateSource::Ghfast,
-                UpdateSource::Nyanpasu,
+                UpdateSource::Chimera,
             ],
         ] {
             let resolved =
@@ -197,21 +216,17 @@ fn update_download_urls_keep_the_artifact_and_selected_priority() {
                 sources
             );
             for (source, url) in resolved {
-                let expected_path = if source == UpdateSource::Ghfast {
-                    format!("/https://github.com{path}")
-                } else {
-                    path.to_owned()
+                let expected = match source {
+                    UpdateSource::Github => format!("https://github.com{path}"),
+                    UpdateSource::Chimera => {
+                        format!("https://gh-proxy.com/github.com{path}")
+                    }
+                    UpdateSource::Ghfast => {
+                        format!("https://ghfast.top/https://github.com{path}")
+                    }
+                    UpdateSource::Sourceforge => unreachable!(),
                 };
-                assert_eq!(url.path(), expected_path);
-                assert_eq!(
-                    url.host_str(),
-                    Some(match source {
-                        UpdateSource::Github => "github.com",
-                        UpdateSource::Nyanpasu => "nyanpasu-script.majokeiko.com",
-                        UpdateSource::Ghfast => "ghfast.top",
-                        UpdateSource::Sourceforge => unreachable!(),
-                    })
-                );
+                assert_eq!(url.as_str(), expected);
             }
         }
     }
@@ -219,12 +234,9 @@ fn update_download_urls_keep_the_artifact_and_selected_priority() {
 
 #[test]
 fn ghfast_download_keeps_escaped_paths_and_query_parameters() {
-    let path =
-        "/libnyanpasu/clash-nyanpasu/releases/download/v2.0.0%2Balpha.hash/Clash%20Nyanpasu.zip";
-    let announced = url::Url::parse(&format!(
-        "https://nyanpasu-script.majokeiko.com{path}?download=1"
-    ))
-    .unwrap();
+    let path = "/MFSGA/Chimera/releases/download/v2.0.0%2Balpha.hash/Chimera.zip";
+    let announced =
+        url::Url::parse(&format!("https://gh-proxy.com/github.com{path}?download=1")).unwrap();
     let resolved = update_download_urls(
         &announced,
         &[UpdateSource::Ghfast],
@@ -240,10 +252,9 @@ fn ghfast_download_keeps_escaped_paths_and_query_parameters() {
 
 #[test]
 fn update_download_urls_reject_invalid_sources_and_unrecognized_artifacts() {
-    let valid = url::Url::parse(
-        "https://github.com/libnyanpasu/clash-nyanpasu/releases/download/v2.0.0/app.zip",
-    )
-    .unwrap();
+    let valid =
+        url::Url::parse("https://github.com/MFSGA/Chimera/releases/download/v2.0.0/app.zip")
+            .unwrap();
     for invalid in [
         vec![],
         vec![UpdateSource::Github, UpdateSource::Github],
@@ -252,8 +263,8 @@ fn update_download_urls_reject_invalid_sources_and_unrecognized_artifacts() {
         assert!(update_download_urls(&valid, &invalid, &json!({}), "windows-x86_64").is_err());
     }
     for invalid in [
-        "http://github.com/libnyanpasu/clash-nyanpasu/releases/download/v2.0.0/app.zip",
-        "https://example.com/libnyanpasu/clash-nyanpasu/releases/download/v2.0.0/app.zip",
+        "http://github.com/MFSGA/Chimera/releases/download/v2.0.0/app.zip",
+        "https://example.com/MFSGA/Chimera/releases/download/v2.0.0/app.zip",
         "https://github.com/someone/another-app/releases/download/v2.0.0/app.zip",
     ] {
         assert!(
@@ -271,7 +282,7 @@ fn update_download_urls_reject_invalid_sources_and_unrecognized_artifacts() {
 #[test]
 fn sourceforge_download_uses_only_explicit_immutable_platform_metadata() {
     let announced = url::Url::parse(
-        "https://github.com/libnyanpasu/clash-nyanpasu/releases/download/pre-release/Clash%20Nyanpasu_2.0.0_x64-setup.nsis.zip",
+        "https://github.com/MFSGA/Chimera/releases/download/pre-release/Chimera_2.0.0_x64-setup.nsis.zip",
     )
     .unwrap();
     let raw_json = json!({
@@ -280,7 +291,7 @@ fn sourceforge_download_uses_only_explicit_immutable_platform_metadata() {
                 "project": "future-project",
                 "build_id": "123-2-0123456789abcdef",
                 "mirrors": {
-                    "sourceforge": "https://downloads.sourceforge.net/project/future-project/nightly/123-2-0123456789abcdef/Clash%20Nyanpasu_2.0.0_x64-setup.nsis.zip"
+                    "sourceforge": "https://downloads.sourceforge.net/project/future-project/nightly/123-2-0123456789abcdef/Chimera_2.0.0_x64-setup.nsis.zip"
                 }
             }
         }
@@ -300,7 +311,7 @@ fn sourceforge_download_uses_only_explicit_immutable_platform_metadata() {
     assert_eq!(resolved[0].0, UpdateSource::Sourceforge);
     assert_eq!(
         resolved[0].1.as_str(),
-        "https://downloads.sourceforge.net/project/future-project/nightly/123-2-0123456789abcdef/Clash%20Nyanpasu_2.0.0_x64-setup.nsis.zip"
+        "https://downloads.sourceforge.net/project/future-project/nightly/123-2-0123456789abcdef/Chimera_2.0.0_x64-setup.nsis.zip"
     );
     assert_eq!(resolved[1].0, UpdateSource::Github);
     assert!(
@@ -316,10 +327,9 @@ fn sourceforge_download_uses_only_explicit_immutable_platform_metadata() {
 
 #[test]
 fn sourceforge_download_rejects_untrusted_or_mutable_metadata() {
-    let announced = url::Url::parse(
-        "https://github.com/libnyanpasu/clash-nyanpasu/releases/download/pre-release/app.zip",
-    )
-    .unwrap();
+    let announced =
+        url::Url::parse("https://github.com/MFSGA/Chimera/releases/download/pre-release/app.zip")
+            .unwrap();
     for (project, build_id, url) in [
         (
             "project",
@@ -392,34 +402,29 @@ fn release_channel_selects_feeds_without_changing_fixed_target() {
         ReleaseChannel::Beta,
         ReleaseChannel::Nightly,
     ] {
-        let endpoints = update_endpoints(channel);
-        assert!(endpoints.len() >= 4);
         let suffix = match channel {
             ReleaseChannel::Stable => "",
             ReleaseChannel::Beta => "-beta",
             ReleaseChannel::Nightly => "-nightly",
         };
-        assert!(endpoints[2].ends_with(&format!("/update{suffix}.json")));
-        assert_eq!(endpoints[3], format!("https://ghfast.top/{}", endpoints[2]));
         for fixed in [false, true] {
+            let fixed_suffix = if fixed { "-fixed-webview" } else { "" };
+            let endpoints = update_endpoints(channel, fixed);
+            assert!(endpoints[2].ends_with(&format!("/update{suffix}{fixed_suffix}.json")));
+            assert_eq!(endpoints[3], format!("https://ghfast.top/{}", endpoints[2]));
+            if channel == ReleaseChannel::Beta {
+                assert!(endpoints[6].ends_with(&format!("/update{fixed_suffix}.json")));
+            }
             let metadata = BundleMetadata {
                 is_portable: false,
                 is_fixed_webview: fixed,
                 release_channel: channel,
-                sourceforge_project: option_env!("NYANPASU_SOURCEFORGE_PROJECT"),
-                ..nyanpasu_contracts::bundle_metadata::TEST_BUNDLE_METADATA
+                sourceforge_project: option_env!("CHIMERA_SOURCEFORGE_PROJECT"),
+                ..chimera_contracts::bundle_metadata::TEST_BUNDLE_METADATA
             };
             let mut config = config(false);
             setup(&metadata, &mut config).unwrap();
             assert_eq!(config.plugins.0["updater"]["endpoints"], json!(endpoints));
-            assert_eq!(
-                updater_target(&metadata, "windows-aarch64"),
-                if fixed {
-                    "windows-aarch64-fixed-webview"
-                } else {
-                    "windows-aarch64"
-                }
-            );
         }
     }
 }
@@ -435,12 +440,28 @@ fn sourceforge_manifest_feed_is_optional_validated_and_appended_after_existing_f
         let blank = endpoints::update_endpoints_for_project(channel, Some("  ")).unwrap();
         assert_eq!(blank, base);
         let configured =
-            endpoints::update_endpoints_for_project(channel, Some("nyanpasu-project")).unwrap();
-        assert_eq!(&configured[..base.len()], base.as_slice());
+            endpoints::update_endpoints_for_project(channel, Some("chimera-project")).unwrap();
+        let configured_without_sourceforge = configured
+            .iter()
+            .filter(|endpoint| !endpoint.contains(".sourceforge.io/"))
+            .collect::<Vec<_>>();
         assert_eq!(
-            configured.last().unwrap(),
-            &format!("https://nyanpasu-project.sourceforge.io/updater/update{suffix}.json")
+            configured_without_sourceforge,
+            base.iter().collect::<Vec<_>>()
         );
+        let sourceforge_feeds = configured
+            .iter()
+            .filter(|endpoint| endpoint.contains(".sourceforge.io/"))
+            .collect::<Vec<_>>();
+        let expected_suffixes = if channel == ReleaseChannel::Beta {
+            vec!["-beta", ""]
+        } else {
+            vec![suffix]
+        };
+        assert_eq!(sourceforge_feeds.len(), expected_suffixes.len());
+        for (endpoint, expected_suffix) in sourceforge_feeds.iter().zip(expected_suffixes) {
+            assert!(endpoint.ends_with(&format!("/update{expected_suffix}.json")));
+        }
         for invalid in [
             "../project",
             "project/path",
@@ -456,7 +477,7 @@ fn sourceforge_manifest_feed_is_optional_validated_and_appended_after_existing_f
 #[test]
 fn sourceforge_metadata_decodes_equivalent_url_path_components() {
     let announced = url::Url::parse(
-        "https://github.com/libnyanpasu/clash-nyanpasu/releases/download/pre-release/Clash%20Nyanpasu+nightly.zip",
+        "https://github.com/MFSGA/Chimera/releases/download/pre-release/Chimera+nightly.zip",
     )
     .unwrap();
     let raw_json = json!({
@@ -465,7 +486,7 @@ fn sourceforge_metadata_decodes_equivalent_url_path_components() {
                 "project": "nightly-project",
                 "build_id": "123-2-abcdef0123456789",
                 "mirrors": {
-                    "sourceforge": "https://downloads.sourceforge.net/project/nightly-project/nightly/123-2-abcdef0123456789/Clash%20Nyanpasu%2bnightly.zip"
+                    "sourceforge": "https://downloads.sourceforge.net/project/nightly-project/nightly/123-2-abcdef0123456789/Chimera%2bnightly.zip"
                 }
             }
         }
@@ -583,10 +604,10 @@ async fn installed_webview_fallback_configures_runtime_and_selects_fixed_update_
         let manifest = json!({
             "version": "99.0.0",
             "platforms": {
-                target.clone(): {"url": "https://example.com/standard.zip", "signature": "standard"},
-                format!("{target}-fixed-webview"): {"url": "https://example.com/fixed.zip", "signature": "fixed"},
+                target.clone(): {"url": "https://example.com/fixed.zip", "signature": "fixed"},
             }
-        }).to_string();
+        })
+        .to_string();
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let endpoint = format!("http://{}/update.json", listener.local_addr().unwrap());
         let server = std::thread::spawn(move || {
@@ -622,7 +643,7 @@ async fn installed_webview_fallback_configures_runtime_and_selects_fixed_update_
             .unwrap()
             .unwrap();
         server.join().unwrap();
-        assert_eq!(update.target, format!("{target}-fixed-webview"));
+        assert_eq!(update.target, target);
         assert_eq!(
             update.download_url.as_str(),
             "https://example.com/fixed.zip"

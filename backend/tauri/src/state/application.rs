@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use anyhow::Context as _;
-use chimera_config::application::{ChimeraAppConfig, ChimeraAppConfigPatch};
+use chimera_config::application::{ChimeraAppConfig, ChimeraAppConfigPatch, ReleaseChannel};
 use chimera_core::state::{PersistentStateManager, ReplaceIfVersionResult, Version};
 use ractor::{Actor, ActorProcessingErr, ActorRef, RpcReplyPort};
 use struct_patch::Patch;
@@ -20,11 +20,13 @@ pub struct ApplicationSnapshot {
 pub struct ApplicationActorArgs {
     pub manager: PersistentStateManager<ChimeraAppConfig>,
     pub bridge: Arc<dyn VergeLegacyBridge>,
+    pub build_channel: ReleaseChannel,
 }
 
 pub struct ApplicationActorState {
     manager: PersistentStateManager<ChimeraAppConfig>,
     bridge: Arc<dyn VergeLegacyBridge>,
+    build_channel: ReleaseChannel,
 }
 
 #[derive(Debug)]
@@ -63,13 +65,37 @@ impl ApplicationActor {
 
     fn prepare_replace(
         state: &ApplicationActorState,
-        next: ChimeraAppConfig,
+        mut next: ChimeraAppConfig,
     ) -> anyhow::Result<PreparedTypedReplace<ChimeraAppConfig>> {
+        Self::validate_release_channel(state, &mut next)?;
+        chimera_config::application::validate_update_sources(&next.update_sources)
+            .map_err(anyhow::Error::msg)
+            .context("invalid application update sources")?;
         let mirror = state
             .bridge
             .prepare(&next)
             .context("failed to prepare legacy application mirror")?;
         Ok(PreparedTypedReplace::new(next, mirror))
+    }
+
+    fn validate_release_channel(
+        state: &ApplicationActorState,
+        next: &mut ChimeraAppConfig,
+    ) -> anyhow::Result<()> {
+        let current = state.manager.snapshot_handle().load();
+        next.release_channel = next
+            .release_channel
+            .or(current.state.release_channel)
+            .or(Some(state.build_channel));
+        if state.build_channel == ReleaseChannel::Nightly
+            && next.release_channel != Some(ReleaseChannel::Nightly)
+        {
+            anyhow::bail!(
+                "cannot switch from the nightly release channel to {:?}",
+                next.release_channel
+            );
+        }
+        Ok(())
     }
 
     async fn commit(
@@ -124,6 +150,7 @@ impl Actor for ApplicationActor {
         Ok(ApplicationActorState {
             manager: args.manager,
             bridge: args.bridge,
+            build_channel: args.build_channel,
         })
     }
 
@@ -206,22 +233,29 @@ mod tests {
 
     async fn spawn_actor(
         bridge: Arc<dyn VergeLegacyBridge>,
+        build_channel: ReleaseChannel,
     ) -> (ActorRef<ApplicationActorMessage>, tempfile::TempDir) {
         let dir = tempdir().expect("tempdir should be created");
         let config_dir = dir.path().join("config");
         std::fs::create_dir(&config_dir).expect("config directory should be created");
         let path = camino::Utf8PathBuf::from_path_buf(config_dir.join("application.yaml"))
             .expect("temp path should be UTF-8");
+        let mut config = ChimeraAppConfig::default();
+        config.release_channel = Some(build_channel.resolve(config.release_channel));
         let manager = PersistentStateManagerSetup::<ChimeraAppConfig>::builder()
             .config_path(path)
             .assemble()
-            .from_state(ChimeraAppConfig::default())
+            .from_state(config)
             .await
             .expect("application manager should initialize");
         let (actor_ref, _handle) = Actor::spawn(
             None,
             ApplicationActor,
-            ApplicationActorArgs { manager, bridge },
+            ApplicationActorArgs {
+                manager,
+                bridge,
+                build_channel,
+            },
         )
         .await
         .expect("application actor should spawn");
@@ -240,7 +274,7 @@ mod tests {
 
     #[tokio::test]
     async fn japanese_write_failure_preserves_previous_application_state() {
-        let (actor, dir) = spawn_actor(Arc::new(NoopVergeMirror)).await;
+        let (actor, dir) = spawn_actor(Arc::new(NoopVergeMirror), ReleaseChannel::Stable).await;
         let config_dir = dir.path().join("config");
         let config_path = config_dir.join("application.yaml");
 
@@ -311,7 +345,7 @@ mod tests {
 
     #[tokio::test]
     async fn mirror_prepare_failure_leaves_state_and_version_unchanged() {
-        let (actor, _dir) = spawn_actor(Arc::new(FailingVergeMirror)).await;
+        let (actor, _dir) = spawn_actor(Arc::new(FailingVergeMirror), ReleaseChannel::Stable).await;
         let before = get_snapshot(&actor)
             .await
             .expect("initial get should succeed");
@@ -341,6 +375,124 @@ mod tests {
         assert_eq!(
             after.state.enable_system_proxy,
             before.state.enable_system_proxy
+        );
+    }
+
+    #[tokio::test]
+    async fn invalid_update_sources_do_not_change_persisted_settings() {
+        let (actor, dir) = spawn_actor(Arc::new(NoopVergeMirror), ReleaseChannel::Stable).await;
+        let mut initial_patch = ChimeraAppConfig::new_empty_patch();
+        initial_patch.enable_auto_download_update = Some(true);
+        match actor
+            .call(
+                |reply| ApplicationActorMessage::Patch {
+                    patch: initial_patch,
+                    reply,
+                },
+                None,
+            )
+            .await
+            .expect("initial actor call should complete")
+        {
+            CallResult::Success(result) => {
+                result.expect("initial config should be persisted");
+            }
+            CallResult::SenderError => panic!("application actor reply dropped"),
+            CallResult::Timeout => panic!("application actor call timed out"),
+        }
+        let previous_bytes = std::fs::read(dir.path().join("config/application.yaml"))
+            .expect("initial config should be readable");
+        let before = get_snapshot(&actor)
+            .await
+            .expect("initial get should succeed");
+
+        let mut patch = ChimeraAppConfig::new_empty_patch();
+        patch.update_sources = Some(Vec::new());
+        let result = actor
+            .call(
+                |reply| ApplicationActorMessage::Patch { patch, reply },
+                None,
+            )
+            .await
+            .expect("actor call should complete");
+        match result {
+            CallResult::Success(result) => {
+                assert!(
+                    result
+                        .expect_err("empty source list must be rejected")
+                        .to_string()
+                        .contains("invalid application update sources")
+                );
+            }
+            CallResult::SenderError => panic!("application actor reply dropped"),
+            CallResult::Timeout => panic!("application actor call timed out"),
+        }
+
+        let after = get_snapshot(&actor)
+            .await
+            .expect("post-failure get should succeed");
+        assert_eq!(after.version, before.version);
+        assert_eq!(after.state.update_sources, before.state.update_sources);
+        assert_eq!(
+            std::fs::read(dir.path().join("config/application.yaml"))
+                .expect("initial config should remain readable"),
+            previous_bytes,
+        );
+    }
+
+    #[tokio::test]
+    async fn nightly_build_rejects_channel_changes_in_patch_and_replace() {
+        let (actor, _dir) = spawn_actor(Arc::new(NoopVergeMirror), ReleaseChannel::Nightly).await;
+
+        for channel in [ReleaseChannel::Stable, ReleaseChannel::Beta] {
+            let mut patch = ChimeraAppConfig::new_empty_patch();
+            patch.release_channel = Some(Some(channel));
+            let result = actor
+                .call(
+                    |reply| ApplicationActorMessage::Patch { patch, reply },
+                    None,
+                )
+                .await
+                .expect("patch actor call should complete");
+            assert!(matches!(
+                result,
+                CallResult::Success(Err(error)) if error.to_string().contains("cannot switch from the nightly release channel")
+            ));
+
+            let replacement = ChimeraAppConfig {
+                release_channel: Some(channel),
+                ..ChimeraAppConfig::default()
+            };
+            let result = actor
+                .call(
+                    |reply| ApplicationActorMessage::Replace {
+                        state: replacement,
+                        reply,
+                    },
+                    None,
+                )
+                .await
+                .expect("replace actor call should complete");
+            assert!(matches!(
+                result,
+                CallResult::Success(Err(error)) if error.to_string().contains("cannot switch from the nightly release channel")
+            ));
+        }
+
+        let mut clear_patch = ChimeraAppConfig::new_empty_patch();
+        clear_patch.release_channel = Some(None);
+        let result = actor
+            .call(
+                |reply| ApplicationActorMessage::Patch {
+                    patch: clear_patch,
+                    reply,
+                },
+                None,
+            )
+            .await
+            .expect("clear patch actor call should complete");
+        assert!(
+            matches!(result, CallResult::Success(Ok(snapshot)) if snapshot.state.release_channel == Some(ReleaseChannel::Nightly))
         );
     }
 }

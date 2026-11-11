@@ -3,6 +3,7 @@
 use std::sync::Arc;
 
 use anyhow::Context as _;
+use chimera_contracts::net::SelfProxyPortSource as _;
 use chimera_traffic::{RedbTrafficStore, TrafficStore};
 use chimera_utils::process::{AtomicStopStrategy, StopStrategy};
 use tauri::Manager;
@@ -39,7 +40,21 @@ impl crate::service::profile_file::SelfProxyPortSource for LegacySelfProxyPort {
     }
 }
 
-pub fn setup(app: &mut tauri::App, paths: PathResolver) -> anyhow::Result<()> {
+impl chimera_contracts::net::SelfProxyPortSource for LegacySelfProxyPort {
+    fn mixed_port(&self) -> Option<u16> {
+        Some(
+            crate::config::core::Config::clash()
+                .latest()
+                .get_mixed_port(),
+        )
+    }
+}
+
+pub fn setup(
+    app: &mut tauri::App,
+    paths: PathResolver,
+    bundle_metadata: chimera_contracts::bundle_metadata::BundleMetadata,
+) -> anyhow::Result<()> {
     let shutdown = tokio_util::sync::CancellationToken::new();
     let tasks = tokio_util::task::TaskTracker::new();
     let jobs = crate::startup_failure::report_boundary(
@@ -192,14 +207,30 @@ pub fn setup(app: &mut tauri::App, paths: PathResolver) -> anyhow::Result<()> {
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     let window: Arc<dyn WindowControl> = Arc::new(TauriWindowControl::new(app.handle().clone()));
 
+    let update_proxy_port = Arc::new(LegacySelfProxyPort);
+    let app_update_backend: Arc<dyn chimera_core::client::app_update::AppUpdateBackend> =
+        Arc::new(crate::adapters::app_update::TauriAppUpdateBackend::new(
+            app.handle().clone(),
+            update_proxy_port.clone(),
+            bundle_metadata,
+        ));
+    let app_update_events: Arc<dyn chimera_core::client::app_update::AppUpdateEventSink> = Arc::new(
+        crate::adapters::app_update::TauriAppUpdateEventSink::new(app.handle().clone()),
+    );
+    let changelog_http: Arc<dyn chimera_contracts::net::ChangelogHttp> = Arc::new(
+        crate::adapters::app_update::ReqwestChangelogHttp::new(update_proxy_port.mixed_port())?,
+    );
+
     let client = crate::startup_failure::report_boundary(
         ChimeraClient::try_new_with_args(ClientSetupArgs {
             paths: paths.clone(),
             runtime_paths: runtime_paths.clone(),
+            bundle_metadata,
+            app_update_backend,
+            app_update_events,
+            changelog_http,
             bridges,
-            core: Arc::new(crate::client::core_lifecycle::LegacyCoreBridge::new(
-                core_facade.clone(),
-            )),
+            core: core_bridge,
             service: Arc::new(crate::client::core_lifecycle::LegacyServiceBridge::new(
                 core_facade,
             )),

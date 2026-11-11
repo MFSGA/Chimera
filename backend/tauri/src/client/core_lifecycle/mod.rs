@@ -1994,6 +1994,7 @@ mod tests {
                 ..Default::default()
             },
             Arc::new(TestApplicationBridge),
+            chimera_config::application::ReleaseChannel::Stable,
         )
         .await
         .unwrap();
@@ -2854,6 +2855,7 @@ mod tests {
             config_path,
             chimera_config::application::ChimeraAppConfig::default(),
             Arc::new(TestApplicationBridge),
+            chimera_config::application::ReleaseChannel::Stable,
         )
         .await
         .unwrap();
@@ -2919,6 +2921,7 @@ mod tests {
             config_path,
             chimera_config::application::ChimeraAppConfig::default(),
             Arc::new(TestApplicationBridge),
+            chimera_config::application::ReleaseChannel::Stable,
         )
         .await
         .unwrap();

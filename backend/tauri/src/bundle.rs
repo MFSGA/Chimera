@@ -1,6 +1,6 @@
 use chimera_core::client::app_update::endpoints;
 
-use anyhow::{Result, bail};
+use anyhow::{Result, anyhow, bail};
 use chimera_config::application::{ReleaseChannel, UpdateSource};
 use chimera_contracts::bundle_metadata::BundleMetadata;
 use std::path::{Path, PathBuf};
@@ -74,7 +74,7 @@ pub fn compiled_metadata() -> std::result::Result<BundleMetadata, Error> {
         is_portable: false,
         is_fixed_webview: false,
         release_channel: compiled_channel(cfg!(feature = "nightly"), env!("CHIMERA_VERSION"))?,
-        sourceforge_project: option_env!("chimera_SOURCEFORGE_PROJECT"),
+        sourceforge_project: option_env!("CHIMERA_SOURCEFORGE_PROJECT"),
     })
 }
 
@@ -87,23 +87,20 @@ pub fn setup(
         .plugins
         .0
         .get_mut("updater")
-        .context(LocateUpdaterConfigurationSnafu)?["endpoints"] = serde_json::to_value(
-        endpoints::update_endpoints(metadata.release_channel, metadata.sourceforge_project),
-    )?;
+        .context(LocateUpdaterConfigurationSnafu)?["endpoints"] =
+        serde_json::to_value(endpoints::update_endpoints_for_target(
+            metadata.release_channel,
+            metadata.sourceforge_project,
+            metadata.is_fixed_webview,
+        ))?;
     let mut updater = tauri_plugin_updater::Builder::new();
     if metadata.is_fixed_webview {
         let target = tauri_plugin_updater::target().context(ResolveUpdaterTargetSnafu)?;
-        updater = updater.target(updater_target(metadata, &target));
+        // Fixed WebView builds have a separate feed, but manifests keep the
+        // standard platform keys and differ by the asset selected for that feed.
+        updater = updater.target(target);
     }
     Ok(updater)
-}
-
-fn updater_target(metadata: &BundleMetadata, target: &str) -> String {
-    if metadata.is_fixed_webview {
-        format!("{target}-fixed-webview")
-    } else {
-        target.to_owned()
-    }
 }
 
 pub(super) fn is_portable(executable_dir: &Path) -> bool {
@@ -128,8 +125,12 @@ fn compiled_channel(nightly: bool, version: &str) -> std::result::Result<Release
     }
 }
 
-pub fn update_endpoints(channel: ReleaseChannel) -> Vec<String> {
-    endpoints::update_endpoints(channel, option_env!("chimera_SOURCEFORGE_PROJECT"))
+pub fn update_endpoints(channel: ReleaseChannel, fixed_webview: bool) -> Vec<String> {
+    endpoints::update_endpoints_for_target(
+        channel,
+        option_env!("CHIMERA_SOURCEFORGE_PROJECT"),
+        fixed_webview,
+    )
 }
 
 pub fn update_download_urls(
@@ -139,44 +140,73 @@ pub fn update_download_urls(
     target: &str,
 ) -> Result<Vec<(UpdateSource, url::Url)>> {
     chimera_config::application::validate_update_sources(sources).map_err(anyhow::Error::msg)?;
+    let announced = canonical_github_release_url(announced)?;
     if announced.scheme() != "https"
-        || !matches!(
-            announced.host_str(),
-            Some("github.com" | "chimera-script.majokeiko.com")
-        )
+        || announced.host_str() != Some("github.com")
         || !announced
             .path()
-            .starts_with("/libchimera/clash-chimera/releases/download/")
+            .starts_with("/MFSGA/Chimera/releases/download/")
     {
         bail!("unsupported application update download URL: {announced}");
     }
     let mut candidates = Vec::with_capacity(sources.len());
     for source in sources {
         if *source == UpdateSource::Sourceforge {
-            match sourceforge_download_url(raw_json, target, announced) {
+            match sourceforge_download_url(raw_json, target, &announced) {
                 Ok(Some(url)) => candidates.push((*source, url)),
                 Ok(None) => {}
                 Err(error) => tracing::warn!(%error, "ignoring invalid SourceForge update mirror"),
             }
             continue;
         }
-        let mut url = announced.clone();
-        let host = match source {
-            UpdateSource::Chimera => "chimera-script.majokeiko.com",
-            UpdateSource::Github | UpdateSource::Ghfast => "github.com",
+        let url = match source {
+            UpdateSource::Chimera => url::Url::parse(&format!(
+                "https://gh-proxy.com/{}{}{}",
+                announced.host_str().expect("GitHub URL has a host"),
+                announced.path(),
+                announced
+                    .query()
+                    .map(|query| format!("?{query}"))
+                    .unwrap_or_default(),
+            ))?,
+            UpdateSource::Github => announced.clone(),
+            UpdateSource::Ghfast => url::Url::parse(&format!("https://ghfast.top/{announced}"))?,
             UpdateSource::Sourceforge => unreachable!(),
         };
-        url.set_host(Some(host))
-            .expect("update source hosts are valid");
-        if *source == UpdateSource::Ghfast {
-            url = url::Url::parse(&format!("https://ghfast.top/{url}"))?;
-        }
         candidates.push((*source, url));
     }
     if candidates.is_empty() {
         bail!("no configured update package source is available for this release");
     }
     Ok(candidates)
+}
+
+fn canonical_github_release_url(announced: &url::Url) -> Result<url::Url> {
+    if announced.scheme() != "https" {
+        bail!("unsupported application update download URL: {announced}");
+    }
+    match announced.host_str() {
+        Some("github.com") => Ok(announced.clone()),
+        Some("gh-proxy.com") => {
+            let path = announced
+                .path()
+                .strip_prefix('/')
+                .ok_or_else(|| anyhow!("GitHub proxy URL has no upstream path"))?;
+            let upstream = if path.starts_with("https://") {
+                path.to_owned()
+            } else {
+                format!("https://{path}")
+            };
+            let mut url = url::Url::parse(&upstream).map_err(|error| {
+                anyhow!("invalid upstream URL in GitHub proxy download: {error}")
+            })?;
+            if url.query().is_none() {
+                url.set_query(announced.query());
+            }
+            Ok(url)
+        }
+        _ => bail!("unsupported application update download URL: {announced}"),
+    }
 }
 
 fn sourceforge_download_url(
@@ -301,5 +331,5 @@ pub fn is_newer_release(
     }
 }
 
-// #[cfg(test)]
-// mod tests;
+#[cfg(test)]
+mod tests;
