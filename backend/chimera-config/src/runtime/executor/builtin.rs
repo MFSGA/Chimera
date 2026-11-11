@@ -6,13 +6,14 @@ use std::sync::Arc;
 use indexmap::IndexMap;
 
 use crate::runtime::{
-    post_process::{OwnedFields, Ownership, apply_settings, keep_inherited},
+    post_process::{apply_settings, keep_inherited},
     value::{ConfigObject, ConfigValue},
 };
 
 use super::{
     GuardInputs, TunFlavor, TunParams,
     error::RuntimePipelineError,
+    plan,
     value_util::{obj_get, obj_insert},
 };
 
@@ -153,57 +154,10 @@ pub(super) fn apply_guard_with_source(
     source: &ConfigValue,
     guard: &GuardInputs<'_>,
 ) -> Result<ConfigValue, RuntimePipelineError> {
-    let ownership = guard.overrides.ownership_entries();
+    let ownership = plan::guard_ownership(guard);
     let (inherited, _) = keep_inherited(config, source, &ownership);
-    let (mut next, _) = apply_settings(&inherited, &ownership);
+    let (next, _) = apply_settings(&inherited, &ownership);
 
-    next = obj_insert(
-        &next,
-        "mixed-port",
-        ConfigValue::Number(serde_json::Number::from(guard.ports.mixed_port)),
-    );
-    if let Some(port) = guard.ports.port {
-        next = obj_insert(
-            &next,
-            "port",
-            ConfigValue::Number(serde_json::Number::from(port)),
-        );
-    }
-    if let Some(port) = guard.ports.socks_port {
-        next = obj_insert(
-            &next,
-            "socks-port",
-            ConfigValue::Number(serde_json::Number::from(port)),
-        );
-    }
-    if let Some(port) = guard.ports.redir_port {
-        next = obj_insert(
-            &next,
-            "redir-port",
-            ConfigValue::Number(serde_json::Number::from(port)),
-        );
-    }
-    if let Some(port) = guard.ports.tproxy_port {
-        next = obj_insert(
-            &next,
-            "tproxy-port",
-            ConfigValue::Number(serde_json::Number::from(port)),
-        );
-    }
-    if let Some(mark) = guard.routing_mark {
-        next = obj_insert(
-            &next,
-            "routing-mark",
-            ConfigValue::Number(serde_json::Number::from(mark)),
-        );
-    }
-    if let Some(controller) = &guard.ports.external_controller {
-        next = obj_insert(
-            &next,
-            "external-controller",
-            ConfigValue::String(Arc::from(controller.as_str())),
-        );
-    }
     Ok(next)
 }
 
@@ -214,17 +168,7 @@ pub(super) fn apply_tun_overrides_with_source(
     source: &ConfigValue,
     tun: &TunParams,
 ) -> ConfigValue {
-    let mut entries = vec![("enable", Ownership::Forced(ConfigValue::Bool(tun.enable)))];
-    if tun.enable && !matches!(tun.flavor, TunFlavor::ChimeraClient) {
-        entries.extend(tun.overrides.ownership_entries());
-    }
-    let ownership = vec![(
-        "tun",
-        Ownership::Table {
-            entries,
-            create: tun.enable,
-        },
-    )];
+    let ownership = plan::tun_ownership(tun);
     let (inherited, _) = keep_inherited(config, source, &ownership);
     apply_settings(&inherited, &ownership).0
 }

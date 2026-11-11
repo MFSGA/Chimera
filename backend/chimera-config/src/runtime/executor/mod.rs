@@ -6,6 +6,7 @@ mod builtin;
 mod compose;
 mod error;
 mod overlay;
+mod plan;
 mod ports;
 mod scoped;
 mod value_util;

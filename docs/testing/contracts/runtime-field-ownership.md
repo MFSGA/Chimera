@@ -80,3 +80,13 @@ application integration and TypeScript contract. The UI typecheck verifies the
 existing guard selector's typed wiring, but none of these tests starts a real
 Core, creates a TUN device, changes host routes/DNS/system-proxy settings, or
 proves behavior in a running desktop session.
+
+## Runtime Plan extraction (2026-11-11)
+
+`runtime/executor/plan.rs` is the pure ownership declaration shared by
+`apply_guard_with_source` and `apply_tun_overrides_with_source`. Unlike the
+reference, absent `port`, `socks-port`, `redir-port` and `tproxy-port` overrides
+do **not** remove Profile-provided listeners. An explicitly resolved port is
+forced, and Linux `routing-mark` is retained. Chimera Client's legacy TUN
+flavor does not inherit the Mihomo-family `auto-route` ownership. These
+compatibility differences are covered by focused unit tests.
