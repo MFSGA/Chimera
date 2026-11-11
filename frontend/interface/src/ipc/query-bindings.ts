@@ -33,6 +33,18 @@ export const queries = {
       queryKey: ['readProfileFile', ...args],
       queryFn: () => commands.readProfileFile(...args),
     }),
+  inspectRuntime: () =>
+    queryOptions({
+      queryKey: ['inspectRuntime'],
+      queryFn: () => commands.inspectRuntime(),
+    }),
+  inspectRuntimeNode: (
+    ...args: Parameters<typeof commands.inspectRuntimeNode>
+  ) =>
+    queryOptions({
+      queryKey: ['inspectRuntimeNode', ...args],
+      queryFn: () => commands.inspectRuntimeNode(...args),
+    }),
   clashApiGetConfigs: (
     ...args: Parameters<typeof commands.clashApiGetConfigs>
   ) =>

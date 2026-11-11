@@ -154,6 +154,107 @@ describe('main profiles reference layout', () => {
     ]);
   });
 
+  // Ref navigation contract: groups are human-visible, each selectable link
+  // changes the URL and selection without remounting the shared profile state.
+  it('navigates between grouped profile types and restores All selection', async () => {
+    await openMainRoute(targetPath);
+    const navigation = await $('[data-slot="profiles-navigation"]');
+    await navigation.waitForDisplayed({ timeout: 15_000 });
+
+    const groups = await navigation.$$('[data-slot="navigation-list-group"]');
+    assert.equal(
+      groups.length,
+      3,
+      'Configs, Transforms and Pipeline groups should be present.',
+    );
+
+    const scripts = await navigation.$('a[href="/main/profiles/javascript"]');
+    await scripts.waitForClickable({ timeout: 15_000 });
+    await scripts.click();
+    await browser.waitUntil(
+      async () =>
+        new URL(await browser.getUrl()).pathname ===
+          '/main/profiles/javascript' &&
+        (await scripts.getAttribute('aria-current')) === 'page',
+      {
+        timeout: 15_000,
+        timeoutMsg:
+          'Clicking JavaScript in the sidebar did not select its route.',
+      },
+    );
+
+    const all = await navigation.$('a[href="/main/profiles/profile"]');
+    await all.waitForClickable({ timeout: 15_000 });
+    await all.click();
+    await browser.waitUntil(
+      async () =>
+        new URL(await browser.getUrl()).pathname === targetPath &&
+        (await all.getAttribute('aria-current')) === 'page',
+      {
+        timeout: 15_000,
+        timeoutMsg:
+          'All Profiles was not selected after returning from a transform.',
+      },
+    );
+
+    assert.equal(
+      await navigation.$('[data-slot="profiles-all-nav-item"]').isExisting(),
+      true,
+    );
+    assert.equal(
+      await navigation
+        .$('[data-slot="global-transform-chain-nav"]')
+        .isExisting(),
+      true,
+    );
+  });
+
+  // Contract: a user opens Inspect through the Profiles navigation. The
+  // rendered content must agree with the read-only backend snapshot: either
+  // show the actual step output or explicitly report that none exists.
+  it('opens the runtime Inspect tool through the visible Profiles navigation', async () => {
+    await openMainRoute(targetPath);
+    const link = await $(
+      '[data-slot="profiles-navigation"] a[href="/main/profiles/inspect"]',
+    );
+    await link.waitForClickable({ timeout: 15_000 });
+    await link.click();
+
+    await browser.waitUntil(
+      async () =>
+        new URL(await browser.getUrl()).pathname === '/main/profiles/inspect',
+      {
+        timeout: 15_000,
+        timeoutMsg: 'Clicking Inspect did not open the Inspect route.',
+      },
+    );
+    const page = await $('[data-slot="inspect-page"]');
+    await page.waitForDisplayed({ timeout: 15_000 });
+    const refresh = await $('[data-slot="inspect-refresh"]');
+    await refresh.waitForDisplayed({ timeout: 15_000 });
+
+    // Native Tauri invoke returns the Result's success payload directly:
+    // a snapshot or null, not a { status, data } discriminated union.
+    const snapshot = await invoke<{ snapshot_id: string } | null>(
+      'inspect_runtime',
+    );
+
+    if (snapshot) {
+      const details = await $('[data-slot="inspect-step-detail"]');
+      await details.waitForDisplayed({ timeout: 15_000 });
+      const outputTab = await $('[data-slot="inspect-tab-output"]');
+      await outputTab.waitForClickable({ timeout: 15_000 });
+      await outputTab.click();
+      const yaml = await $('[data-slot="inspect-yaml-viewer"]');
+      await yaml.waitForDisplayed({ timeout: 15_000 });
+    } else {
+      const empty = await $('[data-slot="inspect-empty"]');
+      await empty.waitForDisplayed({ timeout: 15_000 });
+    }
+
+    await openMainRoute(targetPath);
+  });
+
   // Contract: from the main Profile list, opening the create menu exposes a
   // visible remote action with its localized accessible name. The bounded
   // hover limitation is recorded in docs/testing/contracts/profile-import-accessible-action.md.
@@ -289,6 +390,10 @@ describe('main profiles reference layout', () => {
 
       const link = await $(`//a[starts-with(@aria-label,"${folderName}, ")]`);
       await link.waitForClickable({ timeout: 15_000 });
+      const actions = await link
+        .$('..')
+        .$('[data-slot="profiles-folder-actions"]');
+      await actions.waitForDisplayed({ timeout: 15_000 });
       await link.click();
       // The exiting page can still have an older folder header. Resolve the
       // one with the exact name that a user sees after opening this folder,

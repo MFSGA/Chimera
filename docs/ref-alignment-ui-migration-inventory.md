@@ -432,7 +432,7 @@ ref-mapped functionality onto new signed commits, review its changed APIs and
 run complete exact-SHA tests before routine merge. Preserve the original dirty
 primary checkout, read-only ref, Legacy UI, Agent and v0.28.0 release tags.
 
-## 2026-11-11：Logs / Settings 导航结构后续对齐（部分迁移，尚未提交）
+## 2026-11-11：Logs / Settings 导航结构后续对齐（部分迁移）
 
 - **基线**：Chimera `master@3813878613292ef35b27f72c89c788eceb766c67`；主仓 pin 的 ref 为 `59724e85c34abb6995c22d101c876cc06dc16576`，实际检出的 ref 是 `5a2e2baba3bdf2c3db3b9ffe1c941ac45dfa9ba5`。本批参考的 Logs `route.tsx`/`index.tsx`、Settings `route.tsx`/`settings-navigate.tsx` 在这两个 ref 提交之间没有源码差异；未更新 ref/gitlink。ref 内嵌 runtime 与根仓库 `pnpm-lock.yaml` 在开始时已脏，未触碰这两类修改。
 - **目标和边界**：L2，主 UI 的 Logs 级别导航、搜索工具栏和 Settings 分组样式与 ref 收敛。非目标：完整日志持久化/分页 RPC、Core/App/Service 来源切换、上游细分 Settings 子路由、系统代理/TUN/Service 行为改变；Legacy UI 和 Agent 继续共用原接口。
@@ -445,15 +445,15 @@ primary checkout, read-only ref, Legacy UI, Agent and v0.28.0 release tags.
 - **回滚**：仅恢复本批 4 个主 UI 源文件、2 个 E2E 文件及本段记录；保留开始时原有的 `pnpm-lock.yaml`、`ref/` 差异和所有其他工作。
 - **下一批顺序**：先落实 Logs 的 CoreLogCursor、App/Service 文件日志查询和 LogRecord/文件选择器的完整前后端切片及实际 E2E；然后拆分 Settings 子路由并测试具体设置，再继续 Profiles → Proxies。每批先确认上游 commit、真实调用路径及现有客户端兼容，再做源码和测试迁移。
 
-## 2026-11-11：Logs 记录查看器与跟随行为（本轮新切片，未提交）
+## 2026-11-11：Logs 记录查看器与跟随行为
 
-- **基线与范围**：主仓库 master `3813878613292ef35b27f72c89c788eceb766c67`，参考子模块实际 checkout `5a2e2baba3bdf2c3db3b9ffe1c941ac45dfa9ba5`。本轮沿用已暂存的 Logs / Settings 第一批 UI 迁移，在同一 checkout 修改。L2：仅主 UI 日志显示和多语言资源，不改 MMDB、配置生成、内核、服务、系统代理、TUN、Legacy UI 或 Agent，不改原有 `ref/` 或 `pnpm-lock.yaml` 差异。
+- **基线与范围**：主仓库 master `3813878613292ef35b27f72c89c788eceb766c67`，参考子模块实际 checkout `5a2e2baba3bdf2c3db3b9ffe1c941ac45dfa9ba5`。本批在前一批 Logs / Settings UI 迁移基础上继续修改。L2：仅主 UI 日志显示和多语言资源，不改 MMDB、配置生成、内核、服务、系统代理、TUN、Legacy UI 或 Agent，不改原有 `ref/` 或 `pnpm-lock.yaml` 差异。
 - **ref 源与落点**：`ref/frontend/nyanpasu/src/pages/(main)/main/logs/_modules/log-viewer.tsx` → `frontend/chimera/src/pages/(main)/main/logs/_modules/log-viewer.tsx`，`log-json.tsx` 同名迁移；将共享 LogRecord 详情/复制、按需 JSON 高亮、LogVirtualItem、LogClearButton、LogFollowButton 复用到现有 `logs/index.tsx`；增加 `utils/shiki.ts::highlightJson` 与五种 locale 字串。迁移仅替换 @nyanpasu/@chimera 包别名和现有 `@tauri-apps/plugin-clipboard-manager` 复制调用，保持 ref 的局部组件形状。原有 E2E 的 logs search/clear data-slot 保留。
 - **临时桥接**：Chimera 目前仍由 `@chimera/interface::useClashLogs()` 的 WebSocket 内存快照提供 `type,time,payload`，没有 ref 的 `CoreLogCursor`、原始分页详情、App/Service 日志文件查询；没有捏造后端接口、日志源选项或服务端搜索。虚拟列表用 `WeakMap<ClashLog,number>` 提供同一个 WebSocket 对象的稳定 key（含定长历史滑窗），后续有真实游标时移除。旧流可能发出 `warn`，而导航为 `warning`，增加匹配适配及单测；其余级别沿用现有值。日志上滚停止自动跟随；主动恢复时滚到末尾，尊重 reduced motion；展示 dock 底部留白避免遮住最新日志。
 - **验证**：新 `frontend/chimera/tests/logs-level-filter.test.ts` 2/2 通过；`pnpm typecheck`、`pnpm --filter=chimera-ui build`、改动文件 Oxlint/Prettier、`pnpm lint:frontend-boundaries`、共享 UI 对应 9 个单测均已在本轮执行并通过；最终源码已重新通过全前端类型检查、生产构建、Oxlint、Prettier 和新增回归测试。构建仍仅提示已有大 bundle chunk。**桌面 E2E 未运行**，因为 `backend/target/e2e/debug/chimera.exe` 当前不存在；现有 main suite 的 WebDriver 日志测试不能被静态检查代替。日志复制、JSON 展开、跟随滚动、虚拟尺寸和重启的真实交互仍待专用 E2E runner 验收。
 - **回滚和下一步**：恢复本轮新增两个 logs `_modules` 文件、`logs/index.tsx` 本轮增量、`logs/_modules/consts.ts`、`utils/shiki.ts`、五个 locale 文件及新增单测，不动之前已经暂存的 Logs/Settings、lockfile、ref 和私有数据。下一批优先 ref 后端 Logs actor → RPC typed client → `useClashLogs` 游标/文件日志 UI → 真实桌面 E2E；然后完成 Settings 子页面、Profiles 和 Proxies。
 
-## 2026-11-11：Profiles 分组导航与响应式布局迁移（未提交）
+## 2026-11-11：Profiles 分组导航与响应式布局迁移
 
 - **基线 / 风险**：Chimera `master@3813878613292ef35b27f72c89c788eceb766c67`；上游 ref 实际 HEAD `5a2e2baba3bdf2c3db3b9ffe1c941ac45dfa9ba5`（主仓 pin `59724e85c34abb6995c22d101c876cc06dc16576`）。L2，主 UI 的 Profiles 导航、拖拽目标和响应式布局；不触碰 Profile 的持久化/API、Legacy UI、Agent、服务/TUN、MMDB，亦不改变已有的 `pnpm-lock.yaml` 或 `ref/` 工作区状态。
 - **完整路径对齐**：`ref/frontend/nyanpasu/src/pages/(main)/main/profiles/_modules/profiles-navigation-item.tsx` → Chimera 同名新增文件（`useLinkProps`、NavigationListItem/图标/文本，与 ref 相同的子路由活动选中语义）。`profiles-navigate.tsx` 引入 ref 的 Configs / Transforms / Pipeline 三组、按类型计数及图标色调，并保留真实可用路由。`consts.ts` 补 `PROFILE_TYPE_COLORS`。共用的 `@chimera/ui/navigation-list` 不重复实现。
@@ -462,7 +462,7 @@ primary checkout, read-only ref, Legacy UI, Agent and v0.28.0 release tags.
 - **测试边界**：补充到现有 `tauri-e2e/specs/profiles-main-layout.e2e.ts` 的用户可见导航点击、URL、选中状态及文件夹菜单可见性断言（真实 E2E 待 runner）；前端 TypeScript、E2E TypeScript、Vite 生产构建及架构边界本轮均已通过。未以类型检查冒充真实拖拽、文件夹排序或桌面布局通过。无 E2E 专用二进制时需先按测试规范编译、隔离本机真实配置，再运行 WebDriver。
 - **后续与回滚**：如异常仅恢复上述 Profiles 相关文件、新增的 `profiles-navigation-item.tsx`、对应五语种新增文案与 Profiles E2E 增量。下一阶段才开始完整的 Inspect 页面、上游变换链工具栏/排序、Logs CoreLogCursor 后端迁移和独立桌面 E2E；不一次性替换共享状态所有权。
 
-## 2026-11-11：Profiles → Inspect 真实快照查看器（本轮新切片，未提交）
+## 2026-11-11：Profiles → Inspect 真实快照查看器
 
 - **目标与边界**：用上游 Inspect 的步骤分组、字段搜索、变更字段、YAML 与 diff 结构替换 Chimera 的 "coming soon" 占位页，直接读取本地已有的只读 `inspect_runtime` / `inspect_runtime_node` 后端契约。L2：主 UI 路由及共享前端查询元数据，未修改 Rust/Service、核心生命周期、运行时配置生成逻辑、系统代理/TUN、Legacy UI 或 Agent；原有 `pnpm-lock.yaml` 和 `ref/` 工作区修改不动。
 - **上游文件映射**：`ref/frontend/nyanpasu/src/pages/(main)/main/profiles/inspect/_modules/inspect-steps.ts`、`text-find.ts`、`changed-fields.tsx` → Chimera 同名模块，保留上游阶段分组、组合分支缩进、稳定步骤键、changed-fields 筛选及 YAML 字段路径定位。上游 `inspect-toolbar.tsx`、`step-rail.tsx`、`step-detail.tsx` 以已有 `@chimera/interface` 和布局组件迁移。上游 `yaml-viewer.tsx` / `diff-viewer.tsx` 的虚拟滚动被适配到 `inspect-document.tsx`；本批不复制尚不存在的 YAML tokenizer / 双侧语法高亮基础设施。

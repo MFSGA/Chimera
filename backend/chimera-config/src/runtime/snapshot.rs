@@ -76,6 +76,8 @@ pub enum BuiltinStepKind {
     GuardOverrides,
     WhitelistFieldFilter,
     Finalizing,
+    /// Read-only view of the configuration reported by the running core.
+    CoreController,
 }
 
 /// The pipeline operator that produced a snapshot node.
@@ -942,6 +944,15 @@ impl StoredConfigSnapshotsGraph {
 }
 
 /// Projects the set of changed dot-paths from a JSON patch.
+/// Fields modified between two complete configuration documents.
+/// Shared by materialized graph steps and the core's effective view.
+pub fn changed_fields_between(
+    before: &serde_json::Value,
+    after: &serde_json::Value,
+) -> Option<IndexSet<ConfigField>> {
+    changed_fields_from_patch(&json_patch::diff(before, after))
+}
+
 pub fn changed_fields_from_patch(patch: &Patch) -> Option<IndexSet<ConfigField>> {
     let mut fields = IndexSet::new();
     for operation in &patch.0 {

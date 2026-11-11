@@ -930,7 +930,11 @@ export type BuildInfo = {
 
 /**  Built-in post-processing steps applied to the selected config. */
 export type BuiltinStepKind =
-  'guard_overrides' | 'whitelist_field_filter' | 'finalizing';
+  | 'guard_overrides'
+  | 'whitelist_field_filter'
+  | 'finalizing'
+  /**  Read-only view of the configuration reported by the running core. */
+  | 'core_controller';
 
 export type Bytes = {
   upload: number;
