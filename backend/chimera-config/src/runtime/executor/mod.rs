@@ -366,7 +366,10 @@ pub fn execute(
     ));
     builder.push(step(BuiltinStepKind::FinalFieldFilter), working.clone())?;
 
-    working = Arc::new(builtin::apply_runtime_defaults(&working, &inputs.tun));
+    working = Arc::new(builtin::apply_runtime_defaults(
+        &working,
+        &ownership.final_defaults,
+    ));
     builder.push(step(BuiltinStepKind::Defaults), working.clone())?;
 
     working = Arc::new(builtin::finalize_post_defaults(&working));

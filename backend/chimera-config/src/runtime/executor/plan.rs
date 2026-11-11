@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use crate::runtime::{
     post_process::{OwnedFields, Ownership, OwnershipEntries},
-    value::ConfigValue,
+    value::{ConfigObject, ConfigValue},
 };
 
 use super::{GuardInputs, TunFlavor, TunParams};
@@ -20,12 +20,16 @@ use super::{GuardInputs, TunFlavor, TunParams};
 pub(super) struct RuntimePlan {
     pub guard: OwnershipEntries,
     pub tun: OwnershipEntries,
+    /// Applied only after built-in transforms; preserves existing TUN/DNS
+    /// fallback values and the profile cache's create-if-absent semantics.
+    pub final_defaults: OwnershipEntries,
 }
 
 pub(super) fn ownership(guard: &GuardInputs<'_>, tun: &TunParams) -> RuntimePlan {
     RuntimePlan {
         guard: guard_ownership(guard),
         tun: tun_ownership(tun),
+        final_defaults: final_defaults_ownership(tun),
     }
 }
 
@@ -69,6 +73,129 @@ pub(super) fn tun_ownership(tun: &TunParams) -> OwnershipEntries {
             create: tun.enable,
         },
     )]
+}
+
+/// Post-builtin ownership. These entries intentionally use the existing
+/// Chimera ordering: TUN, then DNS takeover (only while enabled), then the
+/// profile cache. Unmanaged profile keys remain untouched at every level.
+pub(super) fn final_defaults_ownership(tun: &TunParams) -> OwnershipEntries {
+    let mut entries = Vec::with_capacity(3);
+    let mut tun_fields = vec![("enable", forced(ConfigValue::Bool(tun.enable)))];
+    if tun.enable {
+        match tun.flavor {
+            TunFlavor::ClashRs => {
+                tun_fields.push(("device-id", default(string("dev://utun1989"))));
+            }
+            TunFlavor::ChimeraClient => {
+                tun_fields.extend([
+                    ("device-id", default(string("dev://utun1989"))),
+                    ("route-all", default(ConfigValue::Bool(true))),
+                    ("dns-hijack", default(ConfigValue::Bool(true))),
+                    (
+                        "so-mark",
+                        default(ConfigValue::Number(serde_json::Number::from(7777))),
+                    ),
+                ]);
+            }
+            TunFlavor::Standard { stack } => {
+                tun_fields.extend([
+                    ("stack", default(string(stack.as_ref()))),
+                    ("dns-hijack", default(strings(&["any:53"]))),
+                    ("auto-detect-interface", default(ConfigValue::Bool(true))),
+                ]);
+            }
+        }
+    }
+    entries.push((
+        "tun",
+        Ownership::Table {
+            entries: tun_fields,
+            create: tun.enable,
+        },
+    ));
+    if tun.enable {
+        let mut dns_fields = vec![
+            ("enable", forced(ConfigValue::Bool(true))),
+            ("enhanced-mode", default(string("fake-ip"))),
+        ];
+        if tun.flavor == TunFlavor::ChimeraClient {
+            dns_fields.extend([
+                (
+                    "nameserver",
+                    default(strings(&[
+                        "https://dns.alidns.com/dns-query",
+                        "114.114.114.114",
+                        "223.5.5.5",
+                        "8.8.8.8",
+                    ])),
+                ),
+                (
+                    "default-nameserver",
+                    default(strings(&["114.114.114.114", "1.1.1.1", "8.8.8.8"])),
+                ),
+            ]);
+        } else {
+            dns_fields.extend([
+                ("fake-ip-range", default(string("198.18.0.1/16"))),
+                (
+                    "nameserver",
+                    default(strings(&["114.114.114.114", "223.5.5.5", "8.8.8.8"])),
+                ),
+                ("fallback", default(strings(&[]))),
+            ]);
+        }
+        if tun.windows_fake_ip_filter {
+            dns_fields.push((
+                "fake-ip-filter",
+                default(strings(&[
+                    "dns.msftncsi.com",
+                    "www.msftncsi.com",
+                    "www.msftconnecttest.com",
+                ])),
+            ));
+        }
+        entries.push((
+            "dns",
+            Ownership::Table {
+                entries: dns_fields,
+                create: true,
+            },
+        ));
+    }
+    entries.push((
+        "profile",
+        default(object([
+            ("store-selected", ConfigValue::Bool(true)),
+            ("store-fake-ip", ConfigValue::Bool(false)),
+        ])),
+    ));
+    entries
+}
+
+fn forced(value: ConfigValue) -> Ownership {
+    Ownership::Forced(value)
+}
+
+fn default(value: ConfigValue) -> Ownership {
+    Ownership::Default(value)
+}
+
+fn string(text: &str) -> ConfigValue {
+    ConfigValue::String(Arc::from(text))
+}
+
+fn strings(items: &[&str]) -> ConfigValue {
+    ConfigValue::Array(Arc::from(
+        items.iter().map(|item| string(item)).collect::<Vec<_>>(),
+    ))
+}
+
+fn object<const N: usize>(entries: [(&str, ConfigValue); N]) -> ConfigValue {
+    let values: ConfigObject = entries
+        .into_iter()
+        .map(|(key, value)| (Arc::from(key), value))
+        .collect();
+    ConfigValue::Object(Arc::new(values))
 }
 
 fn number(port: u16) -> Ownership {

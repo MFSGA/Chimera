@@ -114,3 +114,22 @@ exchanged without changing output. No defaults are moved ahead of builtin
 transforms. Existing finalizing snapshots and the Chimera Client-specific DNS
 and TUN defaults remain supported. The new steps are inspectable snapshots;
 there is still no real Core or desktop acceptance claim.
+
+## Declarative final defaults (2026-11-11)
+
+`RuntimePlan.final_defaults` now declares the post-builtin TUN enable flag,
+TUN flavor defaults, DNS takeover and Profile cache as `Ownership` entries.
+The executor applies forced settings before filling missing defaults through
+`apply_settings`/`apply_defaults`; unchanged Profile values remain inherited.
+Unlike the reference, the Chimera Client flavor retains its own `route-all`,
+boolean `dns-hijack`, `so-mark`, DoH/UDP nameserver and default-nameserver
+behavior. Disabling TUN does not create a missing TUN table or synthesize DNS.
+Existing Profile `profile` tables are not merged with cache defaults.
+
+The old `apply_tun`/`apply_tun_dns`/`apply_cache` implementations remain
+**test-only** as compatibility oracles. A comparison runs 112 combinations
+of enabled/disabled TUN, Windows fake-IP filtering, four TUN flavors, and seven
+profile shapes (including conflicting, scalar and absent fields). Each
+comparison checks the complete serialized JSON, including map key order.
+Passing this pure check does not establish real DNS leak protection or device
+routing behavior. There is no new persistence field or user-facing default.

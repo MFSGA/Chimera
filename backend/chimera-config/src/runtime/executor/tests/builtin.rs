@@ -9,8 +9,9 @@ use crate::{
         executor::{
             TunFlavor, TunParams,
             builtin::{
-                apply_tun_overrides_with_source, finalize, finalize_for_core, known_fields,
-                known_fields_for_core, stage1_fields, stage1_fields_for_core, whitelist_filter,
+                apply_runtime_defaults, apply_tun_overrides_with_source, finalize,
+                finalize_for_core, known_fields, known_fields_for_core, legacy_runtime_defaults,
+                stage1_fields, stage1_fields_for_core, whitelist_filter,
             },
         },
         value::ConfigValue,
@@ -503,6 +504,58 @@ fn cache_does_not_merge_into_existing_profile_key() {
     let config = value(json!({ "profile": { "do-not-override": true } }));
     let result = finalize(&config, &tun_off(), false).to_json();
     assert_eq!(result["profile"], json!({ "do-not-override": true }));
+}
+
+#[test]
+fn planned_defaults_match_legacy_for_every_tun_flavor_and_profile_shape() {
+    use crate::runtime::executor::plan;
+
+    let samples = [
+        json!({}),
+        json!({ "tun": { "stack": "system", "auto-route": "custom" } }),
+        json!({ "dns": { "enable": false, "nameserver": ["1.1.1.1"] } }),
+        json!({ "tun": { "enable": "custom", "device-id": "local" },
+                "dns": { "enhanced-mode": "redir-host", "fallback": ["9.9.9.9"] },
+                "profile": { "persist": true } }),
+        json!({ "tun": "invalid-table", "dns": "invalid-table", "profile": null }),
+        json!({ "proxies": [], "profile": { "store-selected": false },
+                "dns": { "default-nameserver": ["8.8.4.4"] } }),
+        json!({ "tun": { "route-all": false, "dns-hijack": false, "so-mark": 52 },
+                "dns": { "fake-ip-filter": ["local.test"] } }),
+    ];
+    let flavors = [
+        TunFlavor::ClashRs,
+        TunFlavor::ChimeraClient,
+        TunFlavor::Standard {
+            stack: TunStack::Gvisor,
+        },
+        TunFlavor::Standard {
+            stack: TunStack::System,
+        },
+    ];
+    for enable in [false, true] {
+        for windows_fake_ip_filter in [false, true] {
+            for flavor in flavors {
+                let tun = TunParams {
+                    enable,
+                    overrides: TunOverrides::default(),
+                    flavor,
+                    windows_fake_ip_filter,
+                };
+                let planned = plan::final_defaults_ownership(&tun);
+                for sample in &samples {
+                    let source = value(sample.clone());
+                    let actual = apply_runtime_defaults(&source, &planned);
+                    let expected = legacy_runtime_defaults(&source, &tun);
+                    assert_eq!(
+                        serde_json::to_string(&actual.to_json()).unwrap(),
+                        serde_json::to_string(&expected.to_json()).unwrap(),
+                        "declarative defaults must retain exact old values and map order: {tun:?} {sample}"
+                    );
+                }
+            }
+        }
+    }
 }
 
 #[test]

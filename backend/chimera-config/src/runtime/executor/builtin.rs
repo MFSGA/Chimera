@@ -5,16 +5,16 @@ use std::sync::Arc;
 
 use indexmap::IndexMap;
 
-use crate::runtime::value::{ConfigObject, ConfigValue};
-
-#[cfg(test)]
-use super::{GuardInputs, error::RuntimePipelineError, plan};
-use super::{
-    TunFlavor, TunParams,
-    value_util::{obj_get, obj_insert},
+use crate::runtime::{
+    post_process::{OwnershipEntries, apply_defaults, apply_settings},
+    value::{ConfigObject, ConfigValue},
 };
+
+use super::value_util::{obj_get, obj_insert};
 #[cfg(test)]
-use crate::runtime::post_process::{apply_settings, keep_inherited};
+use super::{GuardInputs, TunFlavor, TunParams, error::RuntimePipelineError, plan};
+#[cfg(test)]
+use crate::runtime::post_process::keep_inherited;
 
 pub(super) const HANDLE_FIELDS: [&str; 9] = [
     "mode",
@@ -191,7 +191,7 @@ pub(super) fn finalize_for_core(
     core_supports_mmdb: bool,
 ) -> ConfigValue {
     let filtered = final_field_filter(config, whitelist_enabled, core_supports_mmdb);
-    let defaults = apply_runtime_defaults(&filtered, tun);
+    let defaults = apply_runtime_defaults(&filtered, &plan::final_defaults_ownership(tun));
     finalize_post_defaults(&defaults)
 }
 
@@ -212,9 +212,19 @@ pub(super) fn final_field_filter(
     next
 }
 
-/// Old finalizer's TUN/DNS defaults and profile cache, in their original
-/// relative order. Builtin transforms have already finished when called.
-pub(super) fn apply_runtime_defaults(config: &ConfigValue, tun: &TunParams) -> ConfigValue {
+/// Apply the declarative plan's mandatory settings and then its defaults.
+/// Runs only after built-in transforms, retaining the original field order.
+pub(super) fn apply_runtime_defaults(
+    config: &ConfigValue,
+    entries: &OwnershipEntries,
+) -> ConfigValue {
+    let (settings, _) = apply_settings(config, entries);
+    apply_defaults(&settings, entries).0
+}
+
+/// The pre-plan finalizer, used to verify the new ownership path exactly.
+#[cfg(test)]
+pub(super) fn legacy_runtime_defaults(config: &ConfigValue, tun: &TunParams) -> ConfigValue {
     let next = apply_tun(config, tun);
     apply_cache(&next)
 }
@@ -238,6 +248,7 @@ fn strip_chimera_client_fields(config: &ConfigValue) -> ConfigValue {
     ConfigValue::Object(Arc::new(filtered))
 }
 
+#[cfg(test)]
 fn object_of(value: Option<&ConfigValue>) -> ConfigObject {
     value
         .and_then(ConfigValue::as_object_arc)
@@ -245,6 +256,7 @@ fn object_of(value: Option<&ConfigValue>) -> ConfigObject {
         .unwrap_or_default()
 }
 
+#[cfg(test)]
 fn append_default(map: &mut ConfigObject, key: &str, value: ConfigValue) {
     if !map.contains_key(key) {
         map.insert(Arc::from(key), value);
@@ -255,6 +267,7 @@ fn string_value(text: &str) -> ConfigValue {
     ConfigValue::String(Arc::from(text))
 }
 
+#[cfg(test)]
 fn string_list(items: &[&str]) -> ConfigValue {
     ConfigValue::Array(Arc::from(
         items
@@ -266,6 +279,7 @@ fn string_list(items: &[&str]) -> ConfigValue {
 
 /// Mirrors enhance/tun.rs:26-109; `revise!` overwrites and `append!` fills
 /// missing keys only.
+#[cfg(test)]
 fn apply_tun(config: &ConfigValue, params: &TunParams) -> ConfigValue {
     let existing = obj_get(config, "tun");
     if !params.enable && existing.is_none() {
@@ -305,6 +319,7 @@ fn apply_tun(config: &ConfigValue, params: &TunParams) -> ConfigValue {
     next
 }
 
+#[cfg(test)]
 fn apply_tun_dns(
     config: &ConfigValue,
     windows_fake_ip_filter: bool,
@@ -423,6 +438,7 @@ fn apply_include_all(config: &ConfigValue) -> ConfigValue {
 }
 
 /// Mirrors enhance/mod.rs:250-261: existing `profile` keys are not merged.
+#[cfg(test)]
 fn apply_cache(config: &ConfigValue) -> ConfigValue {
     if obj_get(config, "profile").is_some() {
         return config.clone();

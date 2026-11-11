@@ -71,3 +71,19 @@ full pinned-reference parity based on this partial stage alignment.
 The corresponding unit tests assert final configuration content, stage order,
 pre-builtin config insertion order, filtered keys, TUN/DNS/cache defaults, and
 Inspect step identities. No live TUN, Service, DNS or desktop E2E test was run.
+
+## Declarative post-builtin defaults (2026-11-11)
+
+The Chimera executor's `Defaults` step now consumes
+`RuntimePlan.final_defaults` rather than invoking independent mutable
+TUN/DNS/cache helpers. The Plan is derived entirely from typed runtime inputs;
+field ownership is applied in two pure passes (`apply_settings` then
+`apply_defaults`) with unchanged final output and insertion order.
+
+Reference-inspired ownership is limited to this post-builtin processing:
+Chimera still preserves optional listener values unless the caller resolves a
+replacement, keeps the Chimera Client TUN/DNS extension values, and does not
+adopt the reference's optional `expand_include_all` policy. The prior
+TUN/DNS/cache implementation remains as a test-only equivalence oracle, with
+112 pure config comparisons across all TUN flavors and representative Profile
+inputs. No live Core or network behavior was exercised in this migration.
