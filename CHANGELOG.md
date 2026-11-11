@@ -1,3 +1,117 @@
+## [0.28.2] - 2026-11-11 08:25:22
+
+### ✅ Testing
+
+- **core:** Verify bound rules and version controller reads by @MFSGA
+
+- **e2e:** Resolve profile menu labels from active locale by @MFSGA
+
+- **ui:** Cover ScrollArea DOM behavior against reference by @MFSGA
+
+### ✨ Features
+
+- **paths:** Introduce ref-aligned path resolver by @MFSGA
+
+- **proxies:** Expose bound provider healthcheck through IPC by @MFSGA
+
+- **query:** Expose provider healthcheck and reconcile uncertain cache by @MFSGA
+
+- **updater:** Add typed release metadata and update sources by @MFSGA
+
+### 🐛 Bug Fixes
+
+- **hotkey:** Resolve pending dispatches on app exit by @MFSGA
+
+- **i18n:** Use the correct languagse setting order by @MFSGA
+
+- **profiles:** Canonicalize external mirror watcher path by @MFSGA
+
+- **proxies:** Fence owner cancellation after connection effects by @MFSGA
+
+- **proxies:** Fence provider mutations after owner shutdown by @MFSGA
+
+- **proxies:** Fence route effects on owner shutdown by @MFSGA
+
+- **proxies:** Fence snapshot publication during shutdown by @MFSGA
+
+- **proxies:** Coalesce legacy reads and fence late successful snapshots by @MFSGA
+
+- **proxies:** Reconcile provider mutations with source snapshot by @MFSGA
+
+- **proxies:** Fence stale cache after failed controller reread by @MFSGA
+
+- **proxies:** Reread rejected selections from source controller by @MFSGA
+
+- **service:** Avoid stale monitor exit IPC publication by @MFSGA
+
+- **service:** Revoke stale health observations by generation by @MFSGA
+
+- **service:** Serialize health monitor admission and stop signaling by @MFSGA
+
+- **updater:** Keep exit gate unclean after failed core shutdown by @MFSGA
+
+### 💅 Styling
+
+- **toolchain:** Align TOML formatting with ref by @MFSGA
+
+### 📚 Documentation
+
+- **ref:** Record provider shutdown fencing coverage by @MFSGA
+
+- **ref:** Record proxy shutdown route fencing by @MFSGA
+
+- **ref:** Record shutdown snapshot fence and verification by @MFSGA
+
+- **ref:** Update proxy actor verification counts by @MFSGA
+
+- **ref:** Record core-owned proxy actor migration by @MFSGA
+
+- **ref:** Record verified proxy read and stream epoch slices by @MFSGA
+
+- **ref:** Record provider healthcheck parity and verification by @MFSGA
+
+- **ref:** Record ServiceActor settlement verification matrix by @MFSGA
+
+- **ui:** Preserve Tooltip alignment decision by @MFSGA
+
+- Clarify Chimera ecosystem and preserve local Service by @MFSGA
+
+### 🔨 Refactor
+
+- **hotkey:** Reconcile shortcuts on async main-thread dispatcher by @MFSGA
+
+- **hotkey:** Introduce ref-aligned main-thread executor by @MFSGA
+
+- **proxies:** Move proxy snapshot ownership into core actor by @MFSGA
+
+- **service:** Move status watch publication into core by @MFSGA
+
+- **tauri:** Wire startup paths and bundle metadata by @MFSGA
+
+- **ui:** Align Sparkline with ref compositor model by @MFSGA
+
+- **ui:** Align Tooltip lifecycle and root provider with ref by @MFSGA
+
+- **ui:** Align shared DropdownMenu with ref MenuSurface by @MFSGA
+
+- **ui:** Align TextMarquee WAAPI lifecycle with upstream by @MFSGA
+
+### 🧹 Miscellaneous Tasks
+
+- **nix:** Improve NixOS development shell support by @MFSGA
+
+- **ref:** Advance verified nightly toolchain baseline by @MFSGA
+
+- **ref:** Advance verified upstream router dependencies by @MFSGA
+
+- **ref:** Sync verified upstream manifest main by @MFSGA
+
+- **rust:** Pin nightly toolchain to 2026-11-09 by @MFSGA
+
+---
+
+**Full Changelog**: https://github.com/MFSGA/Chimera/compare/v0.28.1...v0.28.2
+
 ## [0.28.1] - 2026-11-09 05:25:48
 
 ### ✅ Testing
