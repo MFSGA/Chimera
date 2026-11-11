@@ -1,12 +1,14 @@
 //! GUI package inputs for the frontend-independent directory resolver.
 use camino::Utf8PathBuf;
+#[cfg(not(feature = "e2e"))]
+use chimera_paths::HostInputs;
+use chimera_paths::InstallDirError;
 #[cfg(feature = "e2e")]
 use chimera_paths::Root;
 use chimera_paths::{DiscoverError, PathResolver};
 #[cfg(not(feature = "e2e"))]
-use chimera_paths::{HostInputs, InstallDirError};
-#[cfg(not(feature = "e2e"))]
-use std::{collections::BTreeMap, sync::Arc};
+use std::collections::BTreeMap;
+use std::sync::Arc;
 
 #[cfg(not(feature = "verge-dev"))]
 pub(crate) const APP_NAME: &str = "clash-chimera";
@@ -22,13 +24,17 @@ pub fn discover() -> Result<PathResolver, DiscoverError> {
     e2e_roots()
 }
 
-#[cfg(not(feature = "e2e"))]
-pub fn discover() -> Result<PathResolver, DiscoverError> {
-    let install_dir = tauri::utils::platform::current_exe()
+fn executable_install_dir() -> Result<Utf8PathBuf, InstallDirError> {
+    tauri::utils::platform::current_exe()
         .map_err(|error| InstallDirError::Executable {
             source: Arc::new(error),
         })
-        .and_then(|executable| chimera_paths::installation_dir(&executable));
+        .and_then(|executable| chimera_paths::installation_dir(&executable))
+}
+
+#[cfg(not(feature = "e2e"))]
+pub fn discover() -> Result<PathResolver, DiscoverError> {
+    let install_dir = executable_install_dir();
     // Only Windows has a portable layout. The marker is a package property, read from the
     // same install dir the resolver is given.
     #[cfg(windows)]
@@ -50,6 +56,7 @@ fn e2e_roots() -> Result<PathResolver, DiscoverError> {
     e2e_roots_for(
         std::env::var_os("CHIMERA_E2E_CONFIG_DIR"),
         std::env::var_os("CHIMERA_E2E_DATA_DIR"),
+        executable_install_dir(),
     )
 }
 
@@ -58,6 +65,7 @@ fn e2e_roots() -> Result<PathResolver, DiscoverError> {
 fn e2e_roots_for(
     config: Option<std::ffi::OsString>,
     data: Option<std::ffi::OsString>,
+    install_dir: Result<Utf8PathBuf, InstallDirError>,
 ) -> Result<PathResolver, DiscoverError> {
     let (config, data) = match (config, data) {
         (Some(config), Some(data)) => (config, data),
@@ -73,7 +81,11 @@ fn e2e_roots_for(
         root: Root::Data,
         path,
     })?;
-    Ok(PathResolver::with_base_dirs(config, data))
+    Ok(PathResolver::with_base_dirs_and_install_dir(
+        config,
+        data,
+        install_dir,
+    ))
 }
 
 #[cfg(all(test, feature = "e2e"))]
@@ -83,15 +95,15 @@ mod tests {
     #[test]
     fn e2e_directory_overrides_must_be_a_complete_pair() {
         assert!(matches!(
-            e2e_roots_for(None, None),
+            e2e_roots_for(None, None, Ok("/app".into())),
             Err(DiscoverError::MissingE2ERoot { root: Root::Config })
         ));
         assert!(matches!(
-            e2e_roots_for(Some("config".into()), None),
+            e2e_roots_for(Some("config".into()), None, Ok("/app".into())),
             Err(DiscoverError::MissingE2ERoot { root: Root::Data })
         ));
         assert!(matches!(
-            e2e_roots_for(None, Some("data".into())),
+            e2e_roots_for(None, Some("data".into()), Ok("/app".into())),
             Err(DiscoverError::MissingE2ERoot { root: Root::Config })
         ));
     }
@@ -104,12 +116,47 @@ mod tests {
         let paths = e2e_roots_for(
             Some(config.clone().into_os_string()),
             Some(data.clone().into_os_string()),
+            Ok("/e2e/install".into()),
         )
         .unwrap();
         assert_eq!(paths.app_config_dir().as_std_path(), config);
         assert_eq!(paths.app_data_dir().as_std_path(), data);
+        assert_eq!(
+            paths.app_install_dir().unwrap(),
+            camino::Utf8Path::new("/e2e/install")
+        );
         assert!(!config.exists());
         assert!(!data.exists());
+    }
+
+    #[test]
+    fn e2e_preserves_actual_executable_dir_without_discovering_host_roots() {
+        let expected = executable_install_dir().expect("running test executable has a directory");
+        let paths = e2e_roots_for(
+            Some("isolated-config".into()),
+            Some("isolated-data".into()),
+            executable_install_dir(),
+        )
+        .unwrap();
+        assert_eq!(paths.app_install_dir().unwrap(), expected);
+        assert_eq!(paths.app_config_dir().as_str(), "isolated-config");
+        assert_eq!(paths.app_data_dir().as_str(), "isolated-data");
+    }
+
+    #[test]
+    fn e2e_install_dir_error_does_not_fall_back_to_real_config_roots() {
+        let paths = e2e_roots_for(
+            Some("isolated-config".into()),
+            Some("isolated-data".into()),
+            Err(InstallDirError::Unknown),
+        )
+        .expect("isolated roots are valid despite an unavailable executable path");
+        assert!(matches!(
+            paths.app_install_dir(),
+            Err(InstallDirError::Unknown)
+        ));
+        assert_eq!(paths.app_config_dir().as_str(), "isolated-config");
+        assert_eq!(paths.app_data_dir().as_str(), "isolated-data");
     }
 }
 

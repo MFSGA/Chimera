@@ -75,10 +75,22 @@ impl PathResolver {
     /// Explicit roots, for tests and tools that do not run from an installed executable.
     /// The install dir is unknown.
     pub fn with_base_dirs(config_dir: Utf8PathBuf, data_dir: Utf8PathBuf) -> Self {
+        Self::with_base_dirs_and_install_dir(config_dir, data_dir, Err(InstallDirError::Unknown))
+    }
+
+    /// Explicit isolated config/data roots while retaining the real executable
+    /// location. GUI E2E needs both: tests must never read the user's config,
+    /// but startup and bundled resources still live beside the test executable.
+    /// Preserve an install-dir discovery error rather than inventing a path.
+    pub fn with_base_dirs_and_install_dir(
+        config_dir: Utf8PathBuf,
+        data_dir: Utf8PathBuf,
+        install_dir: Result<Utf8PathBuf, InstallDirError>,
+    ) -> Self {
         Self(Arc::new(Context {
             config_dir,
             data_dir,
-            install_dir: Err(InstallDirError::Unknown),
+            install_dir,
             development_binaries: BTreeMap::new(),
         }))
     }
@@ -303,6 +315,31 @@ mod tests {
     fn explicit_roots_know_no_install_dir() {
         assert!(matches!(
             resolver().app_install_dir(),
+            Err(InstallDirError::Unknown)
+        ));
+    }
+
+    #[test]
+    fn explicit_roots_can_keep_executable_install_dir_without_using_host_config() {
+        let roots = PathResolver::with_base_dirs_and_install_dir(
+            "/e2e/config".into(),
+            "/e2e/data".into(),
+            Ok("/e2e/executable".into()),
+        );
+        assert_eq!(roots.app_config_dir(), Utf8Path::new("/e2e/config"));
+        assert_eq!(roots.app_data_dir(), Utf8Path::new("/e2e/data"));
+        assert_eq!(
+            roots.app_install_dir().unwrap(),
+            Utf8Path::new("/e2e/executable")
+        );
+
+        let unknown = PathResolver::with_base_dirs_and_install_dir(
+            "/e2e/config".into(),
+            "/e2e/data".into(),
+            Err(InstallDirError::Unknown),
+        );
+        assert!(matches!(
+            unknown.app_install_dir(),
             Err(InstallDirError::Unknown)
         ));
     }
