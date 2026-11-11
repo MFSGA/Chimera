@@ -1,4 +1,7 @@
-import * as path from 'jsr:@std/path';
+import { readFile } from 'node:fs/promises';
+import * as path from 'node:path';
+import { githubApiHeaders } from '../../github-api.ts';
+import { resolveChimeraClientAlphaFromGithub } from './chimera-client-alpha.ts';
 import { mapArch } from './platform.ts';
 import type {
   BinInfo,
@@ -17,6 +20,17 @@ const MIHOMO_ALPHA_ASSETS_URL =
   'https://github.com/MetaCubeX/mihomo/releases/expanded_assets/Prerelease-Alpha';
 
 type DebugLog = (message: string) => void;
+
+async function fetchChimeraReleaseJson<T>(url: string): Promise<T> {
+  const token = process.env.GITHUB_TOKEN || process.env.GH_TOKEN;
+  const response = await fetch(url, { headers: githubApiHeaders(token) });
+  if (!response.ok) {
+    throw new Error(
+      `GitHub API error: ${response.statusText} (${response.status}) - ${url}`,
+    );
+  }
+  return response.json() as Promise<T>;
+}
 
 type LatestChimeraClientAlpha = {
   version: string;
@@ -260,9 +274,7 @@ export function createBinaryResolvers(options: BinaryResolverOptions) {
       refresh: async () => {
         const latest = options.resolveLatestChimeraClientAlpha
           ? await options.resolveLatestChimeraClientAlpha()
-          : await (
-              await import('../../manifest.ts')
-            ).resolveChimeraClientAlpha();
+          : await resolveChimeraClientAlphaFromGithub(fetchChimeraReleaseJson);
         return makeChimeraClientAlphaInfo(latest.version, latest.archMapping);
       },
     };
@@ -274,7 +286,8 @@ export function createBinaryResolvers(options: BinaryResolverOptions) {
       'backend/chimera-runtime/chimera_service/Cargo.toml',
     );
     const manifest = await (
-      options.readChimeraServiceManifest ?? Deno.readTextFile
+      options.readChimeraServiceManifest ??
+      ((file: string) => readFile(file, 'utf8'))
     )(manifestPath);
     const match = manifest.match(
       /^\[package\][^[]*?^version\s*=\s*"([^"]+)"/ms,

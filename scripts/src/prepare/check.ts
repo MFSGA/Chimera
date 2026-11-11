@@ -1,6 +1,9 @@
-import { parseArgs } from 'jsr:@std/cli@1/parse-args';
-import * as path from 'jsr:@std/path';
-import { colorize, consola } from '../../deno/utils/logger.ts';
+import { readFile } from 'node:fs/promises';
+import * as path from 'node:path';
+import { parseArgs } from 'node:util';
+import { runCommand } from '../shared/command.ts';
+import { colorize, consola } from '../shared/logger.ts';
+import { WORKSPACE_ROOT } from '../shared/repo-paths.ts';
 import { createBinaryResolvers } from './binaries.ts';
 import { normalizeArch, normalizePlatform } from './platform.ts';
 import {
@@ -19,8 +22,6 @@ interface CheckArgs {
   arch?: string;
   'sidecar-host'?: string;
 }
-
-const WORKSPACE_ROOT = path.resolve(import.meta.dirname!, '../../..');
 
 async function runTask(
   queue: Task[],
@@ -50,7 +51,7 @@ async function runTask(
         progress.update(task.name, 'Failed');
         progress.finish();
         consola.fatal(`task::${task.name} failed`, err);
-        Deno.exit(1);
+        process.exit(1);
       }
       progress.update(task.name, 'Retrying', {
         note: `${attempt + 1}/${task.retry}`,
@@ -70,22 +71,27 @@ async function resolveSidecarHost(
   hostOverride?: string,
 ): Promise<string | undefined> {
   if (hostOverride) return hostOverride;
-  const cmd = new Deno.Command('rustc', { args: ['-vV'], stdout: 'piped' });
-  const { stdout } = await cmd.output();
-  const output = new TextDecoder().decode(stdout);
+  const { success, stdout } = await runCommand('rustc', { args: ['-vV'] });
+  if (!success) return undefined;
+  const output = stdout.toString('utf8');
   return output.match(/host: (.+)/)?.[1]?.trim();
 }
 
 export async function main(
-  args = parseArgs(Deno.args, {
-    boolean: ['force'],
-    string: ['arch', 'sidecar-host'],
-  }) as CheckArgs,
+  args = parseArgs({
+    args: process.argv.slice(2),
+    options: {
+      force: { type: 'boolean' },
+      arch: { type: 'string' },
+      'sidecar-host': { type: 'string' },
+    },
+    strict: false,
+  }).values as CheckArgs,
 ): Promise<void> {
   const force = args.force;
-  const arch = args.arch ?? normalizeArch(Deno.build.arch);
-  const platform = normalizePlatform(Deno.build.os);
-  const debug = Deno.env.get('LOG_LEVEL') !== undefined;
+  const arch = args.arch ?? normalizeArch(process.arch);
+  const platform = normalizePlatform(process.platform);
+  const debug = process.env.LOG_LEVEL !== undefined;
   const debugLog = (message: string) => {
     if (debug) consola.debug(message);
   };
@@ -93,7 +99,7 @@ export async function main(
   const sidecarHost = await resolveSidecarHost(args['sidecar-host']);
   if (!sidecarHost) {
     consola.fatal(colorize`{red.bold SIDECAR_HOST} not found`);
-    Deno.exit(1);
+    process.exit(1);
   }
 
   debugLog(colorize`sidecar-host {yellow ${sidecarHost}}`);
@@ -101,7 +107,7 @@ export async function main(
   debugLog(colorize`arch {yellow ${arch}}`);
 
   const versionManifest = JSON.parse(
-    await Deno.readTextFile(path.join(WORKSPACE_ROOT, 'manifest/version.json')),
+    await readFile(path.join(WORKSPACE_ROOT, 'manifest/version.json'), 'utf8'),
   ) as VersionManifest;
   const binary = createBinaryResolvers({
     versionManifest,
@@ -129,8 +135,8 @@ export async function main(
   const progress = new ProgressRenderer(
     activeTasks.map((task) => task.name),
     consola,
-    Deno.stdout.isTerminal() && !Deno.env.get('CI') && !debug,
-    (text) => Deno.stdout.writeSync(new TextEncoder().encode(text)),
+    process.stdout.isTTY && !process.env.CI && !debug,
+    (text) => process.stdout.write(text),
   );
   progress.start();
 

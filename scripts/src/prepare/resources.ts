@@ -1,8 +1,16 @@
-import { ensureDir, exists } from 'jsr:@std/fs';
-import * as path from 'jsr:@std/path';
-// @ts-types="npm:@types/adm-zip@0.5.8"
-import AdmZip from 'npm:adm-zip@0.6.1';
-import { verifyAndInstallSidecar } from '../../deno/utils/sidecar-integrity.ts';
+import { readdirSync } from 'node:fs';
+import {
+  chmod,
+  copyFile,
+  mkdir,
+  readFile,
+  rename,
+  rm,
+  stat,
+} from 'node:fs/promises';
+import * as path from 'node:path';
+import AdmZip from 'adm-zip';
+import { pathExists as exists } from '../shared/path-exists.ts';
 import {
   downloadFile,
   extractTarGz,
@@ -10,6 +18,7 @@ import {
   gunzipFile,
   type DebugLog,
 } from './download.ts';
+import { verifyAndInstallSidecar } from './sidecar-integrity.ts';
 import type {
   BinInfo,
   DownloadProgress,
@@ -89,12 +98,12 @@ export async function resolveResource(
     return {
       file,
       version,
-      size: (await Deno.stat(targetPath)).size,
+      size: (await stat(targetPath)).size,
       cached: true,
     };
   }
 
-  await ensureDir(context.resourcesDir);
+  await mkdir(context.resourcesDir, { recursive: true });
   const stagedPath = path.join(
     context.resourcesDir,
     `.${file}.${crypto.randomUUID()}.tmp`,
@@ -106,12 +115,12 @@ export async function resolveResource(
       (progress) => options?.onProgress?.({ ...progress, version }),
       debugLog,
     );
-    await Deno.rename(stagedPath, targetPath);
+    await rename(stagedPath, targetPath);
     debugLog(`resolve ${file} finished`);
     return { file, version, size, speed, cached: false };
   } finally {
     try {
-      await Deno.remove(stagedPath);
+      await rm(stagedPath, { force: true });
     } catch {
       // Ignore cleanup when the staged file was renamed or never created.
     }
@@ -120,7 +129,7 @@ export async function resolveResource(
 
 async function readVersionStamp(stampPath: string): Promise<string | null> {
   try {
-    return (await Deno.readTextFile(stampPath)).trim();
+    return (await readFile(stampPath, 'utf8')).trim();
   } catch {
     return null;
   }
@@ -194,7 +203,7 @@ async function materializeSidecar(
   const versionStampPath = `${sidecarPath}.version`;
   const debugLog = context.debugLog ?? (() => {});
 
-  await ensureDir(context.sidecarDir);
+  await mkdir(context.sidecarDir, { recursive: true });
 
   // These cached targets are only trusted alongside a matching version stamp
   // written after successful materialization.
@@ -210,7 +219,7 @@ async function materializeSidecar(
     return {
       file: targetFile,
       version,
-      size: (await Deno.stat(sidecarPath)).size,
+      size: (await stat(sidecarPath)).size,
       cached: true,
     };
   }
@@ -223,12 +232,12 @@ async function materializeSidecar(
   // Mutable/versioned assets must not reuse an archive downloaded for an older version.
   if (options?.force || versionManagedTarget) {
     try {
-      await Deno.remove(tempDir, { recursive: true });
+      await rm(tempDir, { recursive: true, force: true });
     } catch (error) {
-      if (!(error instanceof Deno.errors.NotFound)) throw error;
+      if (!((error as NodeJS.ErrnoException).code === 'ENOENT')) throw error;
     }
   }
-  await ensureDir(tempDir);
+  await mkdir(tempDir, { recursive: true });
 
   try {
     let size: number;
@@ -243,7 +252,7 @@ async function materializeSidecar(
       size = result.size;
       speed = result.speed;
     } else {
-      size = (await Deno.stat(tempFile)).size;
+      size = (await stat(tempFile)).size;
     }
 
     if (checksumURL) {
@@ -265,17 +274,17 @@ async function materializeSidecar(
             name,
             debugLog,
           );
-          await Deno.copyFile(extractedExe, stagedPath);
+          await copyFile(extractedExe, stagedPath);
         } else if (tmpFile.endsWith('.tar.gz')) {
           await extractTarGz(tempFile, tempDir);
-          await Deno.copyFile(tempExe, stagedPath);
+          await copyFile(tempExe, stagedPath);
         } else if (tmpFile.endsWith('.gz')) {
           await gunzipFile(tempFile, stagedPath);
         } else {
-          await Deno.copyFile(tempFile, stagedPath);
+          await copyFile(tempFile, stagedPath);
         }
 
-        if (context.platform !== 'win32') await Deno.chmod(stagedPath, 0o755);
+        if (context.platform !== 'win32') await chmod(stagedPath, 0o755);
       },
     });
 
@@ -287,7 +296,7 @@ async function materializeSidecar(
     return { file: targetFile, version, size, speed, cached: false };
   } finally {
     try {
-      await Deno.remove(tempDir, { recursive: true });
+      await rm(tempDir, { recursive: true, force: true });
     } catch {
       // ignore
     }
@@ -323,19 +332,19 @@ export async function resolveWintun(
   if (!force && (await exists(targetPath))) {
     return {
       file: 'wintun.dll',
-      size: (await Deno.stat(targetPath)).size,
+      size: (await stat(targetPath)).size,
       cached: true,
     };
   }
 
   try {
     // Never reuse a partially downloaded or invalid archive on the next retry.
-    await Deno.remove(tempDir, { recursive: true });
+    await rm(tempDir, { recursive: true, force: true });
   } catch (error) {
-    if (!(error instanceof Deno.errors.NotFound)) throw error;
+    if (!((error as NodeJS.ErrnoException).code === 'ENOENT')) throw error;
   }
 
-  await ensureDir(tempDir);
+  await mkdir(tempDir, { recursive: true });
   try {
     const { size, speed } = await downloadFile(
       url,
@@ -344,8 +353,11 @@ export async function resolveWintun(
       debugLog,
     );
 
-    const fileData = await Deno.readFile(tempZip);
-    const hashBuffer = await crypto.subtle.digest('SHA-256', fileData);
+    const fileData = await readFile(tempZip);
+    const hashBuffer = await crypto.subtle.digest(
+      'SHA-256',
+      new Uint8Array(fileData),
+    );
     const hashHex = Array.from(new Uint8Array(hashBuffer))
       .map((b) => b.toString(16).padStart(2, '0'))
       .join('');
@@ -358,9 +370,9 @@ export async function resolveWintun(
 
     function findDlls(dir: string): string[] {
       const results: string[] = [];
-      for (const entry of Deno.readDirSync(dir)) {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
         const fullPath = path.join(dir, entry.name);
-        if (entry.isDirectory) {
+        if (entry.isDirectory()) {
           results.push(...findDlls(fullPath));
         } else if (
           entry.name === 'wintun.dll' &&
@@ -375,17 +387,17 @@ export async function resolveWintun(
     const dll = findDlls(tempDir)[0];
     if (!dll) throw new Error(`wintun not found for arch ${wintunArch}`);
 
-    await ensureDir(path.dirname(targetPath));
+    await mkdir(path.dirname(targetPath), { recursive: true });
     await verifyAndInstallSidecar({
       archivePath: tempZip,
       targetPath,
-      stage: (stagedPath) => Deno.copyFile(dll, stagedPath),
+      stage: (stagedPath) => copyFile(dll, stagedPath),
     });
     debugLog('resolve wintun.dll finished');
     return { file: 'wintun.dll', size, speed, cached: false };
   } finally {
     try {
-      await Deno.remove(tempDir, { recursive: true });
+      await rm(tempDir, { recursive: true, force: true });
     } catch {
       // ignore cleanup errors after a successful install or failed attempt
     }

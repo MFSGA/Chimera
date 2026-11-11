@@ -1,0 +1,18 @@
+{
+  "compilerOptions": {
+    "target": "ESNext",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "strict": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "allowImportingTsExtensions": true,
+    "verbatimModuleSyntax": true,
+    "erasableSyntaxOnly": true,
+    "types": ["node"],
+    "lib": ["ESNext", "DOM", "DOM.Iterable"]
+  },
+  "files": ["src/prepare/node-prepare_test.ts"],
+  "include": ["src/prepare/*.ts", "src/shared/*.ts", "github-api.ts"],
+  "exclude": ["src/prepare/*_test.ts", "src/prepare/test_utils.ts"]
+}
