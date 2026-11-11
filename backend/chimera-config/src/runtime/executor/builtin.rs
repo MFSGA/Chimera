@@ -193,7 +193,7 @@ pub(super) fn finalize_for_core(
 ) -> ConfigValue {
     let filtered = final_field_filter(config, whitelist_enabled, core_supports_mmdb);
     let defaults = apply_runtime_defaults(&filtered, &plan::final_defaults_ownership(tun));
-    finalize_post_defaults(&super::include_all::expand_legacy(&defaults))
+    finalize_post_defaults(&super::include_all::expand_include_all(&defaults).0)
 }
 
 /// Second core-specific field filter. Never pass Chimera Client's `mmdb`

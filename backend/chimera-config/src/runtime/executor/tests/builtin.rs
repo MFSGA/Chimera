@@ -450,7 +450,7 @@ fn tun_enabled_chimera_client_preserves_user_tun_and_dns_values() {
 }
 
 #[test]
-fn finalize_applies_include_all_cache_sort_and_stage2_filter() {
+fn finalize_applies_upstream_include_all_cache_sort_and_stage2_filter() {
     let config = value(json!({
         "custom-unknown": 1,
         "proxies": [ { "name": "Proxy1" }, { "name": "Proxy2" } ],
@@ -473,7 +473,10 @@ fn finalize_applies_include_all_cache_sort_and_stage2_filter() {
         .iter()
         .map(|p| p.as_str().unwrap())
         .collect();
-    assert_eq!(proxies, vec!["Proxy1", "Proxy2", "provider1", "DIRECT"]);
+    // Upstream Mihomo semantics: explicit entries first, sorted proxies next;
+    // provider names become `use`, not synthetic proxy names.
+    assert_eq!(proxies, vec!["DIRECT", "Proxy1", "Proxy2"]);
+    assert_eq!(global["use"], json!(["provider1"]));
     assert_eq!(
         result["profile"],
         json!({ "store-selected": true, "store-fake-ip": false })

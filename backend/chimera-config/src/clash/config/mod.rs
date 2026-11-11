@@ -27,7 +27,7 @@ pub enum ClashControlChannel {
 }
 
 /// Clash Related Config
-#[derive(Default, Debug, Clone, Deserialize, Serialize, Type, Patch)]
+#[derive(Debug, Clone, Deserialize, Serialize, Type, Patch)]
 #[patch(attribute(serde_with::skip_serializing_none))]
 #[patch(attribute(derive(Debug, Default, Clone, Serialize, Deserialize, Type)))]
 #[patch(attribute(serde(rename_all = "snake_case")))]
@@ -57,6 +57,12 @@ pub struct ClashConfig {
     /// 支持关闭字段过滤，避免meta的新字段都被过滤掉，默认为真
     #[patch(attribute(specta(optional)))]
     pub enable_clash_fields: bool,
+
+    /// Expand `include-all*` proxy-group fields locally using Mihomo semantics;
+    /// when disabled, pass the fields unchanged to the selected Core.
+    #[serde(default = "default_expand_include_all")]
+    #[patch(attribute(specta(optional)))]
+    pub expand_include_all: bool,
 
     /// 外部控制器端口策略
     #[patch(nesting)]
@@ -114,6 +120,34 @@ pub struct ClashConfig {
     /// Tun 堆栈选择
     #[patch(attribute(specta(optional)))]
     pub tun_stack: TunStack,
+}
+
+fn default_expand_include_all() -> bool {
+    true
+}
+
+impl Default for ClashConfig {
+    fn default() -> Self {
+        Self {
+            overrides: ClashGuardOverrides::default(),
+            enable_tun_mode: false,
+            tun: TunOverrides::default(),
+            web_ui_list: Vec::new(),
+            enable_clash_fields: false,
+            expand_include_all: default_expand_include_all(),
+            external_controller: ExternalControllerStrategy::default(),
+            clash_control_channel: ClashControlChannel::default(),
+            clash_ipc_disable_http_controller: false,
+            mixed_port: PortStrategy::default(),
+            socks_port: None,
+            http_port: None,
+            redir_port: None,
+            tproxy_port: None,
+            transparent_proxy: TransparentProxyConfig::default(),
+            break_connection: BreakConnectionStrategy::default(),
+            tun_stack: TunStack::default(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, Default, Type)]
@@ -235,6 +269,35 @@ impl ClashConfig {
 mod patch_tests {
     use super::*;
     use struct_patch::Patch;
+
+    #[test]
+    fn expand_include_all_defaults_true_for_old_configs() {
+        assert!(ClashConfig::default().expand_include_all);
+        let mut yaml = serde_yaml_ng::to_value(ClashConfig::default()).unwrap();
+        yaml.as_mapping_mut().unwrap().remove("expand_include_all");
+        let restored: ClashConfig = serde_yaml_ng::from_value(yaml).unwrap();
+        assert!(restored.expand_include_all);
+    }
+
+    #[test]
+    fn expand_include_all_patch_can_disable_and_reenable_expansion() {
+        let mut config = ClashConfig::default();
+        for enabled in [false, true] {
+            let patch: ClashConfigPatch = serde_json::from_value(serde_json::json!({
+                "expand_include_all": enabled
+            }))
+            .unwrap();
+            config.apply(patch);
+            assert_eq!(config.expand_include_all, enabled);
+            let stored = serde_yaml_ng::to_string(&config).unwrap();
+            assert_eq!(
+                serde_yaml_ng::from_str::<ClashConfig>(&stored)
+                    .unwrap()
+                    .expand_include_all,
+                enabled
+            );
+        }
+    }
 
     #[test]
     fn tun_auto_route_is_managed_true_by_default() {

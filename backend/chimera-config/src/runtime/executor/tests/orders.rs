@@ -51,6 +51,7 @@ pub fn base_inputs<'a>(
             },
             windows_fake_ip_filter: false,
         },
+        expand_include_all: true,
         builtin_transforms,
     }
 }

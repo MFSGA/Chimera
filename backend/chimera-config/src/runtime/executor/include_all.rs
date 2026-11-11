@@ -1,123 +1,201 @@
-//! Legacy Chimera `include-all` expansion, isolated as a pipeline step.
-//!
-//! This intentionally preserves the prior behavior: `include-all: true`
-//! expands named Proxy groups using Profile proxy declaration order followed
-//! by provider names; duplicate names and user entries retain their previous
-//! handling. It is not the full Nyanpasu/Mihomo semantics for
-//! `include-all-proxies`, `include-all-providers`, or regex filtering.
-//! Those require a separate compatibility decision, not a silent replacement.
+//! IncludeAllExpansion: expands `include-all` / `include-all-proxies` /
+//! `include-all-providers` into explicit `proxies` / `use`, mirroring mihomo
+//! `ParseProxyGroup` (adapter/outboundgroup/parser.go) and the `AllProxies` /
+//! `AllProviders` lists built by `config.parseProxies` (config/config.go).
+//! `filter` / `exclude-filter` / `exclude-type` stay on the group: mihomo
+//! applies them at runtime, so the expanded group behaves like the native one.
 
 use std::sync::Arc;
 
-use crate::runtime::value::ConfigValue;
+use fancy_regex::Regex;
 
-use super::value_util::{obj_get, obj_insert};
+use crate::runtime::value::{ConfigObject, ConfigValue};
 
-fn string_value(text: &str) -> ConfigValue {
-    ConfigValue::String(Arc::from(text))
-}
+use super::{
+    StepLogEntry,
+    value_util::{obj_get, obj_insert},
+};
 
-/// Mirrors Chimera's original `enhance/mod.rs:163-248` processing.
-pub(super) fn expand_legacy(config: &ConfigValue) -> ConfigValue {
-    let mut names: Vec<String> = Vec::new();
-    if let Some(proxies) = obj_get(config, "proxies").and_then(ConfigValue::as_array_arc) {
-        for proxy in proxies.iter() {
-            if let Some(ConfigValue::String(name)) =
-                proxy.as_object_arc().and_then(|map| map.get("name"))
-            {
-                names.push(name.to_string());
-            }
-        }
-    }
-    if let Some(providers) = obj_get(config, "proxy-providers").and_then(ConfigValue::as_object_arc)
-    {
-        names.extend(providers.keys().map(|key| key.to_string()));
-    }
+const INCLUDE_ALL: &str = "include-all";
+const INCLUDE_ALL_PROXIES: &str = "include-all-proxies";
+const INCLUDE_ALL_PROVIDERS: &str = "include-all-providers";
 
+pub(super) fn expand_include_all(config: &ConfigValue) -> (ConfigValue, Vec<StepLogEntry>) {
+    let mut logs = Vec::new();
     let Some(groups) = obj_get(config, "proxy-groups").and_then(ConfigValue::as_array_arc) else {
-        return config.clone();
+        return (config.clone(), logs);
     };
+
+    // mihomo sorts both lists before handing them to every group.
+    let mut all_proxies: Vec<Arc<str>> = obj_get(config, "proxies")
+        .and_then(ConfigValue::as_array_arc)
+        .map(|proxies| {
+            proxies
+                .iter()
+                .filter_map(|proxy| match proxy.as_object_arc()?.get("name")? {
+                    ConfigValue::String(name) => Some(name.clone()),
+                    _ => None,
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    all_proxies.sort();
+    let mut all_providers: Vec<Arc<str>> = obj_get(config, "proxy-providers")
+        .and_then(ConfigValue::as_object_arc)
+        .map(|providers| providers.keys().cloned().collect())
+        .unwrap_or_default();
+    all_providers.sort();
+
     let rebuilt: Vec<ConfigValue> = groups
         .iter()
         .map(|group| {
             let Some(map) = group.as_object_arc() else {
                 return group.clone();
             };
-            let include_all = matches!(map.get("include-all"), Some(ConfigValue::Bool(true)));
-            if !include_all || !map.contains_key("name") {
-                return group.clone();
+            match expand_group(map, &all_proxies, &all_providers) {
+                Ok(Some(next)) => ConfigValue::Object(Arc::new(next)),
+                Ok(None) => group.clone(),
+                Err(message) => {
+                    logs.push(StepLogEntry::error(message));
+                    group.clone()
+                }
             }
-            let existing: Vec<String> = map
-                .get("proxies")
-                .and_then(ConfigValue::as_array_arc)
-                .map(|seq| {
-                    seq.iter()
-                        .filter_map(|value| match value {
-                            ConfigValue::String(name) => Some(name.to_string()),
-                            _ => None,
-                        })
-                        .collect()
-                })
-                .unwrap_or_default();
-
-            let mut proxies: Vec<ConfigValue> =
-                names.iter().map(|name| string_value(name)).collect();
-            proxies.extend(
-                existing
-                    .iter()
-                    .filter(|name| !names.contains(name))
-                    .map(|name| string_value(name)),
-            );
-
-            let mut next = (**map).clone();
-            next.insert(Arc::from("proxies"), ConfigValue::Array(Arc::from(proxies)));
-            next.shift_remove("include-all");
-            ConfigValue::Object(Arc::new(next))
         })
         .collect();
-    obj_insert(
+    let next = obj_insert(
         config,
         "proxy-groups",
         ConfigValue::Array(Arc::from(rebuilt)),
-    )
+    );
+    (next, logs)
 }
 
-#[cfg(test)]
-mod tests {
-    use serde_json::json;
+/// `Ok(None)` leaves the group as-is: nothing to expand, or a shape mihomo
+/// itself rejects, which is left for the core to report.
+fn expand_group(
+    map: &ConfigObject,
+    all_proxies: &[Arc<str>],
+    all_providers: &[Arc<str>],
+) -> Result<Option<ConfigObject>, String> {
+    let Some(include_all) = weak_bool(map.get(INCLUDE_ALL)) else {
+        return Ok(None);
+    };
+    let Some(include_proxies) = weak_bool(map.get(INCLUDE_ALL_PROXIES)) else {
+        return Ok(None);
+    };
+    let Some(include_providers) = weak_bool(map.get(INCLUDE_ALL_PROVIDERS)) else {
+        return Ok(None);
+    };
+    let include_proxies = include_proxies || include_all;
+    let include_providers = include_providers || include_all;
+    if !include_proxies && !include_providers {
+        return Ok(None);
+    }
+    let Some(ConfigValue::String(name)) = map.get("name") else {
+        return Ok(None);
+    };
 
-    use super::*;
+    let mut proxies: Vec<ConfigValue> = match map.get("proxies") {
+        None | Some(ConfigValue::Null) => Vec::new(),
+        Some(ConfigValue::Array(items)) => items.to_vec(),
+        Some(_) => return Ok(None),
+    };
+    let mut uses: Vec<ConfigValue> = match map.get("use") {
+        None | Some(ConfigValue::Null) => Vec::new(),
+        Some(ConfigValue::Array(items)) => items.to_vec(),
+        Some(_) => return Ok(None),
+    };
 
-    #[test]
-    fn legacy_expansion_preserves_user_order_and_appends_extra_entries() {
-        let input = ConfigValue::from_json_value(json!({
-            "proxies": [{"name":"Alpha"},{"name":"Beta"}],
-            "proxy-providers": {"provider-b": {}, "provider-a": {}},
-            "proxy-groups": [{
-                "name":"Group", "type":"select", "include-all":true,
-                "proxies":["DIRECT","Beta"]
-            }],
-        }));
-        let result = expand_legacy(&input).to_json();
-        assert_eq!(
-            result["proxy-groups"][0]["proxies"],
-            json!(["Alpha", "Beta", "provider-b", "provider-a", "DIRECT"]),
-        );
-        assert!(result["proxy-groups"][0].get("include-all").is_none());
+    if include_providers {
+        uses = all_providers
+            .iter()
+            .map(|provider| ConfigValue::String(provider.clone()))
+            .collect();
+    }
+    if include_proxies {
+        let filter = match map.get("filter") {
+            None | Some(ConfigValue::Null) => String::new(),
+            Some(value) => weak_string(value).ok_or_else(|| {
+                format!(
+                    "proxy group `{name}`: `filter` is not a string, include-all left to the core"
+                )
+            })?,
+        };
+        if filter.is_empty() {
+            proxies.extend(
+                all_proxies
+                    .iter()
+                    .map(|proxy| ConfigValue::String(proxy.clone())),
+            );
+        } else {
+            let regs = filter
+                .split('`')
+                .map(|pattern| {
+                    Regex::new(pattern).map_err(|error| {
+                        format!(
+                            "proxy group `{name}`: invalid filter `{pattern}` ({error}), include-all left to the core"
+                        )
+                    })
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            // Same loop shape as mihomo: a proxy matching several filters is
+            // appended once per match, and a match error counts as no match.
+            for proxy in all_proxies {
+                for reg in &regs {
+                    if reg.is_match(proxy.as_ref()).unwrap_or(false) {
+                        proxies.push(ConfigValue::String(proxy.clone()));
+                    }
+                }
+            }
+        }
+        if proxies.is_empty() && uses.is_empty() {
+            let fallback = map
+                .get("empty-fallback")
+                .and_then(weak_string)
+                .filter(|fallback| !fallback.is_empty())
+                .unwrap_or_else(|| "COMPATIBLE".to_string());
+            proxies.push(ConfigValue::String(Arc::from(fallback)));
+        }
     }
 
-    #[test]
-    fn untouched_reference_specific_flags_remain_for_the_core() {
-        let input = ConfigValue::from_json_value(json!({
-            "proxy-groups": [
-                {"name":"Group", "include-all-proxies":true, "filter":"HK"},
-                {"include-all":true,"proxies":["DIRECT"]},
-            ],
-        }));
-        assert_eq!(
-            serde_json::to_string(&expand_legacy(&input).to_json()).unwrap(),
-            serde_json::to_string(&input.to_json()).unwrap(),
-            "do not silently change unsupported include-all semantics"
-        );
+    let mut next = map.clone();
+    for key in [INCLUDE_ALL, INCLUDE_ALL_PROXIES, INCLUDE_ALL_PROVIDERS] {
+        next.shift_remove(key);
+    }
+    if include_proxies {
+        next.insert(Arc::from("proxies"), ConfigValue::Array(Arc::from(proxies)));
+    }
+    if include_providers {
+        if uses.is_empty() {
+            next.shift_remove("use");
+        } else {
+            next.insert(Arc::from("use"), ConfigValue::Array(Arc::from(uses)));
+        }
+    }
+    Ok(Some(next))
+}
+
+/// mihomo's weakly typed bool decode: a bool, or a non-zero integer. `None`
+/// marks a value mihomo fails to decode.
+fn weak_bool(value: Option<&ConfigValue>) -> Option<bool> {
+    match value {
+        None | Some(ConfigValue::Null) => Some(false),
+        Some(ConfigValue::Bool(flag)) => Some(*flag),
+        Some(ConfigValue::Number(number)) => number
+            .as_i64()
+            .map(|n| n != 0)
+            .or_else(|| number.as_u64().map(|n| n != 0)),
+        Some(_) => None,
+    }
+}
+
+/// mihomo's weakly typed string decode for the integer forms YAML produces.
+fn weak_string(value: &ConfigValue) -> Option<String> {
+    match value {
+        ConfigValue::String(text) => Some(text.to_string()),
+        ConfigValue::Number(number) if number.is_i64() || number.is_u64() => {
+            Some(number.to_string())
+        }
+        _ => None,
     }
 }

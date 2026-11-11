@@ -181,6 +181,7 @@ impl RequestedRuntimeFields {
         Self {
             named: !patch.overrides.is_empty()
                 || patch.enable_clash_fields.is_some()
+                || patch.expand_include_all.is_some()
                 || patch.enable_tun_mode.is_some()
                 || !patch.tun.is_empty()
                 || patch.tun_stack.is_some()
@@ -323,6 +324,7 @@ pub(crate) fn classify_application(
 ///
 /// Enumerated from the real consumers rather than from a field whitelist:
 /// `RuntimeBuilder::build` reads `overrides`, `enable_clash_fields`,
+/// `expand_include_all`,
 /// `enable_tun_mode`, `tun`, and `tun_stack`; `SessionPortResolver::resolve` turns the
 /// four port strategies into the bindings written into the generated config;
 /// and `RuntimePreparation::prepare` turns the two channel fields into the
@@ -336,6 +338,7 @@ pub(crate) fn classify_application(
 struct ClashRuntimeInputs<'a> {
     overrides: &'a ClashGuardOverrides,
     enable_clash_fields: bool,
+    expand_include_all: bool,
     enable_tun_mode: bool,
     tun: &'a TunOverrides,
     tun_stack: TunStack,
@@ -355,6 +358,7 @@ impl<'a> ClashRuntimeInputs<'a> {
         Self {
             overrides: &clash.overrides,
             enable_clash_fields: clash.enable_clash_fields,
+            expand_include_all: clash.expand_include_all,
             enable_tun_mode: clash.enable_tun_mode,
             tun: &clash.tun,
             tun_stack: clash.tun_stack,
@@ -521,6 +525,21 @@ mod tests {
 
         let patch = ClashConfig::new_empty_patch();
         assert!(!RequestedRuntimeFields::of_clash(&patch).names_any());
+    }
+
+    #[test]
+    fn expand_include_all_flag_rebuilds_runtime_and_names_patch() {
+        let before = ClashConfig::default();
+        let mut after = before.clone();
+        after.expand_include_all = false;
+        assert_eq!(classify_clash(&before, &after), RuntimeImpact::Reconcile);
+        assert_ne!(clash_target(&before), clash_target(&after));
+        let patch: ClashConfigPatch = serde_yaml_ng::from_str(
+            "expand_include_all: false
+",
+        )
+        .expect("include-all setting patch must deserialize");
+        assert!(RequestedRuntimeFields::of_clash(&patch).names_any());
     }
 
     #[test]

@@ -50,6 +50,9 @@ pub struct RuntimePipelineInputs<'a> {
     /// Whether the selected core accepts Chimera Client's top-level `mmdb` extension.
     pub core_supports_mmdb: bool,
     pub tun: TunParams,
+    /// Match the reference: pre-expand `include-all*` groups when enabled.
+    /// Disabled: pass the original keys through to the selected Core.
+    pub expand_include_all: bool,
     /// Pre-gated and ordered by the caller against `ClashCore` (spec D3).
     pub builtin_transforms: &'a [BuiltinTransform],
 }
@@ -373,8 +376,13 @@ pub fn execute(
     ));
     builder.push(step(BuiltinStepKind::Defaults), working.clone())?;
 
-    working = Arc::new(include_all::expand_legacy(&working));
-    builder.push(step(BuiltinStepKind::IncludeAllExpansion), working.clone())?;
+    if inputs.expand_include_all {
+        let (next, entries) = include_all::expand_include_all(&working);
+        let tag = step(BuiltinStepKind::IncludeAllExpansion);
+        logs.extend(tag.node_key(), entries);
+        working = Arc::new(next);
+        builder.push(tag, working.clone())?;
+    }
 
     working = Arc::new(builtin::finalize_post_defaults(&working));
     builder.push(step(BuiltinStepKind::Finalizing), working.clone())?;

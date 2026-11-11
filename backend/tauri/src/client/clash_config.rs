@@ -1039,6 +1039,16 @@ mod tests {
         ));
 
         let mut runtime_patch = ClashConfig::new_empty_patch();
+        let mut expansion_patch = ClashConfig::new_empty_patch();
+        expansion_patch.expand_include_all = Some(false);
+        let mut expansion_changed = current.clone();
+        expansion_changed.apply(expansion_patch.clone());
+        assert!(should_reconcile_clash_patch(
+            &current,
+            &expansion_changed,
+            &expansion_patch
+        ));
+
         runtime_patch.enable_clash_fields = Some(!current.enable_clash_fields);
         let mut runtime_changed = current.clone();
         runtime_changed.apply(runtime_patch.clone());

@@ -226,6 +226,7 @@ impl RuntimeBuilder {
                 flavor: derive_tun_flavor(input.app.core, input.clash.tun_stack),
                 windows_fake_ip_filter: cfg!(windows),
             },
+            expand_include_all: input.clash.expand_include_all,
             builtin_transforms: &builtin_transforms,
         };
         execute(&inputs, content, scripts).map_err(RuntimeBuildError::Pipeline)
@@ -705,6 +706,91 @@ mod tests {
             assert_eq!(
                 artifact.final_config.to_json()["tun"]["auto-route"],
                 expected
+            );
+        }
+    }
+
+    #[test]
+    fn runtime_builder_threads_include_all_toggle_to_executor() {
+        let mut profiles = Profiles::default();
+        profiles.current = Some(ProfileId("profile".into()));
+        profiles.append_item(ProfileItem {
+            uid: ProfileId("profile".into()),
+            metadata: ProfileMetadata {
+                name: "Profile".into(),
+                desc: None,
+                custom_name: true,
+            },
+            definition: ProfileDefinition::Config {
+                config: ConfigDefinition::File(FileConfig {
+                    source: ProfileSource::Local {
+                        binding: LocalBinding::Managed {
+                            materialized: MaterializedFile {
+                                file: ManagedProfilePath::new("profile.yaml").unwrap(),
+                                updated_at: None,
+                            },
+                        },
+                    },
+                    transforms: Vec::new(),
+                }),
+            },
+        });
+
+        for enabled in [true, false] {
+            let input = RuntimeBuildInput {
+                profiles: Arc::new(profiles.clone()),
+                clash: ClashConfig {
+                    enable_clash_fields: false,
+                    expand_include_all: enabled,
+                    ..ClashConfig::default()
+                },
+                app: ChimeraAppConfig {
+                    core: chimera_config::application::ClashCore::Mihomo,
+                    enable_builtin_enhanced: false,
+                    ..ChimeraAppConfig::default()
+                },
+                resolved_ports: ResolvedPortBindings {
+                    mixed_port: 7890,
+                    ..Default::default()
+                },
+            };
+            let artifact = RuntimeBuilder::build(
+                &input,
+                &StaticContent(
+                    "proxies:
+  - name: z-proxy
+  - name: a-proxy
+proxy-groups:
+  - name: G
+    type: select
+    include-all: true
+    proxies: [DIRECT]
+"
+                    .into(),
+                ),
+                &EchoRunner,
+            )
+            .unwrap();
+            let config = artifact.final_config.to_json();
+            let group = &config["proxy-groups"][0];
+            if enabled {
+                assert_eq!(group["proxies"], json!(["DIRECT", "a-proxy", "z-proxy"]));
+                assert!(group.get("include-all").is_none());
+            } else {
+                assert_eq!(group["proxies"], json!(["DIRECT"]));
+                assert_eq!(group["include-all"], json!(true));
+            }
+            assert_eq!(
+                artifact.graph.nodes.iter().any(|node| matches!(
+                    node.tag,
+                    chimera_config::runtime::snapshot::OperatorTag::BuiltinStep {
+                        step:
+                            chimera_config::runtime::snapshot::BuiltinStepKind::IncludeAllExpansion,
+                        ..
+                    }
+                )),
+                enabled,
+                "the persisted toggle must control whether the expansion stage runs"
             );
         }
     }

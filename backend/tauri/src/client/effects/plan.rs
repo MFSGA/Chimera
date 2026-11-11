@@ -64,6 +64,7 @@ pub struct ClashEffectFields {
     pub http_port: Option<PortStrategy>,
     pub external_controller: ExternalControllerStrategy,
     pub enable_clash_fields: bool,
+    pub expand_include_all: bool,
     pub clash_control_channel: ClashControlChannel,
     pub clash_ipc_disable_http_controller: bool,
 }
@@ -107,6 +108,7 @@ impl ApplicationEffectInputs {
                 http_port: clash.http_port.clone(),
                 external_controller: clash.external_controller.clone(),
                 enable_clash_fields: clash.enable_clash_fields,
+                expand_include_all: clash.expand_include_all,
                 clash_control_channel: clash.clash_control_channel,
                 clash_ipc_disable_http_controller: clash.clash_ipc_disable_http_controller,
             },
@@ -464,6 +466,7 @@ struct RuntimeRebuildDesired {
     transparent_proxy: TransparentProxyConfig,
     external_controller: ExternalControllerStrategy,
     enable_clash_fields: bool,
+    expand_include_all: bool,
 }
 
 /// The clash fields a running core reacts to, grouped by how it must react.
@@ -493,6 +496,7 @@ impl ClashEffectFields {
                 transparent_proxy: self.transparent_proxy.clone(),
                 external_controller: self.external_controller.clone(),
                 enable_clash_fields: self.enable_clash_fields,
+                expand_include_all: self.expand_include_all,
             },
         }
     }
@@ -575,6 +579,7 @@ mod tests {
                 http_port: None,
                 external_controller: ExternalControllerStrategy::default(),
                 enable_clash_fields: true,
+                expand_include_all: true,
                 clash_control_channel: ClashControlChannel::PreferIpc,
                 clash_ipc_disable_http_controller: false,
             },
@@ -1035,6 +1040,9 @@ mod tests {
         });
         assert_rebuild("enable_clash_fields", |after| {
             after.clash.enable_clash_fields = false;
+        });
+        assert_rebuild("expand_include_all", |after| {
+            after.clash.expand_include_all = false;
         });
     }
 

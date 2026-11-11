@@ -1286,6 +1286,11 @@ export type ClashConfig = {
   web_ui_list: string[];
   /**  支持关闭字段过滤，避免meta的新字段都被过滤掉，默认为真 */
   enable_clash_fields: boolean;
+  /**
+   *  Expand `include-all*` proxy-group fields locally using Mihomo semantics;
+   *  when disabled, pass the fields unchanged to the selected Core.
+   */
+  expand_include_all?: boolean;
   /**  外部控制器端口策略 */
   external_controller: ExternalControllerStrategy;
   clash_control_channel?: ClashControlChannel;
@@ -1316,6 +1321,7 @@ export type ClashConfigPatch_Deserialize = {
   tun?: TunOverridesPatch_Deserialize;
   web_ui_list?: string[] | null;
   enable_clash_fields?: boolean | null;
+  expand_include_all?: boolean | null;
   external_controller?: ExternalControllerStrategyPatch_Deserialize;
   clash_control_channel?: ClashControlChannel | null;
   clash_ipc_disable_http_controller?: boolean | null;
@@ -1335,6 +1341,7 @@ export type ClashConfigPatch_Serialize = {
   tun?: TunOverridesPatch_Serialize;
   web_ui_list?: string[] | null;
   enable_clash_fields?: boolean | null;
+  expand_include_all?: boolean | null;
   external_controller?: ExternalControllerStrategyPatch_Serialize;
   clash_control_channel?: ClashControlChannel | null;
   clash_ipc_disable_http_controller?: boolean | null;
