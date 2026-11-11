@@ -73,6 +73,12 @@
 | LESSON-20261031-012 | 2026-10-31 | NixOS / Btrfs / Rust tests | Tauri 测试二进制链接在 Btrfs `reserve_bytes` 阻塞；Cargo check 成功，完整 Client 测试待环境复验 | Open |
 | LESSON-20261103-001 | 2026-11-03 | Runtime / Windows / ref | 原样迁入原生存储路径测试在 Windows 将 `/data/ui` 错判为正确路径；改为 `Utf8Path::join` 生成预期值，重新运行 12/12 通过 | Mitigated |
 | LESSON-20261104-001 | 2026-11-04 | Rust workspace / Cargo target / pnpm store | 默认 D 盘耗尽导致完整测试链接失败；恢复空间后在默认位置完成全量测试，pnpm 元数据策略检查仍告警 | Mitigated |
+| LESSON-20261109-001 | 2026-11-09 | Application config / updater channel | 启动渠道归一化若替换 symlink 别名会丢失链接节点；写入解析后的目标并加入回归 | Mitigated |
+| LESSON-20261110-001 | 2026-11-10 | Clash config / nested patch | 新增嵌套 transparent_proxy patch 未标记 serde default，稀疏历史 patch 反序列化失败；补默认并由旧配置 patch 回归检出 | Mitigated |
+| LESSON-20261110-002 | 2026-11-10 | Runtime builder / platform tests | Linux-only runtime builder 用例在 macOS 请求 Linux 配置并失败 `UnsupportedTarget`；将用例限制到 Linux target，macOS 不再误报但仍需 Linux 执行 | Mitigated |
+| LESSON-20261110-003 | 2026-11-10 | Effects / test expectations | 新增 transparent proxy effect 后两个完整 effect 序列断言漏加新 effect；更新 plan/executor 顺序断言并由 45 项测试覆盖 | Mitigated |
+| LESSON-20261110-004 | 2026-11-10 | Service / ref defect | pinned ref 配置允许 Mihomo Alpha，Service 仅允许 Mihomo；复现后统一 stable/alpha 判定并加入回归，Linux runtime 仍待实测 | Mitigated |
+| LESSON-20261111-001 | 2026-11-11 | Updater / mainline integration | 按旧分支拆批次 Rebase 后没有更新 `client/mod.rs` 构造依赖，lib check 11 处错误、test 另 3 处缺参；补齐 actor 启动注入与 Stable 测试参数，并重跑真实用例 | Mitigated |
 
 ### LESSON-20261103-001：原生路径重写测试不能假定 Unix 分隔符
 
@@ -1103,6 +1109,23 @@ backend/Cargo.toml -p chimera --lib core::clash::proxies::tests:: -- --nocapture
 - On the current candidate, 39/39 E2E harness unit tests pass, including four executable-script tests for nested scrolling, preventDefault, overscroll containment and residual window scrolling. E2E TypeScript, Prettier, Oxlint, single-file rustfmt, and offline cargo check -p tauri-plugin-wdio-webdriver pass.
 - Still pending: a new Windows WebView2 settings-suite run on this exact commit. The WebDriver event remains synthetic (isTrusted=false); do not claim native physical mouse-wheel or trackpad validation.
 
+### LESSON-20261109-001：更新渠道启动归一化必须保留 application.yaml 符号链接
+
+- 日期与时区：2026-11-09 US/Pacific
+- 状态：Mitigated（Nightly 渠道归一化、actor patch/replace 拒绝与外部 symlink 回归均通过；桌面 E2E 未运行）
+- 严重度：Medium（首次启动写入可能替换用户有意创建的配置 symlink 节点）
+- 模块：Application config / updater channel / filesystem compatibility
+- master commit / ref SHA / 平台与测试环境：未提交工作分支 `codex/app-update-ref-alignment`，当前基线提交 `8ee098904d5a3d1f1f87756faeba013762ff604f`；ref `231e3866cb9ae0390519a22835f6a1e98e484cbf`；macOS ARM64。
+- 关联 Issue / PR / CI / 运行日志（脱敏）：本地差异及命令证据留在上述分支工作树和 `docs/ref-alignment-progress.md` 的 DIFF-071；本批未建立 Issue/PR 或新 commit。
+- 预期行为：按 ref 归一化安装渠道时，Nightly 构建应把旧 Stable/Beta 偏好改为 Nightly，非 Nightly 构建遇到旧 Nightly 偏好应回到本机安装渠道；持久化不能破坏用户原有配置文件节点和路径语义。
+- 真实异常、复现步骤与证据：在 `ApplicationClient::new` 加入启动归一化后，`cargo test --quiet --manifest-path backend/Cargo.toml -p chimera --lib client::application::tests` 中既有 `existing_application_link_still_loads_original_config` 失败：`std::fs::read_link(application.yaml)` 报 `Invalid argument`，证明原 symlink alias 已被 `PersistentStateManager::upsert` 的原子替换写移除。初次新增渠道测试另有一个错误的 `enable_auto_check_update=false` 夹具期望；根因是默认值实际为 true，现从测试配置导出期望值，不属于产品行为差异。
+- 确认的根因与排除项：持久化 manager 以文件 rename 替换配置路径；把 symlink 节点路径直接交给该写入器会替换链接本身，而不是保留链接并写其外部目标。问题在首次回归测试中确定复现，不涉及权限、Service/TUN 或宿主网络。
+- 修复、差异映射及保留的兼容性边界：在 `backend/tauri/src/client/application.rs::ApplicationClient::new` 检测已存在的叶节点 symlink；目标可解析时将 manager 写路径规范到真实目标，保留 alias symlink；悬空链接不做解析，仍按既有错误路径失败关闭。按 ref `ApplicationClient::new` 和 `ApplicationActor::validate_channel` 同时接入启动归一化及 Nightly patch/replace 校验。不会更改 parent-directory symlink 策略。
+- 原实现失败、新实现通过的回归测试，及测试注册位置：`client::application::tests::installed_channel_normalizes_and_persists_saved_preferences` 覆盖 Nightly 安装覆盖旧 Stable、Stable/Beta 安装覆盖旧 Nightly 并确认落盘；既有 `existing_application_link_still_loads_original_config` 改为确认 symlink alias 保留、真实目标含归一化渠道；`state::application::tests::nightly_build_rejects_channel_changes_in_patch_and_replace` 覆盖 patch/完整替换拒绝离开 Nightly及清除请求仍维持 Nightly。均注册于 `backend/tauri/src/{client/application.rs,state/application.rs}` 单测。
+- 验证命令、实际用例数量、结果、未覆盖/跳过项：修正后 `cargo test --quiet --manifest-path backend/Cargo.toml -p chimera --lib client::application::tests` 12/12，`... state::application::tests` 4/4，`cargo check --locked --quiet --manifest-path backend/Cargo.toml -p chimera --lib`、涉及 Rust 文件 scoped `rustfmt --check` 与 `git diff --check` 通过。首次 E2E binary 构建因磁盘空间不足，未运行桌面更新偏好 E2E；Windows/Linux filesystem behavior 未在本机覆盖。
+- 风险/回滚和清理证据：仅临时测试目录读写 typed `application.yaml` 和临时 symlink；回滚 DIFF-071 同时撤销渠道归一化与此路径解析适配即可，不改真实用户配置或系统状态。
+- 关联重复事件、后续防复发措施、L3 门禁调整审批链接（如有）：若启动时新增需写回的 typed config 字段，回归需同时覆盖普通文件、指向外部文件的 symlink、悬空 symlink；保留“更新配置语义”与“保留文件节点类型”两类断言，不只检查 loaded state。
+
 ### LESSON-20261110-001：Clash 配置新增嵌套 patch 必须保持稀疏反序列化
 
 - 日期与时区：2026-11-10 US/Pacific
@@ -1141,3 +1164,11 @@ backend/Cargo.toml -p chimera --lib core::clash::proxies::tests:: -- --nocapture
 - 失败复现：新增 Service 单测 `mihomo_alpha_is_supported_for_transparent_proxy` 在修复前失败，断言 `supports_transparent_proxy_core(Some(CoreType::Clash(ClashCoreType::MihomoAlpha)))` 为 false（退出码 101）。
 - 最小修正与回归：新增统一 `supports_transparent_proxy_core` predicate，让配置接受的 stable/alpha Mihomo 在启用、apply 后再次确认和 stale 清理三处共用同一个判定。修复后透明代理与受限 Axum route 测试 **12/12** 通过；测试覆盖 stable、alpha 与无 core 状态。没有扩张到其他核心类型。
 - 复查条件与限制：后续 ref 更新 `validate_transparent_proxy` 或 Service runtime core gate 时再次对照这条对应关系，并保留 alpha 回归。当前 macOS 只能验证纯 predicate/模拟规则；没有 Linux Mihomo Alpha 进程、真实 Service 或内核网络验证。
+
+### LESSON-20261111-001：跨版本 updater 迁移必须检验真正的 Client 初始化链
+
+- 日期与时区：2026-11-11 US/Pacific。状态：Mitigated（仅本地编译和单测已确认；尚无桌面安装验收）。
+- 证据：将 updater 的 4 个签名功能/测试提交 Rebase 到 `master@0a6ac8ec` 后，首次 `cargo check --locked --offline -p chimera --lib` 出现 11 项 E0609/E0560/E0061；`ChimeraClientInner`、`ClientSetupArgs` 和 `new_typed_config_clients` 未接入 updater actor、bundle/channel、changelog adapter。修正库检查后，首次 `cargo test -p chimera --lib adapters::app_update::tests` 另发现 3 个 CoreLifecycle 测试夹具缺少安装渠道参数。两个失败均在隔离集成分支真实复现。
+- 修复：在 `backend/tauri/src/client/mod.rs` 延续 ref 的 updater 初始化所有权，传入构建渠道、新增受启动/关闭任务管理的 `AppUpdateClient`、事件/HTTP 适配与 Bundle 元数据，保持测试客户端无真实 updater 副作用；三个 CoreLifecycle 夹具显式传 `ReleaseChannel::Stable`。保留原 `ref`/Service pin，不触碰原始 dirty updater 工作区。
+- 回归：修复后 backend lib cargo check 成功；Core app-update 27/27、应用配置 4/4、Tauri updater adapter 3/3、bundle 18/18、application client 12/12、application state 4/4、Specta bindings 1/1；TypeScript、前端生产构建与 E2E harness unit 44/44 通过。没有执行真实桌面 E2E、下载/签名安装与重启/回滚，不得把纯测试当作发布验收。
+- 防复发：跨分支迁移时必须从 `setup` 追踪到 `ClientSetupArgs`、typed state、actor spawn、业务命令和测试 fixture；编译 `--lib` 后还须编译/执行 `--lib` 测试，避免生产入口遗漏与测试夹具漏参。
