@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { openMainRoute } from './main-window.js';
 
-const targetPath = '/main/logs';
+const targetPath = '/main/rules';
 
 describe('main tooltip reference surface', () => {
   before(async () => {
@@ -32,7 +32,11 @@ describe('main tooltip reference surface', () => {
   });
 
   it('keeps ref padding on the animated inner surface', async () => {
-    const firstSidebarLink = await $('[data-slot="slider-sidebar"] a');
+    // The Rules rail owns a real Radix Tooltip for each collapsed proxy link.
+    // The Logs navigation rail has labels but does not render Tooltip roots.
+    const firstSidebarLink = await $(
+      '[data-slot="rules-proxy-item"][data-proxy-item-kind="all"]',
+    );
     await firstSidebarLink.waitForDisplayed({ timeout: 15_000 });
     const target = await browser.execute((element) => {
       const rect = element.getBoundingClientRect();

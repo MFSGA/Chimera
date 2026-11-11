@@ -90,8 +90,8 @@ describe('main profiles reference layout', () => {
     assert.ok(profileUid, 'The layout fixture profile was not persisted.');
   });
 
-  // Keep each contract on the All Profiles route. If one navigation
-  // assertion fails, later cases must not inherit its Inspect/transform route.
+  // Every case starts on the real Profiles route, even if an earlier
+  // assertion failed after navigating to Inspect or a transform.
   beforeEach(async () => {
     await openMainRoute(targetPath);
   });
@@ -249,11 +249,15 @@ describe('main profiles reference layout', () => {
       const details = await $('[data-slot="inspect-step-detail"]');
       await details.waitForDisplayed({ timeout: 15_000 });
       const outputTab = await $('[data-slot="inspect-tab-output"]');
-      // The final configuration step already opens on Output. Avoid asking
-      // WebDriver to click a selected tab that is already displaying its panel.
+      // Output is selected for the final generated step. Avoid a redundant
+      // click through the animated toolbar; use the shared pointer helper only
+      // if the visible tab is not already selected.
       if ((await outputTab.getAttribute('aria-selected')) !== 'true') {
         await clickElement(outputTab);
       }
+      assert.equal(await outputTab.getAttribute('aria-selected'), 'true');
+      const yaml = await $('[data-slot="inspect-yaml-viewer"]');
+      await yaml.waitForDisplayed({ timeout: 15_000 });
       await browser.waitUntil(
         async () =>
           browser.execute(() => {
@@ -666,18 +670,21 @@ describe('main profiles reference layout', () => {
     }
   });
 
-  // Contract: every visible Profile type navigation item renders its icon
-  // inside the current material-shape wrapper and uses the shared color token.
-  // Assert the actual navigation DOM rather than stale attributes not emitted
-  // by NavigationListItem.
-  it('uses the reference profile type navigation icon compositions', async () => {
+  // Contract: the visible Profiles navigation renders the correct icon and
+  // material color for each type. Assert its actual structure and shared color
+  // token rather than obsolete test-only icon attributes.
+  it('renders the reference profile type icon compositions', async () => {
     const icons = await browser.execute(() => {
-      const readIcon = (selector: string, color: string) => {
-        const shape = document.querySelector<HTMLElement>(
-          `${selector} [data-slot="navigation-list-item-icon"] [data-slot="material-shape"]`,
+      const readIcon = (type: string, color: string) => {
+        const link = document.querySelector<HTMLElement>(
+          `[data-slot="profiles-navigation"] a[href="/main/profiles/${type}"]`,
+        );
+        const shape = link?.querySelector<HTMLElement>(
+          '[data-slot="navigation-list-item-icon"] [data-slot="material-shape"]',
         );
         return {
           hasPrimaryIcon: Boolean(shape?.querySelector('svg')),
+          hasMaterialShape: Boolean(shape),
           hasColorToken: Boolean(
             shape?.classList.contains(`bg-${color}-container`),
           ),
@@ -685,19 +692,10 @@ describe('main profiles reference layout', () => {
       };
 
       return {
-        profile: readIcon('[data-slot="profiles-all-nav-item"]', 'blue'),
-        javascript: readIcon(
-          '[data-slot="profiles-navigation"] a[href="/main/profiles/javascript"]',
-          'yellow',
-        ),
-        lua: readIcon(
-          '[data-slot="profiles-navigation"] a[href="/main/profiles/lua"]',
-          'cyan',
-        ),
-        merge: readIcon(
-          '[data-slot="profiles-navigation"] a[href="/main/profiles/merge"]',
-          'orange',
-        ),
+        profile: readIcon('profile', 'blue'),
+        javascript: readIcon('javascript', 'yellow'),
+        lua: readIcon('lua', 'cyan'),
+        merge: readIcon('merge', 'orange'),
       };
     });
 
@@ -706,6 +704,11 @@ describe('main profiles reference layout', () => {
         icon.hasPrimaryIcon,
         true,
         `${type} is missing its primary navigation icon.`,
+      );
+      assert.equal(
+        icon.hasMaterialShape,
+        true,
+        `${type} is missing its material shape.`,
       );
       assert.equal(
         icon.hasColorToken,
