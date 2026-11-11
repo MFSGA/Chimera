@@ -1311,14 +1311,15 @@ pub async fn get_runtime_config(
 #[tauri::command]
 #[specta::specta]
 pub async fn get_runtime_yaml(client: State<'_, ChimeraClient>) -> Result<String> {
-    let state = client.promoted_runtime_snapshot();
-    Ok(state
-        .as_ref()
-        .map(|state| &state.config)
-        .ok_or(anyhow!("failed to parse config to yaml file"))
-        .and_then(|config| {
-            serde_yaml::to_string(config).context("failed to convert config to yaml")
-        })?)
+    let state = client.promoted_runtime_snapshot().ok_or_else(|| {
+        anyhow!(
+            "runtime configuration is unavailable: no promoted runtime snapshot; \
+             start the selected core and apply a profile first"
+        )
+    })?;
+
+    Ok(serde_yaml::to_string(&state.config)
+        .context("failed to serialize runtime configuration to YAML")?)
 }
 
 #[tauri::command]

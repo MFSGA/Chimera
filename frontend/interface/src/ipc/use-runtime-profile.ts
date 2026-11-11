@@ -11,12 +11,13 @@ import { commands } from './bindings';
  *
  * @returns An object containing the query state and helper methods related to the runtime profile.
  */
-export const useRuntimeProfile = () => {
+export const useRuntimeProfile = (enabled = true) => {
   const query = useQuery({
     queryKey: ['runtime-profile'],
     queryFn: async () => {
       return unwrapResult(await commands.getRuntimeYaml());
     },
+    enabled,
   });
 
   return {
