@@ -9,6 +9,7 @@ import {
 import { SettingsTitle } from '../_modules/settings-title';
 import AllowLanSwitch from './_modules/allow-lan-switch';
 import CoreManagerCard from './_modules/core-manager-card';
+import ExpandIncludeAllSwitch from './_modules/expand-include-all-switch';
 import FieldFilterCard from './_modules/field-filter-card';
 import FieldFilterSwitch from './_modules/field-filter-switch';
 import IPv6Switch from './_modules/ipv6-switch';
@@ -114,6 +115,15 @@ const FieldFilterSettings = () => {
   );
 };
 
+const RuntimeProcessingSettings = () => (
+  <div data-slot="runtime-processing-settings-container">
+    <SettingsLabel>{m.settings_clash_runtime_processing_label()}</SettingsLabel>
+    <SettingsGroup>
+      <ExpandIncludeAllSwitch />
+    </SettingsGroup>
+  </div>
+);
+
 function RouteComponent() {
   return (
     <>
@@ -131,6 +141,8 @@ function RouteComponent() {
         <CoreManagerSettings />
 
         <FieldFilterSettings />
+
+        <RuntimeProcessingSettings />
       </div>
     </>
   );

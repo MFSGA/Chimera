@@ -102,3 +102,19 @@ and the broader Mihomo `include-all*` grammar remain a separately scoped
 compatibility decision. No settings schema, Core, or runtime network behavior
 was changed in this slice; new tests assert the stage boundary and existing
 legacy behavior.
+
+## Full reference include-all migration (2026-11-11; supersedes legacy step)
+
+The `IncludeAllExpansion` step now calls the reference's complete
+`expand_include_all` algorithm, with unchanged upstream unit tests and
+`fancy-regex` support. Unlike the previous legacy-only stage extraction,
+this migrates `include-all-proxies`, `include-all-providers`, sorted proxy and
+provider lists, `filter`/lookaround behavior, empty-fallback and step error
+logs. A persisted `expand_include_all` switch (default `true`) controls the
+step, with Tauri runtime change detection and the Main UI switch connected.
+When disabled, no expansion step is recorded and raw keys pass through to the
+Core. Source-level parity was verified byte-for-byte against checkout
+`b37e18444e3df012fe8f548e7e0818ed8b4aa227` without changing the
+tracked ref gitlink. Product-specific compatibility assessment and the
+remaining live Core testing are documented in
+[`ref-alignment-include-all.md`](ref-alignment-include-all.md).

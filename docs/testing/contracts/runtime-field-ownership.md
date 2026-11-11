@@ -151,3 +151,20 @@ silently reinterpreted; full upstream semantics and the reference's
 `expand_include_all` switch remain future decisions. The unit tests cover
 legacy expansion and unsupported fields left for the Core. No live Core
 routing or provider behavior is claimed.
+
+## Full upstream include-all behavior (2026-11-11; supersedes earlier slice)
+
+The previous section described the first **legacy-only** stage extraction.
+That implementation has since been replaced with the byte-identical upstream
+`expand_include_all` algorithm and its original test suite. The optional
+`ClashConfig.expand_include_all` field now defaults to `true` even when absent
+from an older saved file, and `false` omits the expansion snapshot and leaves
+`include-all*` keys to the selected Core. Invalid regex failures are attached
+to the expansion node. Frontend settings, generated IPC types, and runtime
+reconcile/change-impact projections include this new field.
+
+This is an **intentional output change** from the legacy Chimera algorithm:
+providers move to `use`, explicit proxy entries precede sorted generated
+entries, and filter/lookaround/fallback semantics follow Ref. See
+[`docs/ref-alignment-include-all.md`](../../ref-alignment-include-all.md) for
+file-by-file provenance, compatibility risk assessment, and test boundaries.
