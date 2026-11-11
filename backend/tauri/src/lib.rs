@@ -31,6 +31,11 @@ mod setup;
 /// 8
 #[cfg(windows)]
 mod shutdown_hook;
+#[cfg(all(
+    any(target_os = "macos", target_os = "linux", windows),
+    any(not(feature = "e2e"), test)
+))]
+mod single_instance_activation;
 mod specta_export;
 mod startup_failure;
 mod state;
@@ -112,6 +117,14 @@ pub fn run() -> std::process::ExitCode {
 
     let specta_builder = specta_export::build_specta_builder();
 
+    // Secondary invocations may arrive before primary application setup finishes.
+    #[cfg(all(
+        any(target_os = "macos", target_os = "linux", windows),
+        not(feature = "e2e")
+    ))]
+    let secondary_activation =
+        std::sync::Arc::new(single_instance_activation::PendingWindowActivation::default());
+
     #[allow(unused_mut)]
     let mut builder = tauri::Builder::default();
     builder = builder.manage(utils::exit::ExitBoundary::default());
@@ -129,9 +142,15 @@ pub fn run() -> std::process::ExitCode {
         // The deep-link plugin must exist before a secondary invocation reaches
         // the single-instance callback.
         builder = builder.plugin(tauri_plugin_deep_link::init());
-        builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-            resolve::create_window(app);
-        }));
+        let activation = secondary_activation.clone();
+        builder = builder.plugin(tauri_plugin_single_instance::init(
+            move |app, _args, _cwd| {
+                // Before readiness, enqueue one activation instead of opening a window.
+                if activation.request() {
+                    resolve::create_window(app);
+                }
+            },
+        ));
     }
 
     #[cfg(all(
@@ -284,6 +303,13 @@ pub fn run() -> std::process::ExitCode {
                         log::error!(target: "app", "failed to emit scheme request {url} to {target_label}: {error:?}");
                     }
                 });
+
+                // The Client, window state and deep-link listener now exist.
+                // Deliver any activation coalesced during the primary startup.
+                #[cfg(not(feature = "e2e"))]
+                if secondary_activation.mark_ready() {
+                    resolve::create_window(app.handle());
+                }
 
                 if let Some(url) = app
                     .deep_link()
