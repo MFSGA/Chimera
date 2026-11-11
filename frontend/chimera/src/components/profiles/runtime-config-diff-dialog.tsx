@@ -3,7 +3,7 @@ import {
   useProfileContent,
   useRuntimeProfile,
 } from '@chimera/interface';
-import { BaseDialog, cn } from '@chimera/ui';
+import { BaseDialog, Button, cn } from '@chimera/ui';
 import { useCreation } from 'ahooks';
 import { useAtomValue } from 'jotai';
 import { nanoid } from 'nanoid';
@@ -27,20 +27,47 @@ export default function RuntimeConfigDiffDialog({
   const currentProfileUid = query.data?.current;
 
   const contentFn = useProfileContent(currentProfileUid || '');
+  const runtimeProfile = useRuntimeProfile(open && !!currentProfileUid);
 
-  // need manual refetch
-  contentFn.query.refetch();
+  const loaded =
+    !!currentProfileUid &&
+    contentFn.query.isSuccess &&
+    runtimeProfile.isSuccess &&
+    typeof contentFn.query.data === 'string' &&
+    typeof runtimeProfile.data === 'string';
+  const loading =
+    query.isLoading || contentFn.query.isLoading || runtimeProfile.isLoading;
+  const runtimeErrorMessage =
+    runtimeProfile.error instanceof Error
+      ? runtimeProfile.error.message
+      : runtimeProfile.error
+        ? String(runtimeProfile.error)
+        : '';
+  const error = runtimeProfile.isError
+    ? runtimeProfile.error
+    : contentFn.query.isError
+      ? contentFn.query.error
+      : query.error;
+  const errorMessage =
+    error instanceof Error ? error.message : error ? String(error) : '';
+  const runtimeUnavailable =
+    runtimeProfile.isError &&
+    runtimeErrorMessage.includes('runtime configuration is unavailable');
 
-  const runtimeProfile = useRuntimeProfile();
-
-  const loaded = !contentFn.query.isLoading && !query.isLoading;
+  const retry = () => {
+    void Promise.all([
+      query.refetch(),
+      currentProfileUid ? contentFn.query.refetch() : Promise.resolve(),
+      currentProfileUid ? runtimeProfile.refetch() : Promise.resolve(),
+    ]);
+  };
 
   const mode = useAtomValue(themeMode);
 
   const originalModelPath = useCreation(() => `${nanoid()}.clash.yaml`, []);
   const modifiedModelPath = useCreation(() => `${nanoid()}.runtime.yaml`, []);
 
-  if (!currentProfileUid) {
+  if (!currentProfileUid && !query.isLoading && !query.isError) {
     return null;
   }
 
@@ -64,9 +91,39 @@ export default function RuntimeConfigDiffDialog({
             {m.profile_runtime_config_label()}
           </span>
         </div>
-        <div className="h-[75vh] w-full">
-          <Suspense fallback={null}>
-            {loaded && (
+        <div className="flex h-[75vh] w-full items-center justify-center">
+          {loading && (
+            <div className="text-on-surface-variant text-sm" role="status">
+              {m.common_loading()}
+            </div>
+          )}
+          {!loading &&
+            (query.isError ||
+              contentFn.query.isError ||
+              runtimeProfile.isError) && (
+              <div
+                className="flex max-w-xl flex-col items-center gap-3 px-6 text-center"
+                role="alert"
+              >
+                <span className="text-base font-semibold">
+                  {runtimeProfile.isError
+                    ? m.agent_finding_title_runtime_config_missing()
+                    : m.settings_clash_core_manager_card_loading_error()}
+                </span>
+                <p className="text-on-surface-variant text-sm">
+                  {runtimeUnavailable
+                    ? m.agent_finding_runtime_config_missing()
+                    : errorMessage}
+                </p>
+                <Button variant="stroked" onClick={retry}>
+                  {m.dashboard_widget_config_retry()}
+                </Button>
+              </div>
+            )}
+          {loaded && (
+            <Suspense
+              fallback={<span className="text-sm">{m.common_loading()}</span>}
+            >
               <MonacoDiffEditor
                 language="yaml"
                 theme={mode === 'light' ? 'vs' : 'vs-dark'}
@@ -80,8 +137,17 @@ export default function RuntimeConfigDiffDialog({
                   readOnly: true,
                 }}
               />
+            </Suspense>
+          )}
+          {!loading &&
+            !loaded &&
+            !query.isError &&
+            !contentFn.query.isError &&
+            !runtimeProfile.isError && (
+              <div className="text-on-surface-variant text-sm" role="status">
+                {m.agent_finding_runtime_config_missing()}
+              </div>
             )}
-          </Suspense>
         </div>
       </div>
     </BaseDialog>
