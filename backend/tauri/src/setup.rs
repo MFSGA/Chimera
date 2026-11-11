@@ -111,6 +111,9 @@ pub fn setup(app: &mut tauri::App, paths: PathResolver) -> anyhow::Result<()> {
         runtime_paths.clone(),
     ));
     let core_facade_monitor = core_facade.clone();
+    let core_bridge: Arc<dyn crate::client::core_lifecycle::CoreLifecyclePort> = Arc::new(
+        crate::client::core_lifecycle::LegacyCoreBridge::new(core_facade.clone()),
+    );
 
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     let main_thread_handoff = Arc::new(MainThreadHandoff::default());
@@ -183,6 +186,7 @@ pub fn setup(app: &mut tauri::App, paths: PathResolver) -> anyhow::Result<()> {
             hotkeys,
             accelerators.clone(),
             effect_adapters,
+            core_bridge.clone(),
         ),
     );
     #[cfg(not(any(target_os = "android", target_os = "ios")))]

@@ -84,6 +84,7 @@ const fn phase_of(kind: EffectKind) -> DegradationPhase {
         EffectKind::AutoLaunch
         | EffectKind::SystemProxy
         | EffectKind::ProxyGuard
+        | EffectKind::TransparentProxy
         | EffectKind::Hotkeys => DegradationPhase::SystemEffect,
     }
 }

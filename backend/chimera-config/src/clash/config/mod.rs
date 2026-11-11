@@ -80,6 +80,22 @@ pub struct ClashConfig {
     #[patch(attribute(specta(optional)))]
     pub http_port: Option<PortStrategy>,
 
+    /// Transparent proxy listener ports. `None` leaves profile-provided ports intact.
+    #[patch(attribute(serde(default, with = "::serde_with::rust::double_option")))]
+    #[patch(attribute(specta(type = Option<Option<PortStrategy>>)))]
+    pub redir_port: Option<PortStrategy>,
+
+    #[patch(attribute(serde(default, with = "::serde_with::rust::double_option")))]
+    #[patch(attribute(specta(type = Option<Option<PortStrategy>>)))]
+    pub tproxy_port: Option<PortStrategy>,
+
+    /// Capture policy applied by the platform network service.
+    #[serde(default)]
+    #[patch(nesting)]
+    #[patch(attribute(serde(default)))]
+    #[patch(attribute(specta(optional)))]
+    pub transparent_proxy: TransparentProxyConfig,
+
     /// 断开连接策略
     #[patch(nesting)]
     #[patch(attribute(specta(optional)))]
@@ -89,6 +105,121 @@ pub struct ClashConfig {
     /// Tun 堆栈选择
     #[patch(attribute(specta(optional)))]
     pub tun_stack: TunStack,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, Default, Type)]
+#[serde(rename_all = "snake_case")]
+pub enum TransparentProxyMode {
+    #[default]
+    Disabled,
+    Redir,
+    Tproxy,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, Type, Patch)]
+#[patch(attribute(derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq, Eq, Type)))]
+#[patch(attribute(serde(default, rename_all = "snake_case")))]
+#[serde(default, rename_all = "snake_case")]
+pub struct TransparentProxyConfig {
+    pub mode: TransparentProxyMode,
+    pub local: bool,
+    pub interfaces: Vec<String>,
+    pub ipv6: bool,
+}
+
+impl Default for TransparentProxyConfig {
+    fn default() -> Self {
+        Self {
+            mode: TransparentProxyMode::Disabled,
+            local: true,
+            interfaces: Vec::new(),
+            ipv6: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error, Serialize, Type)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum TransparentProxyValidationError {
+    #[error("transparent proxy listeners require Linux and Mihomo")]
+    UnsupportedTarget,
+    #[error("transparent proxy capture cannot be combined with TUN")]
+    TunConflict,
+    #[error("{mode:?} capture requires its corresponding managed listener port")]
+    MissingListener { mode: TransparentProxyMode },
+    #[error("transparent proxy listener port must be nonzero")]
+    ZeroPort,
+    #[error("transparent proxy capture needs local traffic or at least one interface")]
+    EmptyTarget,
+    #[error("invalid transparent proxy interface name: {name}")]
+    InvalidInterface { name: String },
+    #[error("transparent proxy interface list contains duplicates")]
+    DuplicateInterface,
+    #[error("transparent proxy supports at most 16 interfaces")]
+    TooManyInterfaces,
+}
+
+impl ClashConfig {
+    /// Validate the network policy and listener settings for one runtime target.
+    pub fn validate_transparent_proxy(
+        &self,
+        core: crate::application::ClashCore,
+        linux: bool,
+    ) -> Result<(), TransparentProxyValidationError> {
+        use crate::application::ClashCore;
+        use TransparentProxyMode::{Disabled, Redir, Tproxy};
+
+        let capture_enabled = self.transparent_proxy.mode != Disabled;
+        if (capture_enabled || self.redir_port.is_some() || self.tproxy_port.is_some())
+            && (!linux || !matches!(core, ClashCore::Mihomo | ClashCore::MihomoAlpha))
+        {
+            return Err(TransparentProxyValidationError::UnsupportedTarget);
+        }
+        if capture_enabled && self.enable_tun_mode {
+            return Err(TransparentProxyValidationError::TunConflict);
+        }
+        if self
+            .redir_port
+            .iter()
+            .chain(self.tproxy_port.iter())
+            .any(|port| port.kind != PortStrategyKind::Random && port.start_port == 0)
+        {
+            return Err(TransparentProxyValidationError::ZeroPort);
+        }
+        match self.transparent_proxy.mode {
+            Disabled => return Ok(()),
+            Redir if self.redir_port.is_none() => {
+                return Err(TransparentProxyValidationError::MissingListener { mode: Redir });
+            }
+            Tproxy if self.tproxy_port.is_none() => {
+                return Err(TransparentProxyValidationError::MissingListener { mode: Tproxy });
+            }
+            Redir | Tproxy => {}
+        }
+        if !self.transparent_proxy.local && self.transparent_proxy.interfaces.is_empty() {
+            return Err(TransparentProxyValidationError::EmptyTarget);
+        }
+        if self.transparent_proxy.interfaces.len() > 16 {
+            return Err(TransparentProxyValidationError::TooManyInterfaces);
+        }
+        let mut seen = std::collections::HashSet::new();
+        for name in &self.transparent_proxy.interfaces {
+            if name.is_empty()
+                || name.len() > 15
+                || !name
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || b"_.-".contains(&byte))
+            {
+                return Err(TransparentProxyValidationError::InvalidInterface {
+                    name: name.clone(),
+                });
+            }
+            if !seen.insert(name) {
+                return Err(TransparentProxyValidationError::DuplicateInterface);
+            }
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -124,12 +255,81 @@ mod patch_tests {
         let mapping = yaml.as_mapping_mut().unwrap();
         mapping.remove("clash_control_channel");
         mapping.remove("clash_ipc_disable_http_controller");
+        mapping.remove("redir_port");
+        mapping.remove("tproxy_port");
+        mapping.remove("transparent_proxy");
         let config: ClashConfig = serde_yaml_ng::from_value(yaml).unwrap();
         assert_eq!(config.clash_control_channel, ClashControlChannel::PreferIpc);
         assert!(!config.clash_ipc_disable_http_controller);
+        assert_eq!(config.redir_port, None);
+        assert_eq!(config.tproxy_port, None);
+        assert_eq!(config.transparent_proxy, TransparentProxyConfig::default());
         let app = serde_yaml_ng::to_value(crate::application::ChimeraAppConfig::default()).unwrap();
         assert!(app.get("clash_control_channel").is_none());
         assert!(app.get("clash_ipc_disable_http_controller").is_none());
+    }
+
+    #[test]
+    fn transparent_proxy_validation_checks_platform_mode_and_listener() {
+        let mut config = ClashConfig::default();
+        config.transparent_proxy.mode = TransparentProxyMode::Tproxy;
+        assert!(matches!(
+            config.validate_transparent_proxy(crate::application::ClashCore::Mihomo, true),
+            Err(TransparentProxyValidationError::MissingListener {
+                mode: TransparentProxyMode::Tproxy
+            })
+        ));
+
+        config.tproxy_port = Some(PortStrategy::new_allow_fallback(7894));
+        assert!(
+            config
+                .validate_transparent_proxy(crate::application::ClashCore::Mihomo, true)
+                .is_ok()
+        );
+        assert!(matches!(
+            config.validate_transparent_proxy(crate::application::ClashCore::ClashRs, true),
+            Err(TransparentProxyValidationError::UnsupportedTarget)
+        ));
+        assert!(matches!(
+            config.validate_transparent_proxy(crate::application::ClashCore::Mihomo, false),
+            Err(TransparentProxyValidationError::UnsupportedTarget)
+        ));
+        config.enable_tun_mode = true;
+        assert!(matches!(
+            config.validate_transparent_proxy(crate::application::ClashCore::Mihomo, true),
+            Err(TransparentProxyValidationError::TunConflict)
+        ));
+    }
+
+    #[test]
+    fn transparent_proxy_validation_checks_targets_and_zero_port() {
+        let mut config = ClashConfig::default();
+        config.redir_port = Some(PortStrategy {
+            kind: PortStrategyKind::Fixed,
+            start_port: 0,
+        });
+        assert!(matches!(
+            config.validate_transparent_proxy(crate::application::ClashCore::Mihomo, true),
+            Err(TransparentProxyValidationError::ZeroPort)
+        ));
+
+        config.redir_port = Some(PortStrategy::new_allow_fallback(7893));
+        config.transparent_proxy.mode = TransparentProxyMode::Redir;
+        config.transparent_proxy.local = false;
+        assert!(matches!(
+            config.validate_transparent_proxy(crate::application::ClashCore::Mihomo, true),
+            Err(TransparentProxyValidationError::EmptyTarget)
+        ));
+        config.transparent_proxy.interfaces = vec!["eth0".into(), "eth0".into()];
+        assert!(matches!(
+            config.validate_transparent_proxy(crate::application::ClashCore::Mihomo, true),
+            Err(TransparentProxyValidationError::DuplicateInterface)
+        ));
+        config.transparent_proxy.interfaces = vec!["interface-name-too-long".into()];
+        assert!(matches!(
+            config.validate_transparent_proxy(crate::application::ClashCore::Mihomo, true),
+            Err(TransparentProxyValidationError::InvalidInterface { .. })
+        ));
     }
 
     /// `socks_port`/`http_port` are `Option<PortStrategy>` originals under the

@@ -117,8 +117,11 @@ fn guard_inserts_override_keys_and_resolved_ports() {
             mixed_port: 7890,
             port: None,
             socks_port: Some(7891),
+            redir_port: Some(7892),
+            tproxy_port: Some(7893),
             external_controller: Some("127.0.0.1:9090".to_string()),
         },
+        routing_mark: Some(0x20000),
     };
     let result = apply_guard(
         &value(json!({ "mode": "from-profile", "rules": [] })),
@@ -136,6 +139,9 @@ fn guard_inserts_override_keys_and_resolved_ports() {
     assert_eq!(result["tcp-concurrent"], json!(true));
     assert_eq!(result["mixed-port"], json!(7890));
     assert_eq!(result["socks-port"], json!(7891));
+    assert_eq!(result["redir-port"], json!(7892));
+    assert_eq!(result["tproxy-port"], json!(7893));
+    assert_eq!(result["routing-mark"], json!(0x20000));
     assert_eq!(result["external-controller"], json!("127.0.0.1:9090"));
     assert!(result.get("port").is_none());
     assert_eq!(result["rules"], json!([]));

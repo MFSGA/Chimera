@@ -47,8 +47,60 @@ impl std::fmt::Debug for ServiceEndpoint {
     }
 }
 
+fn legacy_disabled_transparent_proxy_response(
+    mode: chimera_ipc::api::network::transparent_proxy::NetworkTransparentProxyMode,
+    error: &ClientError<'_>,
+) -> Option<chimera_ipc::api::network::transparent_proxy::NetworkTransparentProxyStatus> {
+    use chimera_ipc::api::network::transparent_proxy::{
+        NetworkTransparentProxyMode::Disabled, NetworkTransparentProxyStatus,
+    };
+
+    (mode == Disabled
+        && matches!(
+            error,
+            ClientError::HttpStatus { status, .. } if status.as_u16() == 404
+        ))
+    .then_some(NetworkTransparentProxyStatus {
+        supported: false,
+        active: false,
+        mode: None,
+        revision: None,
+        error: None,
+    })
+}
+
 #[async_trait::async_trait]
 impl ControlEndpoint for ServiceEndpoint {
+    async fn reconcile_transparent_proxy(
+        &self,
+        request: &chimera_ipc::api::network::transparent_proxy::NetworkTransparentProxyRequest,
+    ) -> Result<
+        chimera_ipc::api::network::transparent_proxy::NetworkTransparentProxyStatus,
+        CoreError,
+    > {
+        match self.client.reconcile_transparent_proxy(request).await {
+            Ok(status) => Ok(status),
+            Err(error) => legacy_disabled_transparent_proxy_response(request.mode, &error)
+                .ok_or_else(|| map_client_error(error)),
+        }
+    }
+
+    async fn transparent_proxy_status(
+        &self,
+    ) -> Result<
+        chimera_ipc::api::network::transparent_proxy::NetworkTransparentProxyStatus,
+        CoreError,
+    > {
+        match self.client.transparent_proxy_status().await {
+            Ok(status) => Ok(status),
+            Err(error) => legacy_disabled_transparent_proxy_response(
+                chimera_ipc::api::network::transparent_proxy::NetworkTransparentProxyMode::Disabled,
+                &error,
+            )
+            .ok_or_else(|| map_client_error(error)),
+        }
+    }
+
     async fn effective_config(
         &self,
     ) -> Result<Option<chimera_ipc::api::core::v2::CoreEffectiveConfig>, CoreError> {
@@ -290,6 +342,30 @@ mod tests {
 
         assert_eq!(wire_type.as_ref(), &core_type);
         assert_eq!(config, "mode: rule\n");
+    }
+
+    #[test]
+    fn disabled_transparent_proxy_treats_missing_legacy_route_as_unsupported() {
+        use chimera_ipc::api::network::transparent_proxy::NetworkTransparentProxyMode;
+
+        let not_found = ClientError::HttpStatus {
+            status: 404_u16.try_into().unwrap(),
+            message: "route not found".into(),
+        };
+        let status = legacy_disabled_transparent_proxy_response(
+            NetworkTransparentProxyMode::Disabled,
+            &not_found,
+        )
+        .expect("missing legacy route should be reported as unsupported");
+
+        assert!(!status.supported);
+        assert!(
+            legacy_disabled_transparent_proxy_response(
+                NetworkTransparentProxyMode::Tproxy,
+                &not_found,
+            )
+            .is_none()
+        );
     }
 
     #[test]

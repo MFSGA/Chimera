@@ -177,6 +177,7 @@ impl RequestedRuntimeFields {
 
     /// The runtime-relevant fields a clash-config patch carries.
     pub fn of_clash(patch: &ClashConfigPatch) -> Self {
+        use struct_patch::Status as _;
         Self {
             named: patch.overrides.is_some()
                 || patch.enable_clash_fields.is_some()
@@ -186,6 +187,9 @@ impl RequestedRuntimeFields {
                 || patch.mixed_port.start_port.is_some()
                 || patch.socks_port.is_some()
                 || patch.http_port.is_some()
+                || patch.redir_port.is_some()
+                || patch.tproxy_port.is_some()
+                || !patch.transparent_proxy.is_empty()
                 || patch.external_controller.host.is_some()
                 || patch.external_controller.port.kind.is_some()
                 || patch.external_controller.port.start_port.is_some()
@@ -336,6 +340,9 @@ struct ClashRuntimeInputs<'a> {
     mixed_port: &'a PortStrategy,
     socks_port: Option<&'a PortStrategy>,
     http_port: Option<&'a PortStrategy>,
+    redir_port: Option<&'a PortStrategy>,
+    tproxy_port: Option<&'a PortStrategy>,
+    transparent_proxy: &'a chimera_config::clash::config::TransparentProxyConfig,
     external_controller: &'a ExternalControllerStrategy,
     control_channel: ClashControlChannel,
     disable_http_controller: bool,
@@ -351,6 +358,9 @@ impl<'a> ClashRuntimeInputs<'a> {
             mixed_port: &clash.mixed_port,
             socks_port: clash.socks_port.as_ref(),
             http_port: clash.http_port.as_ref(),
+            redir_port: clash.redir_port.as_ref(),
+            tproxy_port: clash.tproxy_port.as_ref(),
+            transparent_proxy: &clash.transparent_proxy,
             external_controller: &clash.external_controller,
             control_channel: clash.clash_control_channel,
             disable_http_controller: clash.clash_ipc_disable_http_controller,

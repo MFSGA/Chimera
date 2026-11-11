@@ -187,6 +187,23 @@ impl LegacyCoreBridge {
 
 #[async_trait]
 impl CoreLifecyclePort for LegacyCoreBridge {
+    async fn reconcile_transparent_proxy(
+        &self,
+        request: &chimera_ipc::api::network::transparent_proxy::NetworkTransparentProxyRequest,
+    ) -> anyhow::Result<chimera_ipc::api::network::transparent_proxy::NetworkTransparentProxyStatus>
+    {
+        self.facade()
+            .reconcile_transparent_proxy(request.clone())
+            .await
+    }
+
+    async fn transparent_proxy_status(
+        &self,
+    ) -> anyhow::Result<chimera_ipc::api::network::transparent_proxy::NetworkTransparentProxyStatus>
+    {
+        self.facade().transparent_proxy_status().await
+    }
+
     async fn reconcile(
         &self,
         clash: ClashConfig,

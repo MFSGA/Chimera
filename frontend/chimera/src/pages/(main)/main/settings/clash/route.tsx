@@ -15,6 +15,7 @@ import IPv6Switch from './_modules/ipv6-switch';
 import LogLevelSelector from './_modules/log-level-selector';
 import MixedPortConfig from './_modules/mixed-port-config';
 import RandomPortSwitch from './_modules/random-port-switch';
+import TransparentProxyConfigSettings from './_modules/transparent-proxy-config';
 import TunStackSelector from './_modules/tun-stack-selector';
 
 export const Route = createFileRoute('/(main)/main/settings/clash')({
@@ -108,6 +109,8 @@ function RouteComponent() {
         <PatchSettings />
 
         <PortSettings />
+
+        <TransparentProxyConfigSettings />
 
         <CoreManagerSettings />
 

@@ -122,6 +122,41 @@ pub struct RuntimeTransformDiagnostics {
 
 #[async_trait]
 pub(crate) trait CoreLifecyclePort: Send + Sync {
+    async fn reconcile_transparent_proxy(
+        &self,
+        request: &chimera_ipc::api::network::transparent_proxy::NetworkTransparentProxyRequest,
+    ) -> anyhow::Result<chimera_ipc::api::network::transparent_proxy::NetworkTransparentProxyStatus>
+    {
+        use chimera_ipc::api::network::transparent_proxy::{
+            NetworkTransparentProxyMode::Disabled, NetworkTransparentProxyStatus,
+        };
+        if request.mode == Disabled {
+            return Ok(NetworkTransparentProxyStatus {
+                supported: false,
+                active: false,
+                mode: None,
+                revision: None,
+                error: None,
+            });
+        }
+        anyhow::bail!("this core lifecycle adapter does not support transparent capture")
+    }
+
+    async fn transparent_proxy_status(
+        &self,
+    ) -> anyhow::Result<chimera_ipc::api::network::transparent_proxy::NetworkTransparentProxyStatus>
+    {
+        Ok(
+            chimera_ipc::api::network::transparent_proxy::NetworkTransparentProxyStatus {
+                supported: false,
+                active: false,
+                mode: None,
+                revision: None,
+                error: None,
+            },
+        )
+    }
+
     async fn reconcile(
         &self,
         clash: ClashConfig,

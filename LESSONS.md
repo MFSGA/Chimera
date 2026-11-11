@@ -1102,3 +1102,42 @@ backend/Cargo.toml -p chimera --lib core::clash::proxies::tests:: -- --nocapture
 - Current base is master@03d6e641 and current ref is 911644c8. The original PR #633 Windows harness failure was caused by a CRLF-sensitive source extractor, not by the wheel algorithm; the unit test now normalizes CRLF before extracting the Rust raw string.
 - On the current candidate, 39/39 E2E harness unit tests pass, including four executable-script tests for nested scrolling, preventDefault, overscroll containment and residual window scrolling. E2E TypeScript, Prettier, Oxlint, single-file rustfmt, and offline cargo check -p tauri-plugin-wdio-webdriver pass.
 - Still pending: a new Windows WebView2 settings-suite run on this exact commit. The WebDriver event remains synthetic (isTrusted=false); do not claim native physical mouse-wheel or trackpad validation.
+
+### LESSON-20261110-001：Clash 配置新增嵌套 patch 必须保持稀疏反序列化
+
+- 日期与时区：2026-11-10 US/Pacific
+- 状态：Mitigated（补齐 `serde(default)` 与可选 Specta patch 字段；相关配置测试通过）
+- 严重度：Medium（旧版和局部配置更新会因缺少新字段而无法反序列化）
+- 模块：Clash typed config / struct-patch / Specta
+- master commit / ref SHA / 平台与测试环境：`codex/app-update-ref-alignment`，基线 `8ee098904d5a3d1f1f87756faeba013762ff604f`；pinned ref `231e3866cb9ae0390519a22835f6a1e98e484cbf`；macOS ARM64。
+- 关联 Issue / PR / CI / 运行日志（脱敏）：本地 DIFF-072 工作树与 `docs/ref-alignment-progress.md`；尚未建立 Issue/PR。
+- 预期行为：旧 Clash 配置与省略不相关字段的稀疏 patch 必须反序列化，新透明代理字段缺失时采用 disabled 默认值；Specta patch binding 将新嵌套字段描述为可选。
+- 真实异常、复现步骤与证据：初次执行 `cargo test --locked --manifest-path backend/Cargo.toml -p chimera-config --lib patch_tests` 时，`nested_patches_preserve_unmodified_strategy_fields` 与 `optional_ports_clear_keep_and_sparse_serialize` 失败，serde 返回 `missing field transparent_proxy`。失败发生在测试代码加载旧格式 patch 及不含新字段的请求时。
+- 确认的根因与排除项：`#[patch(nesting)]` 仅定义嵌套 patch 形状；新 `transparent_proxy` patch 缺少生成 patch struct 的 `serde(default)` 和 `specta(optional)` 标记，导致它成为必需输入。并非旧配置内容损坏或运行时字段默认值错误。
+- 修复与差异映射及保留的兼容性边界：在 `backend/chimera-config/src/clash/config/mod.rs::ClashConfig::transparent_proxy` 的 nested patch attributes 增加 `serde(default)` 与 `specta(optional)`，保留运行时透明代理默认关闭；没有手改生成 TS。
+- 原实现失败、新实现通过的回归测试，及测试注册位置：现有 `nested_patches_preserve_unmodified_strategy_fields`、`optional_ports_clear_keep_and_sparse_serialize` 加上两项透明代理校验用例，均在 `backend/chimera-config/src/clash/config/mod.rs::patch_tests`。
+- 验证命令、实际用例数量、结果、未覆盖/跳过项：修正后 `cargo test --locked --manifest-path backend/Cargo.toml -p chimera-config --lib clash::config::patch_tests` 5/5 通过；同模块旧格式/稀疏 patch 回归已执行。完整 frontend 与 Service 验证在 DIFF-072 记录；此条不代表真实 Linux 网络效果已验证。
+- 风险/回滚和清理证据：新增字段有 serde 默认值，不需迁移或改写已有用户配置；回滚本字段与其 patch attribute 不会改变已存储数据。
+- 关联重复事件、后续防复发措施、L3 门禁调整审批链接（如有）：每次给 `#[patch(nesting)]` 引入新配置字段时，同时验证 `serde(default)`、Specta optional binding 和旧配置/稀疏 patch 测试；避免只验证新默认结构的 YAML 序列化。
+
+### LESSON-20261110-002：Linux runtime builder 测试必须在支持的平台运行
+
+- 日期：2026-11-10；状态：Mitigated；模块：Runtime builder / platform tests。迁移目标为 `ref` Linux Mihomo REDIR/TPROXY 运行配置与捕获策略。
+- 复现与证据：macOS ARM64 上新增的 runtime builder 用例显式把平台配置设为 Linux；测试在验证开始处返回 `UnsupportedTarget`。根因是 Linux 专用行为测试被无条件编译进 macOS Rust 测试，不是运行时配置构建缺陷。
+- 修正与验证：该测试加 `#[cfg(target_os = "linux")]`，保留 Linux 上真实执行配置断言的路径。当前 macOS `cargo check --locked --manifest-path backend/Cargo.toml -p chimera --lib` 通过；该 Linux 用例在此主机上未执行，必须由 Linux target/CI 实际运行后才能确认行为。
+- 防复发与限制：平台专用 runtime 断言按目标平台门控；编译通过不能替代目标系统测试。没有改动 Service 或宿主网络，也没有把此用例记为通过。
+
+### LESSON-20261110-003：新增 effect 后同步完整计划与执行顺序断言
+
+- 日期：2026-11-10；状态：Mitigated；模块：Application effects。为 transparent proxy 增加独立 effect kind 后，完整 plan 和 executor 的有序效果列表应一并更新。
+- 复现与证据：`client::effects::plan::tests::full_plan_contains_every_kind_with_full_tray` 首次失败，因为预期 kind 列表遗漏 `TransparentProxy`；`client::effects::executor::tests::full_plan_dispatches_each_effect_in_reference_order` 首次失败，因为旧断言仍把 Hotkeys 期望在索引 5。
+- 修正与回归：plan 完整 kind 列表纳入新 effect；executor 断言按效果顺序验证 `TransparentProxy` 在索引 5、Hotkeys 在索引 6。随后执行 `cargo test --locked --manifest-path backend/Cargo.toml -p chimera --lib client::effects:: -- --test-threads=1`，45/45 通过。
+- 防复发与限制：新增 effect 时更新 kind 穷举、完整计划、执行器排序和 status 映射测试；此结果只证明效果计划/分发单测，不证明真实 Service 或 Linux 网络操作。
+
+### LESSON-20261110-004：配置允许 Mihomo Alpha 时 Service 必须保持一致
+
+- 日期：2026-11-10；状态：Mitigated；模块：Linux transparent proxy / Service core support。ref 主 SHA `231e3866cb9ae0390519a22835f6a1e98e484cbf`；透明代理实现来源为上游根变更 `839e7ed01646eba2e02ac4c8957db923663f17a7` 与 Service `4665b47ac6a524a273e6ba07438321b58e12dc22`。
+- 独立审查发现的已复现问题：Chimera 配置校验允许 `Mihomo` 与 `MihomoAlpha`，但 Service apply、core handoff 后复核和 stale-state 判定只接受 `ClashCoreType::Mihomo`。对应配置路径 `ref/backend/nyanpasu-config/src/clash/config/mod.rs::validate_transparent_proxy` 与 Service `ref/backend/nyanpasu-runtime/crates/nyanpasu-service-runtime/src/server/transparent_proxy.rs` 的相应 gate。ref 的这两处也存在同样不一致，属于已确认的上游缺陷，不能照搬。
+- 失败复现：新增 Service 单测 `mihomo_alpha_is_supported_for_transparent_proxy` 在修复前失败，断言 `supports_transparent_proxy_core(Some(CoreType::Clash(ClashCoreType::MihomoAlpha)))` 为 false（退出码 101）。
+- 最小修正与回归：新增统一 `supports_transparent_proxy_core` predicate，让配置接受的 stable/alpha Mihomo 在启用、apply 后再次确认和 stale 清理三处共用同一个判定。修复后透明代理与受限 Axum route 测试 **12/12** 通过；测试覆盖 stable、alpha 与无 core 状态。没有扩张到其他核心类型。
+- 复查条件与限制：后续 ref 更新 `validate_transparent_proxy` 或 Service runtime core gate 时再次对照这条对应关系，并保留 alpha 回归。当前 macOS 只能验证纯 predicate/模拟规则；没有 Linux Mihomo Alpha 进程、真实 Service 或内核网络验证。

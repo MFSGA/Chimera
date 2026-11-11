@@ -1,5 +1,6 @@
 import { commands } from './bindings';
 
+export { isTauri } from './connection-details-channel';
 export * from './system-dns';
 export * from './profile-folders';
 export * from './use-profile';
