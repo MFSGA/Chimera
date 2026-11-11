@@ -302,31 +302,33 @@ pub fn execute(
         &stage1,
         inputs.whitelist_enabled,
     ));
-    builder.push(
-        OperatorTag::BuiltinStep {
-            selected_profile_id: selected.clone(),
-            step: BuiltinStepKind::WhitelistFieldFilter,
-        },
-        working.clone(),
-    )?;
+    let step = |step| OperatorTag::BuiltinStep {
+        selected_profile_id: selected.clone(),
+        step,
+    };
+    builder.push(step(BuiltinStepKind::WhitelistFieldFilter), working.clone())?;
 
-    working = Arc::new(builtin::apply_guard_with_source(
-        &working,
-        &prefilter,
-        &inputs.guard,
-    )?);
-    working = Arc::new(builtin::apply_tun_overrides_with_source(
-        &working,
-        &prefilter,
-        &inputs.tun,
-    ));
-    builder.push(
-        OperatorTag::BuiltinStep {
-            selected_profile_id: selected.clone(),
-            step: BuiltinStepKind::GuardOverrides,
-        },
-        working.clone(),
-    )?;
+    // Preserve Chimera's existing guard -> TUN processing order. Independent
+    // snapshots expose the inherited and managed effects without changing the
+    // configuration the built-in scripts receive.
+    let ownership = plan::ownership(&inputs.guard, &inputs.tun);
+    let (inherited, _) =
+        crate::runtime::post_process::keep_inherited(&working, &prefilter, &ownership.guard);
+    working = Arc::new(inherited);
+    builder.push(step(BuiltinStepKind::KeepUnmanaged), working.clone())?;
+
+    let (managed, _) = crate::runtime::post_process::apply_settings(&working, &ownership.guard);
+    working = Arc::new(managed);
+    builder.push(step(BuiltinStepKind::ManagedSettings), working.clone())?;
+
+    let (inherited, _) =
+        crate::runtime::post_process::keep_inherited(&working, &prefilter, &ownership.tun);
+    working = Arc::new(inherited);
+    builder.push(step(BuiltinStepKind::TunKeepUnmanaged), working.clone())?;
+
+    let (managed, _) = crate::runtime::post_process::apply_settings(&working, &ownership.tun);
+    working = Arc::new(managed);
+    builder.push(step(BuiltinStepKind::TunManagedSettings), working.clone())?;
 
     for (index, builtin_transform) in inputs.builtin_transforms.iter().enumerate() {
         let outcome = runner.run(

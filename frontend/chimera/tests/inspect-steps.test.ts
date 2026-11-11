@@ -86,6 +86,34 @@ test('ref inspect model preserves source, filter and final steps', () => {
   );
 });
 
+test('guard and TUN ownership passes appear as distinct stable Inspect steps', () => {
+  const kinds = [
+    'keep_unmanaged',
+    'managed_settings',
+    'tun_keep_unmanaged',
+    'tun_managed_settings',
+  ] as const;
+  const phases: RuntimeInspectionNode[] = kinds.map((step, index) => ({
+    id: index + 4,
+    tag: { kind: 'builtin_step', data: { selected_profile_id: null, step } },
+    next: index === kinds.length - 1 ? [2] : [index + 5],
+    has_logs: false,
+    max_log_level: null,
+    changed_fields: index % 2 === 0 ? [] : ['tun.auto-route'],
+  }));
+  const steps = buildSteps([nodes[0], nodes[1], ...phases, nodes[2]], 2);
+  assert.deepEqual(
+    steps.filter((item) => item.node.id >= 4).map((item) => item.key),
+    kinds.map((step) => `builtin:${step}`),
+  );
+  assert.ok(
+    steps
+      .filter((item) => item.node.id >= 4)
+      .every((item) => item.stage === 'chimera'),
+  );
+  assert.equal(steps.at(-1)?.key, 'final');
+});
+
 test('core effective step is separate from final and errors outrank changes', () => {
   const effective: RuntimeInspectionNode = {
     id: 3,

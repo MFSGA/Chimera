@@ -90,3 +90,14 @@ do **not** remove Profile-provided listeners. An explicitly resolved port is
 forced, and Linux `routing-mark` is retained. Chimera Client's legacy TUN
 flavor does not inherit the Mihomo-family `auto-route` ownership. These
 compatibility differences are covered by focused unit tests.
+
+## Stage-separated executor and inspection (2026-11-11)
+
+The current mainline records distinct `KeepUnmanaged` and `ManagedSettings`
+steps for guard and ports, then `TunKeepUnmanaged` and `TunManagedSettings`
+for TUN. Unlike the reference's combined plan pass, this preserves the
+existing Chimera guard-then-TUN ordering, including key insertion order seen
+by built-in transforms. `GuardOverrides` remains readable in historical
+snapshots but is not emitted in newly generated graphs. Inspect uses generated
+Specta types and translated labels for all four stages; existing Finalizing
+remains the authoritative generated configuration node.

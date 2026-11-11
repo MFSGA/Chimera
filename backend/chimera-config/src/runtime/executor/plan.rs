@@ -13,10 +13,20 @@ use crate::runtime::{
 
 use super::{GuardInputs, TunFlavor, TunParams};
 
-pub(super) fn ownership(guard: &GuardInputs<'_>, tun: &TunParams) -> OwnershipEntries {
-    let mut entries = guard_ownership(guard);
-    entries.extend(tun_ownership(tun));
-    entries
+/// Keep guard/ports and TUN ownership as ordered, separate operations: the
+/// existing Chimera pipeline applies guard settings before restoring TUN keys.
+/// Combining both inheritance passes would reorder keys seen by built-in
+/// transforms even when the final sorted YAML remains the same.
+pub(super) struct RuntimePlan {
+    pub guard: OwnershipEntries,
+    pub tun: OwnershipEntries,
+}
+
+pub(super) fn ownership(guard: &GuardInputs<'_>, tun: &TunParams) -> RuntimePlan {
+    RuntimePlan {
+        guard: guard_ownership(guard),
+        tun: tun_ownership(tun),
+    }
 }
 
 pub(super) fn guard_ownership(guard: &GuardInputs<'_>) -> OwnershipEntries {

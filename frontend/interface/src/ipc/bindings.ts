@@ -1026,8 +1026,17 @@ export type BuildInfo = {
 
 /**  Built-in post-processing steps applied to the selected config. */
 export type BuiltinStepKind =
+  /**  Kept for materializing older snapshots; new pipelines use fine-grained steps. */
   | 'guard_overrides'
   | 'whitelist_field_filter'
+  /**  Restore unmanaged guard values removed by the first filter. */
+  | 'keep_unmanaged'
+  /**  Apply managed guard values, resolved ports, and routing-mark. */
+  | 'managed_settings'
+  /**  Restore unmanaged TUN values after guard settings (Chimera ordering). */
+  | 'tun_keep_unmanaged'
+  /**  Apply TUN enable/auto-route ownership before builtin transforms. */
+  | 'tun_managed_settings'
   | 'finalizing'
   /**  Read-only view of the configuration reported by the running core. */
   | 'core_controller';

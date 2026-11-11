@@ -54,6 +54,14 @@ function stepKind(tag: OperatorTag): string {
           return m.inspect_tag_guard();
         case 'whitelist_field_filter':
           return m.inspect_tag_filter();
+        case 'keep_unmanaged':
+          return m.inspect_tag_keep_unmanaged();
+        case 'managed_settings':
+          return m.inspect_tag_managed_settings();
+        case 'tun_keep_unmanaged':
+          return m.inspect_tag_tun_keep_unmanaged();
+        case 'tun_managed_settings':
+          return m.inspect_tag_tun_managed_settings();
         case 'finalizing':
           return m.inspect_tag_finalizing();
         case 'core_controller':

@@ -73,8 +73,17 @@ pub enum ConfigExecutionRole {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "snake_case")]
 pub enum BuiltinStepKind {
+    /// Kept for materializing older snapshots; new pipelines use fine-grained steps.
     GuardOverrides,
     WhitelistFieldFilter,
+    /// Restore unmanaged guard values removed by the first filter.
+    KeepUnmanaged,
+    /// Apply managed guard values, resolved ports, and routing-mark.
+    ManagedSettings,
+    /// Restore unmanaged TUN values after guard settings (Chimera ordering).
+    TunKeepUnmanaged,
+    /// Apply TUN enable/auto-route ownership before builtin transforms.
+    TunManagedSettings,
     Finalizing,
     /// Read-only view of the configuration reported by the running core.
     CoreController,

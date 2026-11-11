@@ -72,7 +72,7 @@ fn overrides_with_patch(yaml: &str) -> ClashGuardOverrides {
 
 #[test]
 fn selected_file_config_records_canonical_mainline() {
-    // §7.1：root → scoped → global → whitelist → guard → builtin-transform → finalizing
+    // §7.1：root → scoped → global → filter → guard/TUN inheritance and settings → builtin → finalizing
     let profiles = profiles_with(
         Some("sub-a"),
         &["global-fix"],
@@ -129,25 +129,32 @@ fn selected_file_config_records_canonical_mainline() {
             ..
         }
     ));
+    for (offset, kind) in [
+        BuiltinStepKind::KeepUnmanaged,
+        BuiltinStepKind::ManagedSettings,
+        BuiltinStepKind::TunKeepUnmanaged,
+        BuiltinStepKind::TunManagedSettings,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        assert!(matches!(
+            tags[4 + offset],
+            OperatorTag::BuiltinStep { step, .. } if *step == kind
+        ));
+    }
     assert!(matches!(
-        tags[4],
-        OperatorTag::BuiltinStep {
-            step: BuiltinStepKind::GuardOverrides,
-            ..
-        }
-    ));
-    assert!(matches!(
-        tags[5],
+        tags[8],
         OperatorTag::BuiltinTransform { step_index: 0, .. }
     ));
     assert!(matches!(
-        tags[6],
+        tags[9],
         OperatorTag::BuiltinStep {
             step: BuiltinStepKind::Finalizing,
             ..
         }
     ));
-    assert_eq!(artifact.graph.nodes.len(), 7);
+    assert_eq!(artifact.graph.nodes.len(), 10);
 
     // 语义断言：scoped + global 追加都生效，guard 覆盖 mode。
     let config = artifact.final_config.to_json();
@@ -228,6 +235,72 @@ fn managed_guard_fields_override_profile_values() {
 
     assert_eq!(config["unified-delay"], json!(true));
     assert_eq!(config["tcp-concurrent"], json!(true));
+}
+
+#[cfg(feature = "default-meta")]
+#[test]
+fn staged_ownership_matches_legacy_builtin_input_exactly() {
+    use crate::runtime::{executor::builtin, value::ConfigValue};
+
+    let profiles = profiles_with(
+        Some("sub-a"),
+        &[],
+        &[],
+        vec![config_file_item("sub-a", "sub-a.yaml", &[])],
+    );
+    let content = MapContentSource::from_pairs(&[(
+        "sub-a.yaml",
+        "proxies: []
+unified-delay: false
+tun: { auto-route: false, stack: system }
+",
+    )]);
+    let ov = overrides_with_patch(
+        "unified-delay: { kind: unmanaged }
+",
+    );
+    let mut inputs = base_inputs(&profiles, ExecutionTarget::Selected(pid("sub-a")), &ov, &[]);
+    inputs.tun.enable = true;
+    inputs.tun.overrides.auto_route = ManageableField::Unmanaged;
+    let artifact = execute(&inputs, &content, &FakeScriptRunner::default()).unwrap();
+    let root = &artifact.graph.nodes[0].snapshot.config;
+    let filtered = artifact
+        .graph
+        .nodes
+        .iter()
+        .find(|node| {
+            matches!(
+                node.tag,
+                OperatorTag::BuiltinStep {
+                    step: BuiltinStepKind::WhitelistFieldFilter,
+                    ..
+                }
+            )
+        })
+        .unwrap();
+    let managed_tun = artifact
+        .graph
+        .nodes
+        .iter()
+        .find(|node| {
+            matches!(
+                node.tag,
+                OperatorTag::BuiltinStep {
+                    step: BuiltinStepKind::TunManagedSettings,
+                    ..
+                }
+            )
+        })
+        .unwrap();
+    let root = ConfigValue::from_json_value(root.clone());
+    let filtered = ConfigValue::from_json_value(filtered.snapshot.config.clone());
+    let original_guard = builtin::apply_guard_with_source(&filtered, &root, &inputs.guard).unwrap();
+    let original = builtin::apply_tun_overrides_with_source(&original_guard, &root, &inputs.tun);
+    assert_eq!(
+        serde_json::to_string(&original.to_json()).unwrap(),
+        serde_json::to_string(&managed_tun.snapshot.config).unwrap(),
+        "staging must preserve even field insertion order seen by builtin transforms"
+    );
 }
 
 #[test]
