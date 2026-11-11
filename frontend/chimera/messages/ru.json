@@ -1123,6 +1123,7 @@
   "inspect_tag_filter": "Отфильтровать разрешённые поля",
   "inspect_tag_final_filter": "Отфильтровать поля вне ядра",
   "inspect_tag_defaults": "Применить значения TUN, DNS и кэша",
+  "inspect_tag_include_all": "Развернуть группы прокси include-all",
   "inspect_tag_finalizing": "Завершить конфигурацию",
   "inspect_snapshot_label": "Снимок",
   "inspect_snapshot_latest": "Сгенерировано",

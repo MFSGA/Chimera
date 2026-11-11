@@ -10,6 +10,7 @@ use crate::runtime::{
     value::{ConfigObject, ConfigValue},
 };
 
+#[cfg(test)]
 use super::value_util::{obj_get, obj_insert};
 #[cfg(test)]
 use super::{GuardInputs, TunFlavor, TunParams, error::RuntimePipelineError, plan};
@@ -192,7 +193,7 @@ pub(super) fn finalize_for_core(
 ) -> ConfigValue {
     let filtered = final_field_filter(config, whitelist_enabled, core_supports_mmdb);
     let defaults = apply_runtime_defaults(&filtered, &plan::final_defaults_ownership(tun));
-    finalize_post_defaults(&defaults)
+    finalize_post_defaults(&super::include_all::expand_legacy(&defaults))
 }
 
 /// Second core-specific field filter. Never pass Chimera Client's `mmdb`
@@ -229,10 +230,9 @@ pub(super) fn legacy_runtime_defaults(config: &ConfigValue, tun: &TunParams) -> 
     apply_cache(&next)
 }
 
-/// The last postprocessing pass changes only include-all groups and key order.
+/// The last postprocessing pass changes only the top-level field ordering.
 pub(super) fn finalize_post_defaults(config: &ConfigValue) -> ConfigValue {
-    let next = apply_include_all(config);
-    apply_sort(&next)
+    apply_sort(config)
 }
 
 fn strip_chimera_client_fields(config: &ConfigValue) -> ConfigValue {
@@ -263,6 +263,7 @@ fn append_default(map: &mut ConfigObject, key: &str, value: ConfigValue) {
     }
 }
 
+#[cfg(test)]
 fn string_value(text: &str) -> ConfigValue {
     ConfigValue::String(Arc::from(text))
 }
@@ -370,71 +371,6 @@ fn apply_tun_dns(
         );
     }
     obj_insert(config, "dns", ConfigValue::Object(Arc::new(dns)))
-}
-
-/// Mirrors enhance/mod.rs:163-248.
-fn apply_include_all(config: &ConfigValue) -> ConfigValue {
-    let mut names: Vec<String> = Vec::new();
-    if let Some(proxies) = obj_get(config, "proxies").and_then(ConfigValue::as_array_arc) {
-        for proxy in proxies.iter() {
-            if let Some(ConfigValue::String(name)) =
-                proxy.as_object_arc().and_then(|map| map.get("name"))
-            {
-                names.push(name.to_string());
-            }
-        }
-    }
-    if let Some(providers) = obj_get(config, "proxy-providers").and_then(ConfigValue::as_object_arc)
-    {
-        names.extend(providers.keys().map(|key| key.to_string()));
-    }
-
-    let Some(groups) = obj_get(config, "proxy-groups").and_then(ConfigValue::as_array_arc) else {
-        return config.clone();
-    };
-    let rebuilt: Vec<ConfigValue> = groups
-        .iter()
-        .map(|group| {
-            let Some(map) = group.as_object_arc() else {
-                return group.clone();
-            };
-            let include_all = matches!(map.get("include-all"), Some(ConfigValue::Bool(true)));
-            if !include_all || !map.contains_key("name") {
-                return group.clone();
-            }
-            let existing: Vec<String> = map
-                .get("proxies")
-                .and_then(ConfigValue::as_array_arc)
-                .map(|seq| {
-                    seq.iter()
-                        .filter_map(|value| match value {
-                            ConfigValue::String(name) => Some(name.to_string()),
-                            _ => None,
-                        })
-                        .collect()
-                })
-                .unwrap_or_default();
-
-            let mut proxies: Vec<ConfigValue> =
-                names.iter().map(|name| string_value(name)).collect();
-            proxies.extend(
-                existing
-                    .iter()
-                    .filter(|name| !names.contains(name))
-                    .map(|name| string_value(name)),
-            );
-
-            let mut next = (**map).clone();
-            next.insert(Arc::from("proxies"), ConfigValue::Array(Arc::from(proxies)));
-            next.shift_remove("include-all");
-            ConfigValue::Object(Arc::new(next))
-        })
-        .collect();
-    obj_insert(
-        config,
-        "proxy-groups",
-        ConfigValue::Array(Arc::from(rebuilt)),
-    )
 }
 
 /// Mirrors enhance/mod.rs:250-261: existing `profile` keys are not merged.

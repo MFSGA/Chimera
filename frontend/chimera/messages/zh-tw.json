@@ -1112,6 +1112,7 @@
   "inspect_tag_filter": "篩選允許的欄位",
   "inspect_tag_final_filter": "過濾核心不支援的欄位",
   "inspect_tag_defaults": "套用 TUN、DNS 與快取預設值",
+  "inspect_tag_include_all": "展開 include-all 代理群組",
   "inspect_tag_finalizing": "完成設定",
   "inspect_snapshot_label": "快照",
   "inspect_snapshot_latest": "產生設定",

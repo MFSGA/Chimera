@@ -88,6 +88,8 @@ pub enum BuiltinStepKind {
     FinalFieldFilter,
     /// Apply TUN, DNS and profile cache defaults after builtin transforms.
     Defaults,
+    /// Expand legacy `include-all` proxy groups before final field sorting.
+    IncludeAllExpansion,
     Finalizing,
     /// Read-only view of the configuration reported by the running core.
     CoreController,

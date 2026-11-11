@@ -17,7 +17,7 @@
   config; apply the first field filter; restore inherited guard fields; apply
   managed guard fields and ports; restore inherited TUN fields; apply managed
   TUN settings; execute builtin transforms; filter for the selected core;
-  apply TUN/DNS/profile defaults; and finalize include-all and key ordering.
+  apply TUN/DNS/profile defaults; expand include-all, then finalize key ordering.
   TUN auto-route ownership is applied before builtin transforms.
 - Authoritative results:
   - A managed guard value overrides a conflicting Profile value.
@@ -106,14 +106,15 @@ remains the authoritative generated configuration node.
 
 After built-in transforms, Chimera records `FinalFieldFilter` (second field
 filter and mandatory non-Client `mmdb` removal), `Defaults` (legacy TUN/DNS
-and profile-cache defaults), and `Finalizing` (include-all expansion and stable
-key sorting). This preserves the former `filter -> TUN -> include-all -> cache
--> sort` final YAML: include-all only reads proxy groups and providers, whereas
-the cache pass only writes the `profile` key, so their relative order may be
-exchanged without changing output. No defaults are moved ahead of builtin
-transforms. Existing finalizing snapshots and the Chimera Client-specific DNS
-and TUN defaults remain supported. The new steps are inspectable snapshots;
-there is still no real Core or desktop acceptance claim.
+and profile-cache defaults), `IncludeAllExpansion` (legacy proxy-group
+expansion), and `Finalizing` (stable key sorting). This preserves the former
+`filter -> TUN -> include-all -> cache -> sort` final YAML: include-all only
+reads proxy groups and providers, whereas the cache pass only writes the
+`profile` key, so their relative order may be exchanged without changing
+output. No defaults are moved ahead of builtin transforms. Existing finalizing
+snapshots and Chimera Client-specific DNS and TUN defaults remain supported.
+The new steps are inspectable snapshots; there is still no real Core or
+desktop acceptance claim.
 
 ## Declarative final defaults (2026-11-11)
 
@@ -133,3 +134,20 @@ profile shapes (including conflicting, scalar and absent fields). Each
 comparison checks the complete serialized JSON, including map key order.
 Passing this pure check does not establish real DNS leak protection or device
 routing behavior. There is no new persistence field or user-facing default.
+
+## Separate include-all expansion (2026-11-11)
+
+`runtime/executor/include_all.rs` contains Chimera's former `include-all`
+function without changing its behavior. Runtime snapshots now record a
+separate `IncludeAllExpansion` node between the `Defaults` and `Finalizing`
+steps, and Inspect provides the step's translated label in all five locales.
+`Finalizing` continues to identify the authoritative sorted output node,
+including when older stored graphs have no expansion step. The existing
+compatibility contract preserves proxy/provider declaration order, previously
+included entry handling, and only expands named groups with a boolean
+`include-all: true`. Reference-specific `include-all-proxies`,
+`include-all-providers`, `filter`, `exclude-filter`, and `exclude-type` are **not**
+silently reinterpreted; full upstream semantics and the reference's
+`expand_include_all` switch remain future decisions. The unit tests cover
+legacy expansion and unsupported fields left for the Core. No live Core
+routing or provider behavior is claimed.

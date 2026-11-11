@@ -5,6 +5,7 @@ mod artifact;
 mod builtin;
 mod compose;
 mod error;
+mod include_all;
 mod overlay;
 mod plan;
 mod ports;
@@ -371,6 +372,9 @@ pub fn execute(
         &ownership.final_defaults,
     ));
     builder.push(step(BuiltinStepKind::Defaults), working.clone())?;
+
+    working = Arc::new(include_all::expand_legacy(&working));
+    builder.push(step(BuiltinStepKind::IncludeAllExpansion), working.clone())?;
 
     working = Arc::new(builtin::finalize_post_defaults(&working));
     builder.push(step(BuiltinStepKind::Finalizing), working.clone())?;

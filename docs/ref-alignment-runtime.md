@@ -51,15 +51,16 @@ Chimera now declares `GuardInputs`/`TunParams` ownership in
 resolved ports and `routing-mark` semantics. The current pure Executor records
 `WhitelistFieldFilter`, `KeepUnmanaged`, `ManagedSettings`,
 `TunKeepUnmanaged`, `TunManagedSettings`, then built-in transforms,
-`FinalFieldFilter`, `Defaults`, and the final `Finalizing` node. The legacy
+`FinalFieldFilter`, `Defaults`, `IncludeAllExpansion`, and the final
+`Finalizing` node. The legacy
 `GuardOverrides` tag is retained for deserializing older graphs. Guard and TUN
 ownership are deliberately separate to preserve the intermediate insertion
 order that built-in scripts observe. Generated Specta bindings and five
 localized Inspect labels accompany the Rust tags.
 
 The second filter still preserves Chimera Client's `mmdb` capability boundary;
-TUN/DNS defaults stay *after* built-in transforms; the final node retains
-include-all expansion and sorting. These stages expose internal config
+TUN/DNS defaults stay *after* built-in transforms; the dedicated include-all
+node runs before the final sorting node. These stages expose internal config
 transformations but do not imply runtime Core acceptance. Unset listener ports
 retain current Chimera behavior rather than adopting the reference's removal
 policy. The review-only `ref` checkout was `b37e18444e3df012fe8f548e7e0818ed8b4aa227`
@@ -87,3 +88,17 @@ adopt the reference's optional `expand_include_all` policy. The prior
 TUN/DNS/cache implementation remains as a test-only equivalence oracle, with
 112 pure config comparisons across all TUN flavors and representative Profile
 inputs. No live Core or network behavior was exercised in this migration.
+
+## Standalone include-all expansion stage (2026-11-11)
+
+The former `builtin.rs::apply_include_all` algorithm is now isolated in
+`runtime/executor/include_all.rs::expand_legacy`, with a distinct
+`BuiltinStepKind::IncludeAllExpansion` and Inspect label. The user-visible
+finalizing node still selects the finished sorted YAML. Chimera keeps its
+legacy expansion rules and declaration order rather than importing the
+reference's filter/provider/sorted expansion in a way that might change
+existing Profile outputs. Reference `expand_include_all` (default enabled)
+and the broader Mihomo `include-all*` grammar remain a separately scoped
+compatibility decision. No settings schema, Core, or runtime network behavior
+was changed in this slice; new tests assert the stage boundary and existing
+legacy behavior.

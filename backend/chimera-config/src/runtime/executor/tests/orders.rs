@@ -150,6 +150,7 @@ fn selected_file_config_records_canonical_mainline() {
     for (index, kind) in [
         BuiltinStepKind::FinalFieldFilter,
         BuiltinStepKind::Defaults,
+        BuiltinStepKind::IncludeAllExpansion,
         BuiltinStepKind::Finalizing,
     ]
     .into_iter()
@@ -157,7 +158,7 @@ fn selected_file_config_records_canonical_mainline() {
     {
         assert!(matches!(tags[9 + index], OperatorTag::BuiltinStep { step, .. } if *step == kind));
     }
-    assert_eq!(artifact.graph.nodes.len(), 12);
+    assert_eq!(artifact.graph.nodes.len(), 13);
 
     // 语义断言：scoped + global 追加都生效，guard 覆盖 mode。
     let config = artifact.final_config.to_json();
@@ -339,6 +340,7 @@ extra: ignored
     };
     let filtered = find(BuiltinStepKind::FinalFieldFilter);
     let defaults = find(BuiltinStepKind::Defaults);
+    let expansion = find(BuiltinStepKind::IncludeAllExpansion);
     let finalizer = find(BuiltinStepKind::Finalizing);
 
     assert!(filtered.snapshot.config.get("extra").is_none());
@@ -347,6 +349,18 @@ extra: ignored
     assert_eq!(
         defaults.snapshot.config["profile"]["store-selected"],
         json!(true)
+    );
+    assert!(
+        defaults.snapshot.config["proxy-groups"][0]
+            .get("include-all")
+            .is_some(),
+        "the defaults step must not consume include-all early"
+    );
+    assert!(
+        expansion.snapshot.config["proxy-groups"][0]
+            .get("include-all")
+            .is_none(),
+        "only the dedicated include-all stage may consume the flag"
     );
     assert_eq!(
         serde_json::to_string(&finalizer.snapshot.config).unwrap(),

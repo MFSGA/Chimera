@@ -1041,6 +1041,8 @@ export type BuiltinStepKind =
   | 'final_field_filter'
   /**  Apply TUN, DNS and profile cache defaults after builtin transforms. */
   | 'defaults'
+  /**  Expand legacy `include-all` proxy groups before final field sorting. */
+  | 'include_all_expansion'
   | 'finalizing'
   /**  Read-only view of the configuration reported by the running core. */
   | 'core_controller';

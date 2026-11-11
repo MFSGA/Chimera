@@ -66,6 +66,8 @@ function stepKind(tag: OperatorTag): string {
           return m.inspect_tag_final_filter();
         case 'defaults':
           return m.inspect_tag_defaults();
+        case 'include_all_expansion':
+          return m.inspect_tag_include_all();
         case 'finalizing':
           return m.inspect_tag_finalizing();
         case 'core_controller':

@@ -150,6 +150,26 @@ test('default and core field-filter stages remain inspectable before finalizing'
   assert.equal(steps.at(-1)?.key, 'final');
 });
 
+test('dedicated include-all expansion stays ahead of the final configuration', () => {
+  const expansion: RuntimeInspectionNode = {
+    id: 4,
+    tag: {
+      kind: 'builtin_step',
+      data: { selected_profile_id: null, step: 'include_all_expansion' },
+    },
+    next: [2],
+    has_logs: false,
+    max_log_level: null,
+    changed_fields: ['proxy-groups'],
+  };
+  const steps = buildSteps([nodes[0], nodes[1], expansion, nodes[2]], 2);
+  const expand = steps.find((step) => step.node.id === 4);
+  assert.equal(expand?.stage, 'chimera');
+  assert.equal(expand?.key, 'builtin:include_all_expansion');
+  assert.equal(expand?.changedCount, 1);
+  assert.equal(steps.at(-1)?.key, 'final');
+});
+
 test('core effective step is separate from final and errors outrank changes', () => {
   const effective: RuntimeInspectionNode = {
     id: 3,
