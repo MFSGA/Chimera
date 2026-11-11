@@ -1110,6 +1110,8 @@
   "inspect_tag_tun_keep_unmanaged": "還原設定檔的 TUN 欄位",
   "inspect_tag_tun_managed_settings": "套用受管理的 TUN 設定",
   "inspect_tag_filter": "篩選允許的欄位",
+  "inspect_tag_final_filter": "過濾核心不支援的欄位",
+  "inspect_tag_defaults": "套用 TUN、DNS 與快取預設值",
   "inspect_tag_finalizing": "完成設定",
   "inspect_snapshot_label": "快照",
   "inspect_snapshot_latest": "產生設定",

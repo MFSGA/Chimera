@@ -147,14 +147,17 @@ fn selected_file_config_records_canonical_mainline() {
         tags[8],
         OperatorTag::BuiltinTransform { step_index: 0, .. }
     ));
-    assert!(matches!(
-        tags[9],
-        OperatorTag::BuiltinStep {
-            step: BuiltinStepKind::Finalizing,
-            ..
-        }
-    ));
-    assert_eq!(artifact.graph.nodes.len(), 10);
+    for (index, kind) in [
+        BuiltinStepKind::FinalFieldFilter,
+        BuiltinStepKind::Defaults,
+        BuiltinStepKind::Finalizing,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        assert!(matches!(tags[9 + index], OperatorTag::BuiltinStep { step, .. } if *step == kind));
+    }
+    assert_eq!(artifact.graph.nodes.len(), 12);
 
     // 语义断言：scoped + global 追加都生效，guard 覆盖 mode。
     let config = artifact.final_config.to_json();
@@ -300,6 +303,73 @@ tun: { auto-route: false, stack: system }
         serde_json::to_string(&original.to_json()).unwrap(),
         serde_json::to_string(&managed_tun.snapshot.config).unwrap(),
         "staging must preserve even field insertion order seen by builtin transforms"
+    );
+}
+
+#[test]
+fn defaults_are_inspectable_without_changing_final_yaml() {
+    let profiles = profiles_with(
+        Some("sub-a"),
+        &[],
+        &["tun", "dns"],
+        vec![config_file_item("sub-a", "sub-a.yaml", &[])],
+    );
+    let content = MapContentSource::from_pairs(&[(
+        "sub-a.yaml",
+        "proxies: []
+proxy-groups: [{ name: Group, type: select, include-all: true }]
+extra: ignored
+",
+    )]);
+    let ov = overrides();
+    let mut inputs = base_inputs(&profiles, ExecutionTarget::Selected(pid("sub-a")), &ov, &[]);
+    inputs.tun.enable = true;
+    let artifact = execute(&inputs, &content, &FakeScriptRunner::default()).unwrap();
+    let find = |kind| {
+        artifact
+            .graph
+            .nodes
+            .iter()
+            .find(|node| {
+                matches!(
+                    node.tag, OperatorTag::BuiltinStep { step, .. } if step == kind
+                )
+            })
+            .unwrap()
+    };
+    let filtered = find(BuiltinStepKind::FinalFieldFilter);
+    let defaults = find(BuiltinStepKind::Defaults);
+    let finalizer = find(BuiltinStepKind::Finalizing);
+
+    assert!(filtered.snapshot.config.get("extra").is_none());
+    assert!(defaults.snapshot.config["dns"]["enable"].as_bool().unwrap());
+    assert!(defaults.snapshot.config["tun"]["enable"].as_bool().unwrap());
+    assert_eq!(
+        defaults.snapshot.config["profile"]["store-selected"],
+        json!(true)
+    );
+    assert_eq!(
+        serde_json::to_string(&finalizer.snapshot.config).unwrap(),
+        serde_json::to_string(&artifact.final_config.to_json()).unwrap(),
+    );
+    assert_eq!(
+        serde_json::to_string(&artifact.final_config.to_json()).unwrap(),
+        serde_json::to_string(
+            &super::super::builtin::finalize_for_core(
+                &crate::runtime::value::ConfigValue::from_json_value(
+                    find(BuiltinStepKind::TunManagedSettings)
+                        .snapshot
+                        .config
+                        .clone()
+                ),
+                &inputs.tun,
+                inputs.whitelist_enabled,
+                inputs.core_supports_mmdb,
+            )
+            .to_json()
+        )
+        .unwrap(),
+        "split steps must preserve the finalizing output and key order"
     );
 }
 

@@ -14,11 +14,11 @@
   - `Forced`, `Removed`, `Default`, `Inherited`, and `Table` describe
     post-processing at the corresponding config key.
 - Runtime order: build Profile and transform output; retain the pre-filter
-  config; apply the first field filter; restore inherited guard and TUN keys
-  from the pre-filter config; apply managed guard and TUN settings; then
-  continue with resolved port bindings and the existing built-in/finalizing
-  stages. TUN auto-route ownership is applied before builtin transforms, so
-  transforms see the restored or managed value.
+  config; apply the first field filter; restore inherited guard fields; apply
+  managed guard fields and ports; restore inherited TUN fields; apply managed
+  TUN settings; execute builtin transforms; filter for the selected core;
+  apply TUN/DNS/profile defaults; and finalize include-all and key ordering.
+  TUN auto-route ownership is applied before builtin transforms.
 - Authoritative results:
   - A managed guard value overrides a conflicting Profile value.
   - An unmanaged guard value preserves the Profile/transform value even when
@@ -51,11 +51,11 @@
   `ClashConfig.overrides` setting through Chimera's local settings hook. All
   five locale message sets were regenerated and the TypeScript contract passed.
   No UI control for `tun.auto-route` is exposed in this slice.
-- Not covered yet: a separate Runtime plan module, separate snapshot nodes
-  for inherited/settings/default passes, port removal semantics, live Core
-  acceptance, TUN device creation, host routes, DNS/system-proxy changes, and
-  Windows/macOS/Linux desktop behavior. Do not describe this slice as complete
-  Runtime ownership parity.
+- Not covered yet: complete upstream Runtime plan parity (especially unset
+  port removal semantics and include-all ownership), live Core acceptance,
+  TUN device creation, host routes, DNS/system-proxy changes, and
+  Windows/macOS/Linux desktop behavior. The Plan and separate snapshot stages
+  are now present, but this does not establish complete upstream parity.
 - Regression sensitivity: serializing a tagged object into generated Core
   YAML, failing to restore an unmanaged field after filtering, synthesizing an
   absent inherited key, overwriting a Profile value marked unmanaged, changing
@@ -101,3 +101,16 @@ by built-in transforms. `GuardOverrides` remains readable in historical
 snapshots but is not emitted in newly generated graphs. Inspect uses generated
 Specta types and translated labels for all four stages; existing Finalizing
 remains the authoritative generated configuration node.
+
+## Finalizing phase split (2026-11-11)
+
+After built-in transforms, Chimera records `FinalFieldFilter` (second field
+filter and mandatory non-Client `mmdb` removal), `Defaults` (legacy TUN/DNS
+and profile-cache defaults), and `Finalizing` (include-all expansion and stable
+key sorting). This preserves the former `filter -> TUN -> include-all -> cache
+-> sort` final YAML: include-all only reads proxy groups and providers, whereas
+the cache pass only writes the `profile` key, so their relative order may be
+exchanged without changing output. No defaults are moved ahead of builtin
+transforms. Existing finalizing snapshots and the Chimera Client-specific DNS
+and TUN defaults remain supported. The new steps are inspectable snapshots;
+there is still no real Core or desktop acceptance claim.

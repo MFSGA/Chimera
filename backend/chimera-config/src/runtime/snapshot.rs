@@ -84,6 +84,10 @@ pub enum BuiltinStepKind {
     TunKeepUnmanaged,
     /// Apply TUN enable/auto-route ownership before builtin transforms.
     TunManagedSettings,
+    /// Second field filter against the actual selected core's supported keys.
+    FinalFieldFilter,
+    /// Apply TUN, DNS and profile cache defaults after builtin transforms.
+    Defaults,
     Finalizing,
     /// Read-only view of the configuration reported by the running core.
     CoreController,

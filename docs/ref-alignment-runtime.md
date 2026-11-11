@@ -43,3 +43,31 @@ For Standard and ClashRs TUN flavors, `Managed(true)` is the default and forces 
 This is a field-level adaptation to Chimera's existing executor, not the complete ref runtime-plan migration. Guard and TUN ownership still share the existing `GuardOverrides` snapshot node; the finalizing stage still supplies stack and DNS defaults. There is no new UI control for `tun.auto-route` because the reference does not expose one. The pure config pipeline does not create a TUN device or change host routes, DNS, or system proxy.
 
 Validation: `chimera-config` default library suite **212/212** and no-default-meta/nesting suite **203/203** passed; config Clippy passed with two existing test-fixture dead-code warnings; Tauri RuntimeBuilder tests **9/9**, nested request-impact tests **2/2**, Specta binding freshness **1/1**, TypeScript typecheck, frontend-boundary lint, oxlint, Chimera UI build, Rustfmt, Prettier, and `git diff --check` passed. The Vite configLoader/native and large-chunk warnings remain. No live Core or host networking test is claimed.
+
+## Plan and Inspect stage separation (2026-11-11)
+
+Chimera now declares `GuardInputs`/`TunParams` ownership in
+`backend/chimera-config/src/runtime/executor/plan.rs`, keeping Chimera-specific
+resolved ports and `routing-mark` semantics. The current pure Executor records
+`WhitelistFieldFilter`, `KeepUnmanaged`, `ManagedSettings`,
+`TunKeepUnmanaged`, `TunManagedSettings`, then built-in transforms,
+`FinalFieldFilter`, `Defaults`, and the final `Finalizing` node. The legacy
+`GuardOverrides` tag is retained for deserializing older graphs. Guard and TUN
+ownership are deliberately separate to preserve the intermediate insertion
+order that built-in scripts observe. Generated Specta bindings and five
+localized Inspect labels accompany the Rust tags.
+
+The second filter still preserves Chimera Client's `mmdb` capability boundary;
+TUN/DNS defaults stay *after* built-in transforms; the final node retains
+include-all expansion and sorting. These stages expose internal config
+transformations but do not imply runtime Core acceptance. Unset listener ports
+retain current Chimera behavior rather than adopting the reference's removal
+policy. The review-only `ref` checkout was `b37e18444e3df012fe8f548e7e0818ed8b4aa227`
+while the parent repository's tracked `ref` gitlink remains
+`59724e85c34abb6995c22d101c876cc06dc16576`; the existing ref
+`backend/Cargo.lock` change was deliberately left untouched. Do not claim
+full pinned-reference parity based on this partial stage alignment.
+
+The corresponding unit tests assert final configuration content, stage order,
+pre-builtin config insertion order, filtered keys, TUN/DNS/cache defaults, and
+Inspect step identities. No live TUN, Service, DNS or desktop E2E test was run.

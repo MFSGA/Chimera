@@ -1119,6 +1119,8 @@
   "inspect_tag_tun_keep_unmanaged": "Restore profile TUN fields",
   "inspect_tag_tun_managed_settings": "Apply managed TUN settings",
   "inspect_tag_filter": "Filter allowed fields",
+  "inspect_tag_final_filter": "Filter unsupported core fields",
+  "inspect_tag_defaults": "Apply TUN, DNS and cache defaults",
   "inspect_tag_finalizing": "Finalize configuration",
   "inspect_snapshot_label": "Snapshot",
   "inspect_snapshot_latest": "Generated",

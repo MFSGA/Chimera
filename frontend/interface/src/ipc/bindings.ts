@@ -1037,6 +1037,10 @@ export type BuiltinStepKind =
   | 'tun_keep_unmanaged'
   /**  Apply TUN enable/auto-route ownership before builtin transforms. */
   | 'tun_managed_settings'
+  /**  Second field filter against the actual selected core's supported keys. */
+  | 'final_field_filter'
+  /**  Apply TUN, DNS and profile cache defaults after builtin transforms. */
+  | 'defaults'
   | 'finalizing'
   /**  Read-only view of the configuration reported by the running core. */
   | 'core_controller';

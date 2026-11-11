@@ -359,19 +359,18 @@ pub fn execute(
         working = next;
     }
 
-    working = Arc::new(builtin::finalize_for_core(
+    working = Arc::new(builtin::final_field_filter(
         &working,
-        &inputs.tun,
         inputs.whitelist_enabled,
         inputs.core_supports_mmdb,
     ));
-    builder.push(
-        OperatorTag::BuiltinStep {
-            selected_profile_id: selected.clone(),
-            step: BuiltinStepKind::Finalizing,
-        },
-        working.clone(),
-    )?;
+    builder.push(step(BuiltinStepKind::FinalFieldFilter), working.clone())?;
+
+    working = Arc::new(builtin::apply_runtime_defaults(&working, &inputs.tun));
+    builder.push(step(BuiltinStepKind::Defaults), working.clone())?;
+
+    working = Arc::new(builtin::finalize_post_defaults(&working));
+    builder.push(step(BuiltinStepKind::Finalizing), working.clone())?;
 
     // Legacy mod.rs:155-157 parity: intersect with the selected core's
     // supported field set; IndexSet preserves insertion order.

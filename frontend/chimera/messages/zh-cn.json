@@ -1110,6 +1110,8 @@
   "inspect_tag_tun_keep_unmanaged": "恢复配置文件的 TUN 字段",
   "inspect_tag_tun_managed_settings": "应用托管 TUN 设置",
   "inspect_tag_filter": "过滤允许的字段",
+  "inspect_tag_final_filter": "过滤核心不支持的字段",
+  "inspect_tag_defaults": "应用 TUN、DNS 和缓存默认值",
   "inspect_tag_finalizing": "完成配置",
   "inspect_snapshot_label": "快照",
   "inspect_snapshot_latest": "生成配置",

@@ -5,17 +5,16 @@ use std::sync::Arc;
 
 use indexmap::IndexMap;
 
-use crate::runtime::{
-    post_process::{apply_settings, keep_inherited},
-    value::{ConfigObject, ConfigValue},
-};
+use crate::runtime::value::{ConfigObject, ConfigValue};
 
+#[cfg(test)]
+use super::{GuardInputs, error::RuntimePipelineError, plan};
 use super::{
-    GuardInputs, TunFlavor, TunParams,
-    error::RuntimePipelineError,
-    plan,
+    TunFlavor, TunParams,
     value_util::{obj_get, obj_insert},
 };
+#[cfg(test)]
+use crate::runtime::post_process::{apply_settings, keep_inherited};
 
 pub(super) const HANDLE_FIELDS: [&str; 9] = [
     "mode",
@@ -147,8 +146,8 @@ pub(super) fn apply_guard(
     apply_guard_with_source(config, config, guard)
 }
 
-/// Apply guard ownership after filtering, restoring profile-owned values from
-/// the pre-filter config before writing managed settings.
+/// Compatibility oracle for the previous unseparated guard pass.
+#[cfg(test)]
 pub(super) fn apply_guard_with_source(
     config: &ConfigValue,
     source: &ConfigValue,
@@ -161,8 +160,8 @@ pub(super) fn apply_guard_with_source(
     Ok(next)
 }
 
-/// Restore profile-owned TUN keys after the field filter and apply managed
-/// auto-route before builtin transforms, matching the reference ownership pass.
+/// Compatibility oracle for the previous unseparated TUN pass.
+#[cfg(test)]
 pub(super) fn apply_tun_overrides_with_source(
     config: &ConfigValue,
     source: &ConfigValue,
@@ -173,8 +172,7 @@ pub(super) fn apply_tun_overrides_with_source(
     apply_settings(&inherited, &ownership).0
 }
 
-/// Finalizing composite node (spec 7.4): stage-2 filter, tun, include-all,
-/// cache, then sort. One recorded node; changed_fields shows the net effect.
+/// Old finalizer behavior retained for comparison with stage-separated execution.
 #[cfg(test)]
 pub(super) fn finalize(
     config: &ConfigValue,
@@ -185,9 +183,22 @@ pub(super) fn finalize(
     finalize_for_core(&config, tun, whitelist_enabled, false)
 }
 
+#[cfg(test)]
 pub(super) fn finalize_for_core(
     config: &ConfigValue,
     tun: &TunParams,
+    whitelist_enabled: bool,
+    core_supports_mmdb: bool,
+) -> ConfigValue {
+    let filtered = final_field_filter(config, whitelist_enabled, core_supports_mmdb);
+    let defaults = apply_runtime_defaults(&filtered, tun);
+    finalize_post_defaults(&defaults)
+}
+
+/// Second core-specific field filter. Never pass Chimera Client's `mmdb`
+/// extension to a core that does not support it, even if filtering is off.
+pub(super) fn final_field_filter(
+    config: &ConfigValue,
     whitelist_enabled: bool,
     core_supports_mmdb: bool,
 ) -> ConfigValue {
@@ -196,13 +207,21 @@ pub(super) fn finalize_for_core(
         .collect();
     let mut next = whitelist_filter(config, &full, whitelist_enabled);
     if !core_supports_mmdb {
-        // Core compatibility is not optional: disabling the generic field
-        // whitelist must not send Chimera Client-only `mmdb` to other cores.
         next = strip_chimera_client_fields(&next);
     }
-    next = apply_tun(&next, tun);
-    next = apply_include_all(&next);
-    next = apply_cache(&next);
+    next
+}
+
+/// Old finalizer's TUN/DNS defaults and profile cache, in their original
+/// relative order. Builtin transforms have already finished when called.
+pub(super) fn apply_runtime_defaults(config: &ConfigValue, tun: &TunParams) -> ConfigValue {
+    let next = apply_tun(config, tun);
+    apply_cache(&next)
+}
+
+/// The last postprocessing pass changes only include-all groups and key order.
+pub(super) fn finalize_post_defaults(config: &ConfigValue) -> ConfigValue {
+    let next = apply_include_all(config);
     apply_sort(&next)
 }
 

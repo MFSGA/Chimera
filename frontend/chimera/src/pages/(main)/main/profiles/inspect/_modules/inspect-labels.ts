@@ -62,6 +62,10 @@ function stepKind(tag: OperatorTag): string {
           return m.inspect_tag_tun_keep_unmanaged();
         case 'tun_managed_settings':
           return m.inspect_tag_tun_managed_settings();
+        case 'final_field_filter':
+          return m.inspect_tag_final_filter();
+        case 'defaults':
+          return m.inspect_tag_defaults();
         case 'finalizing':
           return m.inspect_tag_finalizing();
         case 'core_controller':

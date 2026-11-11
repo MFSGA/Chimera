@@ -114,6 +114,42 @@ test('guard and TUN ownership passes appear as distinct stable Inspect steps', (
   assert.equal(steps.at(-1)?.key, 'final');
 });
 
+test('default and core field-filter stages remain inspectable before finalizing', () => {
+  const finalFieldFilter: RuntimeInspectionNode = {
+    id: 4,
+    tag: {
+      kind: 'builtin_step',
+      data: { selected_profile_id: null, step: 'final_field_filter' },
+    },
+    next: [5],
+    has_logs: false,
+    max_log_level: null,
+    changed_fields: ['mmdb'],
+  };
+  const defaults: RuntimeInspectionNode = {
+    id: 5,
+    tag: {
+      kind: 'builtin_step',
+      data: { selected_profile_id: null, step: 'defaults' },
+    },
+    next: [2],
+    has_logs: false,
+    max_log_level: null,
+    changed_fields: ['dns', 'profile'],
+  };
+  const steps = buildSteps(
+    [nodes[0], nodes[1], finalFieldFilter, defaults, nodes[2]],
+    2,
+  );
+  assert.equal(
+    steps.find((s) => s.node.id === 4)?.key,
+    'builtin:final_field_filter',
+  );
+  assert.equal(steps.find((s) => s.node.id === 5)?.changedCount, 2);
+  assert.equal(steps.find((s) => s.node.id === 5)?.stage, 'chimera');
+  assert.equal(steps.at(-1)?.key, 'final');
+});
+
 test('core effective step is separate from final and errors outrank changes', () => {
   const effective: RuntimeInspectionNode = {
     id: 3,
