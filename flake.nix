@@ -52,7 +52,56 @@
             gst_all_1.gst-plugins-base
           ];
 
+          # Match Nixpkgs' Electron runtime closure for npm's prebuilt binary.
+          # Keep this separate from the broader WebKitGTK/Tauri runtime path.
+          electronRuntimeLibs = with pkgs; lib.optionals isLinux [
+            alsa-lib
+            at-spi2-atk
+            cairo
+            cups
+            dbus
+            expat
+            gdk-pixbuf
+            glib
+            gtk3
+            gtk4
+            nss
+            nspr
+            libx11
+            libxcb
+            libxcomposite
+            libxdamage
+            libxext
+            libxfixes
+            libxrandr
+            libxkbfile
+            pango
+            pciutils
+            stdenv.cc.cc
+            systemd
+            libnotify
+            pipewire
+            libsecret
+            libpulseaudio
+            speechd-minimal
+            libdrm
+            libgbm
+            libxkbcommon
+            libxshmfence
+            libGL
+            vulkan-loader
+          ];
+
+          electronLibraryPath = pkgs.lib.makeLibraryPath electronRuntimeLibs;
+          nixLdLibraryPath = pkgs.lib.makeLibraryPath (electronRuntimeLibs ++ [ pkgs.stdenv.cc.libc ]);
+          electronGlLibraryPath = pkgs.lib.makeLibraryPath [ pkgs.libGL pkgs.pciutils pkgs.vulkan-loader ];
+
           linuxShellHook = pkgs.lib.optionalString isLinux ''
+            # Keep nix-ld on the same glibc ABI as this pinned dev shell.
+            # Electron itself is patched below to use this loader directly.
+            export NIX_LD="${pkgs.stdenv.cc.bintools.dynamicLinker}"
+            export NIX_LD_LIBRARY_PATH="${nixLdLibraryPath}"
+
             # Keep GTK schemas, GIO TLS modules and GStreamer plugins
             # discoverable when WebKitGTK runs inside the Nix shell.
             if [ -n "$GSETTINGS_SCHEMAS_PATH" ]; then
@@ -85,10 +134,11 @@
             # systemd user manager; never eval its complete environment.
             if command -v systemctl >/dev/null 2>&1 && [ -n "$XDG_RUNTIME_DIR" ]; then
               _session_environment="$(systemctl --user show-environment 2>/dev/null || true)"
-              for _name in DISPLAY WAYLAND_DISPLAY XDG_SESSION_TYPE; do
+              for _name in DISPLAY WAYLAND_DISPLAY XAUTHORITY XDG_SESSION_TYPE; do
                 case "$_name" in
                   DISPLAY) _current="$DISPLAY" ;;
                   WAYLAND_DISPLAY) _current="$WAYLAND_DISPLAY" ;;
+                  XAUTHORITY) _current="$XAUTHORITY" ;;
                   XDG_SESSION_TYPE) _current="$XDG_SESSION_TYPE" ;;
                 esac
                 if [ -z "$_current" ]; then
@@ -100,6 +150,78 @@
                 unset _current
               done
               unset _session_environment _name _value
+            fi
+
+            # npm ships Electron as a generic Ubuntu ELF. Recreate the relevant
+            # Nixpkgs Electron fixups in a versioned cache, preserving the exact
+            # npm Electron version and the upstream package scripts.
+            if [ -z "''${ELECTRON_OVERRIDE_DIST_PATH:-}" ] &&
+              command -v patchelf >/dev/null 2>&1; then
+              _electron_binary="$(node -e '
+                const { createRequire } = require("node:module");
+                const packageJson = require.resolve("react-devtools/package.json");
+                process.stdout.write(createRequire(packageJson)("electron"));
+              ' 2>/dev/null || true)"
+
+              if [ -n "$_electron_binary" ] && [ -x "$_electron_binary" ]; then
+                _electron_source="$(dirname "$_electron_binary")"
+                _electron_version="$(cat "$_electron_source/version" 2>/dev/null || printf unknown)"
+                _electron_cache="''${XDG_CACHE_HOME:-$HOME/.cache}/chimera"
+                mkdir -p "$_electron_cache"
+                _electron_binary_hash="$(sha256sum "$_electron_binary" | cut -c1-16)"
+                _electron_cache_key="$(printf '%s\n%s\n%s' "$_electron_binary_hash" "${pkgs.stdenv.cc.bintools.dynamicLinker}" "${electronLibraryPath}" | sha256sum | cut -c1-16)"
+                _electron_dist="$_electron_cache/electron-$_electron_version-$_electron_cache_key-nix"
+
+                if [ ! -f "$_electron_dist/.chimera-nixos-patched" ]; then
+                  rm -rf "$_electron_dist"
+                  mkdir -p "$_electron_dist"
+                  _electron_patch_ok=1
+
+                  for _electron_entry in "$_electron_source"/*; do
+                    [ -e "$_electron_entry" ] || [ -L "$_electron_entry" ] || continue
+                    _electron_name="''${_electron_entry##*/}"
+                    case "$_electron_name" in
+                      electron|chrome_crashpad_handler|chrome-sandbox|lib*GL*)
+                        cp --reflink=auto -a "$_electron_entry" "$_electron_dist/$_electron_name" || _electron_patch_ok=0
+                        ;;
+                      libvulkan.so.1) ;;
+                      *)
+                        ln -s "$_electron_entry" "$_electron_dist/$_electron_name" || _electron_patch_ok=0
+                        ;;
+                    esac
+                  done
+
+                  if [ -e "$_electron_source/libvulkan.so.1" ] || [ -L "$_electron_source/libvulkan.so.1" ]; then
+                    ln -s "${pkgs.lib.getLib pkgs.vulkan-loader}/lib/libvulkan.so.1" "$_electron_dist/libvulkan.so.1" || _electron_patch_ok=0
+                  fi
+
+                  if [ "$_electron_patch_ok" -eq 1 ]; then
+                    patchelf --set-interpreter "${pkgs.stdenv.cc.bintools.dynamicLinker}" --set-rpath "${electronLibraryPath}:$_electron_dist" "$_electron_dist/electron" "$_electron_dist/chrome_crashpad_handler" || _electron_patch_ok=0
+                    patchelf --set-interpreter "${pkgs.stdenv.cc.bintools.dynamicLinker}" --set-rpath "${pkgs.stdenv.cc.libc}/lib" "$_electron_dist/chrome-sandbox" || _electron_patch_ok=0
+
+                    for _electron_gl in "$_electron_dist"/lib*GL*; do
+                      [ -e "$_electron_gl" ] || continue
+                      patchelf --set-rpath "${electronGlLibraryPath}" "$_electron_gl" || _electron_patch_ok=0
+                    done
+                  fi
+
+                  if [ "$_electron_patch_ok" -eq 1 ]; then
+                    printf '%s\n' "$_electron_cache_key" > "$_electron_dist/.chimera-nixos-patched"
+                  else
+                    rm -rf "$_electron_dist"
+                    echo "Chimera: warning: failed to prepare npm Electron for NixOS."
+                  fi
+                fi
+
+                if [ -f "$_electron_dist/.chimera-nixos-patched" ]; then
+                  export ELECTRON_OVERRIDE_DIST_PATH="$_electron_dist"
+                  export CHROME_DEVEL_SANDBOX="$_electron_dist/chrome-sandbox"
+                  export GDK_PIXBUF_MODULE_FILE="${pkgs.librsvg}/lib/gdk-pixbuf-2.0/2.10.0/loaders.cache"
+                  echo "Chimera: using NixOS-compatible Electron $_electron_version."
+                fi
+              fi
+
+              unset _electron_binary _electron_source _electron_version _electron_cache _electron_binary_hash _electron_cache_key _electron_entry _electron_name _electron_gl _electron_patch_ok
             fi
           '';
         in {
@@ -121,7 +243,7 @@
               file
               curl
               wget
-            ] ++ lib.optionals isLinux [ desktop-file-utils wrapGAppsHook4 xdotool ];
+            ] ++ lib.optionals isLinux [ desktop-file-utils wrapGAppsHook4 xdotool patchelf ];
 
             buildInputs = runtimeLibs;
 
