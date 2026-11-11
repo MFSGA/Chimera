@@ -35,12 +35,16 @@ type StateChanged =
 /** Both graph representations must move together until the legacy UI retires. */
 export const mutationKeys: Record<StateChanged['kind'], QueryKey[]> = {
   nyanpasu_config: [
+    queries.inspectRuntime().queryKey,
+    queries.inspectAppliedRuntime().queryKey,
     [CHIMERA_SETTING_QUERY_KEY],
     [CHIMERA_SYSTEM_PROXY_QUERY_KEY],
     [CLASH_PROXIES_QUERY_KEY],
     [NATIVE_PROXIES_QUERY_KEY],
   ],
   clash_config: [
+    queries.inspectRuntime().queryKey,
+    queries.inspectAppliedRuntime().queryKey,
     [CLASH_SETTINGS_QUERY_KEY],
     [CLASH_VERSION_QUERY_KEY],
     [CLASH_INFO_QUERY_KEY],
@@ -53,6 +57,8 @@ export const mutationKeys: Record<StateChanged['kind'], QueryKey[]> = {
     [RUNTIME_TRANSFORM_DIAGNOSTICS_QUERY_KEY],
   ],
   profiles: [
+    queries.inspectRuntime().queryKey,
+    queries.inspectAppliedRuntime().queryKey,
     [PROFILES_QUERY_KEY],
     [CLASH_VERSION_QUERY_KEY],
     [CLASH_INFO_QUERY_KEY],
@@ -68,7 +74,11 @@ export const mutationKeys: Record<StateChanged['kind'], QueryKey[]> = {
     [NATIVE_PROXIES_QUERY_KEY],
     [CLASH_PROXIES_PROVIDER_QUERY_KEY],
   ],
-  runtime_transform_diagnostics: [[RUNTIME_TRANSFORM_DIAGNOSTICS_QUERY_KEY]],
+  runtime_transform_diagnostics: [
+    [RUNTIME_TRANSFORM_DIAGNOSTICS_QUERY_KEY],
+    queries.inspectRuntime().queryKey,
+    queries.inspectAppliedRuntime().queryKey,
+  ],
 };
 
 export const MutationProvider = ({ children }: PropsWithChildren) => {

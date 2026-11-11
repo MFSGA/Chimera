@@ -1081,5 +1081,12 @@
   "inspect_tag_builtin": "内置变换",
   "inspect_tag_guard": "应用覆盖设置",
   "inspect_tag_filter": "过滤允许的字段",
-  "inspect_tag_finalizing": "完成配置"
+  "inspect_tag_finalizing": "完成配置",
+  "inspect_snapshot_label": "快照",
+  "inspect_snapshot_latest": "生成配置",
+  "inspect_snapshot_applied": "最近应用",
+  "inspect_applied": "已验证运行中的配置",
+  "inspect_effective_pending": "正在等待核心实际配置",
+  "inspect_not_applied": "当前未应用",
+  "inspect_tag_core_controller": "核心实际生效配置"
 }

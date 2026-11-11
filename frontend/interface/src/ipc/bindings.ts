@@ -51,13 +51,36 @@ export const commands = {
     typedError<
       {
         snapshot_id: string;
+        /**  Whether the selected build matches the currently active core receipt. */
+        applied: boolean;
+        /**  An active matching receipt exists but the host cannot yet supply its document. */
+        effective_pending: boolean;
+        effective_revision: ConfigRevisionInfo | null;
         revision: string;
         target_core: string;
         root_id: number;
+        final_id: number;
         nodes: RuntimeInspectionNode[];
       } | null,
       string
     >(__TAURI_INVOKE('inspect_runtime')),
+  inspectAppliedRuntime: () =>
+    typedError<
+      {
+        snapshot_id: string;
+        /**  Whether the selected build matches the currently active core receipt. */
+        applied: boolean;
+        /**  An active matching receipt exists but the host cannot yet supply its document. */
+        effective_pending: boolean;
+        effective_revision: ConfigRevisionInfo | null;
+        revision: string;
+        target_core: string;
+        root_id: number;
+        final_id: number;
+        nodes: RuntimeInspectionNode[];
+      } | null,
+      string
+    >(__TAURI_INVOKE('inspect_applied_runtime')),
   inspectRuntimeNode: (snapshotId: string, nodeId: number) =>
     typedError<RuntimeInspectionContent, string>(
       __TAURI_INVOKE('inspect_runtime_node', { snapshotId, nodeId }),
@@ -3155,9 +3178,15 @@ export type RuntimeInfos = {
 
 export type RuntimeInspection = {
   snapshot_id: string;
+  /**  Whether the selected build matches the currently active core receipt. */
+  applied: boolean;
+  /**  An active matching receipt exists but the host cannot yet supply its document. */
+  effective_pending: boolean;
+  effective_revision: ConfigRevisionInfo | null;
   revision: string;
   target_core: string;
   root_id: number;
+  final_id: number;
   nodes: RuntimeInspectionNode[];
 };
 
@@ -3177,6 +3206,8 @@ export type RuntimeInspectionNode = {
   tag: OperatorTag;
   next: number[];
   has_logs: boolean;
+  /**  Highest severity of the recorded step logs, matching the upstream DTO. */
+  max_log_level: StepLogLevel | null;
   /**  None means unchanged or no comparison baseline (including independent roots). */
   changed_fields: string[] | null;
 };

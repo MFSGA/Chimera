@@ -32,6 +32,7 @@ macro_rules! build_builder {
                 crate::ipc::get_runtime_yaml,
                 crate::ipc::get_runtime_exists,
                 crate::ipc::inspect_runtime,
+                crate::ipc::inspect_applied_runtime,
                 crate::ipc::inspect_runtime_node,
                 crate::ipc::get_postprocessing_output,
                 crate::ipc::flush_system_dns_cache,

@@ -238,6 +238,8 @@ pub struct RuntimeSnapshot {
     pub postprocessing_output: PostProcessingOutput,
     product_bytes: Arc<[u8]>,
     pub(crate) inspection: Arc<super::runtime_inspection::RuntimeInspectionData>,
+    /// Core-reported effective document is an ephemeral view, never stored in the build graph.
+    pub(crate) effective: Option<Arc<super::runtime_inspection::EffectiveInspection>>,
 }
 
 impl RuntimeSnapshot {
@@ -258,6 +260,7 @@ impl RuntimeSnapshot {
             postprocessing_output: data.postprocessing_output,
             product_bytes,
             inspection: data.inspection,
+            effective: None,
         }
     }
 

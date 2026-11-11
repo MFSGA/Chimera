@@ -305,6 +305,12 @@ impl CoreLifecyclePort for LegacyCoreBridge {
         self.facade().last_confirmed_runtime_receipt()
     }
 
+    async fn active_effective_config(
+        &self,
+    ) -> anyhow::Result<Option<chimera_ipc::api::core::v2::CoreEffectiveConfig>> {
+        self.facade().active_effective_config().await
+    }
+
     async fn observe_runtime_baseline(
         &self,
     ) -> anyhow::Result<crate::client::application_workflow::mutation::KnownRuntimeState> {

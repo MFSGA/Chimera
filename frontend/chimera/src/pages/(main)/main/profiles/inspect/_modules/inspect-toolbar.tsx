@@ -1,14 +1,22 @@
 import type { RuntimeInspection } from '@chimera/interface';
 import { Button } from '@chimera/ui/button';
 import { SearchField } from '@chimera/ui/search-field';
+import {
+  SegmentedButton,
+  SegmentedButtonItem,
+} from '@chimera/ui/segmented-button';
 import { Link } from '@tanstack/react-router';
 import ArrowBackRounded from '~icons/material-symbols/arrow-back-rounded';
 import RefreshRounded from '~icons/material-symbols/refresh-rounded';
 import * as m from '@/paraglide/messages';
 import { ProfileType } from '../../_modules/consts';
 
+export type SnapshotView = 'latest' | 'applied';
+
 export default function InspectToolbar({
   snapshot,
+  view,
+  onViewChange,
   fieldQuery,
   onFieldQueryChange,
   onCycleMatch,
@@ -16,6 +24,8 @@ export default function InspectToolbar({
   loading,
 }: {
   snapshot: RuntimeInspection | null | undefined;
+  view: SnapshotView;
+  onViewChange: (view: SnapshotView) => void;
   fieldQuery: string;
   onFieldQueryChange: (value: string) => void;
   onCycleMatch: (delta: 1 | -1) => void;
@@ -38,12 +48,37 @@ export default function InspectToolbar({
       <h1 className="text-on-surface text-xl font-semibold">
         {m.profile_inspect_title()}
       </h1>
+      <SegmentedButton
+        size="sm"
+        variant="tabs"
+        className="w-auto shrink-0"
+        aria-label={m.inspect_snapshot_label()}
+        data-slot="inspect-snapshot-switch"
+        value={view}
+        onValueChange={(next) => {
+          if (next === 'latest' || next === 'applied') onViewChange(next);
+        }}
+      >
+        <SegmentedButtonItem value="latest" data-slot="inspect-view-latest">
+          {m.inspect_snapshot_latest()}
+        </SegmentedButtonItem>
+        <SegmentedButtonItem value="applied" data-slot="inspect-view-applied">
+          {m.inspect_snapshot_applied()}
+        </SegmentedButtonItem>
+      </SegmentedButton>
       {snapshot && (
         <p
           data-slot="inspect-status"
+          data-applied={snapshot.applied || undefined}
+          data-effective-pending={snapshot.effective_pending || undefined}
           className="text-on-surface-variant min-w-0 truncate text-xs"
         >
-          {snapshot.target_core} · {m.inspect_revision()} {snapshot.revision}
+          {snapshot.effective_pending
+            ? m.inspect_effective_pending()
+            : snapshot.applied
+              ? m.inspect_applied()
+              : m.inspect_not_applied()}{' '}
+          · {snapshot.target_core} · {m.inspect_revision()} {snapshot.revision}
         </p>
       )}
       <div className="min-w-0 basis-full sm:ml-auto sm:max-w-xs sm:flex-1 sm:basis-auto">

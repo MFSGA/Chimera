@@ -964,6 +964,40 @@ impl CoreFacade {
             .filter(|receipt| receipt.confirms(endpoint.host(), &status)))
     }
 
+    /// On-demand effective configuration only when the same core instance and
+    /// revision stay active throughout the read. This never changes core state.
+    pub(crate) async fn active_effective_config(
+        &self,
+    ) -> anyhow::Result<Option<chimera_ipc::api::core::v2::CoreEffectiveConfig>> {
+        let Some(local_runtime) = self.local_runtime.as_ref() else {
+            return Ok(None);
+        };
+        let endpoint: Arc<dyn ControlEndpoint> = match local_runtime.run_type() {
+            RunType::Normal => Arc::new(local_runtime.local_endpoint()),
+            RunType::Service => Arc::new(self.service_endpoint.clone()),
+            RunType::Elevated => return Ok(None),
+        };
+        let before = endpoint.status().await?;
+        let Some(receipt) = local_runtime.accepted_runtime_receipt() else {
+            return Ok(None);
+        };
+        if !receipt.confirms(endpoint.host(), &before) {
+            return Ok(None);
+        }
+        let Some(effective) = endpoint.effective_config().await? else {
+            return Ok(None);
+        };
+        let after = endpoint.status().await?;
+        if before != after
+            || !receipt.confirms(endpoint.host(), &after)
+            || before.instance_id.as_deref() != Some(effective.instance_id.as_str())
+            || effective.revision != receipt.applied_revision
+        {
+            return Ok(None);
+        }
+        Ok(Some(effective))
+    }
+
     /// Last confirmed receipt for the currently selected host. It is useful
     /// after a clean stop when recovering a stale host proxy, but does not
     /// prove that the core is currently running.

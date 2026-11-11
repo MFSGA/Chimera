@@ -32,7 +32,7 @@ export const FINAL_KEY = 'final';
 
 /** The finalizing operation is authoritative when it is present.
  * Older snapshots without it fall back to the last terminal node.
- * Chimera's summary currently omits ref's explicit final_id.
+ * This compatibility function is retained for older isolated model tests.
  */
 export function finalNodeId(
   nodes: readonly RuntimeInspectionNode[],
@@ -63,7 +63,10 @@ export function stageOf(node: RuntimeInspectionNode, finalId: number): Stage {
     case 'builtin_transform':
       return 'chimera';
     case 'builtin_step':
-      return tag.data.step === 'finalizing' ? 'result' : 'chimera';
+      return tag.data.step === 'core_controller' ||
+        tag.data.step === 'finalizing'
+        ? 'result'
+        : 'chimera';
   }
 }
 
@@ -91,7 +94,7 @@ function baseKey(node: RuntimeInspectionNode, finalId: number): string {
     case 'builtin_transform':
       return `builtin-transform:${tag.data.step_index}`;
     case 'builtin_step':
-      return tag.data.step === 'finalizing'
+      return tag.data.step === 'core_controller'
         ? 'core'
         : `builtin:${tag.data.step}`;
   }
@@ -119,14 +122,19 @@ function isRoot(tag: OperatorTag) {
   );
 }
 
-/**
- * Chimera's current inspection summary has no max_log_level, so the state
- * reports only changes (logs remain available in the selected step details).
- */
+/** Mirror upstream severity precedence while preserving final/core styles. */
 export function stepStatus(
   node: RuntimeInspectionNode,
   finalId: number,
 ): StepStatus {
+  if (node.max_log_level === 'error') return 'error';
+  if (node.max_log_level === 'warn') return 'warn';
+  if (
+    node.tag.kind === 'builtin_step' &&
+    node.tag.data.step === 'core_controller'
+  ) {
+    return 'core';
+  }
   if (node.id === finalId) return 'final';
   if (node.changed_fields === null && isRoot(node.tag)) return 'start';
   return (node.changed_fields?.length ?? 0) > 0 ? 'changed' : 'unchanged';

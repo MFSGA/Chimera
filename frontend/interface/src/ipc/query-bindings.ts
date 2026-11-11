@@ -38,6 +38,11 @@ export const queries = {
       queryKey: ['inspectRuntime'],
       queryFn: () => commands.inspectRuntime(),
     }),
+  inspectAppliedRuntime: () =>
+    queryOptions({
+      queryKey: ['inspectAppliedRuntime'],
+      queryFn: () => commands.inspectAppliedRuntime(),
+    }),
   inspectRuntimeNode: (
     ...args: Parameters<typeof commands.inspectRuntimeNode>
   ) =>

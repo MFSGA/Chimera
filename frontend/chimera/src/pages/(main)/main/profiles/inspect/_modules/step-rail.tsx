@@ -89,6 +89,9 @@ export default function StepRail({
                           'size-2 shrink-0 rounded-full',
                           step.status === 'changed' && 'bg-primary',
                           step.status === 'final' && 'bg-ok',
+                          step.status === 'core' && 'bg-ok',
+                          step.status === 'warn' && 'bg-warn',
+                          step.status === 'error' && 'bg-error',
                           step.status === 'start' && 'bg-on-surface-variant',
                           step.status === 'unchanged' &&
                             'border-on-surface-variant border',

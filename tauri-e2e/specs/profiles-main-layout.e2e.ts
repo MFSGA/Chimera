@@ -252,6 +252,41 @@ describe('main profiles reference layout', () => {
       await empty.waitForDisplayed({ timeout: 15_000 });
     }
 
+    // Switching snapshots is a visible interaction, not a direct cache or
+    // route mutation. A core that has never been applied must show an empty
+    // state rather than presenting the latest generated document as applied.
+    const applied = await $('[data-slot="inspect-view-applied"]');
+    await applied.waitForClickable({ timeout: 15_000 });
+    await applied.click();
+    await browser.waitUntil(
+      async () => (await applied.getAttribute('data-state')) === 'on',
+      {
+        timeout: 15_000,
+        timeoutMsg: 'The last-applied snapshot control was not selected.',
+      },
+    );
+    const appliedSnapshot = await invoke<{ snapshot_id: string } | null>(
+      'inspect_applied_runtime',
+    );
+    if (appliedSnapshot) {
+      await $('[data-slot="inspect-step-detail"]').waitForDisplayed({
+        timeout: 15_000,
+      });
+    } else {
+      await $('[data-slot="inspect-empty"]').waitForDisplayed({
+        timeout: 15_000,
+      });
+    }
+    const latest = await $('[data-slot="inspect-view-latest"]');
+    await latest.click();
+    await browser.waitUntil(
+      async () => (await latest.getAttribute('data-state')) === 'on',
+      {
+        timeout: 15_000,
+        timeoutMsg: 'The generated snapshot control was not restored.',
+      },
+    );
+
     await openMainRoute(targetPath);
   });
 

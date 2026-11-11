@@ -130,6 +130,23 @@ pub(crate) fn artifact_to_legacy_output_with_inspection(
         mapping,
         exists_keys,
         output,
-        RuntimeInspectionData { graph, step_logs },
+        RuntimeInspectionData {
+            final_node: graph
+                .nodes
+                .iter()
+                .rposition(|node| {
+                    matches!(
+                        &node.tag,
+                        chimera_config::runtime::snapshot::OperatorTag::BuiltinStep {
+                            step: chimera_config::runtime::snapshot::BuiltinStepKind::Finalizing,
+                            ..
+                        }
+                    )
+                })
+                .context("runtime inspection graph has no finalizing step")?
+                as u32,
+            graph,
+            step_logs,
+        },
     ))
 }

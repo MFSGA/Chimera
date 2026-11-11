@@ -1081,5 +1081,12 @@
   "inspect_tag_builtin": "組み込み変換",
   "inspect_tag_guard": "上書き設定の適用",
   "inspect_tag_filter": "許可フィールドのフィルター",
-  "inspect_tag_finalizing": "設定の確定"
+  "inspect_tag_finalizing": "設定の確定",
+  "inspect_snapshot_label": "スナップショット",
+  "inspect_snapshot_latest": "生成した設定",
+  "inspect_snapshot_applied": "最後に適用",
+  "inspect_applied": "実行中の設定を検証済み",
+  "inspect_effective_pending": "実際のコア設定を待機中",
+  "inspect_not_applied": "現在適用されていません",
+  "inspect_tag_core_controller": "コアの実効設定"
 }

@@ -56,6 +56,27 @@ test('native proxy view returns the original identity when nothing is hidden', (
   assert.strictEqual(selectVisibleNativeProxies(graph), graph);
 });
 
+test('runtime inspection caches invalidate together on committed configuration changes', () => {
+  for (const kind of [
+    'nyanpasu_config',
+    'clash_config',
+    'profiles',
+    'runtime_transform_diagnostics',
+  ] as const) {
+    const keys = mutationKeys[kind].map((queryKey) => queryKey[0]);
+    assert.equal(
+      keys.filter((key) => key === 'inspectRuntime').length,
+      1,
+      `${kind}: exactly one generated snapshot invalidation`,
+    );
+    assert.equal(
+      keys.filter((key) => key === 'inspectAppliedRuntime').length,
+      1,
+      `${kind}: exactly one last-applied snapshot invalidation`,
+    );
+  }
+});
+
 test('backend state changes invalidate both old and normalized proxy caches', () => {
   assert.notEqual(NATIVE_PROXIES_QUERY_KEY, CLASH_PROXIES_QUERY_KEY);
   for (const kind of [

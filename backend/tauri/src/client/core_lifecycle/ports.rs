@@ -219,6 +219,13 @@ pub(crate) trait CoreLifecyclePort: Send + Sync {
     async fn active_runtime_receipt(&self) -> anyhow::Result<Option<Arc<RuntimeApplyReceipt>>> {
         Ok(None)
     }
+
+    /// Read-only and instance-bound: unsupported compatibility ports return no view.
+    async fn active_effective_config(
+        &self,
+    ) -> anyhow::Result<Option<chimera_ipc::api::core::v2::CoreEffectiveConfig>> {
+        Ok(None)
+    }
     fn last_confirmed_runtime_receipt(&self) -> Option<Arc<RuntimeApplyReceipt>> {
         None
     }

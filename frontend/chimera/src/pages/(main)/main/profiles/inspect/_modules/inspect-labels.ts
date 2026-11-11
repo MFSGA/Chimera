@@ -56,6 +56,8 @@ function stepKind(tag: OperatorTag): string {
           return m.inspect_tag_filter();
         case 'finalizing':
           return m.inspect_tag_finalizing();
+        case 'core_controller':
+          return m.inspect_tag_core_controller();
       }
   }
 }

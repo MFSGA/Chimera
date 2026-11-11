@@ -7,11 +7,10 @@ import * as m from '@/paraglide/messages';
 import {
   buildSteps,
   filterSteps,
-  finalNodeId,
   matchField,
   resolveStep,
 } from './_modules/inspect-steps';
-import InspectToolbar from './_modules/inspect-toolbar';
+import InspectToolbar, { type SnapshotView } from './_modules/inspect-toolbar';
 import StepDetail from './_modules/step-detail';
 import StepRail from './_modules/step-rail';
 
@@ -25,10 +24,14 @@ function RouteComponent() {
   const navigate = useNavigate({ from: Route.fullPath });
   const { step: selectedKey } = Route.useSearch();
   const { query: profilesQuery } = useProfile();
+  const [view, setView] = useState<SnapshotView>('latest');
   const [fieldQuery, setFieldQuery] = useState('');
   const [onlyChanged, setOnlyChanged] = useState(false);
 
-  const query = queries.inspectRuntime();
+  const query =
+    view === 'applied'
+      ? queries.inspectAppliedRuntime()
+      : queries.inspectRuntime();
   const inspection = useQuery({
     ...unwrapQueryOptions(query, query.queryFn!),
     retry: false,
@@ -45,7 +48,7 @@ function RouteComponent() {
   );
   const steps = useMemo(() => {
     if (!snapshot) return [];
-    const final = finalNodeId(snapshot.nodes);
+    const final = snapshot.final_id;
     return final === undefined ? [] : buildSteps(snapshot.nodes, final);
   }, [snapshot]);
   const selected = resolveStep(steps, selectedKey);
@@ -92,11 +95,18 @@ function RouteComponent() {
     >
       <InspectToolbar
         snapshot={snapshot}
+        view={view}
+        onViewChange={setView}
         fieldQuery={fieldQuery}
         onFieldQueryChange={setFieldQuery}
         onCycleMatch={cycleMatch}
         onRefresh={() => {
-          void client.invalidateQueries({ queryKey: query.queryKey });
+          void client.invalidateQueries({
+            queryKey: queries.inspectRuntime().queryKey,
+          });
+          void client.invalidateQueries({
+            queryKey: queries.inspectAppliedRuntime().queryKey,
+          });
         }}
         loading={inspection.isFetching}
       />

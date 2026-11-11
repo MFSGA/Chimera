@@ -10,6 +10,7 @@ import {
   finalNodeId,
   matchField,
   resolveStep,
+  stepStatus,
 } from '../src/pages/(main)/main/profiles/inspect/_modules/inspect-steps';
 import {
   cycleIndex,
@@ -24,6 +25,7 @@ const nodes: RuntimeInspectionNode[] = [
     tag: { kind: 'bare_root' },
     next: [1],
     has_logs: false,
+    max_log_level: null,
     changed_fields: null,
   },
   {
@@ -34,6 +36,7 @@ const nodes: RuntimeInspectionNode[] = [
     },
     next: [2],
     has_logs: true,
+    max_log_level: 'warn',
     changed_fields: ['dns', 'mmdb'],
   },
   {
@@ -44,6 +47,7 @@ const nodes: RuntimeInspectionNode[] = [
     },
     next: [],
     has_logs: false,
+    max_log_level: null,
     changed_fields: [],
   },
 ];
@@ -54,6 +58,7 @@ test('inspection chooses the finalizing step, not the independent last leaf', ()
     tag: { kind: 'bare_root' },
     next: [],
     has_logs: false,
+    max_log_level: null,
     changed_fields: null,
   };
   assert.equal(finalNodeId([...nodes, extra]), 2);
@@ -70,6 +75,7 @@ test('ref inspect model preserves source, filter and final steps', () => {
   );
   assert.equal(steps.at(-1)?.key, 'final');
   assert.equal(steps[1].changedCount, 2);
+  assert.equal(steps[1].status, 'warn');
   assert.equal(matchField(steps[1], 'dns.nameserver'), true);
   assert.equal(matchField(steps[1], 'mmdb'), true);
   assert.equal(matchField(steps[1], 'geosite'), false);
@@ -78,6 +84,25 @@ test('ref inspect model preserves source, filter and final steps', () => {
     filterSteps(steps, { onlyChanged: true }).map((item) => item.key),
     steps.map((item) => item.key),
   );
+});
+
+test('core effective step is separate from final and errors outrank changes', () => {
+  const effective: RuntimeInspectionNode = {
+    id: 3,
+    tag: {
+      kind: 'builtin_step',
+      data: { selected_profile_id: null, step: 'core_controller' },
+    },
+    next: [],
+    has_logs: false,
+    max_log_level: null,
+    changed_fields: ['mmdb'],
+  };
+  const steps = buildSteps([...nodes, effective], 2);
+  assert.equal(steps.at(-1)?.status, 'core');
+  assert.equal(steps.at(-1)?.key, 'core');
+  assert.equal(steps.at(-1)?.stage, 'result');
+  assert.equal(stepStatus({ ...nodes[1], max_log_level: 'error' }, 2), 'error');
 });
 
 test('field locator points at the nested YAML mapping and rejects absent fields', () => {

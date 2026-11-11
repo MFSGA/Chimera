@@ -1090,5 +1090,12 @@
   "inspect_tag_builtin": "Built-in transform",
   "inspect_tag_guard": "Guard overrides",
   "inspect_tag_filter": "Filter allowed fields",
-  "inspect_tag_finalizing": "Finalize configuration"
+  "inspect_tag_finalizing": "Finalize configuration",
+  "inspect_snapshot_label": "Snapshot",
+  "inspect_snapshot_latest": "Generated",
+  "inspect_snapshot_applied": "Last applied",
+  "inspect_applied": "Verified running config",
+  "inspect_effective_pending": "Waiting for effective config",
+  "inspect_not_applied": "Not currently applied",
+  "inspect_tag_core_controller": "Core effective configuration"
 }

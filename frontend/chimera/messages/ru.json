@@ -1092,5 +1092,12 @@
   "inspect_tag_builtin": "Встроенное преобразование",
   "inspect_tag_guard": "Применить переопределения",
   "inspect_tag_filter": "Отфильтровать разрешённые поля",
-  "inspect_tag_finalizing": "Завершить конфигурацию"
+  "inspect_tag_finalizing": "Завершить конфигурацию",
+  "inspect_snapshot_label": "Снимок",
+  "inspect_snapshot_latest": "Сгенерировано",
+  "inspect_snapshot_applied": "Последнее применение",
+  "inspect_applied": "Рабочая конфигурация проверена",
+  "inspect_effective_pending": "Ожидание фактической конфигурации ядра",
+  "inspect_not_applied": "Сейчас не применяется",
+  "inspect_tag_core_controller": "Фактическая конфигурация ядра"
 }

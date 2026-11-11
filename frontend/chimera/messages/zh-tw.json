@@ -1081,5 +1081,12 @@
   "inspect_tag_builtin": "內建轉換",
   "inspect_tag_guard": "套用覆寫設定",
   "inspect_tag_filter": "篩選允許的欄位",
-  "inspect_tag_finalizing": "完成設定"
+  "inspect_tag_finalizing": "完成設定",
+  "inspect_snapshot_label": "快照",
+  "inspect_snapshot_latest": "產生設定",
+  "inspect_snapshot_applied": "最近套用",
+  "inspect_applied": "已驗證執行中的設定",
+  "inspect_effective_pending": "正在等待核心實際設定",
+  "inspect_not_applied": "目前未套用",
+  "inspect_tag_core_controller": "核心實際生效設定"
 }
