@@ -1,3 +1,5 @@
+extern crate self as chimera_config;
+
 pub mod application;
 pub mod clash;
 pub mod profile;

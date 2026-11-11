@@ -1,15 +1,24 @@
 use serde_json::json;
 
 use crate::{
-    clash::config::{overrides::ClashGuardOverrides, tun_stack::TunStack},
+    clash::config::{
+        overrides::{ClashGuardOverrides, ManageableField, TunOverrides},
+        tun_stack::TunStack,
+    },
     runtime::{
         executor::{
-            GuardInputs, ResolvedPortBindings, TunFlavor, TunParams,
-            builtin::{apply_guard, finalize, known_fields, stage1_fields, whitelist_filter},
+            TunFlavor, TunParams,
+            builtin::{
+                apply_tun_overrides_with_source, finalize, finalize_for_core, known_fields,
+                known_fields_for_core, stage1_fields, stage1_fields_for_core, whitelist_filter,
+            },
         },
         value::ConfigValue,
     },
 };
+
+#[cfg(feature = "default-meta")]
+use crate::runtime::executor::{GuardInputs, ResolvedPortBindings, builtin::apply_guard};
 
 fn value(json: serde_json::Value) -> ConfigValue {
     ConfigValue::try_from(json).unwrap()
@@ -26,6 +35,7 @@ pub fn fixed_overrides() -> ClashGuardOverrides {
 fn tun_off() -> TunParams {
     TunParams {
         enable: false,
+        overrides: TunOverrides::default(),
         flavor: TunFlavor::Standard {
             stack: TunStack::Gvisor,
         },
@@ -34,11 +44,29 @@ fn tun_off() -> TunParams {
 }
 
 #[test]
-fn known_fields_are_exactly_45() {
+fn known_fields_match_ref_for_cores_without_chimera_extensions() {
     assert_eq!(known_fields().count(), 45);
     assert!(known_fields().any(|f| f == "proxies"));
+    assert!(!known_fields().any(|f| f == "mmdb"));
     assert!(known_fields().any(|f| f == "external-controller"));
     assert!(known_fields().any(|f| f == "global-client-fingerprint"));
+}
+
+#[test]
+fn known_fields_include_mmdb_only_for_chimera_client() {
+    let fields: Vec<&str> = known_fields_for_core(true).collect();
+    assert_eq!(fields.len(), 46);
+    assert_eq!(
+        &fields[..6],
+        &[
+            "proxies",
+            "proxy-groups",
+            "proxy-providers",
+            "rules",
+            "rule-providers",
+            "mmdb",
+        ]
+    );
 }
 
 #[test]
@@ -73,13 +101,19 @@ fn known_fields_keep_default_handle_others_order() {
 
 #[test]
 fn stage1_fields_take_valid_intersect_others_plus_default_and_never_handle() {
-    let fields = stage1_fields(&[
+    let valid = [
         "DNS".to_string(),
         "not-a-clash-field".to_string(),
         "mode".to_string(),
-    ]);
+    ];
+    let fields = stage1_fields_for_core(&valid, true);
     assert!(fields.contains(&"dns".to_string()));
     assert!(fields.contains(&"proxies".to_string()));
+    assert!(
+        fields.contains(&"mmdb".to_string()),
+        "the Chimera Client MMDB extension is retained independent of profile.valid"
+    );
+    assert!(!stage1_fields(&valid).contains(&"mmdb".to_string()));
     assert!(!fields.contains(&"not-a-clash-field".to_string()));
     assert!(!fields.contains(&"mode".to_string()));
 }
@@ -99,15 +133,50 @@ fn whitelist_filter_keeps_only_allowed_and_is_noop_when_disabled() {
 fn whitelist_preserves_retained_field_and_nested_order() {
     let config = value(json!({
         "mode": "rule", "proxies": [{"name": "a", "type": "direct"}],
-        "custom": true, "rules": ["MATCH,DIRECT"]
+        "custom": true, "rules": ["MATCH,DIRECT"], "mmdb": "Country.mmdb"
     }));
-    let filtered = whitelist_filter(&config, &stage1_fields(&[]), true);
+    let filtered = whitelist_filter(&config, &stage1_fields_for_core(&[], true), true);
     assert_eq!(
         serde_json::to_string(&filtered.to_json()).unwrap(),
-        r#"{"proxies":[{"name":"a","type":"direct"}],"rules":["MATCH,DIRECT"]}"#,
+        r#"{"proxies":[{"name":"a","type":"direct"}],"rules":["MATCH,DIRECT"],"mmdb":"Country.mmdb"}"#,
     );
 }
 
+#[test]
+fn unsupported_core_mmdb_is_stripped_even_when_field_filter_is_disabled() {
+    let config = value(json!({ "mmdb": "Country.mmdb", "proxies": [] }));
+    let result = finalize_for_core(&config, &tun_off(), false, false).to_json();
+    assert!(result.get("mmdb").is_none());
+}
+
+#[test]
+fn chimera_client_mmdb_is_retained_with_or_without_generic_field_filter() {
+    let config = value(json!({ "mmdb": "Country.mmdb", "proxies": [] }));
+
+    for whitelist_enabled in [false, true] {
+        let result = finalize_for_core(&config, &tun_off(), whitelist_enabled, true).to_json();
+        assert_eq!(result["mmdb"], json!("Country.mmdb"));
+    }
+}
+
+#[test]
+fn mihomo_geox_url_mmdb_is_not_confused_with_chimera_client_top_level_mmdb() {
+    let config = value(json!({
+        "mmdb": "Country.mmdb",
+        "geox-url": {
+            "mmdb": "https://example.invalid/Country.mmdb"
+        }
+    }));
+    let result = finalize_for_core(&config, &tun_off(), false, false).to_json();
+
+    assert!(result.get("mmdb").is_none());
+    assert_eq!(
+        result["geox-url"]["mmdb"],
+        json!("https://example.invalid/Country.mmdb")
+    );
+}
+
+#[cfg(feature = "default-meta")]
 #[test]
 fn guard_inserts_override_keys_and_resolved_ports() {
     let overrides = fixed_overrides();
@@ -164,9 +233,23 @@ fn tun_disabled_with_existing_tun_key_forces_enable_false() {
 }
 
 #[test]
+fn tun_enable_is_owned_without_creating_a_disabled_tun_table() {
+    let source = value(json!({
+        "tun": { "enable": true, "auto-route": "global" }
+    }));
+    let disabled = apply_tun_overrides_with_source(&source, &source, &tun_off()).to_json();
+    assert_eq!(disabled["tun"]["enable"], json!(false));
+    assert_eq!(disabled["tun"]["auto-route"], json!("global"));
+
+    let filtered = apply_tun_overrides_with_source(&value(json!({})), &source, &tun_off());
+    assert!(filtered.to_json().get("tun").is_none());
+}
+
+#[test]
 fn tun_enabled_standard_appends_defaults_and_dns() {
     let params = TunParams {
         enable: true,
+        overrides: TunOverrides::default(),
         flavor: TunFlavor::Standard {
             stack: TunStack::Gvisor,
         },
@@ -197,9 +280,79 @@ fn tun_enabled_standard_appends_defaults_and_dns() {
 }
 
 #[test]
+fn managed_auto_route_overwrites_profile_values() {
+    for (managed, expected) in [(false, false), (true, true)] {
+        let params = TunParams {
+            enable: true,
+            overrides: TunOverrides {
+                auto_route: ManageableField::Managed(managed),
+            },
+            ..tun_off()
+        };
+        let config = value(json!({ "tun": { "auto-route": "global" } }));
+        let result = finalize(&config, &params, false).to_json();
+        assert_eq!(result["tun"]["auto-route"], json!(expected));
+    }
+}
+
+#[test]
+fn unmanaged_auto_route_preserves_profile_values_and_does_not_supply_a_default() {
+    let params = TunParams {
+        enable: true,
+        overrides: TunOverrides {
+            auto_route: ManageableField::Unmanaged,
+        },
+        ..tun_off()
+    };
+    let config = value(json!({ "tun": { "auto-route": "global" } }));
+    let result = finalize(&config, &params, false).to_json();
+    assert_eq!(result["tun"]["auto-route"], json!("global"));
+
+    let absent = finalize(&value(json!({})), &params, false).to_json();
+    assert!(absent["tun"].get("auto-route").is_none());
+}
+
+#[test]
+fn unmanaged_auto_route_is_restored_when_the_field_filter_drops_the_tun_table() {
+    let source = value(json!({
+        "proxies": [],
+        "tun": { "auto-route": "global", "mtu": 1400 }
+    }));
+    let filtered = value(json!({ "proxies": [] }));
+    let params = TunParams {
+        enable: true,
+        overrides: TunOverrides {
+            auto_route: ManageableField::Unmanaged,
+        },
+        ..tun_off()
+    };
+
+    let result = apply_tun_overrides_with_source(&filtered, &source, &params).to_json();
+    assert_eq!(result["tun"]["auto-route"], json!("global"));
+    assert!(result["tun"].get("mtu").is_none());
+}
+
+#[test]
+fn tun_disabled_does_not_apply_auto_route_override() {
+    let params = TunParams {
+        overrides: TunOverrides {
+            auto_route: ManageableField::Managed(false),
+        },
+        ..tun_off()
+    };
+    let config = value(json!({ "tun": { "enable": true, "auto-route": "global" } }));
+    let result = finalize(&config, &params, false).to_json();
+    assert_eq!(
+        result["tun"],
+        json!({ "enable": false, "auto-route": "global" })
+    );
+}
+
+#[test]
 fn tun_enabled_clash_rs_uses_device_branch_and_no_windows_filter() {
     let params = TunParams {
         enable: true,
+        overrides: TunOverrides::default(),
         flavor: TunFlavor::ClashRs,
         windows_fake_ip_filter: false,
     };
@@ -216,6 +369,9 @@ fn tun_enabled_clash_rs_uses_device_branch_and_no_windows_filter() {
 fn tun_enabled_chimera_client_retains_legacy_contract() {
     let params = TunParams {
         enable: true,
+        overrides: TunOverrides {
+            auto_route: ManageableField::Managed(false),
+        },
         flavor: TunFlavor::ChimeraClient,
         windows_fake_ip_filter: true,
     };
@@ -259,6 +415,7 @@ fn tun_enabled_chimera_client_retains_legacy_contract() {
 fn tun_enabled_chimera_client_preserves_user_tun_and_dns_values() {
     let params = TunParams {
         enable: true,
+        overrides: TunOverrides::default(),
         flavor: TunFlavor::ChimeraClient,
         windows_fake_ip_filter: true,
     };

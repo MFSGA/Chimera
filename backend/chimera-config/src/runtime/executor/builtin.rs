@@ -5,7 +5,10 @@ use std::sync::Arc;
 
 use indexmap::IndexMap;
 
-use crate::runtime::value::{ConfigObject, ConfigValue};
+use crate::runtime::{
+    post_process::{OwnedFields, Ownership, apply_settings, keep_inherited},
+    value::{ConfigObject, ConfigValue},
+};
 
 use super::{
     GuardInputs, TunFlavor, TunParams,
@@ -32,6 +35,10 @@ pub(super) const DEFAULT_FIELDS: [&str; 5] = [
     "rules",
     "rule-providers",
 ];
+
+/// Chimera Client's top-level MMDB path is a core-specific extension, not a
+/// shared Mihomo-family field.
+pub(super) const CHIMERA_CLIENT_FIELDS: [&str; 1] = ["mmdb"];
 
 pub(super) const OTHERS_FIELDS: [&str; 31] = [
     "dns",
@@ -67,23 +74,46 @@ pub(super) const OTHERS_FIELDS: [&str; 31] = [
     "global-client-fingerprint",
 ];
 
-/// 45-key full whitelist, DEFAULT ++ HANDLE ++ OTHERS (field.rs:58-65 order).
+/// Default-core view retained for the legacy unit-test assertions.
+#[cfg(test)]
 pub(super) fn known_fields() -> impl Iterator<Item = &'static str> {
+    known_fields_for_core(false)
+}
+
+/// Full whitelist in ref order, with Chimera Client's extension appended
+/// only when the selected core supports it.
+pub(super) fn known_fields_for_core(
+    core_supports_mmdb: bool,
+) -> impl Iterator<Item = &'static str> {
     DEFAULT_FIELDS
         .into_iter()
+        .chain(core_supports_mmdb.then_some(CHIMERA_CLIENT_FIELDS[0]))
         .chain(HANDLE_FIELDS)
         .chain(OTHERS_FIELDS)
 }
 
-/// Stage-1 list: (valid intersect OTHERS, lowercased) ++ DEFAULT; HANDLE
-/// never included. Guarded fields must not come from profile output.
+/// Default-core view retained for the legacy unit-test assertions.
+#[cfg(test)]
 pub(super) fn stage1_fields(valid: &[String]) -> Vec<String> {
+    stage1_fields_for_core(valid, false)
+}
+
+/// Stage-1 list: (valid intersect OTHERS, lowercased) ++ DEFAULT and the
+/// selected core's extensions; HANDLE never comes from profile output.
+pub(super) fn stage1_fields_for_core(valid: &[String], core_supports_mmdb: bool) -> Vec<String> {
     let mut fields: Vec<String> = valid
         .iter()
         .map(|field| field.to_ascii_lowercase())
         .filter(|field| OTHERS_FIELDS.contains(&field.as_str()))
         .collect();
     fields.extend(DEFAULT_FIELDS.iter().map(|field| (*field).to_string()));
+    if core_supports_mmdb {
+        fields.extend(
+            CHIMERA_CLIENT_FIELDS
+                .iter()
+                .map(|field| (*field).to_string()),
+        );
+    }
     fields
 }
 
@@ -108,23 +138,24 @@ pub(super) fn whitelist_filter(
 
 /// Legacy HANDLE overwrite (enhance/mod.rs:110-116): typed overrides + caller
 /// resolved ports force-inserted at top level, bypassing stage-1 whitelist.
+#[cfg(all(test, feature = "default-meta"))]
 pub(super) fn apply_guard(
     config: &ConfigValue,
     guard: &GuardInputs<'_>,
 ) -> Result<ConfigValue, RuntimePipelineError> {
-    let raw = serde_json::to_value(guard.overrides).map_err(|error| {
-        RuntimePipelineError::Internal(format!("encode guard overrides: {error}"))
-    })?;
-    let entries = ConfigValue::try_from(raw).map_err(|error| {
-        RuntimePipelineError::Internal(format!("convert guard overrides: {error:?}"))
-    })?;
+    apply_guard_with_source(config, config, guard)
+}
 
-    let mut next = config.clone();
-    if let Some(map) = entries.as_object_arc() {
-        for (key, value) in map.iter() {
-            next = obj_insert(&next, key.as_ref(), value.clone());
-        }
-    }
+/// Apply guard ownership after filtering, restoring profile-owned values from
+/// the pre-filter config before writing managed settings.
+pub(super) fn apply_guard_with_source(
+    config: &ConfigValue,
+    source: &ConfigValue,
+    guard: &GuardInputs<'_>,
+) -> Result<ConfigValue, RuntimePipelineError> {
+    let ownership = guard.overrides.ownership_entries();
+    let (inherited, _) = keep_inherited(config, source, &ownership);
+    let (mut next, _) = apply_settings(&inherited, &ownership);
 
     next = obj_insert(
         &next,
@@ -176,19 +207,72 @@ pub(super) fn apply_guard(
     Ok(next)
 }
 
+/// Restore profile-owned TUN keys after the field filter and apply managed
+/// auto-route before builtin transforms, matching the reference ownership pass.
+pub(super) fn apply_tun_overrides_with_source(
+    config: &ConfigValue,
+    source: &ConfigValue,
+    tun: &TunParams,
+) -> ConfigValue {
+    let mut entries = vec![("enable", Ownership::Forced(ConfigValue::Bool(tun.enable)))];
+    if tun.enable && !matches!(tun.flavor, TunFlavor::ChimeraClient) {
+        entries.extend(tun.overrides.ownership_entries());
+    }
+    let ownership = vec![(
+        "tun",
+        Ownership::Table {
+            entries,
+            create: tun.enable,
+        },
+    )];
+    let (inherited, _) = keep_inherited(config, source, &ownership);
+    apply_settings(&inherited, &ownership).0
+}
+
 /// Finalizing composite node (spec 7.4): stage-2 filter, tun, include-all,
 /// cache, then sort. One recorded node; changed_fields shows the net effect.
+#[cfg(test)]
 pub(super) fn finalize(
     config: &ConfigValue,
     tun: &TunParams,
     whitelist_enabled: bool,
 ) -> ConfigValue {
-    let full: Vec<String> = known_fields().map(str::to_string).collect();
+    let config = apply_tun_overrides_with_source(config, config, tun);
+    finalize_for_core(&config, tun, whitelist_enabled, false)
+}
+
+pub(super) fn finalize_for_core(
+    config: &ConfigValue,
+    tun: &TunParams,
+    whitelist_enabled: bool,
+    core_supports_mmdb: bool,
+) -> ConfigValue {
+    let full: Vec<String> = known_fields_for_core(core_supports_mmdb)
+        .map(str::to_string)
+        .collect();
     let mut next = whitelist_filter(config, &full, whitelist_enabled);
+    if !core_supports_mmdb {
+        // Core compatibility is not optional: disabling the generic field
+        // whitelist must not send Chimera Client-only `mmdb` to other cores.
+        next = strip_chimera_client_fields(&next);
+    }
     next = apply_tun(&next, tun);
     next = apply_include_all(&next);
     next = apply_cache(&next);
     apply_sort(&next)
+}
+
+fn strip_chimera_client_fields(config: &ConfigValue) -> ConfigValue {
+    let Some(map) = config.as_object_arc() else {
+        return config.clone();
+    };
+    if !map.contains_key("mmdb") {
+        return config.clone();
+    }
+
+    let mut filtered = (**map).clone();
+    filtered.retain(|key, _| key.as_ref() != "mmdb");
+    ConfigValue::Object(Arc::new(filtered))
 }
 
 fn object_of(value: Option<&ConfigValue>) -> ConfigObject {
@@ -231,7 +315,6 @@ fn apply_tun(config: &ConfigValue, params: &TunParams) -> ConfigValue {
         match params.flavor {
             TunFlavor::ClashRs => {
                 append_default(&mut tun, "device-id", string_value("dev://utun1989"));
-                append_default(&mut tun, "auto-route", ConfigValue::Bool(true));
             }
             TunFlavor::ChimeraClient => {
                 // These fields belong to Chimera Client's legacy core contract.
@@ -247,7 +330,6 @@ fn apply_tun(config: &ConfigValue, params: &TunParams) -> ConfigValue {
             TunFlavor::Standard { stack } => {
                 append_default(&mut tun, "stack", string_value(stack.as_ref()));
                 append_default(&mut tun, "dns-hijack", string_list(&["any:53"]));
-                append_default(&mut tun, "auto-route", ConfigValue::Bool(true));
                 append_default(&mut tun, "auto-detect-interface", ConfigValue::Bool(true));
             }
         }

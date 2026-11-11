@@ -22,7 +22,10 @@ pub use error::RuntimePipelineError;
 pub use ports::{PortError, ProfileContentSource, ScriptRunOutcome, ScriptRunner};
 
 use crate::{
-    clash::config::{overrides::ClashGuardOverrides, tun_stack::TunStack},
+    clash::config::{
+        overrides::{ClashGuardOverrides, TunOverrides},
+        tun_stack::TunStack,
+    },
     profile::{
         ProfileDefinition, ProfileId, Profiles, ScriptRuntime, TransformDefinition, TransformKind,
     },
@@ -40,8 +43,10 @@ pub struct RuntimePipelineInputs<'a> {
     pub profiles: &'a Profiles,
     pub target: ExecutionTarget,
     pub guard: GuardInputs<'a>,
-    /// `ClashConfig.enable_clash_fields`: gates both whitelist passes.
+    /// `ClashConfig.enable_clash_fields`: gates both generic whitelist passes.
     pub whitelist_enabled: bool,
+    /// Whether the selected core accepts Chimera Client's top-level `mmdb` extension.
+    pub core_supports_mmdb: bool,
     pub tun: TunParams,
     /// Pre-gated and ordered by the caller against `ClashCore` (spec D3).
     pub builtin_transforms: &'a [BuiltinTransform],
@@ -78,6 +83,7 @@ pub struct ResolvedPortBindings {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct TunParams {
     pub enable: bool,
+    pub overrides: TunOverrides,
     pub flavor: TunFlavor,
     /// Platform conditional as input: caller passes `cfg!(windows)` (spec §7.4).
     pub windows_fake_ip_filter: bool,
@@ -288,7 +294,8 @@ pub fn execute(
         .map(|map| map.keys().map(|key| key.to_ascii_lowercase()).collect())
         .unwrap_or_default();
 
-    let stage1 = builtin::stage1_fields(&inputs.profiles.valid);
+    let stage1 = builtin::stage1_fields_for_core(&inputs.profiles.valid, inputs.core_supports_mmdb);
+    let prefilter = working.clone();
     working = Arc::new(builtin::whitelist_filter(
         &working,
         &stage1,
@@ -302,7 +309,16 @@ pub fn execute(
         working.clone(),
     )?;
 
-    working = Arc::new(builtin::apply_guard(&working, &inputs.guard)?);
+    working = Arc::new(builtin::apply_guard_with_source(
+        &working,
+        &prefilter,
+        &inputs.guard,
+    )?);
+    working = Arc::new(builtin::apply_tun_overrides_with_source(
+        &working,
+        &prefilter,
+        &inputs.tun,
+    ));
     builder.push(
         OperatorTag::BuiltinStep {
             selected_profile_id: selected.clone(),
@@ -340,10 +356,11 @@ pub fn execute(
         working = next;
     }
 
-    working = Arc::new(builtin::finalize(
+    working = Arc::new(builtin::finalize_for_core(
         &working,
         &inputs.tun,
         inputs.whitelist_enabled,
+        inputs.core_supports_mmdb,
     ));
     builder.push(
         OperatorTag::BuiltinStep {
@@ -353,9 +370,11 @@ pub fn execute(
         working.clone(),
     )?;
 
-    // Legacy mod.rs:155-157 parity: ∩45 unconditionally; IndexSet preserves
-    // order.
-    applied_fields.retain(|key| builtin::known_fields().any(|field| field == key));
+    // Legacy mod.rs:155-157 parity: intersect with the selected core's
+    // supported field set; IndexSet preserves insertion order.
+    applied_fields.retain(|key| {
+        builtin::known_fields_for_core(inputs.core_supports_mmdb).any(|field| field == key)
+    });
 
     let graph = builder.build()?;
     let transform_failures = logs.failures.clone();

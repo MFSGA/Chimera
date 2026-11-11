@@ -1149,6 +1149,8 @@ export type ClashConfig = {
   overrides: ClashGuardOverrides;
   /**  clash tun mode */
   enable_tun_mode: boolean;
+  /**  The `tun` keys Chimera manages while TUN mode is on. */
+  tun?: TunOverrides;
   /**  web ui list */
   web_ui_list: string[];
   /**  支持关闭字段过滤，避免meta的新字段都被过滤掉，默认为真 */
@@ -1178,8 +1180,9 @@ export type ClashConfigPatch =
   ClashConfigPatch_Serialize | ClashConfigPatch_Deserialize;
 
 export type ClashConfigPatch_Deserialize = {
-  overrides?: ClashGuardOverrides | null;
+  overrides?: ClashGuardOverridesPatch_Deserialize;
   enable_tun_mode?: boolean | null;
+  tun?: TunOverridesPatch_Deserialize;
   web_ui_list?: string[] | null;
   enable_clash_fields?: boolean | null;
   external_controller?: ExternalControllerStrategyPatch_Deserialize;
@@ -1196,8 +1199,9 @@ export type ClashConfigPatch_Deserialize = {
 };
 
 export type ClashConfigPatch_Serialize = {
-  overrides?: ClashGuardOverrides | null;
+  overrides?: ClashGuardOverridesPatch_Serialize;
   enable_tun_mode?: boolean | null;
+  tun?: TunOverridesPatch_Serialize;
   web_ui_list?: string[] | null;
   enable_clash_fields?: boolean | null;
   external_controller?: ExternalControllerStrategyPatch_Serialize;
@@ -1310,9 +1314,32 @@ export type ClashGuardOverrides = {
   'allow-lan': boolean;
   mode: Mode;
   secret: string;
-  'unified-delay': boolean;
-  'tcp-concurrent': boolean;
+  'unified-delay': ManageableField<boolean>;
+  'tcp-concurrent': ManageableField<boolean>;
   ipv6: boolean;
+};
+
+export type ClashGuardOverridesPatch =
+  ClashGuardOverridesPatch_Serialize | ClashGuardOverridesPatch_Deserialize;
+
+export type ClashGuardOverridesPatch_Deserialize = {
+  'log-level'?: LogLevel | null;
+  'allow-lan'?: boolean | null;
+  mode?: Mode | null;
+  secret?: string | null;
+  'unified-delay'?: ManageableField<boolean> | null;
+  'tcp-concurrent'?: ManageableField<boolean> | null;
+  ipv6?: boolean | null;
+};
+
+export type ClashGuardOverridesPatch_Serialize = {
+  'log-level'?: LogLevel | null;
+  'allow-lan'?: boolean | null;
+  mode?: Mode | null;
+  secret?: string | null;
+  'unified-delay'?: ManageableField<boolean> | null;
+  'tcp-concurrent'?: ManageableField<boolean> | null;
+  ipv6?: boolean | null;
 };
 
 export type ClashInfo = {
@@ -2265,6 +2292,13 @@ export type LoggingLevel_Deserialize =
 
 export type LoggingLevel_Serialize =
   'silent' | 'trace' | 'debug' | 'info' | 'warn' | 'error';
+
+/**  A runtime config field Chimera may take over from the profiles. */
+export type ManageableField<T> =
+  /**  Written into the runtime config over whatever the profiles and transforms produced. */
+  | { kind: 'managed'; value: T }
+  /**  Left to the profiles and transforms, subject to the field filter. */
+  | { kind: 'unmanaged' };
 
 /**  A path relative to the application-managed profile directory. */
 export type ManagedProfilePath = string;
@@ -3469,6 +3503,29 @@ export type TrayMenuCloseBehavior = 'hide' | 'close';
 
 /**  Whether the tray menu uses the system-native menu or the WebView menu. */
 export type TrayMenuMode = 'native' | 'webview';
+
+/**
+ *  The `tun` keys Chimera may manage while TUN mode is on. The TUN switch and
+ *  the stack stay separate settings.
+ */
+export type TunOverrides = {
+  /**
+   *  Managed `true` by default. Unmanaged leaves a profile's value, such
+   *  as `global`, and adds none when the profiles have none.
+   */
+  'auto-route': ManageableField<boolean>;
+};
+
+export type TunOverridesPatch =
+  TunOverridesPatch_Serialize | TunOverridesPatch_Deserialize;
+
+export type TunOverridesPatch_Deserialize = {
+  'auto-route'?: ManageableField<boolean> | null;
+};
+
+export type TunOverridesPatch_Serialize = {
+  'auto-route'?: ManageableField<boolean> | null;
+};
 
 export type TunStack = 'system' | 'gvisor' | 'mixed';
 

@@ -34,12 +34,21 @@ pub enum ClashControlChannel {
 #[serde(rename_all = "snake_case")]
 pub struct ClashConfig {
     /// Clash Overrides config, used to patch clash config directly
+    #[patch(nesting)]
     #[patch(attribute(specta(optional)))]
+    #[patch(attribute(serde(default)))]
     pub overrides: ClashGuardOverrides,
 
     /// clash tun mode
     #[patch(attribute(specta(optional)))]
     pub enable_tun_mode: bool,
+
+    /// The `tun` keys Chimera manages while TUN mode is on.
+    #[patch(nesting)]
+    #[patch(attribute(specta(optional)))]
+    #[patch(attribute(serde(default)))]
+    #[serde(default)]
+    pub tun: TunOverrides,
 
     /// web ui list
     #[patch(attribute(specta(optional)))]
@@ -228,6 +237,59 @@ mod patch_tests {
     use struct_patch::Patch;
 
     #[test]
+    fn tun_auto_route_is_managed_true_by_default() {
+        assert_eq!(
+            ClashConfig::default().tun.auto_route,
+            ManageableField::Managed(true)
+        );
+    }
+
+    /// A nested `tun` patch sets `auto-route` alone, and the setting survives a
+    /// save and load without touching the TUN switch or stack.
+    #[test]
+    fn tun_auto_route_patches_round_trip_without_changing_the_tun_switch() {
+        let mut config = ClashConfig {
+            enable_tun_mode: true,
+            tun_stack: TunStack::System,
+            ..ClashConfig::default()
+        };
+        for field in [
+            ManageableField::Managed(false),
+            ManageableField::Managed(true),
+            ManageableField::Unmanaged,
+        ] {
+            let patch: ClashConfigPatch = serde_json::from_value(serde_json::json!({
+                "tun": { "auto-route": field },
+            }))
+            .unwrap();
+            config.apply(patch);
+            let saved = serde_yaml_ng::to_string(&config).unwrap();
+            let loaded: ClashConfig = serde_yaml_ng::from_str(&saved).unwrap();
+            assert_eq!(loaded.tun.auto_route, field);
+            assert!(loaded.enable_tun_mode);
+            assert_eq!(loaded.tun_stack, TunStack::System);
+        }
+    }
+
+    #[test]
+    fn legacy_tun_auto_route_boolean_remains_readable() {
+        let mut saved = serde_json::to_value(ClashConfig::default()).unwrap();
+        saved["tun"]["auto-route"] = serde_json::json!(false);
+        let config: ClashConfig = serde_json::from_value(saved)
+            .expect("legacy bare auto-route boolean must remain readable");
+        assert_eq!(config.tun.auto_route, ManageableField::Managed(false));
+    }
+
+    #[test]
+    fn old_clash_config_defaults_missing_tun_overrides() {
+        let mut saved = serde_json::to_value(ClashConfig::default()).unwrap();
+        saved.as_object_mut().unwrap().remove("tun");
+        let config: ClashConfig = serde_json::from_value(saved)
+            .expect("older ClashConfig without tun must remain readable");
+        assert_eq!(config.tun, TunOverrides::default());
+    }
+
+    #[test]
     fn nested_patches_preserve_unmodified_strategy_fields() {
         let mut config = ClashConfig {
             mixed_port: PortStrategy {
@@ -247,6 +309,27 @@ mod patch_tests {
         assert_eq!(config.mixed_port.start_port, 28080);
         assert!(!config.break_connection.on_mode_change);
         assert!(config.break_connection.on_profile_change);
+    }
+
+    #[cfg(feature = "default-meta")]
+    #[test]
+    fn nested_override_patch_preserves_unmodified_guard_fields() {
+        let mut config = ClashConfig::default();
+        let before = serde_json::to_value(&config.overrides).unwrap();
+        let patch: ClashConfigPatch =
+            serde_yaml_ng::from_str("overrides:\n  unified-delay:\n    kind: unmanaged\n")
+                .expect("nested guard override patch must deserialize");
+
+        config.apply(patch);
+
+        let after = serde_json::to_value(&config.overrides).unwrap();
+        assert_eq!(
+            after["unified-delay"],
+            serde_json::json!({ "kind": "unmanaged" })
+        );
+        assert_eq!(after["tcp-concurrent"], before["tcp-concurrent"]);
+        assert_eq!(after["allow-lan"], before["allow-lan"]);
+        assert_eq!(after["secret"], before["secret"]);
     }
 
     #[test]

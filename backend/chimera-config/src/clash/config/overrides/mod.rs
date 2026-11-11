@@ -1,3 +1,9 @@
+mod manageable;
+mod tun;
+
+pub use manageable::ManageableField;
+pub use tun::{TunOverrides, TunOverridesPatch};
+
 use serde::{Deserialize, Serialize};
 use struct_patch::Patch;
 
@@ -50,10 +56,20 @@ pub enum Mode {
     Script,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, specta::Type, Patch)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Deserialize,
+    Serialize,
+    specta::Type,
+    Patch,
+    chimera_macro::OwnedFields,
+)]
 #[patch(attribute(serde_with::skip_serializing_none))]
 #[patch(attribute(derive(Debug, Default, Clone, Serialize, Deserialize, specta::Type)))]
-#[patch(attribute(serde(rename_all = "kebab-case")))]
+#[patch(attribute(serde(default, rename_all = "kebab-case")))]
 #[serde(rename_all = "kebab-case")]
 pub struct ClashGuardOverrides {
     log_level: LogLevel,
@@ -61,9 +77,9 @@ pub struct ClashGuardOverrides {
     mode: Mode,
     secret: String,
     #[cfg(feature = "default-meta")]
-    unified_delay: bool,
+    unified_delay: ManageableField<bool>,
     #[cfg(feature = "default-meta")]
-    tcp_concurrent: bool,
+    tcp_concurrent: ManageableField<bool>,
     ipv6: bool,
 }
 
@@ -75,9 +91,9 @@ impl Default for ClashGuardOverrides {
             mode: Mode::Rule,
             secret: uuid::Uuid::new_v4().to_string().to_lowercase(),
             #[cfg(feature = "default-meta")]
-            unified_delay: true,
+            unified_delay: ManageableField::Managed(true),
             #[cfg(feature = "default-meta")]
-            tcp_concurrent: true,
+            tcp_concurrent: ManageableField::Managed(true),
             ipv6: false,
         }
     }
@@ -118,6 +134,59 @@ mod patch_tests {
         assert_eq!(overrides.log_level, LogLevel::Debug);
         assert_eq!(overrides.mode, Mode::Rule, "absent field unchanged");
         assert_eq!(overrides.secret, kept_secret, "absent secret unchanged");
+    }
+
+    #[cfg(feature = "default-meta")]
+    #[test]
+    fn legacy_boolean_guard_fields_deserialize_as_managed() {
+        let overrides: ClashGuardOverrides = serde_yaml_ng::from_str(
+            "log-level: info\nallow-lan: false\nmode: rule\nsecret: legacy\nunified-delay: false\ntcp-concurrent: true\nipv6: false\n",
+        )
+        .expect("legacy boolean guard fields must remain readable");
+
+        assert_eq!(overrides.unified_delay, ManageableField::Managed(false));
+        assert_eq!(overrides.tcp_concurrent, ManageableField::Managed(true));
+
+        let serialized = serde_json::to_value(&overrides).unwrap();
+        assert_eq!(
+            serialized["unified-delay"],
+            serde_json::json!({ "kind": "managed", "value": false })
+        );
+    }
+
+    #[cfg(feature = "default-meta")]
+    #[test]
+    fn legacy_boolean_guard_patches_remain_readable() {
+        let mut overrides = ClashGuardOverrides::default();
+        let patch: ClashGuardOverridesPatch =
+            serde_yaml_ng::from_str("unified-delay: false\ntcp-concurrent: true\n")
+                .expect("legacy boolean guard patch must remain readable");
+        overrides.apply(patch);
+
+        assert_eq!(overrides.unified_delay, ManageableField::Managed(false));
+        assert_eq!(overrides.tcp_concurrent, ManageableField::Managed(true));
+    }
+
+    #[cfg(feature = "default-meta")]
+    #[test]
+    fn ownership_entries_distinguish_managed_and_unmanaged_fields() {
+        use crate::runtime::post_process::{OwnedFields, Ownership};
+
+        let mut overrides = ClashGuardOverrides::default();
+        let patch: ClashGuardOverridesPatch = serde_yaml_ng::from_str(
+            "unified-delay:\n  kind: unmanaged\ntcp-concurrent:\n  kind: managed\n  value: false\n",
+        )
+        .expect("managed-field patch must deserialize");
+        overrides.apply(patch);
+
+        let entries = overrides.ownership_entries();
+        assert!(entries.contains(&("unified-delay", Ownership::Inherited)));
+        assert!(entries.contains(&(
+            "tcp-concurrent",
+            Ownership::Forced(crate::runtime::value::ConfigValue::from_json_value(
+                serde_json::json!(false)
+            ))
+        )));
     }
 
     #[test]

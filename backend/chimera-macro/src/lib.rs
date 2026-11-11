@@ -5,6 +5,8 @@ use syn::{DeriveInput, parse_macro_input};
 mod builder_update;
 /// 2
 mod enum_wrapper_combined;
+/// 4
+mod owned_fields;
 /// 3
 mod verge_patch;
 
@@ -21,6 +23,15 @@ pub fn builder_update(input: TokenStream) -> TokenStream {
 pub fn enum_wrapper_from(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
     match enum_wrapper_combined::enum_combined_wrapper(input) {
+        Ok(token_stream) => TokenStream::from(token_stream),
+        Err(e) => TokenStream::from(e.to_compile_error()),
+    }
+}
+
+#[proc_macro_derive(OwnedFields)]
+pub fn owned_fields(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as DeriveInput);
+    match owned_fields::owned_fields(input) {
         Ok(token_stream) => TokenStream::from(token_stream),
         Err(e) => TokenStream::from(e.to_compile_error()),
     }
