@@ -73,6 +73,10 @@
 | LESSON-20261031-012 | 2026-10-31 | NixOS / Btrfs / Rust tests | Tauri 测试二进制链接在 Btrfs `reserve_bytes` 阻塞；Cargo check 成功，完整 Client 测试待环境复验 | Open |
 | LESSON-20261103-001 | 2026-11-03 | Runtime / Windows / ref | 原样迁入原生存储路径测试在 Windows 将 `/data/ui` 错判为正确路径；改为 `Utf8Path::join` 生成预期值，重新运行 12/12 通过 | Mitigated |
 | LESSON-20261104-001 | 2026-11-04 | Rust workspace / Cargo target / pnpm store | 默认 D 盘耗尽导致完整测试链接失败；恢复空间后在默认位置完成全量测试，pnpm 元数据策略检查仍告警 | Mitigated |
+| LESSON-20261110-001 | 2026-11-10 | Clash config / nested patch | 新增嵌套 transparent_proxy patch 未标记 serde default，稀疏历史 patch 反序列化失败；补默认并由旧配置 patch 回归检出 | Mitigated |
+| LESSON-20261110-002 | 2026-11-10 | Runtime builder / platform tests | Linux-only runtime builder 用例在 macOS 请求 Linux 配置并失败 `UnsupportedTarget`；将用例限制到 Linux target，macOS 不再误报但仍需 Linux 执行 | Mitigated |
+| LESSON-20261110-003 | 2026-11-10 | Effects / test expectations | 新增 transparent proxy effect 后两个完整 effect 序列断言漏加新 effect；更新 plan/executor 顺序断言并由 45 项测试覆盖 | Mitigated |
+| LESSON-20261110-004 | 2026-11-10 | Service / ref defect | pinned ref 配置允许 Mihomo Alpha，Service 仅允许 Mihomo；复现后统一 stable/alpha 判定并加入回归，Linux runtime 仍待实测 | Mitigated |
 
 ### LESSON-20261103-001：原生路径重写测试不能假定 Unix 分隔符
 

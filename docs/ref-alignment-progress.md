@@ -1,9 +1,12 @@
 # ref 对齐进度
 
-## 2026-11-11：Linux 透明代理集成说明
+## 2026-11-11：Linux 透明代理主线整合收尾
 
-- 本节移植自 `4b632f8f` 并保留原分支的测试证据；其中 `ref@231e3866` 是来源分支当时的参考基线，不代表当前 master 的 gitlink 已同步。
-- 当前主仓仍固定 `ref@59724e85`，本地 `ref` 工作树未改变；真实 Linux 网络/桌面效果仍需单独验收。
+- **已有主线代码**：`Chimera/master@9060202087496ee3a5e56de7441afb22ada78ffe` 已通过 `feat(network): integrate Linux transparent proxy capture` 引入 UI、配置与 Tauri effects；本提交不重复迁移该功能代码，也不改动另一工作区未提交的 updater 修改。
+- **Service 主线依赖**：`Chimera_Service` PR #117 已合并到 `main@d56b083cc6495b103de6f2bee2cd292435b40af3`。本收尾把根仓 Service gitlink 从临时功能提交 `72106892` 更新为已合并主线 `d56b083c`，并同步 Service v1.11.2 的 8 项 workspace crate `Cargo.lock` 版本。
+- **文档记录**：补齐 `LESSONS.md` 中透明代理的四项问题索引。保留根仓当前 `ref` gitlink `59724e85`，下方 DIFF-072 记录的历史 ref `231e3866` 不代表本次同步了 ref。
+- **已验证**：Service macOS cargo check、透明代理 12/12 定向测试和三平台 CI lint/rustfmt；根仓 macOS `cargo check --locked --offline`（chimera-config/chimera lib）、`chimera-config` 测试 177/177、Tauri effects 45/45、E2E 框架单测 44/44、`pnpm typecheck`、`pnpm lint:frontend-boundaries`、Prettier。Tauri 检查使用只在临时检出目录链接的现有 sidecar/resources；不提交这些资源。新 commit/PR SHA 的远端检查须单独确认。
+- **风险与回滚**：Linux nft/ip 实网、网络命名空间与可见桌面 E2E 仍未在本机完成。先停用和清理 Service 的透明代理规则，再回退这次 gitlink/lockfile 变更；根仓主线原有功能提交不随本收尾回退。
 
 ## DIFF-072：Linux 透明代理捕获（代码迁移完成；Linux/桌面验收待补）
 
