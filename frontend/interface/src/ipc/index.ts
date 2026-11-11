@@ -8,7 +8,7 @@ export * from './use-profile-sync';
 export * from './use-runtime-transform-diagnostics';
 export * from './consts';
 
-export { commands } from './bindings';
+export { commands, events } from './bindings';
 export { mutations, queries } from './query-bindings';
 export {
   MutationUnconfirmedError,

@@ -1,4 +1,5 @@
 import { mutationOptions, queryOptions } from '@tanstack/react-query';
+import { unwrapResult } from '../utils';
 import { commands } from './bindings.js';
 import {
   CLASH_CONFIG_QUERY_KEY,
@@ -22,6 +23,11 @@ export const queries = {
     queryOptions({
       queryKey: [TRANSPARENT_PROXY_STATUS_QUERY_KEY],
       queryFn: () => commands.getTransparentProxyStatus(),
+    }),
+  getReleaseChannel: () =>
+    queryOptions({
+      queryKey: ['getReleaseChannel'],
+      queryFn: async () => unwrapResult(await commands.getReleaseChannel()),
     }),
   getProfiles: (...args: Parameters<typeof commands.getProfiles>) =>
     queryOptions({
@@ -111,6 +117,12 @@ export const queries = {
 };
 
 export const mutations = {
+  setReleaseChannel: mutationOptions({
+    mutationKey: ['setReleaseChannel'],
+    mutationFn: async (
+      channel: Parameters<typeof commands.setReleaseChannel>[0],
+    ) => unwrapResult(await commands.setReleaseChannel(channel)),
+  }),
   selectProxy: mutationOptions({
     mutationKey: ['selectProxy'],
     mutationFn: (input: Parameters<typeof commands.selectProxy>) =>

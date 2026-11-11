@@ -1,23 +1,19 @@
-import { cleanupProcesses, openThat } from '@chimera/interface';
+import { commands, openThat, type AppUpdateSnapshot } from '@chimera/interface';
 import { BaseDialog, BaseDialogProps, cn } from '@chimera/ui';
 import { Button, LinearProgress } from '@mui/material';
-import { relaunch } from '@tauri-apps/plugin-process';
-import { DownloadEvent, type Update } from '@tauri-apps/plugin-updater';
 import { useLockFn } from 'ahooks';
 import dayjs from 'dayjs';
 import { useSetAtom } from 'jotai';
-import { lazy, Suspense, useCallback, useState, useTransition } from 'react';
-import { IS_NIGHTLY } from '@/consts';
+import AppUpdateChangelog from '@/components/updater/app-update-changelog';
 import * as m from '@/paraglide/messages';
 import { UpdaterIgnoredAtom } from '@/store/updater';
 import { formatError } from '@/utils';
 import { message } from '@/utils/notification';
+import { useChimeraUpdate } from '../providers/chimera-update-provider';
 import styles from './updater-dialog.module.scss';
 
-const Markdown = lazy(() => import('react-markdown'));
-
 export interface UpdaterDialogProps extends Omit<BaseDialogProps, 'title'> {
-  update: Update;
+  update: AppUpdateSnapshot;
 }
 
 export default function UpdaterDialog({
@@ -27,66 +23,35 @@ export default function UpdaterDialog({
   ...others
 }: UpdaterDialogProps) {
   const setUpdaterIgnore = useSetAtom(UpdaterIgnoredAtom);
-  const [contentLength, setContentLength] = useState(0);
-  const [contentDownloaded, setContentDownloaded] = useState(0);
-  const [pending, startPending] = useTransition();
+  const { currentVersion, downloadUpdate, cancelDownload, installUpdate } =
+    useChimeraUpdate();
+  const release = update.release;
+  const pending =
+    update.phase === 'downloading' ||
+    update.phase === 'verifying' ||
+    update.phase === 'cancelling' ||
+    update.phase === 'installing';
   const progress =
-    contentDownloaded && contentLength
-      ? (contentDownloaded / contentLength) * 100
+    update.downloaded && update.total
+      ? (update.downloaded / update.total) * 100
       : 0;
-  const date =
-    update.date ||
-    (typeof update.rawJson.pub_date === 'string'
-      ? update.rawJson.pub_date
-      : undefined);
-
-  console.info(date);
-  console.info(update);
-
-  const onDownloadEvent = useCallback((e: DownloadEvent) => {
-    switch (e.event) {
-      case 'Started':
-        setContentLength(e.data.contentLength || 0);
-        break;
-      case 'Progress':
-        setContentDownloaded((prev) => prev + e.data.chunkLength);
-        break;
-    }
-  }, []);
 
   const handleUpdate = useLockFn(async () => {
-    startPending(async () => {
-      let shutdownStarted = false;
-      try {
-        // Install the update. This will also restart the app on Windows!
-        await update.download(onDownloadEvent);
-        shutdownStarted = true;
-        await cleanupProcesses();
-        // cleanup and stop core
-        await update.install();
-        // On macOS and Linux you will need to restart the app manually.
-        // You could use this step to display another confirmation dialog.
-        await relaunch();
-      } catch (e) {
-        console.error(e);
-        if (shutdownStarted) {
-          // The app owners have stopped for installation. If installation
-          // fails, relaunch the currently installed version to restore them.
-          try {
-            await relaunch();
-            return;
-          } catch (relaunchError) {
-            console.error(relaunchError);
-          }
-        }
-        message(formatError(e), { kind: 'error', title: m.common_error() });
-      }
-    });
+    try {
+      if (update.phase === 'ready') await installUpdate();
+      else await downloadUpdate();
+    } catch (error) {
+      message(formatError(error), { kind: 'error', title: m.common_error() });
+    }
   });
 
-  const releasesPageUrl = IS_NIGHTLY
-    ? `https://github.com/MFSGA/Chimera/releases/tag/pre-release`
-    : `https://github.com/MFSGA/Chimera/releases/tag/v${update.version}`;
+  const handleCancel = useLockFn(async () => {
+    try {
+      await cancelDownload();
+    } catch (error) {
+      message(formatError(error), { kind: 'error', title: m.common_error() });
+    }
+  });
 
   return (
     <BaseDialog
@@ -94,7 +59,7 @@ export default function UpdaterDialog({
       title={m.updater_update_available()}
       open={open}
       onClose={() => {
-        setUpdaterIgnore(update.version); // TODO: control this behavior
+        if (release) setUpdaterIgnore(release.version);
         onClose?.();
       }}
       onOk={handleUpdate}
@@ -112,19 +77,19 @@ export default function UpdaterDialog({
       >
         <div className="flex items-center justify-between px-2 py-2">
           <div className="flex gap-3">
-            <span className="text-xl font-bold">{update.version}</span>
+            <span className="text-xl font-bold">{release?.version}</span>
             <span className="contents text-xs text-slate-500">
-              {date
-                ? dayjs(date).format('YYYY-MM-DD HH:mm:ss')
+              {release?.date
+                ? dayjs(release.date).format('YYYY-MM-DD HH:mm:ss')
                 : m.common_invalid_date()}
             </span>
           </div>
           <Button
             variant="contained"
             size="small"
-            onClick={() => {
-              openThat(releasesPageUrl);
-            }}
+            onClick={() =>
+              void openThat('https://github.com/MFSGA/Chimera/releases')
+            }
           >
             {m.common_open()}
           </Button>
@@ -132,43 +97,33 @@ export default function UpdaterDialog({
         <div
           className={cn('h-[50vh] overflow-y-auto p-4', styles.MarkdownContent)}
         >
-          <Suspense fallback={<div>{m.common_loading()}</div>}>
-            <Markdown
-              components={{
-                a(props) {
-                  const { children, node, ...rest } = props;
-                  return (
-                    <a
-                      {...rest}
-                      onClick={(e) => {
-                        e.preventDefault();
-                        e.stopPropagation();
-                        if (typeof node?.properties.href === 'string') {
-                          openThat(node.properties.href);
-                        }
-                      }}
-                    >
-                      {children}
-                    </a>
-                  );
-                },
-              }}
-            >
-              {(update.rawJson.notes as string) ||
-                m.settings_label_about_update_has_new_version()}
-            </Markdown>
-          </Suspense>
+          {release && (
+            <AppUpdateChangelog
+              from={currentVersion}
+              to={release.version}
+              fallbackBody={release.body}
+            />
+          )}
+          {update.error && (
+            <p className="mt-3 text-sm text-red-600">{update.error}</p>
+          )}
         </div>
         {pending && (
           <div className="mt-2 flex items-center gap-2">
             <LinearProgress
               className="flex-1"
-              variant="determinate"
+              variant={update.total ? 'determinate' : 'indeterminate'}
               value={progress}
             />
             <span className="text-xs text-slate-500">
-              {progress.toFixed(2)}%
+              {update.total ? `${progress.toFixed(2)}%` : update.phase}
             </span>
+            {(update.phase === 'downloading' ||
+              update.phase === 'verifying') && (
+              <Button size="small" onClick={handleCancel}>
+                {m.common_cancel()}
+              </Button>
+            )}
           </div>
         )}
       </div>

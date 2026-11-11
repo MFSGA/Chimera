@@ -11,11 +11,11 @@ import {
 import { LinearProgress } from '@chimera/ui/progress';
 import { ScrollArea } from '@chimera/ui/scroll-area';
 import { SwitchItem } from '@chimera/ui/switch';
-import { relaunch } from '@tauri-apps/plugin-process';
 import { PropsWithChildren, useEffect, useState } from 'react';
-import Markdown from 'react-markdown';
 import AnimatedLogo from '@/components/logo/animated-logo';
 import { useChimeraUpdate } from '@/components/providers/chimera-update-provider';
+import ChimeraUpdatePreferences from '@/components/setting/chimera-update-preferences';
+import AppUpdateChangelog from '@/components/updater/app-update-changelog';
 import { useLockFn } from '@/hooks/use-lock-fn';
 import {
   Action as AboutAction,
@@ -31,7 +31,6 @@ import {
 } from '../../_modules/settings-card';
 
 const TITLE = 'Clash Chimera~(∠・ω< )⌒☆';
-
 const GITHUB_RELEASES_URL = 'https://github.com/MFSGA/Chimera/releases';
 
 const AutoCheckUpdate = () => {
@@ -50,91 +49,43 @@ const AutoCheckUpdate = () => {
   );
 };
 
-const NewVersionModal = ({ children }: PropsWithChildren) => {
+const NewVersionModal = ({
+  children,
+  currentVersion,
+}: PropsWithChildren<{ currentVersion: string }>) => {
   const { action } = AboutRoute.useSearch();
-
-  const { newVersion } = useChimeraUpdate();
-
-  const [isInstalling, setIsInstalling] = useState(false);
-
-  const [contentLength, setContentLength] = useState(0);
-  const [contentDownloaded, setContentDownloaded] = useState(0);
-
+  const { snapshot, downloadUpdate, cancelDownload, installUpdate } =
+    useChimeraUpdate();
+  const release = snapshot?.release;
+  const cancelling = snapshot?.phase === 'cancelling';
+  const downloading =
+    snapshot?.phase === 'downloading' ||
+    snapshot?.phase === 'verifying' ||
+    cancelling;
+  const installing = snapshot?.phase === 'installing';
   const progress =
-    contentDownloaded && contentLength
-      ? (contentDownloaded / contentLength) * 100
+    snapshot?.downloaded && snapshot.total
+      ? (snapshot.downloaded / snapshot.total) * 100
       : 0;
-
   const [open, setOpen] = useState(false);
 
   useEffect(() => {
-    // for animation duration to open the modal
-    if (action === AboutAction.NEED_UPDATE) {
-      setOpen(true);
-    }
+    if (action === AboutAction.NEED_UPDATE) setOpen(true);
   }, [action]);
 
-  const handleOpenChange = (open: boolean) => {
-    if (isInstalling) {
-      return;
-    }
-
-    setOpen(open);
-  };
-
   const handleUpdate = useLockFn(async () => {
-    if (!newVersion) {
-      return;
-    }
-
-    let shutdownStarted = false;
+    if (!release) return;
     try {
-      setIsInstalling(true);
-
-      // Install the update. This will also restart the app on Windows!
-      await newVersion.download((e) => {
-        switch (e.event) {
-          case 'Started':
-            setContentLength(e.data.contentLength || 0);
-            break;
-          case 'Progress':
-            setContentDownloaded((prev) => prev + e.data.chunkLength);
-            break;
-        }
-      });
-
-      shutdownStarted = true;
-      await commands.cleanupProcesses();
-      // cleanup and stop core
-      await newVersion.install();
-      // On macOS and Linux you will need to restart the app manually.
-      // You could use this step to display another confirmation dialog.
-      await relaunch();
-    } catch (e) {
-      console.error(e);
-      if (shutdownStarted) {
-        // The app owners have stopped for installation. If installation
-        // fails, relaunch the currently installed version to restore them.
-        try {
-          await relaunch();
-          return;
-        } catch (relaunchError) {
-          console.error(relaunchError);
-        }
-      }
-      message(formatError(e), {
-        kind: 'error',
-        title: 'Error',
-      });
-    } finally {
-      setIsInstalling(false);
+      if (snapshot?.phase === 'ready') await installUpdate();
+      else await downloadUpdate();
+    } catch (error) {
+      message(formatError(error), { kind: 'error', title: m.common_error() });
     }
   });
 
   return (
-    <Modal open={open} onOpenChange={handleOpenChange}>
+    <Modal open={open} onOpenChange={(next) => !installing && setOpen(next)}>
       <ModalTrigger asChild>{children}</ModalTrigger>
-
       <ModalContent>
         <Card className="max-w-3xl min-w-96">
           <CardHeader>
@@ -142,61 +93,67 @@ const NewVersionModal = ({ children }: PropsWithChildren) => {
               {m.settings_label_about_update_has_new_version()}
             </ModalTitle>
           </CardHeader>
-
           <CardContent asChild>
             <ScrollArea className="max-h-[80dvh]">
-              {isInstalling ? (
+              {downloading || installing ? (
                 <div className="flex flex-col gap-2">
                   <div className="flex items-center gap-2">
-                    {m.settings_label_about_update_installing()}
-
+                    {installing
+                      ? m.settings_label_about_update_installing()
+                      : cancelling
+                        ? m.settings_about_update_status_cancelling()
+                        : snapshot?.phase === 'verifying'
+                          ? m.settings_about_update_status_verifying()
+                          : m.settings_about_update_status_downloading()}
                     <span className="text-xs text-slate-500">
-                      {progress.toFixed(2)}%
+                      {snapshot?.total ? `${progress.toFixed(2)}%` : ''}
                     </span>
                   </div>
-
-                  <LinearProgress className="w-full" value={progress} />
+                  <LinearProgress
+                    className="w-full"
+                    value={progress}
+                    indeterminate={!snapshot?.total}
+                  />
                 </div>
-              ) : (
-                <Markdown
-                  components={{
-                    a(props) {
-                      const { children, node, ...rest } = props;
-
-                      return (
-                        <a
-                          {...rest}
-                          onClick={(e) => {
-                            e.preventDefault();
-                            e.stopPropagation();
-
-                            if (typeof node?.properties.href === 'string') {
-                              commands.openThat(node.properties.href);
-                            }
-                          }}
-                        >
-                          {children}
-                        </a>
-                      );
-                    },
-                  }}
-                >
-                  {newVersion?.body || 'New version available.'}
-                </Markdown>
+              ) : release ? (
+                <AppUpdateChangelog
+                  from={currentVersion}
+                  to={release.version}
+                  fallbackBody={release.body}
+                />
+              ) : null}
+              {snapshot?.error && (
+                <p className="mt-3 text-sm text-red-600">{snapshot.error}</p>
               )}
             </ScrollArea>
           </CardContent>
-
           <CardFooter className="gap-2">
             <Button
               variant="flat"
-              loading={isInstalling}
+              loading={downloading || installing}
+              disabled={downloading || installing}
               onClick={handleUpdate}
             >
-              {m.settings_label_about_update_to_update_button()}
+              {snapshot?.phase === 'ready'
+                ? m.settings_about_update_install_action()
+                : m.settings_label_about_update_to_update_button()}
             </Button>
-
-            {!isInstalling && <ModalClose>{m.common_close()}</ModalClose>}
+            {downloading && !cancelling && (
+              <Button
+                variant="flat"
+                onClick={() =>
+                  void cancelDownload().catch((error) =>
+                    message(formatError(error), {
+                      kind: 'error',
+                      title: m.common_error(),
+                    }),
+                  )
+                }
+              >
+                {m.common_cancel()}
+              </Button>
+            )}
+            {!installing && <ModalClose>{m.common_close()}</ModalClose>}
           </CardFooter>
         </Card>
       </ModalContent>
@@ -218,17 +175,23 @@ export default function ChimeraVersion() {
   );
 
   const handleCheckNewVersion = useLockFn(async () => {
-    const update = await checkNewVersion();
-
-    if (update) {
-      message(m.settings_label_about_update_has_new_version(), {
-        kind: 'info',
-        title: m.settings_label_about_update(),
-      });
-    } else {
-      message(m.settings_label_about_update_no_update(), {
-        kind: 'info',
-        title: m.settings_label_about_update(),
+    try {
+      const update = await checkNewVersion();
+      if (update.release) {
+        message(m.settings_label_about_update_has_new_version(), {
+          kind: 'info',
+          title: m.settings_label_about_update(),
+        });
+      } else if (update.phase === 'up_to_date') {
+        message(m.settings_label_about_update_no_update(), {
+          kind: 'info',
+          title: m.settings_label_about_update(),
+        });
+      }
+    } catch (error) {
+      message(formatError(error), {
+        kind: 'error',
+        title: m.settings_about_update_check_failed(),
       });
     }
   });
@@ -239,22 +202,17 @@ export default function ChimeraVersion() {
         <div className="p-4">
           <AnimatedLogo className="size-32" indeterminate />
         </div>
-
         <div className="truncate text-base font-bold">{TITLE}</div>
-
         <div className="text-sm font-semibold">
-          {m.settings_label_about_version({
-            version: currentVersion,
-          })}
+          {m.settings_label_about_version({ version: currentVersion })}
         </div>
       </SettingsCardContent>
-
       {isSupported ? (
         <SettingsCardFooter className="flex-col gap-2">
           <AutoCheckUpdate />
-
+          <ChimeraUpdatePreferences />
           {hasNewVersion ? (
-            <NewVersionModal>
+            <NewVersionModal currentVersion={currentVersion}>
               <Button variant="flat" className="w-full">
                 {m.settings_label_about_update_has_new_version()}
               </Button>

@@ -6,6 +6,7 @@ import { useSetAtom } from 'jotai';
 import { version } from '@root/package.json';
 // import LogoSvg from '@/assets/image/logo.svg?react';
 import { useChimeraUpdate } from '@/components/providers/chimera-update-provider';
+import ChimeraUpdatePreferences from '@/components/setting/chimera-update-preferences';
 import * as m from '@/paraglide/messages';
 import { UpdaterInstanceAtom } from '@/store/updater';
 import { formatError } from '@/utils';
@@ -30,13 +31,13 @@ export const SettingChimeraVersion = () => {
     try {
       const update = await checkNewVersion();
 
-      if (!update) {
+      if (update.release) {
+        setUpdaterInstance(update);
+      } else if (update.phase === 'up_to_date') {
         message(m.settings_label_about_update_no_update(), {
           title: m.common_info(),
           kind: 'info',
         });
-      } else {
-        setUpdaterInstance(update || null);
       }
     } catch (e) {
       message(
@@ -90,6 +91,10 @@ export const SettingChimeraVersion = () => {
             <div className="mt-1 mb-1">
               <AutoCheckUpdate />
             </div>
+
+            <ListItem sx={{ pl: 0, pr: 0 }}>
+              <ChimeraUpdatePreferences />
+            </ListItem>
 
             <ListItem sx={{ pl: 0, pr: 0 }}>
               <Button

@@ -457,19 +457,38 @@ export const commands = {
     typedError<null, string>(
       __TAURI_INVOKE('unsubscribe_clash_connection_details', { id }),
     ),
-  checkUpdate: () =>
-    typedError<
-      {
-        rid: number;
-        available: boolean;
-        current_version: string;
-        version: string;
-        date: string | null;
-        body: string | null;
-        raw_json: any;
-      } | null,
-      string
-    >(__TAURI_INVOKE('check_update')),
+  getAppUpdateState: () =>
+    typedError<AppUpdateSnapshot, string>(
+      __TAURI_INVOKE('get_app_update_state'),
+    ),
+  getAppUpdateChangelog: (from: string, to: string) =>
+    typedError<AppUpdateChangelog, string>(
+      __TAURI_INVOKE('get_app_update_changelog', { from, to }),
+    ),
+  getReleaseChannel: () =>
+    typedError<ReleaseChannelInfo, string>(
+      __TAURI_INVOKE('get_release_channel'),
+    ),
+  checkAppUpdate: () =>
+    typedError<AppUpdateSnapshot, string>(__TAURI_INVOKE('check_app_update')),
+  downloadAppUpdate: () =>
+    typedError<AppUpdateSnapshot, string>(
+      __TAURI_INVOKE('download_app_update'),
+    ),
+  cancelAppUpdateDownload: () =>
+    typedError<AppUpdateSnapshot, string>(
+      __TAURI_INVOKE('cancel_app_update_download'),
+    ),
+  installAppUpdate: () =>
+    typedError<AppUpdateSnapshot, string>(__TAURI_INVOKE('install_app_update')),
+  discardAppUpdatePackage: () =>
+    typedError<AppUpdateSnapshot, string>(
+      __TAURI_INVOKE('discard_app_update_package'),
+    ),
+  setReleaseChannel: (channel: ReleaseChannel) =>
+    typedError<MutationOutcome<null>, string>(
+      __TAURI_INVOKE('set_release_channel', { channel }),
+    ),
   isPortable: () => typedError<boolean, string>(__TAURI_INVOKE('is_portable')),
   isAppimage: () => typedError<boolean, string>(__TAURI_INVOKE('is_appimage')),
   openThat: (path: string) =>
@@ -605,6 +624,9 @@ export const commands = {
 
 /** Events */
 export const events = {
+  appUpdateStateChanged: makeEvent<AppUpdateStateChanged>(
+    'app-update-state-changed',
+  ),
   clashConnectionsEvent: makeEvent<ClashConnectionsEvent>(
     'clash-connections-event',
   ),
@@ -910,6 +932,57 @@ export type AgentTunSnapshot = {
 export type AgentUnsupportedIntentReason =
   'empty_input' | 'input_too_long' | 'no_matching_intent';
 
+export type AppUpdateChangelog = {
+  /**  Newest first. */
+  entries: AppUpdateChangelogEntry[];
+  /**  `None` when either version is a nightly build, which has no tag. */
+  compare_url: string | null;
+};
+
+export type AppUpdateChangelogEntry = {
+  version: string;
+  date: string | null;
+  body: string;
+  source: AppUpdateChangelogSource;
+};
+
+export type AppUpdateChangelogSource = 'changelog' | 'release';
+
+export type AppUpdatePhase =
+  | 'idle'
+  | 'checking'
+  | 'up_to_date'
+  | 'available'
+  | 'downloading'
+  | 'cancelling'
+  | 'cancelled'
+  | 'verifying'
+  | 'ready'
+  | 'installing'
+  | 'failed';
+
+export type AppUpdateRelease = {
+  version: string;
+  date: string | null;
+  body: string | null;
+};
+
+export type AppUpdateSnapshot = {
+  revision: number;
+  phase: AppUpdatePhase;
+  release: AppUpdateRelease | null;
+  downloaded: number;
+  total: number | null;
+  speed: number | null;
+  source: UpdateSource | null;
+  error: string | null;
+  last_checked_at: string | null;
+  supported: boolean;
+  endpoints: string[];
+};
+
+export type AppUpdateStateChanged = AppUpdateSnapshot;
+
 export type BreakConnectionStrategy = {
   /**  切换代理时中断连接 */
   on_proxy_change: ProxyChangeBreakMode;
@@ -999,6 +1072,9 @@ export type ChimeraAppConfigPatch_Deserialize = {
   proxy_layout_column?: number | null;
   max_log_files?: number | null;
   enable_auto_check_update?: boolean | null;
+  enable_auto_download_update?: boolean | null;
+  release_channel?: ReleaseChannel | null;
+  update_sources?: UpdateSource[] | null;
   tray_selector_mode?: ProxiesSelectorMode | null;
   always_on_top?: boolean | null;
   tray_menu_mode?: TrayMenuMode | null;
@@ -1035,6 +1111,9 @@ export type ChimeraAppConfigPatch_Serialize = {
   proxy_layout_column?: number | null;
   max_log_files?: number | null;
   enable_auto_check_update?: boolean | null;
+  enable_auto_download_update?: boolean | null;
+  release_channel?: ReleaseChannel | null;
+  update_sources?: UpdateSource[] | null;
   tray_selector_mode?: ProxiesSelectorMode | null;
   always_on_top?: boolean | null;
   tray_menu_mode?: TrayMenuMode | null;
@@ -1083,6 +1162,11 @@ export type ChimeraAppConfig_Deserialize = {
   proxy_layout_column?: number;
   max_log_files?: number;
   enable_auto_check_update?: boolean;
+  enable_auto_download_update?: boolean;
+  /**  None in older configurations means the channel of the installed build. */
+  release_channel?: ReleaseChannel | null;
+  /**  Enabled application update package sources, in priority order. */
+  update_sources?: UpdateSource[];
   tray_selector_mode?: ProxiesSelectorMode;
   always_on_top?: boolean;
   tray_menu_mode?: TrayMenuMode;
@@ -1134,6 +1218,11 @@ export type ChimeraAppConfig_Serialize = {
   proxy_layout_column: number;
   max_log_files: number;
   enable_auto_check_update: boolean;
+  enable_auto_download_update: boolean;
+  /**  None in older configurations means the channel of the installed build. */
+  release_channel: ReleaseChannel | null;
+  /**  Enabled application update package sources, in priority order. */
+  update_sources: UpdateSource[];
   tray_selector_mode: ProxiesSelectorMode;
   always_on_top: boolean;
   tray_menu_mode: TrayMenuMode;
@@ -3059,6 +3148,13 @@ export type Rate = {
   download: number;
 };
 
+export type ReleaseChannel = 'stable' | 'beta' | 'nightly';
+
+export type ReleaseChannelInfo = {
+  current: ReleaseChannel;
+  installed: ReleaseChannel;
+};
+
 export type RemoteProfileImportMode = 'default' | 'direct';
 
 export type RemoteProfileOptionsPatch =
@@ -3564,15 +3660,7 @@ export type TunOverridesPatch_Serialize = {
 
 export type TunStack = 'system' | 'gvisor' | 'mixed';
 
-export type UpdateWrapper = {
-  rid: number;
-  available: boolean;
-  current_version: string;
-  version: string;
-  date: string | null;
-  body: string | null;
-  raw_json: any;
-};
+export type UpdateSource = 'chimera' | 'github' | 'ghfast' | 'sourceforge';
 
 export type UpdaterState =
   | 'idle'
