@@ -8,7 +8,9 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use chimera_config::{
     application::ChimeraAppConfig,
-    clash::config::{ClashConfig, tun_stack::TunStack},
+    clash::config::{
+        ClashConfig, TransparentProxyMode, TransparentProxyValidationError, tun_stack::TunStack,
+    },
     profile::Profiles,
     runtime::executor::{
         BuiltinTransform, ExecutionTarget, GuardInputs, PortError, ProfileContentSource,
@@ -31,6 +33,10 @@ use crate::{
 pub enum RuntimeBuildError {
     #[error("profiles snapshot failed validation: {0:?}")]
     Validation(Vec<chimera_config::profile::ProfileValidationError>),
+    #[error("transparent proxy settings are invalid: {0}")]
+    ValidateTransparentProxy(#[from] TransparentProxyValidationError),
+    #[error("transparent capture requires service mode")]
+    TransparentProxyRequiresServiceMode,
     #[error(transparent)]
     Pipeline(#[from] RuntimePipelineError),
     #[error("runtime candidate contains failed transforms: {failures:?}")]
@@ -180,6 +186,14 @@ impl RuntimeBuilder {
             .profiles
             .validate()
             .map_err(RuntimeBuildError::Validation)?;
+        if input.clash.transparent_proxy.mode != TransparentProxyMode::Disabled
+            && !input.app.enable_service_mode
+        {
+            return Err(RuntimeBuildError::TransparentProxyRequiresServiceMode);
+        }
+        input
+            .clash
+            .validate_transparent_proxy(input.app.core, cfg!(target_os = "linux"))?;
 
         let target = match &input.profiles.current {
             Some(uid) => ExecutionTarget::Selected(uid.clone()),
@@ -196,6 +210,9 @@ impl RuntimeBuilder {
             guard: GuardInputs {
                 overrides: &input.clash.overrides,
                 ports: input.resolved_ports.clone(),
+                routing_mark: (cfg!(target_os = "linux")
+                    && input.clash.transparent_proxy.mode != TransparentProxyMode::Disabled)
+                    .then_some(0x20000),
             },
             whitelist_enabled: input.clash.enable_clash_fields,
             tun: TunParams {
@@ -393,6 +410,36 @@ mod tests {
                 stack: TunStack::Gvisor
             }
         );
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn transparent_capture_requires_service_mode_and_builds_managed_listener() {
+        let mut input = RuntimeBuildInput {
+            profiles: Arc::new(Profiles::default()),
+            clash: ClashConfig::default(),
+            app: ChimeraAppConfig::default(),
+            resolved_ports: ResolvedPortBindings {
+                mixed_port: 7890,
+                ..Default::default()
+            },
+        };
+        input.clash.transparent_proxy.mode = TransparentProxyMode::Tproxy;
+        assert!(matches!(
+            RuntimeBuilder::build(&input, &EmptyContent, &EchoRunner),
+            Err(RuntimeBuildError::TransparentProxyRequiresServiceMode)
+        ));
+
+        input.app.enable_service_mode = true;
+        input.app.core = chimera_config::application::ClashCore::Mihomo;
+        input.clash.tproxy_port = Some(
+            chimera_config::clash::config::clash_strategy::PortStrategy::new_allow_fallback(7894),
+        );
+        input.resolved_ports.tproxy_port = Some(7894);
+        let artifact = RuntimeBuilder::build(&input, &EmptyContent, &EchoRunner).unwrap();
+        let config = artifact.final_config.to_json();
+        assert_eq!(config["tproxy-port"], json!(7894));
+        assert_eq!(config["routing-mark"], json!(0x20000));
     }
 
     #[test]

@@ -79,7 +79,7 @@ struct State {
     pending: BTreeMap<EffectKind, ApplicationEffect>,
     entries: BTreeMap<EffectKind, Entry>,
     waiters: BTreeMap<(EffectKind, EffectRevision), Vec<RpcReplyPort<EffectStatus>>>,
-    active: [Option<tokio::task::JoinHandle<()>>; 3],
+    active: [Option<tokio::task::JoinHandle<()>>; 4],
     status: watch::Sender<EffectsSnapshot>,
     closed: bool,
     timer: tokio::task::JoinHandle<()>,
@@ -140,6 +140,7 @@ fn group(kind: EffectKind) -> usize {
         EffectKind::SystemProxy | EffectKind::ProxyGuard | EffectKind::AutoLaunch => 0,
         EffectKind::Hotkeys => 1,
         EffectKind::Locale | EffectKind::Logger | EffectKind::Widget | EffectKind::Tray => 2,
+        EffectKind::TransparentProxy => 3,
     }
 }
 
@@ -321,8 +322,30 @@ impl State {
         self.pending.insert(kind, effect);
     }
 
+    /// A fresh core apply changes the expected revision even when the listener
+    /// port is stable, so resend the current target to the Service owner.
+    fn reapply(&mut self, kind: EffectKind) {
+        let Some(effect) = ApplicationEffectPlan::full(&self.desired)
+            .effects()
+            .iter()
+            .find(|effect| effect.kind() == kind)
+            .cloned()
+        else {
+            return;
+        };
+        let entry = self.entries.entry(kind).or_insert_with(|| Entry::new(kind));
+        entry.automatic = false;
+        entry.next = None;
+        entry.health = ConvergenceHealth::Pending;
+        self.revision += 1;
+        let revision = EffectRevision::new(self.revision);
+        entry.status.desired_revision = revision;
+        entry.status.health = EffectHealth::Pending;
+        self.pending.insert(kind, effect);
+    }
+
     fn drive(&mut self, myself: &ActorRef<Message>) {
-        for index in 0..3 {
+        for index in 0..4 {
             if self.active[index].is_some() {
                 continue;
             }
@@ -389,7 +412,7 @@ impl Actor for EffectsActor {
             pending: BTreeMap::new(),
             entries: BTreeMap::new(),
             waiters: BTreeMap::new(),
-            active: [None, None, None],
+            active: [None, None, None, None],
             status: args.status,
             closed: false,
             timer: myself.send_interval(Duration::from_millis(250), || Message::Tick),
@@ -409,6 +432,7 @@ impl Actor for EffectsActor {
                 full,
                 requested,
             } if !state.closed => {
+                let runtime_notification = matches!(&slice, Slice::Ports(_));
                 let inputs = merge_slice(state.desired.clone(), slice);
                 let changed: Vec<_> = ApplicationEffectPlan::diff(&state.desired, &inputs)
                     .effects()
@@ -416,6 +440,9 @@ impl Actor for EffectsActor {
                     .map(ApplicationEffect::kind)
                     .collect();
                 state.enqueue(inputs, refresh, full);
+                if runtime_notification && !changed.contains(&EffectKind::TransparentProxy) {
+                    state.reapply(EffectKind::TransparentProxy);
+                }
                 for kind in requested {
                     if !changed.contains(&kind) {
                         state.retry(kind, false);
@@ -903,6 +930,35 @@ mod tests {
         assert!(matches!(
             plan.effects(),
             [ApplicationEffect::SystemProxy(desired)] if desired.port == Some(17890)
+        ));
+        let _ = effects.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn a_new_core_runtime_reapplies_transparent_proxy_when_its_port_is_unchanged() {
+        let (sender, mut receiver) = mpsc::unbounded_channel();
+        let ports = ResolvedPortBindings {
+            mixed_port: 17890,
+            ..Default::default()
+        };
+        let mut initial = inputs();
+        initial.ports = Some(ports.clone());
+        let effects = EffectsClient::spawn(EffectsArgs {
+            port: Arc::new(RecordingEffectsPort { plans: sender }),
+            initial,
+        })
+        .await
+        .expect("effects actor");
+
+        CommitNotifications::runtime_bound(&effects, Some(ports), false);
+        let plan = tokio::time::timeout(Duration::from_secs(5), receiver.recv())
+            .await
+            .expect("transparent proxy effect plan")
+            .expect("recorded effect plan");
+
+        assert!(matches!(
+            plan.effects(),
+            [ApplicationEffect::TransparentProxy(_)]
         ));
         let _ = effects.shutdown().await;
     }

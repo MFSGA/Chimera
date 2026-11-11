@@ -153,4 +153,58 @@ impl PortStrategy {
 
         Ok(port)
     }
+
+    /// Pick a port that is currently available for both TCP and UDP. TProxy
+    /// cores use TCP and UDP listeners on the same port; this probe does not
+    /// reserve the eventual listener's bind.
+    #[tracing::instrument]
+    pub fn pick_and_try_tcp_udp_port(&self) -> Result<PickedPort, PickPortError> {
+        let available = |port| {
+            port_scanner::local_port_available(port)
+                && std::net::UdpSocket::bind((Ipv4Addr::UNSPECIFIED, port)).is_ok()
+        };
+        let fallback = || {
+            let new_port = port_scanner::request_open_port().ok_or(PickPortError::NoOpenPort)?;
+            if !available(new_port) {
+                return Err(PickPortError::PortNotAvailable { port: new_port });
+            }
+            Ok(PickedPort::Fallback(new_port))
+        };
+
+        match self.kind {
+            PortStrategyKind::Fixed => {
+                if !available(self.start_port) {
+                    return Err(PickPortError::PortNotAvailable {
+                        port: self.start_port,
+                    });
+                }
+                Ok(PickedPort::Original(self.start_port))
+            }
+            PortStrategyKind::Random => fallback(),
+            PortStrategyKind::AllowFallback if available(self.start_port) => {
+                Ok(PickedPort::Original(self.start_port))
+            }
+            PortStrategyKind::AllowFallback => fallback(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tcp_udp_picker_rejects_a_udp_listener_on_the_candidate_port() {
+        let occupied = std::net::UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0)).unwrap();
+        let port = occupied.local_addr().unwrap().port();
+        let strategy = PortStrategy {
+            kind: PortStrategyKind::Fixed,
+            start_port: port,
+        };
+
+        assert!(matches!(
+            strategy.pick_and_try_tcp_udp_port(),
+            Err(PickPortError::PortNotAvailable { port: failed }) if failed == port
+        ));
+    }
 }

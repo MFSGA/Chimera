@@ -28,6 +28,8 @@ pub struct PortsFingerprint {
     mixed: PortStrategy,
     socks: Option<PortStrategy>,
     http: Option<PortStrategy>,
+    redir: Option<PortStrategy>,
+    tproxy: Option<PortStrategy>,
     external: ExternalControllerStrategy,
 }
 
@@ -37,6 +39,8 @@ impl PortsFingerprint {
             mixed: clash.mixed_port.clone(),
             socks: clash.socks_port.clone(),
             http: clash.http_port.clone(),
+            redir: clash.redir_port.clone(),
+            tproxy: clash.tproxy_port.clone(),
             external: clash.external_controller.clone(),
         }
     }
@@ -147,6 +151,35 @@ impl SessionPortResolver {
                 .map(|picked| *picked),
         };
 
+        let redir_port = match unchanged(
+            previous
+                .as_ref()
+                .is_some_and(|(prev, _)| prev.redir == fingerprint.redir),
+        ) {
+            Some(ports) => ports.redir_port,
+            None => clash
+                .redir_port
+                .as_ref()
+                .map(|strategy| strategy.pick_and_try_port())
+                .transpose()
+                .context("failed to resolve redir port")?
+                .map(|picked| *picked),
+        };
+        let tproxy_port = match unchanged(
+            previous
+                .as_ref()
+                .is_some_and(|(prev, _)| prev.tproxy == fingerprint.tproxy),
+        ) {
+            Some(ports) => ports.tproxy_port,
+            None => clash
+                .tproxy_port
+                .as_ref()
+                .map(PortStrategy::pick_and_try_tcp_udp_port)
+                .transpose()
+                .context("failed to resolve tproxy port")?
+                .map(|picked| *picked),
+        };
+
         // A host-only external-controller change keeps the picked port. Only
         // a changed port strategy is allowed to probe a new listener.
         let external_port = match unchanged(
@@ -174,10 +207,31 @@ impl SessionPortResolver {
             clash.external_controller.host, external_port
         ));
 
+        let mut used = std::collections::HashMap::new();
+        let external_controller_port = external_controller
+            .as_deref()
+            .and_then(|address| address.rsplit(':').next())
+            .and_then(|raw| raw.parse::<u16>().ok());
+        for (field, port) in [
+            ("mixed", Some(mixed_port)),
+            ("http", port),
+            ("socks", socks_port),
+            ("redir", redir_port),
+            ("tproxy", tproxy_port),
+            ("external controller", external_controller_port),
+        ] {
+            let Some(port) = port else { continue };
+            if let Some(first) = used.insert(port, field) {
+                anyhow::bail!("the {first} and {field} listeners both use port {port}");
+            }
+        }
+
         let ports = ResolvedPortBindings {
             mixed_port,
             port,
             socks_port,
+            redir_port,
+            tproxy_port,
             external_controller,
         };
         Ok(CandidatePortBindings {

@@ -272,6 +272,10 @@ export const commands = {
     typedError<[CoreState, number, RunType], string>(
       __TAURI_INVOKE('get_core_status'),
     ),
+  getTransparentProxyStatus: () =>
+    typedError<NetworkTransparentProxyStatus, string>(
+      __TAURI_INVOKE('get_transparent_proxy_status'),
+    ),
   getCoreLifecycleStatus: () =>
     typedError<CoreLifecycleStatus, string>(
       __TAURI_INVOKE('get_core_lifecycle_status'),
@@ -1159,6 +1163,11 @@ export type ClashConfig = {
   socks_port: PortStrategy | null;
   /**  HTTP Proxy Port */
   http_port: PortStrategy | null;
+  /**  Transparent proxy listener ports. `None` leaves profile-provided ports intact. */
+  redir_port: PortStrategy | null;
+  tproxy_port: PortStrategy | null;
+  /**  Capture policy applied by the platform network service. */
+  transparent_proxy?: TransparentProxyConfig;
   /**  断开连接策略 */
   break_connection: BreakConnectionStrategy;
   /**  Tun 堆栈选择 */
@@ -1179,6 +1188,9 @@ export type ClashConfigPatch_Deserialize = {
   mixed_port?: PortStrategyPatch_Deserialize;
   socks_port?: PortStrategy | null;
   http_port?: PortStrategy | null;
+  redir_port?: PortStrategy | null;
+  tproxy_port?: PortStrategy | null;
+  transparent_proxy?: TransparentProxyConfigPatch;
   break_connection?: BreakConnectionStrategyPatch_Deserialize;
   tun_stack?: TunStack | null;
 };
@@ -1194,6 +1206,9 @@ export type ClashConfigPatch_Serialize = {
   mixed_port?: PortStrategyPatch_Serialize;
   socks_port?: PortStrategy | null;
   http_port?: PortStrategy | null;
+  redir_port?: PortStrategy | null;
+  tproxy_port?: PortStrategy | null;
+  transparent_proxy?: TransparentProxyConfigPatch;
   break_connection?: BreakConnectionStrategyPatch_Serialize;
   tun_stack?: TunStack | null;
 };
@@ -2335,6 +2350,16 @@ export type NetworkProbeResult = {
 export type NetworkStatisticWidgetConfig =
   { kind: 'disabled' } | { kind: 'enabled'; value: StatisticWidgetVariant };
 
+export type NetworkTransparentProxyMode = 'disabled' | 'redir' | 'tproxy';
+
+export type NetworkTransparentProxyStatus = {
+  supported: boolean;
+  active: boolean;
+  mode: NetworkTransparentProxyMode | null;
+  revision: RevisionIdInfo | null;
+  error: string | null;
+};
+
 export type NewProfileRequest =
   NewProfileRequest_Serialize | NewProfileRequest_Deserialize;
 
@@ -3011,6 +3036,12 @@ export type ReportRequest = {
   topology: TopologyRequest | null;
 };
 
+export type RevisionIdInfo = {
+  epoch: number;
+  generation: number;
+  effective_hash: string;
+};
+
 export type RuleKey = {
   kind: string;
   payload: string;
@@ -3416,6 +3447,22 @@ export type TransformDefinition_Serialize =
 
 export type TransformKind =
   { type: 'overlay' } | { type: 'script'; runtime: ScriptRuntime };
+
+export type TransparentProxyConfig = {
+  mode?: TransparentProxyMode;
+  local?: boolean;
+  interfaces?: string[];
+  ipv6?: boolean;
+};
+
+export type TransparentProxyConfigPatch = {
+  mode?: TransparentProxyMode | null;
+  local?: boolean | null;
+  interfaces?: string[] | null;
+  ipv6?: boolean | null;
+};
+
+export type TransparentProxyMode = 'disabled' | 'redir' | 'tproxy';
 
 /**  What happens to the WebView tray menu window when it loses focus. */
 export type TrayMenuCloseBehavior = 'hide' | 'close';

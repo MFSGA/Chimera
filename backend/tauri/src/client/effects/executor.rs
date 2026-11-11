@@ -11,7 +11,7 @@ use super::{
     adapters::ApplicationEffectAdapters,
     plan::{
         ApplicationEffect, ApplicationEffectPlan, EffectKind, LoggerDesired, ProxyGuardDesired,
-        SystemProxyDesired, TrayRefresh, TrayView,
+        SystemProxyDesired, TransparentProxyDesired, TrayRefresh, TrayView,
     },
     ports::ApplicationEffectsPort,
     status::{EffectHealth, EffectRevision, EffectStatus},
@@ -27,6 +27,7 @@ pub(crate) struct ApplicationEffectExecutor {
     hotkeys: HotkeyClient,
     accelerators: Arc<dyn AcceleratorValidator>,
     adapters: Arc<dyn ApplicationEffectAdapters>,
+    core: Arc<dyn crate::client::core_lifecycle::CoreLifecyclePort>,
 }
 
 impl ApplicationEffectExecutor {
@@ -35,12 +36,14 @@ impl ApplicationEffectExecutor {
         hotkeys: HotkeyClient,
         accelerators: Arc<dyn AcceleratorValidator>,
         adapters: Arc<dyn ApplicationEffectAdapters>,
+        core: Arc<dyn crate::client::core_lifecycle::CoreLifecyclePort>,
     ) -> Self {
         Self {
             system_proxy,
             hotkeys,
             accelerators,
             adapters,
+            core,
         }
     }
 
@@ -63,6 +66,89 @@ impl ApplicationEffectExecutor {
             EffectKind::Logger,
             self.adapters.refresh_logger(desired),
         )
+    }
+
+    async fn apply_transparent_proxy(
+        &self,
+        revision: EffectRevision,
+        desired: &TransparentProxyDesired,
+    ) -> EffectStatus {
+        use chimera_config::clash::config::TransparentProxyMode as ConfigMode;
+        use chimera_ipc::api::network::transparent_proxy::{
+            NetworkTransparentProxyMode as WireMode, NetworkTransparentProxyRequest,
+        };
+
+        let enabled = desired.config.mode != ConfigMode::Disabled;
+        if !cfg!(target_os = "linux") && !enabled {
+            return healthy(EffectKind::TransparentProxy, revision);
+        }
+        let port = if enabled {
+            match desired.port.filter(|port| *port != 0) {
+                Some(port) => port,
+                None => {
+                    return degraded(
+                        EffectKind::TransparentProxy,
+                        revision,
+                        "transparent_proxy_failed",
+                        "transparent proxy listener port is not resolved".into(),
+                        true,
+                    );
+                }
+            }
+        } else {
+            0
+        };
+        let mode = match desired.config.mode {
+            ConfigMode::Disabled => WireMode::Disabled,
+            ConfigMode::Redir => WireMode::Redir,
+            ConfigMode::Tproxy => WireMode::Tproxy,
+        };
+        let request = NetworkTransparentProxyRequest {
+            mode,
+            port,
+            local: desired.config.local,
+            interfaces: desired.config.interfaces.clone(),
+            ipv6: desired.config.ipv6,
+            expected_revision: chimera_ipc::api::status::RevisionIdInfo {
+                epoch: 0,
+                generation: 0,
+                effective_hash: String::new(),
+            },
+        };
+        let status = match self.core.reconcile_transparent_proxy(&request).await {
+            Ok(status) => status,
+            Err(error) => {
+                return degraded(
+                    EffectKind::TransparentProxy,
+                    revision,
+                    "transparent_proxy_failed",
+                    format!("{error:#}"),
+                    true,
+                );
+            }
+        };
+        if !status.supported && !enabled && !status.active {
+            return healthy(EffectKind::TransparentProxy, revision);
+        }
+        if let Some(error) = status.error {
+            return degraded(
+                EffectKind::TransparentProxy,
+                revision,
+                "transparent_proxy_failed",
+                error,
+                true,
+            );
+        }
+        if !status.supported || status.active != enabled || (enabled && status.mode != Some(mode)) {
+            return degraded(
+                EffectKind::TransparentProxy,
+                revision,
+                "transparent_proxy_failed",
+                "the Service did not reach the requested transparent proxy state".into(),
+                true,
+            );
+        }
+        healthy(EffectKind::TransparentProxy, revision)
     }
 
     async fn apply_tray(
@@ -165,6 +251,9 @@ impl ApplicationEffectsPort for ApplicationEffectExecutor {
                                 true,
                             )
                         })
+                }
+                ApplicationEffect::TransparentProxy(desired) => {
+                    self.apply_transparent_proxy(revision, desired).await
                 }
                 ApplicationEffect::Hotkeys(raw) => self.apply_hotkeys(revision, raw).await,
                 ApplicationEffect::Widget(config) => self.status_from_result(
@@ -339,6 +428,9 @@ mod tests {
             hotkeys,
             Arc::new(PlatformAcceleratorValidator),
             adapters,
+            Arc::new(crate::client::core_lifecycle::LegacyCoreBridge::new(
+                Arc::new(crate::core::actor_v2::CoreFacade::new_local()),
+            )),
         )
     }
 
@@ -406,7 +498,8 @@ mod tests {
             adapters.tray_refreshes.lock().unwrap().as_slice(),
             [(TrayRefresh::Full, inputs.tray_view())]
         );
-        assert_eq!(statuses[5].kind, EffectKind::Hotkeys);
+        assert_eq!(statuses[5].kind, EffectKind::TransparentProxy);
+        assert_eq!(statuses[6].kind, EffectKind::Hotkeys);
     }
 
     #[tokio::test]
@@ -484,6 +577,8 @@ mod tests {
             mixed_port: 7890,
             port: None,
             socks_port: None,
+            redir_port: None,
+            tproxy_port: None,
             external_controller: None,
         };
         let inputs = ApplicationEffectInputs::project(&app, &ClashConfig::default(), Some(ports));

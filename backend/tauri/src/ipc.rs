@@ -979,6 +979,14 @@ pub async fn get_core_status(
 
 #[tauri::command]
 #[specta::specta]
+pub async fn get_transparent_proxy_status(
+    client: State<'_, ChimeraClient>,
+) -> Result<chimera_ipc::api::network::transparent_proxy::NetworkTransparentProxyStatus> {
+    Ok(client.get_transparent_proxy_status().await?)
+}
+
+#[tauri::command]
+#[specta::specta]
 pub fn get_core_lifecycle_status(
     client: State<'_, ChimeraClient>,
 ) -> Result<crate::client::core_lifecycle::CoreLifecycleStatus> {

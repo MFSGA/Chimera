@@ -88,7 +88,8 @@ export const useClashSettings = () =>
     async (patch) => unwrapResult(await commands.patchClashConfig(patch)),
   );
 
-type ClearableClashField = 'socks_port' | 'http_port';
+type ClearableClashField =
+  'socks_port' | 'http_port' | 'redir_port' | 'tproxy_port';
 
 /** Read or patch one persistent typed Clash setting. */
 export const useClashSetting = <

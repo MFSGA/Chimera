@@ -59,6 +59,8 @@ pub struct GuardInputs<'a> {
     pub overrides: &'a ClashGuardOverrides,
     /// Ports resolved by the caller — port probing IO never enters here.
     pub ports: ResolvedPortBindings,
+    /// Required routing mark for Linux transparent capture.
+    pub routing_mark: Option<u32>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -67,6 +69,8 @@ pub struct ResolvedPortBindings {
     /// Legacy `port` (HTTP) key; absent when `None`.
     pub port: Option<u16>,
     pub socks_port: Option<u16>,
+    pub redir_port: Option<u16>,
+    pub tproxy_port: Option<u16>,
     /// `host:port`; absent when `None`.
     pub external_controller: Option<String>,
 }

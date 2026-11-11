@@ -9,6 +9,7 @@ import {
   CLASH_VERSION_QUERY_KEY,
   NATIVE_PROXIES_QUERY_KEY,
   PROFILES_QUERY_KEY,
+  TRANSPARENT_PROXY_STATUS_QUERY_KEY,
 } from './consts.js';
 
 /**
@@ -17,6 +18,11 @@ import {
  * only, so keep typed query metadata outside generated bindings.
  */
 export const queries = {
+  getTransparentProxyStatus: () =>
+    queryOptions({
+      queryKey: [TRANSPARENT_PROXY_STATUS_QUERY_KEY],
+      queryFn: () => commands.getTransparentProxyStatus(),
+    }),
   getProfiles: (...args: Parameters<typeof commands.getProfiles>) =>
     queryOptions({
       queryKey: [PROFILES_QUERY_KEY, ...args],

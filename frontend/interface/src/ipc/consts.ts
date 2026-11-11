@@ -44,6 +44,9 @@ export const CLASH_CONFIG_QUERY_KEY = 'clash-config';
 /** Persistent typed Clash settings (`ClashConfig`), separate from live `/configs`. */
 export const CLASH_SETTINGS_QUERY_KEY = 'clash-settings';
 
+/** Current Service transparent proxy capture status. */
+export const TRANSPARENT_PROXY_STATUS_QUERY_KEY = 'transparent-proxy-status';
+
 /**
  * Applied runtime transform diagnostics query key.
  */

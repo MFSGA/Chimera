@@ -423,6 +423,17 @@ impl ChimeraClient {
         &self,
         patch: ChimeraAppConfigPatch,
     ) -> anyhow::Result<super::MutationOutcome<()>> {
+        let mut candidate = self.get_app_config()?;
+        candidate.apply(patch.clone());
+        let clash = self.get_clash_config()?;
+        clash.validate_transparent_proxy(candidate.core, cfg!(target_os = "linux"))?;
+        anyhow::ensure!(
+            clash.transparent_proxy.mode
+                == chimera_config::clash::config::TransparentProxyMode::Disabled
+                || candidate.enable_service_mode,
+            "transparent capture requires Service mode"
+        );
+
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
         let reconcile_hotkeys = patch.hotkeys.is_some();
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -504,6 +515,17 @@ impl ChimeraClient {
         &self,
         patch: chimera_config::clash::config::ClashConfigPatch,
     ) -> anyhow::Result<super::MutationOutcome<()>> {
+        let mut candidate = self.get_clash_config()?;
+        candidate.apply(patch.clone());
+        let app = self.get_app_config()?;
+        candidate.validate_transparent_proxy(app.core, cfg!(target_os = "linux"))?;
+        anyhow::ensure!(
+            candidate.transparent_proxy.mode
+                == chimera_config::clash::config::TransparentProxyMode::Disabled
+                || app.enable_service_mode,
+            "transparent capture requires Service mode"
+        );
+
         if patch.enable_tun_mode == Some(true) {
             #[cfg(target_os = "macos")]
             {

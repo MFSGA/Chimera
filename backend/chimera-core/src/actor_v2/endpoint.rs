@@ -113,6 +113,33 @@ pub enum CheckSupport {
 /// read and deliberately not routed through the actor mailbox.
 #[async_trait::async_trait]
 pub trait ControlEndpoint: Send + Sync {
+    async fn reconcile_transparent_proxy(
+        &self,
+        _request: &chimera_ipc::api::network::transparent_proxy::NetworkTransparentProxyRequest,
+    ) -> Result<
+        chimera_ipc::api::network::transparent_proxy::NetworkTransparentProxyStatus,
+        CoreError,
+    > {
+        Err(CoreError::new(
+            CoreErrorKind::BackendUnavailable,
+            "transparent capture requires a Linux service host with network support",
+            false,
+        ))
+    }
+
+    async fn transparent_proxy_status(
+        &self,
+    ) -> Result<
+        chimera_ipc::api::network::transparent_proxy::NetworkTransparentProxyStatus,
+        CoreError,
+    > {
+        Err(CoreError::new(
+            CoreErrorKind::BackendUnavailable,
+            "this execution host does not expose transparent capture",
+            false,
+        ))
+    }
+
     async fn effective_config(
         &self,
     ) -> Result<Option<chimera_ipc::api::core::v2::CoreEffectiveConfig>, CoreError> {

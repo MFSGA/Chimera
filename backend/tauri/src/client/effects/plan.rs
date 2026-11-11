@@ -9,7 +9,7 @@ use chimera_config::{
         ProxiesSelectorMode, TrayMenuMode,
     },
     clash::config::{
-        ClashConfig, ClashControlChannel,
+        ClashConfig, ClashControlChannel, TransparentProxyConfig, TransparentProxyMode,
         clash_strategy::port::{ExternalControllerStrategy, PortStrategy},
         overrides::Mode,
         tun_stack::TunStack,
@@ -53,6 +53,9 @@ pub struct ApplicationEffectFields {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ClashEffectFields {
+    pub transparent_proxy: TransparentProxyConfig,
+    pub redir_port: Option<PortStrategy>,
+    pub tproxy_port: Option<PortStrategy>,
     pub mode: Mode,
     pub enable_tun_mode: bool,
     pub tun_stack: TunStack,
@@ -93,6 +96,9 @@ impl ApplicationEffectInputs {
                 network_statistic_widget: app.network_statistic_widget,
             },
             clash: ClashEffectFields {
+                transparent_proxy: clash.transparent_proxy.clone(),
+                redir_port: clash.redir_port.clone(),
+                tproxy_port: clash.tproxy_port.clone(),
                 mode: clash.overrides.mode(),
                 enable_tun_mode: clash.enable_tun_mode,
                 tun_stack: clash.tun_stack,
@@ -129,6 +135,18 @@ impl ApplicationEffectInputs {
             proxy_guard: ProxyGuardDesired {
                 enabled: app.enable_proxy_guard,
                 interval: Duration::from_secs(app.proxy_guard_interval),
+            },
+            transparent_proxy: TransparentProxyDesired {
+                config: self.clash.transparent_proxy.clone(),
+                port: match self.clash.transparent_proxy.mode {
+                    TransparentProxyMode::Disabled => None,
+                    TransparentProxyMode::Redir => {
+                        self.ports.as_ref().and_then(|ports| ports.redir_port)
+                    }
+                    TransparentProxyMode::Tproxy => {
+                        self.ports.as_ref().and_then(|ports| ports.tproxy_port)
+                    }
+                },
             },
             hotkeys: app.hotkeys.clone(),
             widget: app.network_statistic_widget,
@@ -176,6 +194,7 @@ pub enum EffectKind {
     AutoLaunch,
     SystemProxy,
     ProxyGuard,
+    TransparentProxy,
     Hotkeys,
     Widget,
     Tray,
@@ -200,6 +219,12 @@ pub struct SystemProxyDesired {
 pub struct ProxyGuardDesired {
     pub enabled: bool,
     pub interval: Duration,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct TransparentProxyDesired {
+    pub config: TransparentProxyConfig,
+    pub port: Option<u16>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -251,6 +276,7 @@ struct ApplicationDesired {
     logger: LoggerDesired,
     auto_launch: bool,
     system_proxy: SystemProxyDesired,
+    transparent_proxy: TransparentProxyDesired,
     /// Split from `system_proxy` on purpose: changing only the interval must
     /// not re-apply the OS proxy, and changing only the bypass must not
     /// restart the guard timer.
@@ -282,6 +308,7 @@ pub enum ApplicationEffect {
     AutoLaunch(bool),
     SystemProxy(SystemProxyDesired),
     ProxyGuard(ProxyGuardDesired),
+    TransparentProxy(TransparentProxyDesired),
     Hotkeys(Vec<String>),
     Widget(NetworkStatisticWidgetConfig),
     Tray(TrayRefresh, TrayView),
@@ -295,6 +322,7 @@ impl ApplicationEffect {
             Self::AutoLaunch(_) => EffectKind::AutoLaunch,
             Self::SystemProxy(_) => EffectKind::SystemProxy,
             Self::ProxyGuard(_) => EffectKind::ProxyGuard,
+            Self::TransparentProxy(_) => EffectKind::TransparentProxy,
             Self::Hotkeys(_) => EffectKind::Hotkeys,
             Self::Widget(_) => EffectKind::Widget,
             Self::Tray(..) => EffectKind::Tray,
@@ -378,6 +406,7 @@ impl ApplicationEffectPlan {
             auto_launch,
             system_proxy,
             proxy_guard,
+            transparent_proxy,
             hotkeys,
             widget,
             tray_menu,
@@ -391,6 +420,7 @@ impl ApplicationEffectPlan {
         effects.extend(auto_launch.map(ApplicationEffect::AutoLaunch));
         effects.extend(system_proxy.map(ApplicationEffect::SystemProxy));
         effects.extend(proxy_guard.map(ApplicationEffect::ProxyGuard));
+        effects.extend(transparent_proxy.map(ApplicationEffect::TransparentProxy));
         effects.extend(hotkeys.map(ApplicationEffect::Hotkeys));
         effects.extend(widget.map(ApplicationEffect::Widget));
         // The menu is rendered with the locale, so a locale change is a menu
@@ -429,6 +459,9 @@ struct RuntimeRebuildDesired {
     mixed_port: PortStrategy,
     socks_port: Option<PortStrategy>,
     http_port: Option<PortStrategy>,
+    redir_port: Option<PortStrategy>,
+    tproxy_port: Option<PortStrategy>,
+    transparent_proxy: TransparentProxyConfig,
     external_controller: ExternalControllerStrategy,
     enable_clash_fields: bool,
 }
@@ -455,6 +488,9 @@ impl ClashEffectFields {
                 mixed_port: self.mixed_port.clone(),
                 socks_port: self.socks_port.clone(),
                 http_port: self.http_port.clone(),
+                redir_port: self.redir_port.clone(),
+                tproxy_port: self.tproxy_port.clone(),
+                transparent_proxy: self.transparent_proxy.clone(),
                 external_controller: self.external_controller.clone(),
                 enable_clash_fields: self.enable_clash_fields,
             },
@@ -528,6 +564,9 @@ mod tests {
                 network_statistic_widget: NetworkStatisticWidgetConfig::Disabled,
             },
             clash: ClashEffectFields {
+                transparent_proxy: TransparentProxyConfig::default(),
+                redir_port: None,
+                tproxy_port: None,
                 mode: Mode::Rule,
                 enable_tun_mode: false,
                 tun_stack: TunStack::default(),
@@ -611,6 +650,37 @@ mod tests {
                 pac_url: None,
             })
         );
+    }
+
+    #[test]
+    fn transparent_proxy_effect_uses_the_selected_listener_port() {
+        for (mode, port) in [
+            (TransparentProxyMode::Redir, 7893),
+            (TransparentProxyMode::Tproxy, 7894),
+        ] {
+            let mut inputs = inputs();
+            inputs.clash.transparent_proxy.mode = mode;
+            let strategy = PortStrategy::new_allow_fallback(port);
+            let resolved = inputs.ports.as_mut().expect("resolved ports");
+            match mode {
+                TransparentProxyMode::Redir => {
+                    inputs.clash.redir_port = Some(strategy);
+                    resolved.redir_port = Some(port);
+                }
+                TransparentProxyMode::Tproxy => {
+                    inputs.clash.tproxy_port = Some(strategy);
+                    resolved.tproxy_port = Some(port);
+                }
+                TransparentProxyMode::Disabled => unreachable!(),
+            }
+
+            let plan = ApplicationEffectPlan::full(&inputs);
+            assert!(matches!(
+                plan.effects().iter().find(|effect| effect.kind() == EffectKind::TransparentProxy),
+                Some(ApplicationEffect::TransparentProxy(desired))
+                    if desired.config.mode == mode && desired.port == Some(port)
+            ));
+        }
     }
 
     #[test]
@@ -834,6 +904,7 @@ mod tests {
                 EffectKind::AutoLaunch,
                 EffectKind::SystemProxy,
                 EffectKind::ProxyGuard,
+                EffectKind::TransparentProxy,
                 EffectKind::Hotkeys,
                 EffectKind::Widget,
                 EffectKind::Tray,

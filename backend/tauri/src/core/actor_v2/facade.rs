@@ -47,6 +47,17 @@ const LOCAL_OPERATION_WAIT: Duration = Duration::from_secs(60);
 const LOCAL_OPERATION_HISTORY: usize = 64;
 const SERVICE_API_MONITOR_TIMEOUT: Duration = Duration::from_secs(10);
 
+fn unsupported_transparent_proxy_status()
+-> chimera_ipc::api::network::transparent_proxy::NetworkTransparentProxyStatus {
+    chimera_ipc::api::network::transparent_proxy::NetworkTransparentProxyStatus {
+        supported: false,
+        active: false,
+        mode: None,
+        revision: None,
+        error: None,
+    }
+}
+
 // Service restart decisions now belong to the independent core;
 // this facade keeps only the OS/IPC mutation adapter.
 use chimera_core::actor_v2::service_policy::{
@@ -670,6 +681,66 @@ impl CoreFacade {
             state_changed_at,
             run_type,
         }
+    }
+
+    pub(crate) async fn reconcile_transparent_proxy(
+        &self,
+        mut request: chimera_ipc::api::network::transparent_proxy::NetworkTransparentProxyRequest,
+    ) -> anyhow::Result<chimera_ipc::api::network::transparent_proxy::NetworkTransparentProxyStatus>
+    {
+        use chimera_ipc::api::network::transparent_proxy::NetworkTransparentProxyMode::Disabled;
+
+        let Some(local_runtime) = self.local_runtime.as_ref() else {
+            anyhow::ensure!(
+                request.mode == Disabled,
+                "transparent capture requires Service mode"
+            );
+            return Ok(unsupported_transparent_proxy_status());
+        };
+        let endpoint: Arc<dyn ControlEndpoint> = match local_runtime.run_type() {
+            RunType::Normal => Arc::new(local_runtime.local_endpoint()),
+            RunType::Service => Arc::new(self.service_endpoint.clone()),
+            RunType::Elevated => {
+                anyhow::ensure!(
+                    request.mode == Disabled,
+                    "transparent capture requires Service mode"
+                );
+                return Ok(unsupported_transparent_proxy_status());
+            }
+        };
+        if endpoint.host() != super::control_endpoint::ExecutionHost::Service {
+            anyhow::ensure!(
+                request.mode == Disabled,
+                "transparent capture requires Service mode"
+            );
+            return Ok(unsupported_transparent_proxy_status());
+        }
+        let status = endpoint.status().await?;
+        match status.revision {
+            Some(revision) => request.expected_revision = revision,
+            None if request.mode == Disabled => {}
+            None => anyhow::bail!("core has no applied runtime revision"),
+        }
+        endpoint
+            .reconcile_transparent_proxy(&request)
+            .await
+            .map_err(|error| anyhow::anyhow!(error.message))
+    }
+
+    pub(crate) async fn transparent_proxy_status(
+        &self,
+    ) -> anyhow::Result<chimera_ipc::api::network::transparent_proxy::NetworkTransparentProxyStatus>
+    {
+        let Some(local_runtime) = self.local_runtime.as_ref() else {
+            return Ok(unsupported_transparent_proxy_status());
+        };
+        if local_runtime.run_type() != RunType::Service {
+            return Ok(unsupported_transparent_proxy_status());
+        }
+        self.service_endpoint
+            .transparent_proxy_status()
+            .await
+            .map_err(|error| anyhow::anyhow!(error.message))
     }
 
     pub(crate) async fn observe_runtime_baseline(&self) -> anyhow::Result<KnownRuntimeState> {

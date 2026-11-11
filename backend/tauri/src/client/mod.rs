@@ -590,6 +590,13 @@ impl ChimeraClient {
         Ok(self.profiles_client()?.snapshot())
     }
 
+    pub(crate) async fn get_transparent_proxy_status(
+        &self,
+    ) -> anyhow::Result<chimera_ipc::api::network::transparent_proxy::NetworkTransparentProxyStatus>
+    {
+        self.inner.core.transparent_proxy_status().await
+    }
+
     pub(crate) async fn profile_sync_status(
         &self,
         uid: ProfileId,
