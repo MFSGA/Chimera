@@ -153,6 +153,19 @@ pub struct ChimeraAppConfig {
     pub max_log_files: usize,
     #[patch(attribute(specta(optional)))]
     pub enable_auto_check_update: bool,
+    #[serde(default)]
+    #[patch(attribute(specta(optional)))]
+    pub enable_auto_download_update: bool,
+    /// None in older configurations means the channel of the installed build.
+    #[serde(default)]
+    #[patch(attribute(serde(default, with = "::serde_with::rust::double_option")))]
+    #[patch(attribute(specta(type = Option<Option<ReleaseChannel>>)))]
+    #[patch(attribute(specta(optional)))]
+    pub release_channel: Option<ReleaseChannel>,
+    /// Enabled application update package sources, in priority order.
+    #[serde(default = "default_update_sources")]
+    #[patch(attribute(specta(optional)))]
+    pub update_sources: Vec<UpdateSource>,
     #[patch(attribute(specta(optional)))]
     #[patch(attribute(serde(alias = "clash_tray_selector")))]
     pub tray_selector_mode: ProxiesSelectorMode,
@@ -210,6 +223,9 @@ impl Default for ChimeraAppConfig {
             proxy_layout_column: 0,
             max_log_files: 7,
             enable_auto_check_update: true,
+            enable_auto_download_update: false,
+            release_channel: None,
+            update_sources: default_update_sources(),
             tray_selector_mode: ProxiesSelectorMode::default(),
             always_on_top: false,
             tray_menu_mode: TrayMenuMode::default(),
@@ -266,5 +282,32 @@ mod tests {
             "http://www.gstatic.com/generate_204"
         );
         assert!(!config.use_legacy_ui);
+        assert!(!config.enable_auto_download_update);
+        assert_eq!(config.release_channel, None);
+        assert_eq!(config.update_sources, default_update_sources());
+    }
+
+    #[test]
+    fn update_channel_patch_preserves_clear_and_set_semantics() {
+        let set: ChimeraAppConfigPatch =
+            serde_yaml_ng::from_str("release_channel: beta\n").expect("channel patch");
+        assert_eq!(set.release_channel, Some(Some(ReleaseChannel::Beta)));
+
+        let clear: ChimeraAppConfigPatch =
+            serde_yaml_ng::from_str("release_channel: null\n").expect("clear patch");
+        assert_eq!(clear.release_channel, Some(None));
+
+        let sources: ChimeraAppConfigPatch =
+            serde_yaml_ng::from_str("update_sources: [ghfast, sourceforge, github, chimera]\n")
+                .expect("source priority patch");
+        assert_eq!(
+            sources.update_sources,
+            Some(vec![
+                UpdateSource::Ghfast,
+                UpdateSource::Sourceforge,
+                UpdateSource::Github,
+                UpdateSource::Chimera,
+            ])
+        );
     }
 }
