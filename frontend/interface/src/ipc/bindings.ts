@@ -2171,6 +2171,11 @@ export type IVerge_Deserialize =
       clash_core: ClashCore_Deserialize | null;
       /**  9. 支持关闭字段过滤，避免meta的新字段都被过滤掉，默认为真 */
       enable_clash_fields: boolean | null;
+      /**
+       *  Mirrors the typed include-all setting for legacy core selection and
+       *  config generation; absent values preserve the upstream default (true).
+       */
+      expand_include_all?: boolean | null;
       /**  10. Clash 相关策略 */
       clash_strategy: ClashStrategy | null;
       /**  11. set system proxy bypass */
@@ -2274,6 +2279,11 @@ export type IVerge_Serialize = {
   clash_core?: ClashCore_Serialize | null;
   /**  9. 支持关闭字段过滤，避免meta的新字段都被过滤掉，默认为真 */
   enable_clash_fields: boolean | null;
+  /**
+   *  Mirrors the typed include-all setting for legacy core selection and
+   *  config generation; absent values preserve the upstream default (true).
+   */
+  expand_include_all?: boolean | null;
   /**  10. Clash 相关策略 */
   clash_strategy: ClashStrategy | null;
   /**  11. set system proxy bypass */

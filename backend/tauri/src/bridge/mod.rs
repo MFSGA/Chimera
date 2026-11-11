@@ -57,6 +57,7 @@ fn application_patch_from_legacy_patch(patch: &IVerge) -> anyhow::Result<Option<
     application.enable_tun_mode = None;
     application.web_ui_list = None;
     application.enable_clash_fields = None;
+    application.expand_include_all = None;
     application.enable_random_port = None;
     application.verge_mixed_port = None;
     application.tun_stack = None;
@@ -107,6 +108,10 @@ fn clash_patch_from_legacy_patch(patch: &IVerge, next: ClashConfig) -> Option<Cl
         clash.enable_clash_fields = Some(next.enable_clash_fields);
         touched = true;
     }
+    if patch.expand_include_all.is_some() {
+        clash.expand_include_all = Some(next.expand_include_all);
+        touched = true;
+    }
     if patch.tun_stack.is_some() {
         clash.tun_stack = Some(next.tun_stack);
         touched = true;
@@ -155,6 +160,24 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn legacy_include_all_patch_updates_clash_without_touching_application() {
+        let patch = IVerge {
+            expand_include_all: Some(false),
+            ..IVerge::default()
+        };
+        let plan = split_legacy_verge_patch(&IVerge::template(), &patch, &IClashTemp::template())
+            .expect("legacy patch should keep include-all under Clash ownership");
+        assert!(plan.application.is_none());
+        assert!(plan.session_state.is_none());
+        assert_eq!(
+            plan.clash_config
+                .expect("Clash patch expected")
+                .expand_include_all,
+            Some(false)
+        );
+    }
 
     #[test]
     fn legacy_verge_patch_splits_application_and_clash_domains() {

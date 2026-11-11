@@ -168,3 +168,13 @@ providers move to `use`, explicit proxy entries precede sorted generated
 entries, and filter/lookaround/fallback semantics follow Ref. See
 [`docs/ref-alignment-include-all.md`](../../ref-alignment-include-all.md) for
 file-by-file provenance, compatibility risk assessment, and test boundaries.
+
+## Include-all legacy bridge exception (2026-11-11)
+
+Because `CoreFacade::change_core` reconstructs typed settings from legacy
+`IVerge`, the `expand_include_all` flag is also mirrored as an optional legacy
+boolean. Existing legacy files without it default to `true`. Typed changes
+update the legacy mirror, and a legacy patch changing only this field is
+classified as a Clash config update. This adaptation is strictly for
+cross-UI/core-entrypoint consistency; it does not change the byte-identical
+reference expansion algorithm.

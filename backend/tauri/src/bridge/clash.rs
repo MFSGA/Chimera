@@ -87,6 +87,7 @@ pub(crate) fn clash_config_from_legacy(
     next.enable_tun_mode = legacy_verge.enable_tun_mode.unwrap_or(false);
     next.web_ui_list = legacy_verge.web_ui_list.clone().unwrap_or_default();
     next.enable_clash_fields = legacy_verge.enable_clash_fields.unwrap_or(true);
+    next.expand_include_all = legacy_verge.expand_include_all.unwrap_or(true);
     if let Some(value) = legacy_verge.tun_stack {
         next.tun_stack = value;
     }
@@ -153,6 +154,7 @@ fn apply_prepared_clash_verge_projection(target: &mut IVerge, projected: &IVerge
     target.enable_tun_mode = projected.enable_tun_mode;
     target.web_ui_list = projected.web_ui_list.clone();
     target.enable_clash_fields = projected.enable_clash_fields;
+    target.expand_include_all = projected.expand_include_all;
     target.enable_random_port = projected.enable_random_port;
     target.verge_mixed_port = projected.verge_mixed_port;
     target.tun_stack = projected.tun_stack;
@@ -169,6 +171,7 @@ pub(crate) fn apply_clash_config_to_legacy_verge(
     draft.enable_tun_mode = Some(snap.enable_tun_mode);
     draft.web_ui_list = Some(snap.web_ui_list.clone());
     draft.enable_clash_fields = Some(snap.enable_clash_fields);
+    draft.expand_include_all = Some(snap.expand_include_all);
     draft.enable_random_port = Some(matches!(snap.mixed_port.kind, PortStrategyKind::Random));
     draft.verge_mixed_port = Some(snap.mixed_port.start_port);
     draft.tun_stack = Some(snap.tun_stack);
@@ -199,6 +202,9 @@ pub(crate) fn apply_clash_patch_to_legacy_verge(
     }
     if patch.enable_clash_fields.is_some() {
         draft.enable_clash_fields = Some(snap.enable_clash_fields);
+    }
+    if patch.expand_include_all.is_some() {
+        draft.expand_include_all = Some(snap.expand_include_all);
     }
     if patch.mixed_port.kind.is_some() || patch.mixed_port.start_port.is_some() {
         draft.enable_random_port = Some(matches!(snap.mixed_port.kind, PortStrategyKind::Random));
@@ -277,6 +283,7 @@ mod tests {
 
         assert!(!typed.enable_tun_mode);
         assert!(typed.enable_clash_fields);
+        assert!(typed.expand_include_all);
         assert_eq!(typed.mixed_port.kind, PortStrategyKind::Fixed);
         assert_eq!(typed.mixed_port.start_port, 7890);
         assert_eq!(
@@ -288,11 +295,23 @@ mod tests {
     }
 
     #[test]
+    fn typed_include_all_toggle_survives_legacy_runtime_reconstruction() {
+        let mut typed = ClashConfig::default();
+        typed.expand_include_all = false;
+        let mut legacy = IVerge::default();
+        apply_clash_config_to_legacy_verge(&mut legacy, &typed).unwrap();
+        assert_eq!(legacy.expand_include_all, Some(false));
+        let restored = clash_config_from_legacy(&legacy, &IClashTemp::template().0).unwrap();
+        assert!(!restored.expand_include_all);
+    }
+
+    #[test]
     fn typed_projection_roundtrips_chimera_clash_fields() {
         let legacy = IVerge {
             enable_tun_mode: Some(true),
             web_ui_list: Some(vec!["yacd".into()]),
             enable_clash_fields: Some(false),
+            expand_include_all: Some(false),
             enable_random_port: Some(true),
             verge_mixed_port: Some(17890),
             tun_stack: Some(TunStack::Mixed),
@@ -311,6 +330,7 @@ mod tests {
         patch.enable_tun_mode = Some(typed.enable_tun_mode);
         patch.web_ui_list = Some(typed.web_ui_list.clone());
         patch.enable_clash_fields = Some(typed.enable_clash_fields);
+        patch.expand_include_all = Some(typed.expand_include_all);
         patch.mixed_port = PortStrategyPatch {
             kind: Some(typed.mixed_port.kind.clone()),
             start_port: Some(typed.mixed_port.start_port),
@@ -336,6 +356,7 @@ mod tests {
         assert_eq!(projected.enable_tun_mode, legacy.enable_tun_mode);
         assert_eq!(projected.web_ui_list, legacy.web_ui_list);
         assert_eq!(projected.enable_clash_fields, legacy.enable_clash_fields);
+        assert_eq!(projected.expand_include_all, legacy.expand_include_all);
         assert_eq!(projected.enable_random_port, legacy.enable_random_port);
         assert_eq!(projected.verge_mixed_port, legacy.verge_mixed_port);
         assert_eq!(projected.tun_stack, legacy.tun_stack);
@@ -382,6 +403,7 @@ mod tests {
         assert_eq!(projected.theme_mode.as_deref(), Some("dark"));
         assert_eq!(projected.web_ui_list, None);
         assert_eq!(projected.enable_clash_fields, None);
+        assert_eq!(projected.expand_include_all, None);
         assert_eq!(projected.verge_mixed_port, None);
         assert!(projected.clash_strategy.is_none());
         assert_eq!(projected.break_when_mode_change, None);

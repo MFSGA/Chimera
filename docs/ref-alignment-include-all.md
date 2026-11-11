@@ -100,17 +100,26 @@ spurious test update. No legacy fallback was silently installed.
    `exclude-type` on the frontend: the reference intentionally leaves those
    details to the Core. Test regexp runtime limits on hostile configurations
    before enabling user-supplied, untrusted patterns in high-throughput paths.
-4. **No product-specific adaptation is needed for the algorithm itself.** Its
+4. **The legacy/typed bridge does require a Chimera-specific adapter.**
+   `CoreFacade::change_core` and legacy runtime generation still reconstruct
+   `ClashConfig` from `IVerge`. Without a mirrored setting, a user-selected
+   `expand_include_all: false` is lost on that path and becomes `true`.
+   An optional `IVerge.expand_include_all` is now mirrored during Typed
+   settings updates and read when legacy code rebuilds the runtime. Legacy
+   patches also classify this key under Clash settings, not application
+   settings. A missing legacy field still means `true`.
+5. **No product-specific adaptation is needed for the algorithm itself.** Its
    source file and tests are identical to the reference; Chimera's required
-   changes were typed configuration, runtime lifecycle integration, UI routes,
-   and localized strings.
+   changes were typed configuration, runtime lifecycle integration, the
+   legacy bridge, UI routes, and localized strings.
 
 ## 5. Verification boundary
 
 Static/pure tests cover the reference's sorting, provider handling, filter,
 lookaround, empty fallback, invalid-pattern logging, and on/off step emission.
-Chimera additionally tests default/persistence/patch behavior and the runtime
-rebuild decision in both the application workflow and the effects projection.
+Chimera additionally tests default/persistence/patch behavior, runtime
+rebuild decisions in the application workflow and effects projection, and the
+Typed-to-Legacy mirror plus reverse projection used by older core paths.
 
 **Not run:** live Core acceptance, real subscription provider download,
 TUN/DNS/system-proxy changes, or Windows/macOS/Linux desktop E2E. In

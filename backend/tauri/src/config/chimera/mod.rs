@@ -57,6 +57,10 @@ pub struct IVerge {
     pub clash_core: Option<ClashCore>,
     /// 9. 支持关闭字段过滤，避免meta的新字段都被过滤掉，默认为真
     pub enable_clash_fields: Option<bool>,
+    /// Mirrors the typed include-all setting for legacy core selection and
+    /// config generation; absent values preserve the upstream default (true).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expand_include_all: Option<bool>,
     /// 10. Clash 相关策略
     pub clash_strategy: Option<ClashStrategy>,
     /// 11. set system proxy bypass

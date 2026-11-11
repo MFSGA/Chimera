@@ -118,3 +118,15 @@ Core. Source-level parity was verified byte-for-byte against checkout
 tracked ref gitlink. Product-specific compatibility assessment and the
 remaining live Core testing are documented in
 [`ref-alignment-include-all.md`](ref-alignment-include-all.md).
+
+## Legacy runtime bridge for the include-all setting (2026-11-11)
+
+Chimera still supports CoreFacade and legacy runtime entry points that
+construct typed Clash settings from `IVerge`. The `expand_include_all` switch
+therefore needs one Chimera-specific mirror even though the reference's
+expand algorithm remains byte-identical. Typed settings apply a `Some(bool)`
+value to the optional legacy field; legacy reconstruction reads it and falls
+back to `true` for old files. The `IVerge` patch splitter routes changes to
+Clash settings without interpreting the field as an application effect.
+Focused bridge tests check the round-trip and patch ownership. No runtime
+core process has been started for this test.
