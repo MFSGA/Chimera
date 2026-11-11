@@ -10,11 +10,11 @@
  * - 使用 ref 相同的 Sidebar 布局模式（与 Proxies 一致）
  */
 
-import { cn } from '@chimera/ui';
 import { AppContentScrollArea } from '@chimera/ui/scroll-area';
+import { Sidebar, SidebarContent } from '@chimera/ui/sidebar';
+import { cn } from '@chimera/utils';
 import { createFileRoute } from '@tanstack/react-router';
 import { AnimatedOutletPreset } from '@/components/router/animated-outlet';
-import { Sidebar, SidebarContent } from '@/components/ui/sidebar';
 import SettingsNavigate from './_modules/settings-navigate';
 
 export const Route = createFileRoute('/(main)/main/settings')({
@@ -26,7 +26,7 @@ function RouteComponent() {
     <Sidebar data-slot="settings-container">
       {/* 左侧侧边栏：设置子路由导航列表 */}
       <SidebarContent
-        className="bg-surface-variant/10 [&>div>div]:block!"
+        className="bg-surface-variant/50 min-w-72 dark:bg-transparent [&>div>div]:block!"
         data-slot="settings-sidebar-scroll-area"
       >
         <SettingsNavigate />
@@ -39,7 +39,7 @@ function RouteComponent() {
       */}
       <AppContentScrollArea
         className={cn(
-          'group/settings-content flex-[3_1_auto]',
+          'group/settings-content flex-[2.5_1_0%]',
           // 为 AnimatedOutletPreset 过渡动画保留 overflow-clip
           'overflow-clip',
         )}

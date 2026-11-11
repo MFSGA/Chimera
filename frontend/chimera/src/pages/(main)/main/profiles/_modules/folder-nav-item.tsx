@@ -1,18 +1,21 @@
 import type { ProfileFolder } from '@chimera/interface';
-import { cn } from '@chimera/ui';
-import { Button } from '@chimera/ui/button';
+import { cn } from '@chimera/utils';
 import { useSortable } from '@dnd-kit/react/sortable';
-import { Link } from '@tanstack/react-router';
 import FolderRounded from '~icons/material-symbols/folder-rounded';
+import * as m from '@/paraglide/messages';
 import { FOLDER_ITEM_DRAG_SENSORS } from '@/utils/dnd-sensors';
 import FolderActionsMenu from './folder-actions-menu';
+import ProfilesNavigationItem from './profiles-navigation-item';
 import {
   FOLDER_DRAG_TYPE,
   PROFILE_DRAG_TYPE,
   sidebarFolderId,
 } from './resolve-profile-drop';
 
-/** Ref-compatible folder item, adapted to Chimera's retained sidebar links. */
+/**
+ * Ref NavigationList folder link with the Chimera-only visible action menu.
+ * Keep the draggable target on the link, not the surrounding menu controls.
+ */
 export default function FolderNavItem({
   folder,
   index,
@@ -31,39 +34,31 @@ export default function FolderNavItem({
 
   return (
     <div
-      className={cn(
-        'flex min-w-0 items-center gap-1 rounded-xl px-2',
-        'hover:bg-surface-variant/30',
-        isDragging && 'opacity-40',
-        isDropTarget && 'bg-primary-container/50',
-      )}
-      data-slot="profiles-folder-nav-item"
+      className={cn('relative min-w-0', isDragging && 'opacity-40')}
       data-folder={folder.id}
       data-dragging={isDragging || undefined}
       data-drop-target={isDropTarget || undefined}
     >
-      <Button
-        asChild
-        className="min-w-0 flex-1 justify-start px-2"
-        variant="basic"
-      >
-        <Link
-          ref={ref}
-          role="link"
-          to="/main/profiles/folder/$folderId"
-          params={{ folderId: folder.id }}
-          aria-label={`${folder.name}, ${folder.members.length}`}
-        >
-          <FolderRounded className="size-5 shrink-0" aria-hidden />
-          <span className="min-w-0 flex-1 truncate text-left">
-            {folder.name}
-          </span>
-          <span className="text-on-surface-variant text-xs">
-            {folder.members.length}
-          </span>
-        </Link>
-      </Button>
-      <FolderActionsMenu folder={folder.id} />
+      <ProfilesNavigationItem
+        ref={ref}
+        role="link"
+        to="/main/profiles/folder/$folderId"
+        params={{ folderId: folder.id }}
+        color="neutral"
+        icon={<FolderRounded />}
+        label={folder.name}
+        description={m.profile_nav_count_profiles({
+          count: folder.members.length,
+        })}
+        aria-label={`${folder.name}, ${folder.members.length}`}
+        className="pr-14"
+        data-slot="profiles-folder-nav-item"
+        data-dragging={isDragging || undefined}
+        data-drop-target={isDropTarget || undefined}
+      />
+      <div className="absolute top-1/2 right-2 z-10 -translate-y-1/2">
+        <FolderActionsMenu folder={folder.id} />
+      </div>
     </div>
   );
 }

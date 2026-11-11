@@ -19,11 +19,11 @@
  * - 添加 inspect 子路由（配置内省）
  */
 
-import { cn } from '@chimera/ui';
 import { AppContentScrollArea } from '@chimera/ui/scroll-area';
+import { Sidebar, SidebarContent } from '@chimera/ui/sidebar';
+import { cn } from '@chimera/utils';
 import { createFileRoute } from '@tanstack/react-router';
 import { AnimatedOutletPreset } from '@/components/router/animated-outlet';
-import { Sidebar, SidebarContent } from '@/components/ui/sidebar';
 import ProfilesDndProvider from './_modules/profiles-dnd-provider';
 import ProfilesLayoutProvider from './_modules/profiles-layout-provider';
 import ProfilesNavigate from './_modules/profiles-navigate';
@@ -85,10 +85,10 @@ function RouteComponent() {
         <Sidebar data-slot="profiles-container">
           {/* 左侧侧边栏：配置类型导航 */}
           <SidebarContent
-            className="bg-surface-variant/10"
+            className="bg-surface-variant/50 min-w-72 dark:bg-transparent [&>div>div]:block!"
             data-slot="profiles-sidebar-scroll-area"
           >
-            <ProfilesNavigate className="p-2" />
+            <ProfilesNavigate />
           </SidebarContent>
 
           {/*
@@ -97,7 +97,7 @@ function RouteComponent() {
       */}
           <AppContentScrollArea
             className={cn(
-              'group/profiles-content flex-[3_1_auto]',
+              'group/profiles-content flex-[2.5_1_0%]',
               // 为 AnimatedOutletPreset 过渡动画保留 overflow-clip
               'overflow-clip',
             )}

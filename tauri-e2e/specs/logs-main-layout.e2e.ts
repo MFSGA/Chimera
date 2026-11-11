@@ -15,65 +15,56 @@ describe('main logs reference layout', () => {
     await browser.setWindowSize(1240, 638);
   });
 
-  it('preserves the Chimera sidebar, scroll area, and bottom search bar', async () => {
+  it('shows the navigation rail, logs viewport and floating search actions', async () => {
     const input = await $('[data-slot="logs-search-input-field"]');
     await input.waitForDisplayed({ timeout: 15_000 });
 
-    const state = await browser.execute(() => {
-      const sidebar = document.querySelector<HTMLElement>(
-        '[data-slot="slider-sidebar"]',
-      );
-      const scrollAreas = Array.from(
-        document.querySelectorAll<HTMLElement>('[data-slot="scroll-area"]'),
-      );
-      const search = document.querySelector<HTMLElement>(
-        '[data-slot="logs-search"]',
-      );
-      const inputElement = document.querySelector<HTMLInputElement>(
-        '[data-slot="logs-search-input-field"]',
-      );
-      const emptyState = document.querySelector<HTMLElement>(
-        '[data-slot="logs-no-logs"]',
-      );
-      const virtualList = document.querySelector<HTMLElement>(
-        '[data-slot="logs-virtual-list"]',
-      );
-      const rect = (element: HTMLElement | null) =>
-        element
-          ? {
-              x: Math.round(element.getBoundingClientRect().x),
-              y: Math.round(element.getBoundingClientRect().y),
-              width: Math.round(element.getBoundingClientRect().width),
-              height: Math.round(element.getBoundingClientRect().height),
-            }
-          : null;
+    const rail = await $('[data-slot="navigation-sidebar"]');
+    const toolbar = await $('[data-slot="logs-toolbar"]');
+    const scrollArea = await $('[data-slot="logs-scroll-area"]');
+    const clearLogs = await $('[data-slot="logs-clear-button"]');
 
+    assert.equal(await rail.isDisplayed(), true);
+    assert.equal(await toolbar.isDisplayed(), true);
+    assert.equal(await scrollArea.isDisplayed(), true);
+    assert.equal(await clearLogs.isExisting(), true);
+
+    const state = await browser.execute(() => {
+      const rect = (selector: string) => {
+        const element = document.querySelector<HTMLElement>(selector);
+        if (!element) return null;
+        const bounds = element.getBoundingClientRect();
+        return {
+          x: Math.round(bounds.x),
+          y: Math.round(bounds.y),
+          width: Math.round(bounds.width),
+          height: Math.round(bounds.height),
+          bottom: Math.round(bounds.bottom),
+        };
+      };
       return {
-        sidebar: rect(sidebar),
-        search: rect(search),
-        input: rect(inputElement),
-        inputPlaceholder: inputElement?.placeholder ?? '',
-        emptyState: rect(emptyState),
-        virtualList: rect(virtualList),
-        scrollAreaCount: scrollAreas.length,
+        rail: rect('[data-slot="navigation-sidebar"]'),
+        toolbar: rect('[data-slot="logs-toolbar"]'),
+        dock: rect('[data-slot="data-page-dock"]'),
+        input: rect('[data-slot="logs-search-input-field"]'),
+        emptyState: rect('[data-slot="logs-no-logs"]'),
+        virtualList: rect('[data-slot="logs-virtual-list"]'),
         viewport: { width: innerWidth, height: innerHeight },
       };
     });
 
-    assert.ok(state.viewport.width >= 1200, JSON.stringify(state, null, 2));
-    assert.ok(state.viewport.height >= 600, JSON.stringify(state, null, 2));
-    assert.equal(state.sidebar?.width, 64, JSON.stringify(state, null, 2));
-    assert.equal(state.search?.height, 64, JSON.stringify(state, null, 2));
-    assert.equal(state.input?.height, 40, JSON.stringify(state, null, 2));
+    assert.ok(state.viewport.width >= 1200, JSON.stringify(state));
+    assert.ok(state.viewport.height >= 600, JSON.stringify(state));
+    assert.equal(state.rail?.width, 88, JSON.stringify(state));
+    assert.ok((state.input?.height ?? 0) >= 36, JSON.stringify(state));
     assert.ok(
-      state.inputPlaceholder.length > 0,
-      JSON.stringify(state, null, 2),
+      state.dock &&
+        state.toolbar &&
+        state.toolbar.bottom <= state.dock.bottom &&
+        state.dock.bottom <= state.viewport.height,
+      JSON.stringify(state),
     );
-    assert.ok(state.scrollAreaCount >= 1, JSON.stringify(state, null, 2));
-    assert.ok(
-      state.emptyState || state.virtualList,
-      JSON.stringify(state, null, 2),
-    );
+    assert.ok(state.emptyState || state.virtualList, JSON.stringify(state));
 
     const evidencePath = process.env.CHIMERA_E2E_EVIDENCE_PATH;
     if (evidencePath) {
@@ -82,7 +73,7 @@ describe('main logs reference layout', () => {
     }
   });
 
-  it('filters seven log levels via visible sidebar links', async () => {
+  it('filters seven log levels through visible navigation links', async () => {
     const levels = [
       'trace',
       'debug',
@@ -150,6 +141,28 @@ describe('main logs reference layout', () => {
         timeout: 15_000,
         timeoutMsg: 'All levels filter was not restored on the logs route.',
       },
+    );
+  });
+
+  it('allows a user to type and clear a log search without reloading', async () => {
+    const input = await $('[data-slot="logs-search-input-field"]');
+    await input.waitForDisplayed({ timeout: 15_000 });
+    await input.setValue('test-logs-search');
+    await browser.waitUntil(
+      async () => (await input.getValue()) === 'test-logs-search',
+      { timeout: 5_000 },
+    );
+
+    const clear = await $('[data-slot="search-field-clear"]');
+    await clear.waitForClickable({ timeout: 5_000 });
+    await clear.click();
+    await browser.waitUntil(async () => (await input.getValue()) === '', {
+      timeout: 5_000,
+      timeoutMsg: 'Clicking the visible clear control did not reset search.',
+    });
+    assert.equal(
+      await browser.getUrl().then((url) => new URL(url).pathname),
+      targetPath,
     );
   });
 });

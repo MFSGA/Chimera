@@ -18,6 +18,16 @@ export async function getShikiSingleton() {
   return shiki;
 }
 
+/** Shared on-demand JSON highlighter for the ref-aligned log viewer. */
+export async function highlightJson(code: string) {
+  const instance = await getShikiSingleton();
+  await instance.loadLanguage(import('shiki/langs/json.mjs'));
+  return instance.codeToHtml(code, {
+    lang: 'json',
+    themes: { dark: 'nord', light: 'min-light' },
+  });
+}
+
 export async function formatAnsi(str: string) {
   const instance = await getShikiSingleton();
   return instance.codeToHtml(str, {

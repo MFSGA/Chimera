@@ -1,13 +1,11 @@
-import { cn } from '@chimera/ui';
-import { Button } from '@chimera/ui/button';
 import {
-  Sidebar,
-  SidebarLabelItem,
-  SidebarProvider,
-  SidebarToggleButton,
-  useSidebar,
-} from '@chimera/ui/slider-sidebar';
-import { Tooltip, TooltipContent, TooltipTrigger } from '@chimera/ui/tooltip';
+  NavigationSidebar,
+  NavigationSidebarContent,
+  NavigationSidebarItem,
+  NavigationSidebarToggle,
+} from '@chimera/ui/navigation-sidebar';
+import { ScrollArea } from '@chimera/ui/scroll-area';
+import { SidebarProvider } from '@chimera/ui/slider-sidebar';
 import { createFileRoute, Link, Outlet } from '@tanstack/react-router';
 import ArticleRounded from '~icons/material-symbols/article-rounded';
 import BugReportRounded from '~icons/material-symbols/bug-report-rounded';
@@ -17,9 +15,10 @@ import InfoRounded from '~icons/material-symbols/info-rounded';
 import SearchRounded from '~icons/material-symbols/search-rounded';
 import StopCircleRounded from '~icons/material-symbols/stop-circle-rounded';
 import WarningRounded from '~icons/material-symbols/warning-rounded';
-import { type ComponentProps, type PropsWithChildren } from 'react';
+import { memo, type PropsWithChildren } from 'react';
 import { z } from 'zod';
-import { useIsMobileOrTablet } from '@/hooks/use-is-moblie';
+import * as m from '@/paraglide/messages';
+import { dataPageLayoutVariants } from '../_modules/data-page';
 import { LogLevel } from './_modules/consts';
 
 export const Route = createFileRoute('/(main)/main/logs')({
@@ -39,91 +38,62 @@ const LogLevelIcon = {
   [LogLevel.Unknown]: HelpRounded,
 } satisfies Record<LogLevel, React.FC>;
 
-const SidebarContent = ({ className, ...props }: ComponentProps<'div'>) => {
-  return <div className={cn('p-2', className)} {...props} />;
-};
-
 const LogLevelButton = ({
   level: inputLevel,
   children,
 }: PropsWithChildren<{ level?: LogLevel }>) => {
   const { level } = Route.useSearch();
   const Icon = inputLevel ? LogLevelIcon[inputLevel] : ArticleRounded;
-  const { open, setOpen } = useSidebar();
-  const isMobileOrTablet = useIsMobileOrTablet();
-
-  const handleClick = () => {
-    if (isMobileOrTablet) {
-      setOpen(false);
-    }
-  };
 
   return (
-    <Tooltip open={open ? false : undefined}>
-      <TooltipTrigger asChild>
-        <Button
-          variant="fab"
-          data-active={String(inputLevel === level)}
-          data-slot="logs-level-filter"
-          data-log-level={inputLevel ?? 'all'}
-          className={cn(
-            'h-12 min-w-0 px-3',
-            'flex items-center gap-2',
-            'data-[active=true]:bg-surface-variant/50',
-            'data-[active=false]:bg-transparent',
-            'data-[active=false]:shadow-none',
-            'data-[active=false]:hover:shadow-none',
-            'data-[active=false]:hover:bg-surface-variant/30',
-          )}
-          onClick={handleClick}
-          asChild
-        >
-          <Link to="/main/logs" search={{ level: inputLevel }}>
-            <div className="text-md grid size-6 shrink-0 place-content-center">
-              <Icon className="size-6" />
-            </div>
-
-            <SidebarLabelItem className="capitalize">
-              {children}
-            </SidebarLabelItem>
-          </Link>
-        </Button>
-      </TooltipTrigger>
-
-      <TooltipContent side="right">
-        <p className="capitalize">{children}</p>
-      </TooltipContent>
-    </Tooltip>
+    <NavigationSidebarItem
+      active={(inputLevel ?? null) === (level ?? null)}
+      icon={<Icon className="size-6" />}
+      data-slot="logs-level-filter"
+      data-log-level={inputLevel ?? 'all'}
+      renderLink={(content) => (
+        <Link to="/main/logs" search={{ level: inputLevel }}>
+          {content}
+        </Link>
+      )}
+    >
+      <span className="capitalize">{children}</span>
+    </NavigationSidebarItem>
   );
 };
 
 function RouteComponent() {
+  return <Outlet />;
+}
+
+// The rail owns its open state independently of incoming log updates.
+const LogLevelsSidebar = memo(function LogLevelsSidebar() {
   return (
     <SidebarProvider defaultOpen={false}>
-      <div
-        className={cn(
-          'relative flex min-h-0 w-full overflow-hidden',
-          'divide-outline-variant divide-x',
-        )}
-      >
-        <Sidebar className="divide-outline-variant z-10 flex flex-col divide-y">
-          <SidebarContent className="flex flex-1 flex-col gap-2">
+      <NavigationSidebar aria-label={m.navbar_label_logs()}>
+        <ScrollArea className="min-h-0 w-full flex-1 [&>div>div]:block!">
+          <NavigationSidebarContent className="pb-16">
             <LogLevelButton>All</LogLevelButton>
-
             {Object.values(LogLevel).map((item) => (
               <LogLevelButton key={item} level={item}>
                 {item}
               </LogLevelButton>
             ))}
-          </SidebarContent>
-
-          <SidebarContent className="flex h-16 justify-end">
-            <SidebarToggleButton />
-          </SidebarContent>
-        </Sidebar>
-
-        <Outlet />
-      </div>
+          </NavigationSidebarContent>
+        </ScrollArea>
+        <NavigationSidebarToggle expandLabel={m.navigation_sidebar_expand()}>
+          {m.navigation_sidebar_collapse()}
+        </NavigationSidebarToggle>
+      </NavigationSidebar>
     </SidebarProvider>
+  );
+});
+
+export function LogLevelsLayout({ children }: PropsWithChildren) {
+  return (
+    <div className={dataPageLayoutVariants()} data-slot="logs-layout">
+      <LogLevelsSidebar />
+      {children}
+    </div>
   );
 }

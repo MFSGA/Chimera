@@ -1,0 +1,375 @@
+import { Button, buttonVariants } from '@chimera/ui/button';
+import HighlightText from '@chimera/ui/highlight-text';
+import { SearchField } from '@chimera/ui/search-field';
+import { cn } from '@chimera/utils';
+import { writeText } from '@tauri-apps/plugin-clipboard-manager';
+import ArrowDownwardRounded from '~icons/material-symbols/arrow-downward-rounded';
+import CheckRounded from '~icons/material-symbols/check-rounded';
+import ContentCopyRounded from '~icons/material-symbols/content-copy-rounded';
+import DataObjectRounded from '~icons/material-symbols/data-object-rounded';
+import DeleteSweepRounded from '~icons/material-symbols/delete-sweep-rounded';
+import { cva } from 'class-variance-authority';
+import {
+  memo,
+  useEffect,
+  useId,
+  useRef,
+  useState,
+  type ComponentProps,
+} from 'react';
+import * as m from '@/paraglide/messages';
+import { useDataPageBottomInset } from '../../_modules/data-page';
+import LogJson from './log-json';
+import LogLevelBadge from './log-level-badge';
+
+export const logPanelVariants = cva(
+  'relative flex min-h-0 min-w-0 flex-1 flex-col',
+);
+
+const logFollowButtonVariants = cva(
+  'bg-secondary-container text-on-secondary-container hover:bg-secondary-container dark:bg-secondary-container dark:text-on-secondary-container dark:hover:bg-secondary-container focus-visible:ring-primary size-12 rounded-full shadow-sm hover:brightness-95 focus-visible:ring-2 dark:hover:brightness-105',
+);
+
+export function LogSearch({
+  value,
+  onChange,
+  placeholder,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  placeholder: string;
+}) {
+  return (
+    <SearchField
+      variant="glass"
+      className="min-w-32 flex-1"
+      data-slot="logs-search"
+      aria-label={placeholder}
+      placeholder={placeholder}
+      value={value}
+      maxLength={256}
+      onValueChange={onChange}
+      clearLabel={m.common_clear()}
+    />
+  );
+}
+
+export function LogClearButton({
+  disabled,
+  onClick,
+  label = m.logs_clear_display(),
+}: {
+  disabled: boolean;
+  onClick: () => void;
+  label?: string;
+}) {
+  return (
+    <Button
+      variant="glass"
+      icon
+      data-slot="logs-clear-button"
+      disabled={disabled}
+      aria-disabled={disabled}
+      onClick={onClick}
+      aria-label={label}
+      title={label}
+      className="focus-visible:ring-primary shrink-0 focus-visible:ring-2"
+    >
+      <DeleteSweepRounded aria-hidden className="size-5" />
+    </Button>
+  );
+}
+
+export function LogFollowButton({
+  onClick,
+  unseen = 0,
+}: {
+  onClick: () => void;
+  unseen?: number;
+}) {
+  const bottomInset = useDataPageBottomInset();
+
+  return (
+    <div
+      data-slot="logs-follow-button"
+      className="absolute right-3 z-20"
+      style={{ bottom: bottomInset + 12 }}
+    >
+      <Button
+        icon
+        onClick={onClick}
+        aria-label={m.logs_follow_latest()}
+        title={m.logs_follow_latest()}
+        className={logFollowButtonVariants()}
+      >
+        <ArrowDownwardRounded aria-hidden className="size-6" />
+      </Button>
+      {unseen > 0 && (
+        <span className="bg-primary text-on-primary pointer-events-none absolute -top-1 -right-1 rounded-full px-2 text-xs tabular-nums">
+          {unseen > 99 ? '99+' : unseen}
+        </span>
+      )}
+    </div>
+  );
+}
+
+// Most loads finish within a few frames; announcing one sooner only flashes
+// the status line and shifts the rows that are about to enter.
+const LOG_LOADING_DELAY_MS = 400;
+
+/** Whether a load has lasted long enough to announce. */
+export function useSlowLoading(loading: boolean) {
+  const [slow, setSlow] = useState(false);
+
+  useEffect(() => {
+    setSlow(false);
+    if (!loading) return;
+    const timer = setTimeout(() => setSlow(true), LOG_LOADING_DELAY_MS);
+    return () => clearTimeout(timer);
+  }, [loading]);
+
+  return loading && slow;
+}
+
+// Matches `--animate-log-row-enter`.
+const LOG_ROW_ENTER_MS = 300;
+
+/**
+ * Tells whether a row arrived within the entrance window. A virtual list also
+ * mounts rows as it scrolls to them, so mounting alone does not make a row
+ * new; the window still covers rows mounted right after they arrive, such as
+ * the latest rows the list jumps to after rendering its first page from the
+ * top.
+ */
+export function useEnteringRows<T>(
+  rows: readonly T[],
+  getKey: (row: T) => string,
+) {
+  const settled = useRef<ReadonlySet<string>>(new Set());
+
+  useEffect(() => {
+    // Each update settles on its own; resetting a single timer would keep
+    // a steady stream of logs entering forever.
+    setTimeout(() => {
+      settled.current = new Set(rows.map(getKey));
+    }, LOG_ROW_ENTER_MS);
+  }, [rows, getKey]);
+
+  return (row: T) => !settled.current.has(getKey(row));
+}
+
+const logVirtualItemVariants = cva('absolute top-0 left-0 w-full select-text', {
+  variants: {
+    entering: {
+      true: 'animate-log-row-enter motion-reduce:animate-none',
+    },
+  },
+});
+
+/**
+ * A row positioned by the virtual list. A row that arrives with the data
+ * rises into place; the choice is kept from mount so later list renders
+ * neither cut the entrance short nor replay it.
+ */
+export function LogVirtualItem({
+  entering,
+  className,
+  ...props
+}: ComponentProps<'div'> & { entering: boolean }) {
+  const [enter] = useState(entering);
+
+  return (
+    <div
+      data-slot="logs-virtual-item"
+      className={cn(logVirtualItemVariants({ entering: enter }), className)}
+      {...props}
+    />
+  );
+}
+
+// Every visible row has two action buttons. The shared Button keeps ripple
+// state and motion per instance, which outweighs the rest of a row, so rows
+// use plain buttons with the same look.
+const rowActionVariants = cva(
+  `${buttonVariants({ icon: true })} focus-visible:ring-primary shrink-0 focus-visible:ring-2`,
+);
+
+export const LogRecord = memo(function LogRecord({
+  time,
+  timeTitle,
+  level,
+  target,
+  message,
+  raw,
+  search,
+  incomplete,
+  incompleteTitle,
+  loadRaw,
+  expanded,
+  onInspect,
+}: {
+  time: string;
+  timeTitle?: string;
+  level: string;
+  target?: string;
+  message: string;
+  /** The raw text, or a record to show as JSON when copied or inspected. */
+  raw: unknown;
+  search: string;
+  incomplete?: boolean;
+  incompleteTitle?: string;
+  loadRaw?: () => Promise<unknown>;
+  expanded?: boolean;
+  onInspect: () => void;
+}) {
+  const [showJson, setShowJson] = useState(false);
+  const showing = expanded ?? showJson;
+  const [loadedRaw, setLoadedRaw] = useState<string | null>(null);
+  const [loadingRaw, setLoadingRaw] = useState(false);
+  const [detailError, setDetailError] = useState(false);
+  const [copying, setCopying] = useState(false);
+  useEffect(() => {
+    if (!showing || !loadRaw) {
+      setLoadedRaw(null);
+      setDetailError(false);
+      setLoadingRaw(false);
+      return;
+    }
+    let disposed = false;
+    setLoadingRaw(true);
+    setLoadedRaw(null);
+    setDetailError(false);
+    loadRaw()
+      .then(
+        (value) => {
+          if (!disposed) {
+            setLoadedRaw(
+              typeof value === 'string'
+                ? value
+                : JSON.stringify(value, null, 2),
+            );
+          }
+        },
+        () => {
+          if (!disposed) {
+            setDetailError(true);
+          }
+        },
+      )
+      .finally(() => {
+        if (!disposed) {
+          setLoadingRaw(false);
+        }
+      });
+    return () => {
+      disposed = true;
+    };
+  }, [showing, loadRaw]);
+  const jsonId = useId();
+  const [copied, setCopied] = useState(false);
+  const [copyError, setCopyError] = useState(false);
+  useEffect(() => {
+    if (!copied) return;
+    const timer = setTimeout(() => setCopied(false), 2000);
+    return () => clearTimeout(timer);
+  }, [copied]);
+  const rawText = () =>
+    loadedRaw ?? (typeof raw === 'string' ? raw : JSON.stringify(raw, null, 2));
+  return (
+    <article className="group/log-record border-outline-variant/40 hover:bg-on-surface/4 focus-within:bg-on-surface/4 border-b px-3 py-2 text-sm transition-colors sm:px-4">
+      <div className="text-on-surface-variant flex min-h-10 flex-wrap items-center gap-x-3 gap-y-1">
+        <time title={timeTitle} className="font-mono text-xs tabular-nums">
+          <HighlightText searchText={search}>{time || '—'}</HighlightText>
+        </time>
+        <LogLevelBadge searchText={search}>{level}</LogLevelBadge>
+        {target && (
+          <span className="min-w-0 font-mono text-xs break-all">
+            <HighlightText searchText={search}>{target}</HighlightText>
+          </span>
+        )}
+        <div className="ml-auto flex shrink-0 opacity-0 transition-opacity group-focus-within/log-record:opacity-100 group-hover/log-record:opacity-100 [@media(hover:none)]:opacity-100">
+          <button
+            type="button"
+            className={rowActionVariants()}
+            aria-label={copied ? m.logs_copied() : m.logs_copy()}
+            title={copied ? m.logs_copied() : m.logs_copy()}
+            disabled={copying || loadingRaw}
+            onClick={async () => {
+              if (copying) return;
+              setCopying(true);
+              try {
+                const value = loadRaw && !loadedRaw ? await loadRaw() : null;
+                const text =
+                  value === null
+                    ? rawText()
+                    : typeof value === 'string'
+                      ? value
+                      : JSON.stringify(value, null, 2);
+                await writeText(text);
+                setCopied(true);
+                setCopyError(false);
+              } catch {
+                setCopyError(true);
+              } finally {
+                setCopying(false);
+              }
+            }}
+          >
+            {copied ? (
+              <CheckRounded aria-hidden className="size-4" />
+            ) : (
+              <ContentCopyRounded aria-hidden className="size-4" />
+            )}
+          </button>
+          <button
+            type="button"
+            aria-label={m.logs_view_json()}
+            title={m.logs_view_json()}
+            aria-expanded={showing}
+            aria-controls={jsonId}
+            className={rowActionVariants()}
+            onClick={() => {
+              if (expanded !== undefined || !showing) {
+                onInspect();
+              }
+              if (expanded === undefined) {
+                setShowJson(!showJson);
+              }
+            }}
+          >
+            <DataObjectRounded aria-hidden className="size-4" />
+          </button>
+        </div>
+      </div>
+      <div className="text-on-surface font-mono leading-relaxed [overflow-wrap:anywhere] break-words whitespace-pre-wrap">
+        <HighlightText searchText={search}>{message}</HighlightText>
+      </div>
+      {incomplete && (
+        <span
+          className="text-on-surface-variant text-xs"
+          title={incompleteTitle ?? m.logs_raw_record()}
+        >
+          ⚠
+        </span>
+      )}
+      {showing && (
+        <div id={jsonId} role="region" aria-label={m.logs_view_json()}>
+          {loadingRaw ? (
+            <span>{m.logs_loading()}</span>
+          ) : detailError ? (
+            <p role="alert" className="text-error">
+              {m.logs_core_detail_unavailable()}
+            </p>
+          ) : (
+            <LogJson raw={rawText()} />
+          )}
+        </div>
+      )}
+      {copyError && (
+        <p role="alert" className="text-error mt-2 text-xs">
+          {m.logs_copy_failed()}
+        </p>
+      )}
+    </article>
+  );
+});

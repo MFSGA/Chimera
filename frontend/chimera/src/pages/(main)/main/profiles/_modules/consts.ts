@@ -11,6 +11,7 @@
  * 被 ProfilesNavigate 和 $type 子路由共享
  */
 
+import type { NavigationListItemColor } from '@chimera/ui/navigation-list';
 import * as m from '@/paraglide/messages';
 
 /**
@@ -33,6 +34,14 @@ export const PROFILE_TYPE_NAMES = {
   [ProfileType.Lua]: m.profile_lua_label(),
   [ProfileType.Merge]: m.profile_merge_label(),
 } satisfies Record<ProfileType, string>;
+
+/** Tone of the type icon, shared with the reference navigation list. */
+export const PROFILE_TYPE_COLORS = {
+  [ProfileType.Profile]: 'blue',
+  [ProfileType.JavaScript]: 'yellow',
+  [ProfileType.Lua]: 'cyan',
+  [ProfileType.Merge]: 'orange',
+} satisfies Record<ProfileType, NavigationListItemColor>;
 
 /**
  * Profile 类型到过滤条件的映射
