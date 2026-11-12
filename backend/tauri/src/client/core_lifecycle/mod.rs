@@ -1698,6 +1698,7 @@ mod tests {
         events: Arc<Mutex<Vec<&'static str>>>,
         state: CoreState,
         state_changed_at: i64,
+        run_type: RunType,
         active_kind: Option<chimera_core_manager::CoreKind>,
         receipt_error: bool,
     }
@@ -2457,7 +2458,7 @@ mod tests {
                 instance_id: None,
                 state: self.state.clone(),
                 state_changed_at: self.state_changed_at,
-                run_type: RunType::Normal,
+                run_type: self.run_type,
             })
         }
 
@@ -4061,6 +4062,7 @@ mod tests {
             events: events.clone(),
             state,
             state_changed_at,
+            run_type: RunType::Normal,
             active_kind,
             receipt_error,
         });
@@ -4165,17 +4167,18 @@ mod tests {
         let events = Arc::new(Mutex::new(Vec::new()));
         let application = ApplicationClient::legacy().unwrap();
         let target = application.get_typed().core;
-        let release_stop = Arc::new(Notify::new());
-        release_stop.notify_one();
         let runtime_paths =
             RuntimePaths::from_config_root(std::path::PathBuf::from("test-runtime-root"));
         let client = CoreLifecycleClient::spawn_with_installer(
-            Arc::new(RecordingCore {
+            Arc::new(CoreUpdateRecordingCore {
                 events: events.clone(),
-                stop_started: Arc::new(Notify::new()),
-                release_stop,
-                recovery_notify: Arc::new(Notify::new()),
+                // A stopped state with a positive change timestamp is known,
+                // unlike the compatibility sentinel at timestamp zero.
+                state: CoreState::Stopped(None),
+                state_changed_at: 1,
                 run_type: RunType::Service,
+                active_kind: None,
+                receipt_error: false,
             }),
             application,
             ClashConfigClient::legacy().unwrap(),
@@ -4210,15 +4213,16 @@ mod tests {
         let events = Arc::new(Mutex::new(Vec::new()));
         let application = ApplicationClient::legacy().unwrap();
         let target = application.get_typed().core;
-        let release_stop = Arc::new(Notify::new());
-        release_stop.notify_one();
         let client = CoreLifecycleClient::spawn_with_installer(
-            Arc::new(RecordingCore {
+            Arc::new(CoreUpdateRecordingCore {
                 events: events.clone(),
-                stop_started: Arc::new(Notify::new()),
-                release_stop,
-                recovery_notify: Arc::new(Notify::new()),
+                // A stopped state with a positive change timestamp is known,
+                // unlike the compatibility sentinel at timestamp zero.
+                state: CoreState::Stopped(None),
+                state_changed_at: 1,
                 run_type: RunType::Normal,
+                active_kind: None,
+                receipt_error: false,
             }),
             application,
             ClashConfigClient::legacy().unwrap(),
