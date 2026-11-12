@@ -90,6 +90,12 @@ describe('main profiles reference layout', () => {
     assert.ok(profileUid, 'The layout fixture profile was not persisted.');
   });
 
+  // Keep each contract on the All Profiles route. If one navigation
+  // assertion fails, later cases must not inherit its Inspect/transform route.
+  beforeEach(async () => {
+    await openMainRoute(targetPath);
+  });
+
   after(async () => {
     const uid =
       profileUid ??
@@ -243,8 +249,12 @@ describe('main profiles reference layout', () => {
       const details = await $('[data-slot="inspect-step-detail"]');
       await details.waitForDisplayed({ timeout: 15_000 });
       const outputTab = await $('[data-slot="inspect-tab-output"]');
-      await outputTab.waitForClickable({ timeout: 15_000 });
-      await outputTab.click();
+      // The final configuration step already opens on Output. Avoid asking
+      // WebDriver to click a selected tab that is already displaying its panel.
+      if ((await outputTab.getAttribute('aria-selected')) !== 'true') {
+        await outputTab.waitForClickable({ timeout: 15_000 });
+        await outputTab.click();
+      }
       const yaml = await $('[data-slot="inspect-yaml-viewer"]');
       await yaml.waitForDisplayed({ timeout: 15_000 });
     } else {
@@ -635,30 +645,38 @@ describe('main profiles reference layout', () => {
     }
   });
 
-  // Contract: the persisted local Profile, overlay and JS transform use the
-  // expected icon compositions and badges. DOM icon slots and classes provide
-  // visual evidence; a missing type mapping fails its own assertion.
-  it('uses the reference profile type icon compositions', async () => {
+  // Contract: every visible Profile type navigation item renders its icon
+  // inside the current material-shape wrapper and uses the shared color token.
+  // Assert the actual navigation DOM rather than stale attributes not emitted
+  // by NavigationListItem.
+  it('uses the reference profile type navigation icon compositions', async () => {
     const icons = await browser.execute(() => {
-      const readIcon = (type: string, marker: string) => {
-        const icon = document.querySelector<HTMLElement>(
-          `[data-profile-type-icon="${type}"]`,
-        );
-        const badge = icon?.querySelector<HTMLElement>(
-          `[data-profile-type-badge="${type}"]`,
+      const readIcon = (selector: string, color: string) => {
+        const shape = document.querySelector<HTMLElement>(
+          `${selector} [data-slot="navigation-list-item-icon"] [data-slot="material-shape"]`,
         );
         return {
-          hasPrimaryIcon: (icon?.querySelectorAll('svg').length ?? 0) > 0,
-          hasBadge: Boolean(badge),
-          hasMarker: (badge?.getAttribute('class') ?? '').includes(marker),
+          hasPrimaryIcon: Boolean(shape?.querySelector('svg')),
+          hasColorToken: Boolean(
+            shape?.classList.contains(`bg-${color}-container`),
+          ),
         };
       };
 
       return {
-        profile: readIcon('profile', 'bg-gray-300'),
-        javascript: readIcon('javascript', 'bg-amber-400'),
-        lua: readIcon('lua', 'bg-blue-300'),
-        merge: readIcon('merge', 'bg-orange-400'),
+        profile: readIcon('[data-slot="profiles-all-nav-item"]', 'blue'),
+        javascript: readIcon(
+          '[data-slot="profiles-navigation"] a[href="/main/profiles/javascript"]',
+          'yellow',
+        ),
+        lua: readIcon(
+          '[data-slot="profiles-navigation"] a[href="/main/profiles/lua"]',
+          'cyan',
+        ),
+        merge: readIcon(
+          '[data-slot="profiles-navigation"] a[href="/main/profiles/merge"]',
+          'orange',
+        ),
       };
     });
 
@@ -666,17 +684,12 @@ describe('main profiles reference layout', () => {
       assert.equal(
         icon.hasPrimaryIcon,
         true,
-        `${type} is missing its primary icon.`,
+        `${type} is missing its primary navigation icon.`,
       );
       assert.equal(
-        icon.hasBadge,
+        icon.hasColorToken,
         true,
-        `${type} is missing its reference badge.`,
-      );
-      assert.equal(
-        icon.hasMarker,
-        true,
-        `${type} badge style is not ref-aligned.`,
+        `${type} is missing its reference navigation color token.`,
       );
     }
   });
