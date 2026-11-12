@@ -1,5 +1,18 @@
 # ref 对齐进度
 
+## DIFF-075：OS Contracts / System DNS 注入路径（2026-11-12，部分迁移）
+
+- **目标**：把 DNS flush 从 Tauri 内部的匿名 `anyhow` OS 实现迁移为上游同形的类型化 port、Shell elevation policy 和独立 OS adapter；依然由现有 `ChimeraClient`、Main/Legacy/Agent 共享应用入口调用，不新增第二套系统 DNS 实现。
+- **基线**：Chimera `master@7f08640f`、gitlink 与检出的只读 `ref@59724e85c34abb6995c22d101c876cc06dc16576`，开始时两者工作树干净。2026-11-12 使用 `git ls-remote` 观察到上游 `main@b35722b588e23a416186de96155c47c76b1dfd3b`，但本批未 fetch、切换、修改 ref 或更新 gitlink；这是对固定 ref 的源码迁移，不冒称已对齐实时最新 main。
+- **上游路径映射**：`ref/backend/nyanpasu-contracts/src/{service,elevation,system_dns}.rs` → `backend/chimera-contracts/src/` 同名文件，保留上游枚举、Snafu 错误结构、trait 与序列化键，只有 `nyanpasu_paths` → `chimera_paths` 的 crate 标识映射；上游 OS `elevation/{mod,runner}.rs`、`system_dns.rs` → 新 `backend/chimera-os/src/`；`ref/backend/tauri/src/adapters/elevation.rs` → `backend/tauri/src/adapters/elevation.rs`。`backend/tauri/src/setup.rs` 注入 OS DNS cache 和 shell consent；`backend/tauri/src/client/system_dns.rs` 只保留调用共享 port 的客户端方法以及测试 no-op，移除原先直接调用 `runas`、`osascript`、Linux DNS 命令的第二份生产实现。`chimera-os` 当前**只实现 DNS/elevation 相关源文件**，不是上游完整 OS crate。
+- **接口 / 影响**：`ClientSetupArgs` 改用 `chimera_contracts::system_dns::SystemDnsCache`，OS 层返回上游 `SystemDnsError`，Tauri 现有客户端 RPC 入口仍返回 `anyhow::Result`；因此类型化 OS 失败的来源链/序列化合同已迁移，但客户端及统一 RPC 的结构化错误转换仍属后续工作。交互式桌面 consent 只允许进入现有操作系统授权提示，不自行授予权限；拒绝时在 OS 命令启动之前失败。未改用户配置、核心、服务 IPC 或 TUN。
+- **必要差异**：固定 ref 的 DNS port 在 Linux 返回 Unsupported，但 Chimera 既有实现尝试 `resolvectl`、`systemd-resolve`、`nscd`；这些候选及尝试顺序保留在新 `chimera-os`（使用可替换命令 runner），防止已有 Linux 功能退化，并有 Linux 专用 fake-runner 回归。Mac 本机无法执行该 Linux 专用测试。OS runner 中上游供其他 OS 模块使用的 `runas` 接口当前尚未被本批 DNS 代码调用；后续 Service/Core install 模块迁入后重新复核。
+- **风险 / 非目标**：L2（OS 权限提示与平台机制）。非目标：安装/启动 Service、系统网络和 DNS 实际修改、更新 ref、全量 CoreActor/OS crate/Unified RPC 改造、桌面 E2E、发行或推送。若后续要修改宿主网络、安装 Service 或实跑管理员授权，需独立授权及隔离环境。本批只执行被注入的 fake runner/纯单测，不主动请求系统权限。
+- **验收标准与测试计划**：契约 wire shape、source chain、DNS 授权拒绝不能调用 OS runner，原 macOS DNS 命令形状，Linux 候选失败回退；`cargo check` 新 packages 和 Tauri、`cargo test` 新 packages、改动包 Rustfmt 与 `git diff --check`；Tauri DNS 客户端用例与真实桌面授权/重启作为后续验收。主/Legacy/Agent 均保留同一客户端入口，不新增 UI。
+- **本次验证**：`cargo check --manifest-path backend/Cargo.toml -p chimera-os -p chimera-contracts --lib` 通过；`cargo check --manifest-path backend/Cargo.toml -p chimera --lib` 通过（仓库既有较多 warnings）；`cargo test --manifest-path backend/Cargo.toml -p chimera-contracts --lib` **3/3**、`cargo test --manifest-path backend/Cargo.toml -p chimera-os --lib` **2/2** 均通过（macOS ARM64）；定向 `cargo fmt --check` 与 `git diff --check` 通过。在修正测试模块旧 `SystemDnsCache` 导入导致的 `E0603` 错误后，`cargo check --manifest-path backend/Cargo.toml -p chimera --all-features --tests` 通过，预提交 `pnpm lint:rustfmt` 与全仓库 `pnpm lint:clippy` 通过（有仓库既存 warnings）。Tauri 单测的测试函数、Linux/Windows 测试、跨平台 CI、真实授权提示和桌面 E2E 均未运行，不得视为通过。初次全仓 Clippy 产生缓存导致磁盘余量一度仅约 118 MiB；定向删除当前会话及既有的可再生成 Cargo build/incremental 目录后空间恢复到约 3.1 GiB，没有清理源码、现有可执行文件、用户配置或 Git stash。
+- **回滚**：移除本批新增的 `chimera-os` 和 contracts OS 文件、撤销 Cargo workspace/lockfile/Tauri 组装增量，并恢复 `client/system_dns.rs` 既有 OS 实现；无持久化迁移，也没有实际系统代理、DNS 或网络状态需要回滚。
+- **下一步**：完成独立的 Tauri DNS 客户端测试和 Linux 专用测试；在固定 ref 基线上按 OS port → OS mechanism → Tauri adapter 顺序迁移 `system_proxy`、`service`、`core_install`，然后把 CoreActor 生产所有权搬进独立 core。同步更新上游 ref 应作为独立、显式的固定基线变更。
+
 ## 2026-11-11：Linux 透明代理集成说明
 
 - 本节移植自 `4b632f8f` 并保留原分支的测试证据；其中 `ref@231e3866` 是来源分支当时的参考基线，不代表当前 master 的 gitlink 已同步。

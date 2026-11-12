@@ -4,16 +4,14 @@ use std::sync::Arc;
 
 use anyhow::Context as _;
 use chimera_contracts::net::SelfProxyPortSource as _;
+use chimera_os::system_dns::OsSystemDnsCache;
 use chimera_traffic::{RedbTrafficStore, TrafficStore};
 use chimera_utils::process::{AtomicStopStrategy, StopStrategy};
 use tauri::Manager;
 
 use crate::{
     bridge::{clash::LegacyClashBridge, verge::LegacyVergeBridge, window::LegacyWindowBridge},
-    client::{
-        ChimeraClient, ClientSetupArgs, LegacyBridgeSet, OsSystemDnsCache, RuntimePaths,
-        TauriUiEventSink,
-    },
+    client::{ChimeraClient, ClientSetupArgs, LegacyBridgeSet, RuntimePaths, TauriUiEventSink},
     utils::path::PathResolver,
 };
 
@@ -235,7 +233,9 @@ pub fn setup(
                 core_facade,
             )),
             profile_service,
-            system_dns: Arc::new(OsSystemDnsCache),
+            system_dns: Arc::new(OsSystemDnsCache::new(Arc::new(
+                crate::adapters::elevation::InteractiveElevationConsent,
+            ))),
             traffic_store,
             jobs,
             shutdown: app.state::<AppShutdown>().shutdown.child_token(),
