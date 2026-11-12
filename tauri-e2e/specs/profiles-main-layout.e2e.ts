@@ -255,8 +255,29 @@ describe('main profiles reference layout', () => {
         await outputTab.waitForClickable({ timeout: 15_000 });
         await outputTab.click();
       }
-      const yaml = await $('[data-slot="inspect-yaml-viewer"]');
-      await yaml.waitForDisplayed({ timeout: 15_000 });
+      await browser.waitUntil(
+        async () =>
+          browser.execute(() => {
+            const viewer = document.querySelector<HTMLElement>(
+              '[data-slot="inspect-yaml-viewer"]',
+            );
+            if (!viewer) return false;
+            const rect = viewer.getBoundingClientRect();
+            const style = getComputedStyle(viewer);
+            return (
+              rect.width > 0 &&
+              rect.height > 0 &&
+              style.display !== 'none' &&
+              style.visibility !== 'hidden' &&
+              viewer.querySelectorAll('[data-line]').length > 0
+            );
+          }),
+        {
+          timeout: 15_000,
+          timeoutMsg:
+            'The Inspect output YAML viewer did not render visible lines.',
+        },
+      );
     } else {
       const empty = await $('[data-slot="inspect-empty"]');
       await empty.waitForDisplayed({ timeout: 15_000 });
