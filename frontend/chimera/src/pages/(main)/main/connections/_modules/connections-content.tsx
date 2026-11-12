@@ -4,15 +4,10 @@ import {
   type TrafficScope,
 } from '@chimera/interface';
 import { ContextMenuItem } from '@chimera/ui/context-menu';
+import { Modal } from '@chimera/ui/modal';
 import { ScrollArea } from '@chimera/ui/scroll-area';
 import CloseRounded from '~icons/material-symbols/close-rounded';
-import {
-  useCallback,
-  useDeferredValue,
-  useMemo,
-  useState,
-  type ReactNode,
-} from 'react';
+import { useCallback, useDeferredValue, useMemo, type ReactNode } from 'react';
 import {
   RegisterContextMenu,
   RegisterContextMenuContent,
@@ -69,7 +64,6 @@ export default function ConnectionsContent({
   const [search, setSearch] = useSearchTerm(q, writeQuery);
   const deferredSearch = useDeferredValue(search);
   const showTable = useDeferredValue(true, false);
-  const [settingsOpen, setSettingsOpen] = useState(false);
   const focusRowId = useTabFocus(scope, entryFocus);
   const deleteConnections = useDeleteClashConnections();
   const handleCloseAllConnections = useLockFn(async () => {
@@ -90,8 +84,6 @@ export default function ConnectionsContent({
             search={deferredSearch}
             proxy={proxy}
             selection={selection}
-            settingsOpen={settingsOpen}
-            onSettingsOpenChange={setSettingsOpen}
             onLocateRule={onLocateRule}
             onViewRuleUsage={onViewRuleUsage}
             focusRowId={focusRowId}
@@ -102,8 +94,6 @@ export default function ConnectionsContent({
             search={deferredSearch}
             proxy={proxy}
             selection={selection}
-            settingsOpen={settingsOpen}
-            onSettingsOpenChange={setSettingsOpen}
             onLocateRule={onLocateRule}
             onViewRuleUsage={onViewRuleUsage}
             focusRowId={focusRowId}
@@ -114,8 +104,6 @@ export default function ConnectionsContent({
             search={deferredSearch}
             proxy={proxy}
             filters={filters}
-            settingsOpen={settingsOpen}
-            onSettingsOpenChange={setSettingsOpen}
             onLocateRule={onLocateRule}
             onViewRuleUsage={onViewRuleUsage}
             focusRowId={focusRowId}
@@ -126,42 +114,45 @@ export default function ConnectionsContent({
   );
 
   return (
-    <div
-      className="divide-outline-variant flex min-h-0 flex-1 flex-col divide-y overflow-hidden"
-      data-slot="connections-container"
-    >
-      {scope === 'closed' ? (
-        scrollArea
-      ) : (
-        <RegisterContextMenu>
-          <RegisterContextMenuTrigger asChild>
-            {scrollArea}
-          </RegisterContextMenuTrigger>
-          <RegisterContextMenuContent>
-            <ContextMenuItem onSelect={() => handleCloseAllConnections()}>
-              <CloseRounded className="size-4" />
-              <span>{m.connections_close_all_connections()}</span>
-            </ContextMenuItem>
-          </RegisterContextMenuContent>
-        </RegisterContextMenu>
-      )}
+    <Modal>
+      <div
+        className="divide-outline-variant flex min-h-0 flex-1 flex-col divide-y overflow-hidden"
+        data-slot="connections-container"
+      >
+        {scope === 'closed' ? (
+          scrollArea
+        ) : (
+          <RegisterContextMenu>
+            <RegisterContextMenuTrigger asChild>
+              {scrollArea}
+            </RegisterContextMenuTrigger>
+            <RegisterContextMenuContent>
+              <ContextMenuItem onSelect={() => handleCloseAllConnections()}>
+                <CloseRounded className="size-4" />
+                <span>{m.connections_close_all_connections()}</span>
+              </ContextMenuItem>
+            </RegisterContextMenuContent>
+          </RegisterContextMenu>
+        )}
 
-      <ConnectionsToolbar
-        start={start}
-        tabs={
-          <ConnectionsStatusTabs
-            value={scope}
-            onValueChange={(next) => onChange({ scope: next })}
-            selection={selection}
-          />
-        }
-        selection={selection}
-        onSelectionChange={(next) => onChange(next)}
-        search={search}
-        onSearchChange={setSearch}
-        onOpenSettings={() => setSettingsOpen(true)}
-        onCloseAll={scope === 'closed' ? undefined : handleCloseAllConnections}
-      />
-    </div>
+        <ConnectionsToolbar
+          start={start}
+          tabs={
+            <ConnectionsStatusTabs
+              value={scope}
+              onValueChange={(next) => onChange({ scope: next })}
+              selection={selection}
+            />
+          }
+          selection={selection}
+          onSelectionChange={(next) => onChange(next)}
+          search={search}
+          onSearchChange={setSearch}
+          onCloseAll={
+            scope === 'closed' ? undefined : handleCloseAllConnections
+          }
+        />
+      </div>
+    </Modal>
   );
 }

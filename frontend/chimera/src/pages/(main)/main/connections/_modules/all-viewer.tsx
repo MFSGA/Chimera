@@ -151,8 +151,6 @@ const AllViewer = memo(function AllViewer({
   search,
   proxy,
   selection,
-  settingsOpen,
-  onSettingsOpenChange,
   onLocateRule,
   onViewRuleUsage,
   focusRowId,
@@ -161,8 +159,6 @@ const AllViewer = memo(function AllViewer({
   search: string;
   proxy?: string | null;
   selection: ConnectionsSelection;
-  settingsOpen: boolean;
-  onSettingsOpenChange: (open: boolean) => void;
   onLocateRule?: (detail: ConnectionDetail) => void;
   onViewRuleUsage?: (detail: ConnectionDetail) => void;
   // The row to scroll to and highlight once it appears.
@@ -459,8 +455,6 @@ const AllViewer = memo(function AllViewer({
         }
         onEndReached={onEndReached}
         focusRowId={focusRowId}
-        settingsOpen={settingsOpen}
-        onSettingsOpenChange={onSettingsOpenChange}
       />
 
       <RowsTickContext.Provider value={connections}>

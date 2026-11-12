@@ -1,8 +1,21 @@
 import { cn } from '@chimera/ui';
 import { Button } from '@chimera/ui/button';
 import { Card, CardContent, CardFooter, CardHeader } from '@chimera/ui/card';
-import { Modal, ModalClose, ModalContent, ModalTitle } from '@chimera/ui/modal';
-import { useLayoutEffect, useRef, useState } from 'react';
+import {
+  Modal,
+  ModalClose,
+  ModalContent,
+  ModalTitle,
+  ModalTrigger,
+  useModal,
+} from '@chimera/ui/modal';
+import {
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type ComponentProps,
+} from 'react';
 import * as m from '@/paraglide/messages';
 import FilterChip from './filter-chip';
 
@@ -48,7 +61,17 @@ export function fitCount(
 
 const chipButtonClass = 'h-8 shrink-0 px-3 whitespace-nowrap';
 
-export default function FilterChips({
+export default function FilterChips(
+  props: ComponentProps<typeof FilterChipsContent>,
+) {
+  return (
+    <Modal>
+      <FilterChipsContent {...props} />
+    </Modal>
+  );
+}
+
+function FilterChipsContent({
   items,
   onClearAll,
   className,
@@ -61,7 +84,12 @@ export default function FilterChips({
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [shown, setShown] = useState(items.length);
-  const [open, setOpen] = useState(false);
+  const { setOpen } = useModal();
+
+  useEffect(() => {
+    if (items.length === 0) setOpen(false);
+  }, [items.length, setOpen]);
+
   const labels = items.map((item) => item.label).join('\n');
 
   useLayoutEffect(() => {
@@ -133,48 +161,47 @@ export default function FilterChips({
           >
             {m.connections_filter_clear_all()}
           </Button>
-          <Button
-            className={cn(chipButtonClass, hidden === 0 && unused)}
-            data-slot="filter-chips-more"
-            aria-label={showAll}
-            title={showAll}
-            onClick={() => setOpen(true)}
-          >
-            {`+${hidden || items.length}`}
-          </Button>
+          <ModalTrigger asChild>
+            <Button
+              className={cn(chipButtonClass, hidden === 0 && unused)}
+              data-slot="filter-chips-more"
+              aria-label={showAll}
+              title={showAll}
+            >
+              {`+${hidden || items.length}`}
+            </Button>
+          </ModalTrigger>
         </>
       )}
 
-      <Modal open={open && items.length > 0} onOpenChange={setOpen}>
-        <ModalContent>
-          <Card divider className="flex w-96 max-w-[90vw] flex-col">
-            <CardHeader>
-              <ModalTitle>{m.connections_filters_label()}</ModalTitle>
-            </CardHeader>
+      <ModalContent>
+        <Card divider className="flex w-96 max-w-[90vw] flex-col">
+          <CardHeader>
+            <ModalTitle>{m.connections_filters_label()}</ModalTitle>
+          </CardHeader>
 
-            <CardContent
-              className="flex flex-wrap gap-2"
-              data-slot="filter-chips-dialog"
+          <CardContent
+            className="flex flex-wrap gap-2"
+            data-slot="filter-chips-dialog"
+          >
+            {items.map((item) => chip(item))}
+          </CardContent>
+
+          <CardFooter>
+            <Button
+              data-slot="connections-filter-clear-all-dialog"
+              onClick={() => {
+                onClearAll();
+                setOpen(false);
+              }}
             >
-              {items.map((item) => chip(item))}
-            </CardContent>
+              {m.connections_filter_clear_all()}
+            </Button>
 
-            <CardFooter>
-              <Button
-                data-slot="connections-filter-clear-all-dialog"
-                onClick={() => {
-                  onClearAll();
-                  setOpen(false);
-                }}
-              >
-                {m.connections_filter_clear_all()}
-              </Button>
-
-              <ModalClose variant="flat">{m.common_close()}</ModalClose>
-            </CardFooter>
-          </Card>
-        </ModalContent>
-      </Modal>
+            <ModalClose variant="flat">{m.common_close()}</ModalClose>
+          </CardFooter>
+        </Card>
+      </ModalContent>
     </div>
   );
 }

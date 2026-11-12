@@ -13,22 +13,24 @@ import {
   ModalContent,
   ModalTitle,
   ModalTrigger,
+  useModal,
 } from '@chimera/ui/modal';
 import TextMarquee from '@chimera/ui/text-marquee';
 import AddRounded from '~icons/material-symbols/add-rounded';
-import AllInboxRounded from '~icons/material-symbols/all-inbox-outline-rounded';
 import DeleteRounded from '~icons/material-symbols/delete-rounded';
 import EditSquareRounded from '~icons/material-symbols/edit-square-rounded';
 import OpenInNewRounded from '~icons/material-symbols/open-in-new-rounded';
 import { AnimatePresence, motion } from 'motion/react';
-import { useEffect, useMemo, useState, type PropsWithChildren } from 'react';
+import { useMemo, useState, type PropsWithChildren } from 'react';
 import * as m from '@/paraglide/messages';
 import { formatError } from '@/utils';
 import { message } from '@/utils/notification';
 import {
-  SettingsCard,
-  SettingsCardContent,
-} from '../../_modules/settings-card';
+  SettingsList,
+  SettingsListActions,
+  SettingsListContent,
+  SettingsListItem,
+} from '../../_modules/settings-list';
 
 type UrlLabels = {
   host: string;
@@ -73,45 +75,54 @@ const PreviewItem = ({ url }: { url: string }) => {
   );
 };
 
-const EditItemButton = ({
+const EditItemButton = (
+  props: PropsWithChildren<{ defaultUrl?: string; index?: number }>,
+) => (
+  <Modal>
+    <EditItemForm {...props} />
+  </Modal>
+);
+
+const EditItemForm = ({
   defaultUrl,
   index,
   children,
 }: PropsWithChildren<{ defaultUrl?: string; index?: number }>) => {
-  const [open, setOpen] = useState(false);
+  const { setOpen } = useModal();
+  const [saving, setSaving] = useState(false);
   const { value, upsert } = useClashSetting('web_ui_list');
   const labels = useUrlLabels();
   const [draft, setDraft] = useState(defaultUrl ?? '');
-
-  useEffect(() => setDraft(defaultUrl ?? ''), [defaultUrl]);
-
-  const handleOpenChange = (nextOpen: boolean) => {
-    if (!nextOpen) setDraft(defaultUrl ?? '');
-    setOpen(nextOpen);
-  };
 
   const handleSubmit = async () => {
     const nextUrl = draft.trim();
     if (!nextUrl) return;
 
+    if (saving) return;
+    setSaving(true);
     try {
       const list = [...(value || [])];
       if (index == null) list.push(nextUrl);
       else list[index] = nextUrl;
       await upsert(list);
-      handleOpenChange(false);
+      setOpen(false);
     } catch (error) {
       message(formatError(error), {
         title: m.common_error(),
         kind: 'error',
       });
+    } finally {
+      setSaving(false);
     }
   };
 
   return (
-    <Modal open={open} onOpenChange={handleOpenChange}>
+    <>
       <ModalTrigger asChild>{children}</ModalTrigger>
-      <ModalContent>
+      <ModalContent
+        dismissible={!saving}
+        onOpenAutoFocus={() => setDraft(defaultUrl ?? '')}
+      >
         <Card className="w-96">
           <CardHeader>
             <ModalTitle>
@@ -147,16 +158,17 @@ const EditItemButton = ({
           <CardFooter className="gap-2">
             <Button
               variant="flat"
-              disabled={!draft.trim()}
+              disabled={!draft.trim() || saving}
+              loading={saving}
               onClick={() => void handleSubmit()}
             >
               {m.common_submit()}
             </Button>
-            <ModalClose>{m.common_cancel()}</ModalClose>
+            <ModalClose disabled={saving}>{m.common_cancel()}</ModalClose>
           </CardFooter>
         </Card>
       </ModalContent>
-    </Modal>
+    </>
   );
 };
 
@@ -166,13 +178,15 @@ const WebUIItem = ({ url, index }: { url: string; index: number }) => {
   const { value, upsert } = useClashSetting('web_ui_list');
 
   return (
-    <Card className="w-full min-w-0 space-y-4 overflow-hidden">
-      <CardHeader className="flex w-full min-w-0 flex-row">
-        <TextMarquee className="relative w-0 min-w-0 flex-1 text-base">
-          {formattedUrl}
-        </TextMarquee>
-      </CardHeader>
-      <CardFooter className="gap-1">
+    <SettingsListItem data-slot="web-ui-item">
+      <TextMarquee className="relative w-0 min-w-0 flex-1 text-base">
+        {formattedUrl}
+      </TextMarquee>
+
+      <div
+        className="flex shrink-0 items-center gap-1"
+        data-slot="web-ui-item-actions"
+      >
         <Button icon variant="flat" onClick={() => void openThat(formattedUrl)}>
           <OpenInNewRounded className="size-5" />
         </Button>
@@ -191,45 +205,34 @@ const WebUIItem = ({ url, index }: { url: string; index: number }) => {
         >
           <DeleteRounded className="size-5" />
         </Button>
-      </CardFooter>
-    </Card>
+      </div>
+    </SettingsListItem>
   );
 };
-
-const EmptyItem = () => (
-  <Card variant="outline">
-    <CardContent className="min-h-40 items-center justify-center">
-      <AllInboxRounded className="size-10" />
-      <p>{m.settings_web_ui_empty_item()}</p>
-    </CardContent>
-  </Card>
-);
 
 export default function WebUI() {
   const { value } = useClashSetting('web_ui_list');
 
   return (
-    <div className="space-y-3">
-      <SettingsCard data-slot="web-ui-card">
-        <SettingsCardContent>
-          {value?.length ? (
-            value.map((item, index) => (
-              <WebUIItem key={`${item}-${index}`} url={item} index={index} />
-            ))
-          ) : (
-            <EmptyItem />
-          )}
-        </SettingsCardContent>
-      </SettingsCard>
+    <SettingsList data-slot="web-ui-card">
+      <SettingsListContent
+        data-slot="web-ui-card-content"
+        empty={!value?.length}
+        emptyMessage={m.settings_web_ui_empty_item()}
+      >
+        {value?.map((item, index) => (
+          <WebUIItem key={`${item}-${index}`} url={item} index={index} />
+        ))}
+      </SettingsListContent>
 
-      <div className="flex justify-end">
+      <SettingsListActions>
         <EditItemButton>
           <Button className="flex items-center gap-1 px-4" variant="raised">
             <AddRounded className="size-6" />
             <span>{m.settings_web_ui_add_button()}</span>
           </Button>
         </EditItemButton>
-      </div>
-    </div>
+      </SettingsListActions>
+    </SettingsList>
   );
 }

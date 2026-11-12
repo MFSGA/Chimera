@@ -1,6 +1,7 @@
 import type { TrafficRange } from '@chimera/interface';
 import { cn } from '@chimera/ui';
 import { Button } from '@chimera/ui/button';
+import { ModalTrigger } from '@chimera/ui/modal';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@chimera/ui/tooltip';
 import CloseRounded from '~icons/material-symbols/close-rounded';
 import ViewColumnRounded from '~icons/material-symbols/view-column-rounded';
@@ -16,7 +17,6 @@ export default function ConnectionsToolbar({
   onSelectionChange,
   search,
   onSearchChange,
-  onOpenSettings,
   onCloseAll,
 }: {
   start?: ReactNode;
@@ -28,7 +28,6 @@ export default function ConnectionsToolbar({
   }) => void;
   search: string;
   onSearchChange: (search: string) => void;
-  onOpenSettings: () => void;
   onCloseAll?: () => void;
 }) {
   const filtered =
@@ -69,13 +68,11 @@ export default function ConnectionsToolbar({
 
         <Tooltip>
           <TooltipTrigger asChild>
-            <Button
-              icon
-              data-slot="connections-column-settings"
-              onClick={onOpenSettings}
-            >
-              <ViewColumnRounded />
-            </Button>
+            <ModalTrigger asChild>
+              <Button icon data-slot="connections-column-settings">
+                <ViewColumnRounded />
+              </Button>
+            </ModalTrigger>
           </TooltipTrigger>
           <TooltipContent>{m.connections_column_settings()}</TooltipContent>
         </Tooltip>

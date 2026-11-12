@@ -6,6 +6,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@chimera/ui/dropdown-menu';
+import { ModalAnchor } from '@chimera/ui/modal';
 import ArrowDownwardRounded from '~icons/material-symbols/arrow-downward-rounded';
 import ArrowUpwardRounded from '~icons/material-symbols/arrow-upward-rounded';
 import DeleteForeverOutlineRounded from '~icons/material-symbols/delete-forever-outline-rounded';
@@ -44,16 +45,18 @@ export default function FolderActionsMenu({
 
   return (
     <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button
-          icon
-          className="size-9 shrink-0"
-          aria-label={m.profile_detail_more_actions()}
-          data-slot="profiles-folder-actions"
-        >
-          <MoreVertRounded className="size-5" aria-hidden />
-        </Button>
-      </DropdownMenuTrigger>
+      <ModalAnchor className="w-fit">
+        <DropdownMenuTrigger asChild>
+          <Button
+            icon
+            className="size-9 shrink-0"
+            aria-label={m.profile_detail_more_actions()}
+            data-slot="profiles-folder-actions"
+          >
+            <MoreVertRounded className="size-5" aria-hidden />
+          </Button>
+        </DropdownMenuTrigger>
+      </ModalAnchor>
 
       <DropdownMenuContent align="end">
         <DropdownMenuItem onSelect={handleRename}>

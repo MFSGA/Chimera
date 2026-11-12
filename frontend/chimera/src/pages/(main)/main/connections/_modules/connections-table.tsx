@@ -158,8 +158,6 @@ function ConnectionsTable<TRow extends RowData>({
   emptyMessage,
   onEndReached,
   focusRowId,
-  settingsOpen,
-  onSettingsOpenChange,
 }: {
   settingsKey: string;
   columns: Array<ConnectionColumn<TRow>>;
@@ -172,8 +170,6 @@ function ConnectionsTable<TRow extends RowData>({
   onEndReached?: () => void;
   // The row to scroll to and highlight once it appears.
   focusRowId?: string;
-  settingsOpen: boolean;
-  onSettingsOpenChange: (open: boolean) => void;
 }) {
   const [columnSizing, setColumnSizing] = useLocalStorage<ColumnSizingState>(
     COLUMN_SIZING_STORAGE_KEY,
@@ -299,8 +295,6 @@ function ConnectionsTable<TRow extends RowData>({
 
   const settingsModal = (
     <ColumnSettingsModal
-      open={settingsOpen}
-      onOpenChange={onSettingsOpenChange}
       labels={labels}
       order={order}
       visibility={visibility}

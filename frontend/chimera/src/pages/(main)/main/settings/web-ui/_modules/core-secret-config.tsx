@@ -12,12 +12,13 @@ import {
   ModalContent,
   ModalTitle,
   ModalTrigger,
+  useModal,
 } from '@chimera/ui/modal';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@chimera/ui/tooltip';
 import { writeText } from '@tauri-apps/plugin-clipboard-manager';
 import ArrowForwardIosRounded from '~icons/material-symbols/arrow-forward-ios-rounded';
 import ContentCopyRounded from '~icons/material-symbols/content-copy-rounded';
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { useLockFn } from '@/hooks/use-lock-fn';
 import * as m from '@/paraglide/messages';
 import { formatError, sleep } from '@/utils';
@@ -32,7 +33,15 @@ import {
 } from '../../_modules/settings-card';
 
 export default function CoreSecretConfig() {
-  const [open, setOpen] = useState(false);
+  return (
+    <Modal>
+      <CoreSecretConfigForm />
+    </Modal>
+  );
+}
+
+function CoreSecretConfigForm() {
+  const { setOpen } = useModal();
 
   const { data, refetch } = useClashInfo();
 
@@ -41,10 +50,6 @@ export default function CoreSecretConfig() {
   const runtimeProfile = useRuntimeProfile();
 
   const [coreSecret, setCoreSecret] = useState(data?.secret || '');
-
-  useEffect(() => {
-    setCoreSecret(data?.secret || '');
-  }, [data?.secret]);
 
   const handleSubmit = async () => {
     try {
@@ -87,7 +92,7 @@ export default function CoreSecretConfig() {
 
   return (
     <SettingsCard data-slot="core-secret-config-card">
-      <Modal open={open} onOpenChange={setOpen}>
+      <>
         <SettingsCardContent asChild>
           <ModalTrigger asChild>
             <Button className="text-on-surface! h-auto w-full rounded-none px-5 text-left text-base">
@@ -130,7 +135,10 @@ export default function CoreSecretConfig() {
           </ModalTrigger>
         </SettingsCardContent>
 
-        <ModalContent>
+        <ModalContent
+          dismissible={!upsert.isPending}
+          onOpenAutoFocus={() => setCoreSecret(data?.secret || '')}
+        >
           <Card className="flex min-w-96 flex-col">
             <CardHeader>
               <ModalTitle>
@@ -152,15 +160,18 @@ export default function CoreSecretConfig() {
                 variant="flat"
                 onClick={() => void handleSubmit()}
                 loading={upsert.isPending}
+                disabled={upsert.isPending}
               >
                 {m.common_apply()}
               </Button>
 
-              <ModalClose>{m.common_close()}</ModalClose>
+              <ModalClose disabled={upsert.isPending}>
+                {m.common_close()}
+              </ModalClose>
             </CardFooter>
           </Card>
         </ModalContent>
-      </Modal>
+      </>
     </SettingsCard>
   );
 }

@@ -12,9 +12,10 @@ import {
   ModalContent,
   ModalTitle,
   ModalTrigger,
+  useModal,
 } from '@chimera/ui/modal';
 import ArrowForwardIosRounded from '~icons/material-symbols/arrow-forward-ios-rounded';
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import * as m from '@/paraglide/messages';
 import { formatError, sleep } from '@/utils';
 import { message } from '@/utils/notification';
@@ -28,7 +29,15 @@ import {
 } from '../../_modules/settings-card';
 
 export default function ExternalControllerConfig() {
-  const [open, setOpen] = useState(false);
+  return (
+    <Modal>
+      <ExternalControllerConfigForm />
+    </Modal>
+  );
+}
+
+function ExternalControllerConfigForm() {
+  const { setOpen } = useModal();
 
   const { data, refetch } = useClashInfo();
 
@@ -39,10 +48,6 @@ export default function ExternalControllerConfig() {
   const [externalController, setExternalController] = useState(
     data?.server || '',
   );
-
-  useEffect(() => {
-    setExternalController(data?.server || '');
-  }, [data?.server]);
 
   const handleSubmit = async () => {
     try {
@@ -65,7 +70,7 @@ export default function ExternalControllerConfig() {
 
   return (
     <SettingsCard data-slot="external-controller-config-card">
-      <Modal open={open} onOpenChange={setOpen}>
+      <>
         <SettingsCardContent asChild>
           <ModalTrigger asChild>
             <Button className="text-on-surface! h-auto w-full rounded-none px-5 text-left text-base">
@@ -84,7 +89,10 @@ export default function ExternalControllerConfig() {
           </ModalTrigger>
         </SettingsCardContent>
 
-        <ModalContent>
+        <ModalContent
+          dismissible={!upsert.isPending}
+          onOpenAutoFocus={() => setExternalController(data?.server || '')}
+        >
           <Card className="flex min-w-96 flex-col">
             <CardHeader>
               <ModalTitle>
@@ -106,15 +114,18 @@ export default function ExternalControllerConfig() {
                 variant="flat"
                 onClick={() => void handleSubmit()}
                 loading={upsert.isPending}
+                disabled={upsert.isPending}
               >
                 {m.common_apply()}
               </Button>
 
-              <ModalClose>{m.common_close()}</ModalClose>
+              <ModalClose disabled={upsert.isPending}>
+                {m.common_close()}
+              </ModalClose>
             </CardFooter>
           </Card>
         </ModalContent>
-      </Modal>
+      </>
     </SettingsCard>
   );
 }

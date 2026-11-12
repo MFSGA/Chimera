@@ -5,10 +5,12 @@ import {
   type ProfileId,
   type ProfileLayout,
 } from '@chimera/interface';
+import { Modal, useModal } from '@chimera/ui/modal';
 import { ask } from '@tauri-apps/plugin-dialog';
 import {
   PropsWithChildren,
   useCallback,
+  useEffect,
   useMemo,
   useRef,
   useState,
@@ -35,7 +37,7 @@ type NameDialog =
       members: ProfileId[];
       onCreated?: (id: FolderId) => void;
     }
-  | { mode: 'rename'; id: FolderId };
+  | { mode: 'rename'; id: FolderId; name: string };
 
 const showLayoutError = (error: unknown) =>
   message(m.profile_folder_layout_failed({ error: formatError(error) }), {
@@ -51,6 +53,15 @@ const showLayoutError = (error: unknown) =>
 export default function ProfilesLayoutProvider({
   children,
 }: PropsWithChildren) {
+  return (
+    <Modal>
+      <ProfilesLayoutContent>{children}</ProfilesLayoutContent>
+    </Modal>
+  );
+}
+
+function ProfilesLayoutContent({ children }: PropsWithChildren) {
+  const { open, setOpen } = useModal();
   const { query, setLayout, createFolder } = useProfile();
 
   const profiles = query.data;
@@ -172,18 +183,29 @@ export default function ProfilesLayoutProvider({
   const openCreateFolder = useCallback<
     ProfileLayoutActions['openCreateFolder']
   >(
-    (options) =>
+    (options) => {
       setDialog({
         mode: 'create',
         members: options?.members ?? [],
         onCreated: options?.onCreated,
-      }),
-    [],
+      });
+      setOpen(true);
+    },
+    [setOpen],
   );
 
   const openRenameFolder = useCallback<
     ProfileLayoutActions['openRenameFolder']
-  >((id) => setDialog({ mode: 'rename', id }), []);
+  >(
+    (id) => {
+      const folder = layoutRef.current?.folders.find((item) => item.id === id);
+      if (!folder) return;
+
+      setDialog({ mode: 'rename', id, name: folder.name });
+      setOpen(true);
+    },
+    [setOpen],
+  );
 
   const value = useMemo<ProfileLayoutActions>(
     () => ({
@@ -215,6 +237,11 @@ export default function ProfilesLayoutProvider({
       ? layout?.folders.find((folder) => folder.id === dialog.id)
       : undefined;
 
+  // A deleted target ends the interaction while the captured name survives exit.
+  useEffect(() => {
+    if (open && dialog?.mode === 'rename' && !renaming) setOpen(false);
+  }, [open, dialog, renaming, setOpen]);
+
   const handleSubmitName = async (name: string) => {
     if (!dialog) {
       return;
@@ -223,7 +250,7 @@ export default function ProfilesLayoutProvider({
     if (dialog.mode === 'rename') {
       // An unchanged name commits nothing, which is not a failure.
       if (name === renaming?.name || (await renameFolder(dialog.id, name))) {
-        setDialog(null);
+        setOpen(false);
       }
 
       return;
@@ -232,7 +259,7 @@ export default function ProfilesLayoutProvider({
     const id = await createFolderWith(name, dialog.members);
 
     if (id) {
-      setDialog(null);
+      setOpen(false);
       dialog.onCreated?.(id);
     }
   };
@@ -242,14 +269,12 @@ export default function ProfilesLayoutProvider({
       {children}
 
       <FolderNameDialog
-        open={dialog !== null && (dialog.mode === 'create' || !!renaming)}
-        onOpenChange={(open) => !open && setDialog(null)}
         title={
           dialog?.mode === 'rename'
             ? m.profile_folder_rename_title()
             : m.profile_folder_new_title()
         }
-        initialName={renaming?.name}
+        initialName={dialog?.mode === 'rename' ? dialog.name : ''}
         onSubmit={handleSubmitName}
       />
     </ProfilesLayoutContext.Provider>

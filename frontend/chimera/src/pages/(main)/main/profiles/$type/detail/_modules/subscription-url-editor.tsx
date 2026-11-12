@@ -9,9 +9,11 @@ import { Card, CardContent, CardFooter, CardHeader } from '@chimera/ui/card';
 import { Input } from '@chimera/ui/input';
 import {
   Modal,
+  ModalClose,
   ModalContent,
   ModalTitle,
   ModalTrigger,
+  useModal,
 } from '@chimera/ui/modal';
 import { AnimatePresence } from 'motion/react';
 import { useState, type ComponentProps } from 'react';
@@ -22,7 +24,17 @@ import { formatError } from '@/utils';
 import { message } from '@/utils/notification';
 import AnimatedErrorItem from '../../../_modules/error-item';
 
-export default function SubscriptionUrlEditor({
+export default function SubscriptionUrlEditor(
+  props: ComponentProps<typeof SubscriptionUrlEditorForm>,
+) {
+  return (
+    <Modal>
+      <SubscriptionUrlEditorForm {...props} />
+    </Modal>
+  );
+}
+
+function SubscriptionUrlEditorForm({
   profile,
   ...props
 }: ComponentProps<typeof ModalTrigger> & {
@@ -30,7 +42,7 @@ export default function SubscriptionUrlEditor({
 }) {
   const { replaceDefinition, update } = useProfile();
   const remote = getRemoteSource(profile);
-  const [open, setOpen] = useState(false);
+  const { setOpen } = useModal();
   const [url, setUrl] = useState(remote?.url ?? '');
   const [error, setError] = useState<string | null>(null);
 
@@ -87,15 +99,15 @@ export default function SubscriptionUrlEditor({
   if (!remote) return null;
 
   return (
-    <Modal
-      open={open}
-      onOpenChange={(next) => {
-        if (next) setOpen(true);
-        else close();
-      }}
-    >
+    <>
       <ModalTrigger {...props} />
-      <ModalContent>
+      <ModalContent
+        dismissible={!task.isPending}
+        onOpenAutoFocus={() => {
+          setUrl(remote?.url ?? '');
+          setError(null);
+        }}
+      >
         <Card className="w-96">
           <CardHeader>
             <ModalTitle>{m.profile_subscription_url_editor_label()}</ModalTitle>
@@ -124,13 +136,19 @@ export default function SubscriptionUrlEditor({
           </CardContent>
 
           <CardFooter className="gap-1">
-            <Button onClick={() => void submit()} loading={task.isPending}>
+            <Button
+              onClick={() => void submit()}
+              loading={task.isPending}
+              disabled={task.isPending}
+            >
               {m.common_save()}
             </Button>
-            <Button onClick={close}>{m.common_cancel()}</Button>
+            <ModalClose disabled={task.isPending}>
+              {m.common_cancel()}
+            </ModalClose>
           </CardFooter>
         </Card>
       </ModalContent>
-    </Modal>
+    </>
   );
 }

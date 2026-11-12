@@ -1,5 +1,6 @@
 import { useProfile } from '@chimera/interface';
 import { Button } from '@chimera/ui/button';
+import { ModalTrigger } from '@chimera/ui/modal';
 import {
   NavigationList,
   NavigationListGroup,
@@ -47,15 +48,17 @@ export default function ProfilesNavigate({
       <NavigationListGroup
         label={m.profile_group_config()}
         action={
-          <Button
-            icon
-            className="mr-2 size-8"
-            aria-label={m.profile_folder_new_title()}
-            data-slot="profiles-folder-add"
-            onClick={() => openCreateFolder()}
-          >
-            <AddRounded className="size-5" />
-          </Button>
+          <ModalTrigger asChild>
+            <Button
+              icon
+              className="mr-2 size-8"
+              aria-label={m.profile_folder_new_title()}
+              data-slot="profiles-folder-add"
+              onClick={() => openCreateFolder()}
+            >
+              <AddRounded className="size-5" />
+            </Button>
+          </ModalTrigger>
         }
       >
         <ProfilesNavigationItem

@@ -8,9 +8,11 @@ import {
   ModalContent,
   ModalTitle,
   ModalTrigger,
+  useModal,
 } from '@chimera/ui/modal';
 import ArrowForwardIosRounded from '~icons/material-symbols/arrow-forward-ios-rounded';
 import { useEffect, useMemo, useState } from 'react';
+import { useLockFn } from '@/hooks/use-lock-fn';
 import * as m from '@/paraglide/messages';
 import { formatError } from '@/utils';
 import { message } from '@/utils/notification';
@@ -26,7 +28,15 @@ import {
 const DEFAULT_MIXED_PORT = 7890;
 
 export default function MixedPortConfig() {
-  const [open, setOpen] = useState(false);
+  return (
+    <Modal>
+      <MixedPortConfigForm />
+    </Modal>
+  );
+}
+
+function MixedPortConfigForm() {
+  const { open, setOpen } = useModal();
 
   const mixedPort = useClashSetting('mixed_port');
 
@@ -43,20 +53,13 @@ export default function MixedPortConfig() {
   const [draft, setDraft] = useState<number | null>(currentMixedPort);
 
   useEffect(() => {
-    setDraft(currentMixedPort);
-  }, [currentMixedPort]);
-
-  const handleOpenChange = (nextOpen: boolean) => {
-    if (!nextOpen) {
-      setDraft(currentMixedPort);
-    }
-    setOpen(nextOpen);
-  };
+    if (!open) setDraft(currentMixedPort);
+  }, [open, currentMixedPort]);
 
   const isValid =
     draft != null && Number.isInteger(draft) && draft >= 1 && draft <= 65535;
 
-  const handleSubmit = async () => {
+  const handleSubmit = useLockFn(async () => {
     if (!isValid || draft == null) {
       return;
     }
@@ -71,11 +74,11 @@ export default function MixedPortConfig() {
         kind: 'error',
       });
     }
-  };
+  });
 
   return (
     <SettingsCard data-slot="mixed-port-config-card">
-      <Modal open={open} onOpenChange={handleOpenChange}>
+      <>
         <SettingsCardContent asChild>
           <ModalTrigger asChild>
             <Button className="text-on-surface! h-auto w-full rounded-none px-5 text-left text-base">
@@ -96,7 +99,10 @@ export default function MixedPortConfig() {
           </ModalTrigger>
         </SettingsCardContent>
 
-        <ModalContent>
+        <ModalContent
+          dismissible={!mixedPort.isPending}
+          onOpenAutoFocus={() => setDraft(currentMixedPort)}
+        >
           <Card className="flex min-w-96 flex-col">
             <CardHeader>
               <ModalTitle>
@@ -120,18 +126,20 @@ export default function MixedPortConfig() {
             <CardFooter className="gap-2">
               <Button
                 variant="flat"
-                disabled={!isValid}
+                disabled={!isValid || mixedPort.isPending}
                 loading={mixedPort.isPending}
                 onClick={() => void handleSubmit()}
               >
                 {m.common_apply()}
               </Button>
 
-              <ModalClose>{m.common_close()}</ModalClose>
+              <ModalClose disabled={mixedPort.isPending}>
+                {m.common_close()}
+              </ModalClose>
             </CardFooter>
           </Card>
         </ModalContent>
-      </Modal>
+      </>
     </SettingsCard>
   );
 }
