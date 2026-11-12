@@ -24,80 +24,12 @@ const ActionButton = ({
   />
 );
 
-function scrollViewportImmediately(viewport: HTMLElement, top: number) {
-  const previous = viewport.style.getPropertyValue('scroll-behavior');
-  const previousPriority =
-    viewport.style.getPropertyPriority('scroll-behavior');
-  viewport.style.setProperty('scroll-behavior', 'auto', 'important');
-  try {
-    viewport.scrollTop = top;
-  } finally {
-    if (previous) {
-      viewport.style.setProperty('scroll-behavior', previous, previousPriority);
-    } else {
-      viewport.style.removeProperty('scroll-behavior');
-    }
-  }
-}
-
-function scrollToProfileTransformChainEditor(type: string, profileUid: string) {
-  // Measure on the next frame so the target uses the post-click layout.
-  requestAnimationFrame(() => {
-    const routeSegments = window.location.pathname.split('/').filter(Boolean);
-    if (
-      routeSegments.at(-5) !== 'main' ||
-      routeSegments.at(-4) !== 'profiles' ||
-      routeSegments.at(-3) !== type ||
-      routeSegments.at(-2) !== 'detail'
-    ) {
-      return;
-    }
-    const encodedRouteUid = routeSegments.at(-1);
-    if (!encodedRouteUid) return;
-    try {
-      if (decodeURIComponent(encodedRouteUid) !== profileUid) return;
-    } catch {
-      return;
-    }
-
-    const editor = Array.from(
-      document.querySelectorAll<HTMLElement>(
-        '[data-slot="transform-chain-editor"][data-chain-scope="profile"]',
-      ),
-    ).find((candidate) => candidate.dataset.profileUid === profileUid);
-    const viewport = editor?.closest<HTMLElement>(
-      '[data-slot="scroll-area-viewport"]',
-    );
-    if (!editor || !viewport) return;
-
-    const editorRect = editor.getBoundingClientRect();
-    const viewportRect = viewport.getBoundingClientRect();
-    const centerOffset = Math.max(
-      0,
-      (viewport.clientHeight - editorRect.height) / 2,
-    );
-    const maxScrollTop = Math.max(
-      0,
-      viewport.scrollHeight - viewport.clientHeight,
-    );
-    const targetScrollTop =
-      viewport.scrollTop +
-      editorRect.top -
-      viewportRect.top -
-      viewport.clientTop -
-      centerOffset;
-    const target = Math.min(maxScrollTop, Math.max(0, targetScrollTop));
-
-    scrollViewportImmediately(viewport, target);
-  });
-}
-
 export default function ActionCard({
-  type,
   profile,
+  onOpenTransforms,
 }: {
-  type: string;
   profile: ProfileQueryResultItem;
+  onOpenTransforms: () => void;
 }) {
   const active = useActiveProfile(profile);
   const isProxy = isProxyProfile(profile);
@@ -128,7 +60,7 @@ export default function ActionCard({
           disabled={isPending}
           data-slot="profile-transform-chain"
           data-profile-uid={profile.uid}
-          onClick={() => scrollToProfileTransformChainEditor(type, profile.uid)}
+          onClick={onOpenTransforms}
         >
           <AccountTreeRounded className="size-4 shrink-0" />
           <span className="truncate">{m.profile_menu_proxy_chains()}</span>

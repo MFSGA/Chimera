@@ -1,9 +1,4 @@
-import {
-  ProfileTemplate,
-  useProfile,
-  type NewProfileRequest_Deserialize,
-  type ProfileDefinition_Deserialize,
-} from '@chimera/interface';
+import { useProfile } from '@chimera/interface';
 import { Button } from '@chimera/ui/button';
 import { Card, CardContent, CardFooter, CardHeader } from '@chimera/ui/card';
 import { Input } from '@chimera/ui/input';
@@ -22,46 +17,11 @@ import { formatError } from '@/utils';
 import { message } from '@/utils/notification';
 import { PROFILE_TYPE_NAMES, ProfileType } from '../../_modules/consts';
 import AnimatedErrorItem from '../../_modules/error-item';
+import { transformRequest } from '../../_modules/transform-profile-request';
 import { Route as IndexRoute } from '../index';
 
 const defaultName = (type: ProfileType) =>
   `${PROFILE_TYPE_NAMES[type]} - ${new Date().toLocaleString()}`;
-
-const transformRequest = (
-  type: ProfileType,
-  name: string,
-  desc: string | null,
-): { request: NewProfileRequest_Deserialize; fileData: string } => {
-  const source = {
-    type: 'local' as const,
-    binding: { type: 'managed' as const, file: 'pending.yaml' },
-  };
-  let definition: ProfileDefinition_Deserialize;
-  let fileData: string;
-  if (type === ProfileType.Merge) {
-    definition = { type: 'transform', transform: { type: 'overlay', source } };
-    fileData = ProfileTemplate.merge;
-    return {
-      request: { metadata: { name, desc }, definition },
-      fileData,
-    };
-  }
-
-  const scriptType =
-    type === ProfileType.Lua ? ('lua' as const) : ('javascript' as const);
-  definition = {
-    type: 'transform',
-    transform: { type: 'script', source, runtime: scriptType },
-  };
-  fileData =
-    scriptType === 'lua'
-      ? ProfileTemplate.luascript
-      : ProfileTemplate.javascript;
-  return {
-    request: { metadata: { name, desc }, definition },
-    fileData,
-  };
-};
 
 export default function ChainProfileImport() {
   const { type: rawType } = IndexRoute.useParams();

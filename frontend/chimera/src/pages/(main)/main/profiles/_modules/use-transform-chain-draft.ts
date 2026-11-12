@@ -1,133 +1,79 @@
-import { useProfile } from '@chimera/interface';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useBlockTask } from '@/components/providers/block-task-provider';
-import type { TransformChainLayout } from './transform-chain-column';
 import {
-  categoryProfiles,
-  isChainProfile,
-  type TransformProfile,
-} from './utils';
-
-type ScriptOrMergeProfile = TransformProfile;
-
-enum ColumnType {
-  Active = 'active',
-  Inactive = 'inactive',
-}
-
-const COLUMN_TYPES = [ColumnType.Active, ColumnType.Inactive] as const;
-
-type ChainColumns = Record<ColumnType, string[]>;
+  useProfile,
+  useRuntimeTransformDiagnostics,
+  type LogSpan,
+  type RuntimeTransformFailureDiagnostics,
+} from '@chimera/interface';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Notice } from '@/components/base';
+import { useBlockTask } from '@/components/providers/block-task-provider';
+import * as m from '@/paraglide/messages';
+import { formatError } from '@/utils';
+import { message } from '@/utils/notification';
+import {
+  changesOf,
+  retainKnownDraft,
+  sameOrder,
+  serverChainOf,
+} from './transform-chain-model';
+import { isChainProfile, type TransformProfile } from './utils';
 
 type DragSession = {
-  columns: ChainColumns;
-  profiles: ScriptOrMergeProfile[];
-};
-
-const sameOrder = (left: string[], right: string[]) =>
-  left.length === right.length &&
-  left.every((uid, index) => uid === right[index]);
-
-const sameColumns = (left: ChainColumns, right: ChainColumns) =>
-  COLUMN_TYPES.every((type) => sameOrder(left[type], right[type]));
-
-/** Server order wins; uids without a matching candidate are dropped. */
-const deriveColumns = (
-  transforms: string[],
-  candidateUids: string[],
-): ChainColumns => {
-  const known = new Set(candidateUids);
-  const active = transforms.filter((uid) => known.has(uid));
-  const selected = new Set(active);
-
-  return {
-    [ColumnType.Active]: active,
-    [ColumnType.Inactive]: candidateUids.filter((uid) => !selected.has(uid)),
-  };
-};
-
-/** Keeps the draft order while candidates are added or removed. */
-const reconcileCandidates = (
-  draft: ChainColumns,
-  candidateUids: string[],
-): ChainColumns => {
-  const known = new Set(candidateUids);
-  const active = draft[ColumnType.Active].filter((uid) => known.has(uid));
-  const selected = new Set(active);
-  const inactive = draft[ColumnType.Inactive].filter(
-    (uid) => known.has(uid) && !selected.has(uid),
-  );
-  const present = new Set([...active, ...inactive]);
-
-  return {
-    [ColumnType.Active]: active,
-    [ColumnType.Inactive]: [
-      ...inactive,
-      ...candidateUids.filter((uid) => !present.has(uid)),
-    ],
-  };
+  uids: string[];
+  profiles: TransformProfile[];
 };
 
 /**
- * Draft of a transform chain. Ref's state ownership is shared between the
- * global and scoped editors. This compatibility phase additionally retains
- * Chimera's inactive column and its candidate ordering while those views
- * converge on ref's single enabled list.
+ * Draft of an enabled transform chain. The persisted order wins until the
+ * user edits it, and uids without a matching transform profile are dropped.
  */
 export function useTransformChainDraft({
   transforms: currentTransforms,
   taskKey,
   onApply,
-  layout,
+  scopeUid = null,
 }: {
+  /** The persisted chain, in order. */
   transforms: string[];
   taskKey: string;
   onApply: (transforms: string[]) => Promise<unknown>;
-  layout: TransformChainLayout;
+  /** null for the global chain; otherwise the config whose chain is edited. */
+  scopeUid?: string | null;
 }) {
   const {
     query: { data: profiles },
   } = useProfile();
 
   const dataReady = profiles != null;
-
-  // Candidate chain items = every Transform profile (Overlay / Script).
-  const candidateProfiles = useMemo<ScriptOrMergeProfile[]>(() => {
-    const candidates = (profiles?.items ?? []).filter(isChainProfile);
-    if (layout === 'stacked') return candidates;
-
-    return Object.values(categoryProfiles(candidates))
-      .flat()
-      .filter(isChainProfile);
-  }, [profiles?.items, layout]);
-
+  const candidates = useMemo(
+    () => (profiles?.items ?? []).filter(isChainProfile),
+    [profiles?.items],
+  );
   const candidateUids = useMemo(
-    () => candidateProfiles.map((item) => item.uid),
-    [candidateProfiles],
+    () => candidates.map((item) => item.uid),
+    [candidates],
   );
 
-  const serverChains = useMemo(
-    () => deriveColumns(currentTransforms, candidateUids),
+  const serverEnabled = useMemo(
+    () => serverChainOf(currentTransforms, candidateUids),
     [currentTransforms, candidateUids],
   );
 
-  const [draft, setDraft] = useState<ChainColumns>(serverChains);
+  const [draft, setDraft] = useState<string[]>(serverEnabled);
 
-  // The draft is checked alongside the config because a corrected server
-  // snapshot lands one commit before the sync effect replaces the draft, and
-  // two sortables sharing a uid clobber each other in the dnd-kit registry.
+  // A duplicate in the persisted chain or draft would register the same
+  // sortable id more than once. Keep editing disabled until the data is fixed.
   const hasDuplicates =
     new Set(currentTransforms).size !== currentTransforms.length ||
-    new Set(draft[ColumnType.Active]).size !== draft[ColumnType.Active].length;
+    new Set(draft).size !== draft.length;
 
   const draftRef = useRef(draft);
-  // null until the first server snapshot is adopted, so the initial load wins.
-  const adoptedActiveRef = useRef<string[] | null>(null);
+  const adoptedRef = useRef<string[] | null>(null);
   const dragSessionRef = useRef<DragSession | null>(null);
   const [dragSession, setDragSession] = useState<DragSession | null>(null);
   const savingRef = useRef(false);
 
-  const publishDraft = useCallback((next: ChainColumns) => {
+  const publishDraft = useCallback((next: string[]) => {
     draftRef.current = next;
     setDraft(next);
   }, []);
@@ -135,143 +81,153 @@ export function useTransformChainDraft({
   useEffect(() => {
     if (!dataReady || dragSessionRef.current) return;
 
-    const serverActive = serverChains[ColumnType.Active];
     const serverChanged =
-      adoptedActiveRef.current === null ||
-      !sameOrder(adoptedActiveRef.current, serverActive);
+      adoptedRef.current === null ||
+      !sameOrder(adoptedRef.current, serverEnabled);
 
-    // A changed chain is the server's call; a changed candidate list only adds
-    // or removes entries and must not discard the draft order.
+    // A changed chain is the server's call; a changed candidate list only
+    // removes entries and must not discard the user's draft order.
     const next = serverChanged
-      ? serverChains
-      : reconcileCandidates(draftRef.current, candidateUids);
+      ? serverEnabled
+      : retainKnownDraft(draftRef.current, candidateUids);
 
-    adoptedActiveRef.current = serverActive;
+    adoptedRef.current = serverEnabled;
+    if (!sameOrder(next, draftRef.current)) publishDraft(next);
+  }, [serverEnabled, candidateUids, dragSession, dataReady, publishDraft]);
 
-    if (!sameColumns(next, draftRef.current)) {
-      publishDraft(next);
-    }
-  }, [serverChains, candidateUids, dragSession, dataReady, publishDraft]);
-
-  // Snapshot the candidates for the duration of a gesture so a refetch cannot
-  // unmount the element being dragged.
-  const renderedProfiles = dragSession?.profiles ?? candidateProfiles;
-
-  const chains = useMemo(() => {
+  // Freeze the candidate snapshot during a drag so a refetch cannot unmount
+  // the element being dragged.
+  const renderedProfiles = dragSession?.profiles ?? candidates;
+  const enabled = useMemo(() => {
     const byUid = new Map(renderedProfiles.map((item) => [item.uid, item]));
-    const resolve = (uids: string[]) =>
-      uids
-        .map((uid) => byUid.get(uid))
-        .filter((item): item is ScriptOrMergeProfile => Boolean(item));
-
-    return {
-      [ColumnType.Active]: resolve(draft[ColumnType.Active]),
-      [ColumnType.Inactive]: resolve(draft[ColumnType.Inactive]),
-    };
+    return draft
+      .map((uid) => byUid.get(uid))
+      .filter((item): item is TransformProfile => Boolean(item));
   }, [draft, renderedProfiles]);
 
-  // Only the active column is persisted, so reordering the inactive one is not
-  // a pending change.
-  const isChanged = !sameOrder(
-    draft[ColumnType.Active],
-    serverChains[ColumnType.Active],
+  const isChanged = !sameOrder(draft, serverEnabled);
+  const appliedUids = useMemo(() => new Set(serverEnabled), [serverEnabled]);
+  const changes = useMemo(
+    () => changesOf(draft, serverEnabled),
+    [draft, serverEnabled],
   );
 
-  const blockTask = useBlockTask(taskKey, onApply);
+  const isUnapplied = useCallback(
+    (uid: string) => !appliedUids.has(uid),
+    [appliedUids],
+  );
 
+  const diagnostics = useRuntimeTransformDiagnostics(true);
+  const applyWithDiagnostics = useCallback(
+    async (next: string[]) => {
+      const previousAttemptRevision =
+        diagnostics.data?.failure?.attempt_revision ??
+        diagnostics.data?.revision ??
+        0;
+      try {
+        await onApply(next);
+        await diagnostics.refetch();
+      } catch (error) {
+        const refreshed = await diagnostics.refetch();
+        const failure = refreshed.data?.failure;
+        if (
+          failure &&
+          failure.scope_uid === scopeUid &&
+          failure.attempt_revision > previousAttemptRevision
+        ) {
+          Notice.error(formatError(error), 5000);
+          return;
+        }
+        await message(
+          m.profile_chain_editor_update_failed({ error: formatError(error) }),
+          {
+            title: m.profile_chain_editor_update_failed_title(),
+            kind: 'error',
+          },
+        );
+      }
+    },
+    [
+      diagnostics.data?.failure?.attempt_revision,
+      diagnostics.data?.revision,
+      diagnostics.refetch,
+      onApply,
+      scopeUid,
+    ],
+  );
+
+  const blockTask = useBlockTask(taskKey, applyWithDiagnostics);
   const saving = blockTask.isPending;
   const editable = dataReady && !hasDuplicates;
-  const actionsDisabled = !editable || saving || dragSession !== null;
+  const dragging = dragSession !== null;
+  const actionsDisabled = !editable || saving || dragging;
+
+  const canEdit = useCallback(
+    () => editable && !savingRef.current && !dragSessionRef.current,
+    [editable],
+  );
+
+  const handleAdd = useCallback(
+    (uid: string) => {
+      if (!canEdit() || draftRef.current.includes(uid)) return;
+      publishDraft([...draftRef.current, uid]);
+    },
+    [canEdit, publishDraft],
+  );
+
+  const handleRemove = useCallback(
+    (uid: string) => {
+      if (!canEdit()) return;
+      publishDraft(draftRef.current.filter((item) => item !== uid));
+    },
+    [canEdit, publishDraft],
+  );
+
+  const moveActive = useCallback(
+    (uid: string, offset: -1 | 1) => {
+      if (!canEdit()) return;
+      const current = draftRef.current;
+      const index = current.indexOf(uid);
+      const nextIndex = index + offset;
+      if (index < 0 || nextIndex < 0 || nextIndex >= current.length) return;
+      const next = [...current];
+      [next[index], next[nextIndex]] = [next[nextIndex]!, next[index]!];
+      publishDraft(next);
+    },
+    [canEdit, publishDraft],
+  );
 
   const handleApply = async () => {
-    if (!editable || savingRef.current || dragSessionRef.current) return;
-
+    if (!canEdit()) return;
     savingRef.current = true;
-
     try {
-      const next = reconcileCandidates(draftRef.current, candidateUids);
-      if (!sameColumns(next, draftRef.current)) publishDraft(next);
-
-      await blockTask.execute(next[ColumnType.Active]);
+      const next = retainKnownDraft(draftRef.current, candidateUids);
+      if (!sameOrder(next, draftRef.current)) publishDraft(next);
+      await blockTask.execute(next);
     } finally {
       savingRef.current = false;
     }
   };
 
   const handleReset = () => {
-    if (!editable || savingRef.current || dragSessionRef.current) return;
-
-    adoptedActiveRef.current = serverChains[ColumnType.Active];
-    publishDraft(serverChains);
+    if (!canEdit()) return;
+    adoptedRef.current = serverEnabled;
+    publishDraft(serverEnabled);
   };
 
-  const moveActive = useCallback(
-    (uid: string, offset: -1 | 1) => {
-      if (!editable || savingRef.current || dragSessionRef.current) return;
-      const current = draftRef.current;
-      const index = current.active.indexOf(uid);
-      const nextIndex = index + offset;
-      if (index < 0 || nextIndex < 0 || nextIndex >= current.active.length) {
-        return;
-      }
-      const active = [...current.active];
-      [active[index], active[nextIndex]] = [active[nextIndex]!, active[index]!];
-      publishDraft({ ...current, active });
-    },
-    [editable, publishDraft],
-  );
-
-  // Add only from the inactive pool: a stale menu callback may never remove
-  // an already-enabled transform from this two-column draft.
-  const handleAdd = useCallback(
-    (uid: string) => {
-      if (!editable || savingRef.current || dragSessionRef.current) return;
-      const current = draftRef.current;
-      if (!current.inactive.includes(uid) || current.active.includes(uid)) {
-        return;
-      }
-      publishDraft({
-        active: [...current.active, uid],
-        inactive: current.inactive.filter((item) => item !== uid),
-      });
-    },
-    [editable, publishDraft],
-  );
-
-  const handleToggle = useCallback(
-    (uid: string) => {
-      if (!editable || savingRef.current || dragSessionRef.current) return;
-
-      const current = draftRef.current;
-      const source = current.active.includes(uid)
-        ? ColumnType.Active
-        : ColumnType.Inactive;
-      const target =
-        source === ColumnType.Active ? ColumnType.Inactive : ColumnType.Active;
-
-      publishDraft({
-        ...current,
-        [source]: current[source].filter((item) => item !== uid),
-        [target]: [...current[target], uid],
-      });
-    },
-    [editable, publishDraft],
-  );
-
-  /** The source must be checked twice, before and after dnd-kit awaits. */
   const canDrag = useCallback(() => editable && !savingRef.current, [editable]);
 
   const beginDrag = useCallback(() => {
-    const session = { columns: draftRef.current, profiles: candidateProfiles };
+    const session = { uids: draftRef.current, profiles: candidates };
     dragSessionRef.current = session;
     setDragSession(session);
-  }, [candidateProfiles]);
+  }, [candidates]);
 
   const reorder = useCallback(
-    (update: (current: ChainColumns) => ChainColumns) => {
+    (update: (current: string[]) => string[]) => {
       if (!dragSessionRef.current || savingRef.current) return;
       const next = update(draftRef.current);
-      if (!sameColumns(next, draftRef.current)) publishDraft(next);
+      if (!sameOrder(next, draftRef.current)) publishDraft(next);
     },
     [publishDraft],
   );
@@ -279,31 +235,52 @@ export function useTransformChainDraft({
   const endDrag = useCallback(
     (canceled: boolean) => {
       const session = dragSessionRef.current;
-      if (canceled && session) publishDraft(session.columns);
+      if (canceled && session) publishDraft(session.uids);
       dragSessionRef.current = null;
       setDragSession(null);
     },
     [publishDraft],
   );
 
+  const runtimeLogsByUid = useMemo(() => {
+    const current = diagnostics.data;
+    if (!current) return new Map<string, [LogSpan, string][]>();
+    const output = scopeUid
+      ? (current.output.scopes[scopeUid] ?? {})
+      : current.output.global;
+    return new Map(Object.entries(output));
+  }, [diagnostics.data, scopeUid]);
+
+  const runtimeFailure =
+    useMemo<RuntimeTransformFailureDiagnostics | null>(() => {
+      const failure = diagnostics.data?.failure;
+      return failure?.scope_uid === scopeUid ? failure : null;
+    }, [diagnostics.data?.failure, scopeUid]);
+
   return {
     dataReady,
-    chains,
+    enabled,
+    candidates,
     isChanged,
+    changes,
+    isUnapplied,
     hasDuplicates,
     editable,
     saving,
-    dragSession,
+    dragging,
     actionsDisabled,
+    handleAdd,
+    handleRemove,
+    moveActive,
     handleApply,
     handleReset,
-    moveActive,
-    handleAdd,
-    handleToggle,
     canDrag,
     beginDrag,
     reorder,
     endDrag,
+    diagnostics,
+    runtimeLogsByUid,
+    runtimeFailure,
   };
 }
 

@@ -18,7 +18,8 @@
     "test:traffic": "tsx --test tests/traffic-search.test.ts tests/traffic-sankey-layout.test.ts tests/traffic-view-settings.test.ts ../interface/tests/traffic-report-query.test.ts",
     "test:dashboard-widget-placement": "tsx --test tests/dashboard-widget-placement.test.ts",
     "test:dashboard-widget-config": "tsx --test tests/dashboard-widget-config.test.ts tests/legacy-storage-events.test.ts ../interface/tests/kv-storage-write-echoes.test.ts ../interface/tests/kv-storage-state.test.ts ../interface/tests/kv-storage-provider.test.ts",
-    "test:transparent-proxy-interfaces": "tsx --test tests/transparent-proxy-interfaces.test.ts"
+    "test:transparent-proxy-interfaces": "tsx --test tests/transparent-proxy-interfaces.test.ts",
+    "test:transform-chain-model": "tsx --test tests/transform-chain-model.test.ts"
   },
   "dependencies": {
     "@chimera/interface": "workspace:^",

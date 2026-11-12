@@ -47,16 +47,6 @@ type RuntimeTransformFailure = Exclude<
 
 type CoreState = 'Running' | { Stopped: string | null };
 
-type ScrollViewportObservation = {
-  editorTop: number;
-  editorHeight: number;
-  visibleTop: number;
-  visibleBottom: number;
-  visibleHeight: number;
-  scrollTop: number;
-  maxScrollTop: number;
-};
-
 type UiElementObservation = {
   count: number;
   controlCount: number;
@@ -266,31 +256,6 @@ async function readUiElementObservation(
     selector,
     interactionSelector,
   );
-}
-
-async function readScrollViewportObservation(
-  selector: string,
-): Promise<ScrollViewportObservation | null> {
-  return browser.execute((editorSelector) => {
-    const element = document.querySelector<HTMLElement>(editorSelector);
-    const viewport = element?.closest<HTMLElement>(
-      '[data-slot="scroll-area-viewport"]',
-    );
-    if (!element || !viewport) return null;
-    const rect = element.getBoundingClientRect();
-    const viewportRect = viewport.getBoundingClientRect();
-    const visibleTop = viewportRect.top + viewport.clientTop;
-    const visibleBottom = visibleTop + viewport.clientHeight;
-    return {
-      editorTop: Math.round(rect.top),
-      editorHeight: Math.round(rect.height),
-      visibleTop: Math.round(visibleTop),
-      visibleBottom: Math.round(visibleBottom),
-      visibleHeight: viewport.clientHeight,
-      scrollTop: viewport.scrollTop,
-      maxScrollTop: Math.max(0, viewport.scrollHeight - viewport.clientHeight),
-    };
-  }, selector);
 }
 
 async function waitForScopedChain(uid: string, expected: string[]) {
@@ -853,152 +818,17 @@ describe('main transform chain editor', () => {
     const editorSelector = `[data-slot="transform-chain-editor"][data-chain-scope="profile"][data-profile-uid="${localUid}"]`;
     const editor = await $(editorSelector);
     await $(detailSelector).waitForExist({ timeout: 15_000 });
-    await editor.waitForExist({ timeout: 15_000 });
-
-    const initialScrollTop = await browser.execute((selector) => {
-      const detail = document.querySelector<HTMLElement>(selector);
-      const viewport = detail?.closest<HTMLElement>(
-        '[data-slot="scroll-area-viewport"]',
-      );
-      if (!viewport) return null;
-      viewport.scrollTop = 0;
-      return viewport.scrollTop;
-    }, detailSelector);
-    assert.equal(
-      initialScrollTop,
-      0,
-      'The Profile detail scroll viewport must start at the top.',
-    );
-    await trigger.waitForClickable({ timeout: 15_000 });
-
-    const beforeScroll = await browser.execute((selector) => {
-      const element = document.querySelector<HTMLElement>(selector);
-      const viewport = element?.closest<HTMLElement>(
-        '[data-slot="scroll-area-viewport"]',
-      );
-      if (!element || !viewport) return null;
-      const rect = element.getBoundingClientRect();
-      const viewportRect = viewport.getBoundingClientRect();
-      const visibleTop = viewportRect.top + viewport.clientTop;
-      const visibleBottom = visibleTop + viewport.clientHeight;
-      return {
-        top: Math.round(rect.top),
-        height: Math.round(rect.height),
-        visibleTop: Math.round(visibleTop),
-        visibleBottom: Math.round(visibleBottom),
-      };
-    }, editorSelector);
-    assert.ok(beforeScroll, 'The scoped transform editor is missing.');
-    assert.ok(
-      beforeScroll.top + beforeScroll.height / 2 > beforeScroll.visibleBottom,
-      `The editor center must start below the viewport: ${JSON.stringify(beforeScroll)}`,
-    );
-
-    await trigger.click();
-    let lastAfterScroll: ScrollViewportObservation | null = null;
-    try {
-      await browser.waitUntil(
-        async () => {
-          lastAfterScroll = await readScrollViewportObservation(editorSelector);
-          if (!lastAfterScroll) return false;
-          if (lastAfterScroll.editorHeight > lastAfterScroll.visibleHeight) {
-            return (
-              Math.abs(
-                lastAfterScroll.editorTop - lastAfterScroll.visibleTop,
-              ) <= 2
-            );
-          }
-          const center =
-            lastAfterScroll.editorTop + lastAfterScroll.editorHeight / 2;
-          return (
-            center >= lastAfterScroll.visibleTop &&
-            center <= lastAfterScroll.visibleBottom
-          );
-        },
-        {
-          timeout: 15_000,
-          timeoutMsg:
-            'Clicking the profile transform-chain action did not scroll the editor into view.',
-        },
-      );
-    } catch (error) {
-      throw new Error(
-        `Clicking the profile transform-chain action did not scroll the editor into view. Last viewport observation: ${JSON.stringify(lastAfterScroll)}`,
-        { cause: error },
-      );
-    }
-
-    let fitBefore: ScrollViewportObservation | null = null;
-    let lastFitCandidate: ScrollViewportObservation | null = null;
-    for (const height of [600, 640, 680, 720, 760, 800, 840, 900]) {
-      await browser.setWindowSize(1240, height);
-      const resetScrollTop = await browser.execute((selector) => {
-        const detail = document.querySelector<HTMLElement>(selector);
-        const viewport = detail?.closest<HTMLElement>(
-          '[data-slot="scroll-area-viewport"]',
-        );
-        if (!viewport) return null;
-        viewport.scrollTop = 0;
-        return viewport.scrollTop;
-      }, detailSelector);
-      assert.equal(
-        resetScrollTop,
-        0,
-        `The Profile detail scroll viewport must reset before the ${height}px fit check.`,
-      );
-
-      const candidate = await readScrollViewportObservation(editorSelector);
-      lastFitCandidate = candidate;
-      if (!candidate) continue;
-      const editorCenter = candidate.editorTop + candidate.editorHeight / 2;
-      const viewportCenter = candidate.visibleTop + candidate.visibleHeight / 2;
-      const scrollNeeded = editorCenter - viewportCenter;
-      if (
-        candidate.editorHeight <= candidate.visibleHeight &&
-        scrollNeeded > 8 &&
-        scrollNeeded <= candidate.maxScrollTop
-      ) {
-        fitBefore = candidate;
-        break;
-      }
-    }
-    assert.ok(
-      fitBefore,
-      `Could not find a fitting viewport with enough scroll range to center the editor. Last geometry: ${JSON.stringify(lastFitCandidate)}`,
-    );
     await trigger.waitForClickable({ timeout: 15_000 });
     await trigger.click();
-    let lastFitAfter: ScrollViewportObservation | null = null;
-    try {
-      await browser.waitUntil(
-        async () => {
-          lastFitAfter = await readScrollViewportObservation(editorSelector);
-          if (!lastFitAfter || !fitBefore) return false;
-          const beforeCenter =
-            fitBefore.visibleTop + fitBefore.visibleHeight / 2;
-          const afterCenter =
-            lastFitAfter.visibleTop + lastFitAfter.visibleHeight / 2;
-          const editorCenter =
-            lastFitAfter.editorTop + lastFitAfter.editorHeight / 2;
-          return (
-            Math.abs(editorCenter - afterCenter) <= 2 &&
-            editorCenter >= lastFitAfter.visibleTop &&
-            editorCenter <= lastFitAfter.visibleBottom &&
-            lastFitAfter.scrollTop > fitBefore.scrollTop
-          );
-        },
-        {
-          timeout: 15_000,
-          timeoutMsg:
-            'Clicking the Profile transform-chain action did not center a fitting editor.',
-        },
-      );
-    } catch (error) {
-      throw new Error(
-        `Clicking the Profile transform-chain action did not center a fitting editor. Before: ${JSON.stringify(fitBefore)}; last observation: ${JSON.stringify(lastFitAfter)}`,
-        { cause: error },
-      );
-    }
+    await editor.waitForDisplayed({ timeout: 15_000 });
+
+    const panel = await $(
+      '[data-slot="profile-detail-panel"][data-layout="wide"]',
+    );
+    await panel.waitForDisplayed({ timeout: 15_000 });
+    await panel
+      .$('[data-slot="profile-transform-library"]')
+      .waitForDisplayed({ timeout: 15_000 });
     await browser.setWindowSize(1240, 720);
 
     const first = await editor.$(
@@ -1060,6 +890,26 @@ describe('main transform chain editor', () => {
     await browser.keys(Key.Space);
     await waitForActiveOrder('profile', keyboardOrder);
 
+    const pendingJavascriptRow = await editor.$(
+      `[data-slot="transform-chain-active-item"][data-profile-uid="${javascriptUid}"]`,
+    );
+    await pendingJavascriptRow
+      .$('[data-slot="profile-chain-editor-trace"]')
+      .click();
+    const leaveDialog = await $('[data-slot="profile-leave-dialog"]');
+    await leaveDialog.waitForDisplayed({ timeout: 15_000 });
+    await leaveDialog.$('[data-slot="profile-leave-stay"]').click();
+    await browser.waitUntil(async () => !(await leaveDialog.isDisplayed()), {
+      timeout: 15_000,
+      timeoutMsg: 'Stay did not dismiss the unapplied-changes dialog.',
+    });
+    await editor.waitForDisplayed({ timeout: 15_000 });
+    assert.deepEqual(
+      await activeOrder('profile'),
+      keyboardOrder,
+      'staying in the editor should preserve the unsaved transform order',
+    );
+
     const beforeSaveDiagnostics =
       await invoke<RuntimeTransformDiagnostics | null>(
         'get_runtime_transform_diagnostics',
@@ -1109,6 +959,22 @@ describe('main transform chain editor', () => {
         `merge transform ${mergeUid} should not render an empty runtime log block`,
       );
     }
+
+    await javascriptRow.$('[data-slot="profile-chain-editor-trace"]').click();
+    await browser.waitUntil(
+      async () => (await browser.getUrl()).includes('/main/profiles/inspect'),
+      {
+        timeout: 15_000,
+        timeoutMsg: 'Transform trace did not navigate to Inspect.',
+      },
+    );
+    const inspectStep = await $('[data-slot="inspect-step-detail"]');
+    await inspectStep.waitForDisplayed({ timeout: 15_000 });
+    assert.equal(
+      await inspectStep.getAttribute('data-key'),
+      `scoped:${localUid}:${javascriptUid}:2`,
+      'Inspect should select the exact scoped transform execution step',
+    );
   });
 
   // Contract: a failing JS transform edit is rejected before file commit; the

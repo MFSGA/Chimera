@@ -1,57 +1,55 @@
-import {
-  scopedTransformsOf,
-  useProfile,
-  type ProfileDefinition_Deserialize,
-} from '@chimera/interface';
+import { scopedTransformsOf, useProfile } from '@chimera/interface';
 import { useMemo } from 'react';
 import * as m from '@/paraglide/messages';
-import { TransformChainEditor } from '../../../_modules/transform-chain-list';
-import { type ConfigProfile } from '../../../_modules/utils';
-import { DetailSection } from './detail-section';
+import type { ConfigProfile } from '../../../_modules/utils';
+import { DetailRow } from './detail-section';
 
-/** The transform chain that applies only to one config item. */
+/** The persisted scoped chain entry that opens the transform side panel. */
 export default function TransformChainSection({
   profile,
+  selected = false,
+  onOpen,
 }: {
   profile: ConfigProfile;
+  selected?: boolean;
+  onOpen: () => void;
 }) {
-  const { replaceDefinition } = useProfile();
+  const {
+    query: { data },
+  } = useProfile();
 
-  // The edited config item's own scoped transforms (File or Composition).
-  const transforms = useMemo(() => scopedTransformsOf(profile), [profile]);
+  const enabled = useMemo(() => {
+    const names = new Map(
+      (data?.items ?? [])
+        .filter((item) => item.type === 'transform')
+        .map((item) => [item.uid, item.name]),
+    );
+    return scopedTransformsOf(profile).flatMap((uid) => {
+      const name = names.get(uid);
+      return name ? [name] : [];
+    });
+  }, [data?.items, profile]);
+
+  const summary =
+    data == null
+      ? undefined
+      : enabled.length === 0
+        ? m.profile_chain_editor_empty()
+        : [
+            m.profile_chain_editor_enabled_count({ count: enabled.length }),
+            enabled.join(', '),
+          ].join(' · ');
 
   return (
-    <DetailSection
-      title={m.profile_chain_editor_title()}
-      description={m.profile_chain_editor_scoped_hint()}
-      className="col-span-2 md:col-span-4"
-    >
-      {/* Keyed per profile so a draft cannot leak into another config whose
-          baseline happens to be identical. */}
-      {/* Temporary adapter: the upstream shared TransformChainList has not yet
-          replaced Chimera's global/scoped editor with runtime diagnostics. */}
-      <TransformChainEditor
-        key={profile.uid}
-        layout="stacked"
-        scopeUid={profile.uid}
-        showTitle={false}
-        taskKey={`update-chain-${profile.uid}`}
-        transforms={transforms}
-        onApply={async (next) => {
-          // Rebuild the config definition with the reordered scoped
-          // transforms, preserving every other field, and replace it
-          // atomically.
-          const definition: ProfileDefinition_Deserialize = {
-            type: 'config',
-            config: { ...profile.config, transforms: next },
-          };
-
-          await replaceDefinition.mutateAsync({
-            uid: profile.uid,
-            definition,
-          });
-        }}
-      />
-    </DetailSection>
+    <DetailRow
+      label={m.profile_chain_editor_title()}
+      description={summary}
+      aria-current={selected || undefined}
+      data-selected={selected || undefined}
+      data-profile-uid={profile.uid}
+      data-panel="transforms"
+      data-slot="profile-transform-chain-entry"
+      onClick={onOpen}
+    />
   );
 }
