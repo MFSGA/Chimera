@@ -1694,6 +1694,14 @@ mod tests {
         run_type: RunType,
     }
 
+    struct CoreUpdateRecordingCore {
+        events: Arc<Mutex<Vec<&'static str>>>,
+        state: CoreState,
+        state_changed_at: i64,
+        active_kind: Option<chimera_core_manager::CoreKind>,
+        receipt_error: bool,
+    }
+
     struct PanicOnStopCore {
         events: Arc<Mutex<Vec<&'static str>>>,
     }
@@ -2420,6 +2428,69 @@ mod tests {
                 "finished"
             });
         }
+    }
+
+    #[async_trait]
+    impl CoreLifecyclePort for CoreUpdateRecordingCore {
+        async fn reconcile(
+            &self,
+            _clash: ClashConfig,
+            _target_core: ClashCore,
+            _run_type: RunType,
+        ) -> anyhow::Result<()> {
+            self.events.lock().unwrap().push("rebuild");
+            Ok(())
+        }
+
+        async fn stop(&self) -> anyhow::Result<()> {
+            self.events.lock().unwrap().push("stop");
+            Ok(())
+        }
+
+        async fn change_core(&self, _core: ClashCore) -> anyhow::Result<()> {
+            self.events.lock().unwrap().push("select");
+            Ok(())
+        }
+
+        async fn status(&self) -> anyhow::Result<CoreStatusSnapshot> {
+            Ok(CoreStatusSnapshot {
+                instance_id: None,
+                state: self.state.clone(),
+                state_changed_at: self.state_changed_at,
+                run_type: RunType::Normal,
+            })
+        }
+
+        async fn active_runtime_receipt(
+            &self,
+        ) -> anyhow::Result<Option<Arc<crate::client::runtime::RuntimeApplyReceipt>>> {
+            if self.receipt_error {
+                anyhow::bail!("active core status is unavailable");
+            }
+            let Some(kind) = self.active_kind else {
+                return Ok(None);
+            };
+            if !matches!(self.state, CoreState::Running) {
+                return Ok(None);
+            }
+            let target_core = match kind {
+                chimera_core_manager::CoreKind::Mihomo => ClashCore::Mihomo,
+                chimera_core_manager::CoreKind::ClashRust => ClashCore::ClashRs,
+                chimera_core_manager::CoreKind::ClashPremium => ClashCore::ClashPremium,
+                chimera_core_manager::CoreKind::ChimeraClient => ClashCore::ChimeraClient,
+                chimera_core_manager::CoreKind::Meow => return Ok(None),
+            };
+            let mut receipt = crate::client::ports::test_runtime_receipt_with_mixed_port(7892);
+            receipt.target_core = target_core;
+            receipt.core_spec.kind = kind;
+            Ok(Some(Arc::new(receipt)))
+        }
+
+        fn recovery_notify(&self) -> Option<Arc<Notify>> {
+            None
+        }
+
+        async fn on_profile_change(&self, _break_when: bool) {}
     }
 
     #[async_trait]
@@ -3975,8 +4046,122 @@ mod tests {
         assert_eq!(events.lock().unwrap().as_slice(), ["rebuild"]);
     }
 
+    async fn run_binary_update(
+        desired_core: ClashCore,
+        state: CoreState,
+        active_kind: Option<chimera_core_manager::CoreKind>,
+        target: ClashCore,
+        state_changed_at: i64,
+        receipt_error: bool,
+    ) -> Vec<&'static str> {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let mut app = chimera_config::application::ChimeraAppConfig::default();
+        app.core = desired_core;
+        let core = Arc::new(CoreUpdateRecordingCore {
+            events: events.clone(),
+            state,
+            state_changed_at,
+            active_kind,
+            receipt_error,
+        });
+        let client = CoreLifecycleClient::spawn_with_installer(
+            core,
+            ApplicationClient::static_state(app),
+            ClashConfigClient::legacy().unwrap(),
+            RuntimePaths::from_config_root(std::path::PathBuf::from("test-runtime-root")),
+            Arc::new(RecordingInstaller {
+                events: events.clone(),
+            }),
+        )
+        .await
+        .unwrap();
+        let staging = Arc::new(tempfile::tempdir().unwrap());
+        client
+            .replace_core_binary(PreparedCoreBinary {
+                target,
+                source: staging.path().join("staged-core"),
+                destination: staging.path().join("installed-core"),
+                staging,
+                progress: Arc::new(RecordingProgress {
+                    events: events.clone(),
+                }),
+            })
+            .await
+            .unwrap();
+        events.lock().unwrap().clone()
+    }
+
     #[tokio::test]
-    async fn binary_replacement_runs_stop_install_restart_in_lifecycle_mailbox() {
+    async fn updating_an_inactive_core_does_not_stop_or_restart_the_confirmed_active_core() {
+        let events = run_binary_update(
+            ClashCore::Mihomo,
+            CoreState::Running,
+            Some(chimera_core_manager::CoreKind::Mihomo),
+            ClashCore::ClashRs,
+            1,
+            false,
+        )
+        .await;
+
+        assert_eq!(events, ["install", "finished"]);
+    }
+
+    #[tokio::test]
+    async fn updating_the_running_core_stops_before_install_even_when_it_is_not_selected() {
+        let events = run_binary_update(
+            ClashCore::Mihomo,
+            CoreState::Running,
+            Some(chimera_core_manager::CoreKind::ClashRust),
+            ClashCore::ClashRs,
+            1,
+            false,
+        )
+        .await;
+
+        assert_eq!(
+            events,
+            ["stop", "install", "restarting", "rebuild", "finished"]
+        );
+    }
+
+    #[tokio::test]
+    async fn an_unidentified_running_core_is_stopped_before_binary_replacement() {
+        let events = run_binary_update(
+            ClashCore::Mihomo,
+            CoreState::Running,
+            None,
+            ClashCore::ClashRs,
+            1,
+            false,
+        )
+        .await;
+
+        assert_eq!(
+            events,
+            ["stop", "install", "restarting", "rebuild", "finished"]
+        );
+    }
+
+    #[tokio::test]
+    async fn unavailable_service_status_is_not_treated_as_proven_stopped() {
+        let events = run_binary_update(
+            ClashCore::Mihomo,
+            CoreState::Stopped(None),
+            None,
+            ClashCore::ClashRs,
+            0,
+            true,
+        )
+        .await;
+
+        assert_eq!(
+            events,
+            ["stop", "install", "restarting", "rebuild", "finished"]
+        );
+    }
+
+    #[tokio::test]
+    async fn binary_replacement_of_a_stopped_selected_core_installs_then_restarts() {
         let events = Arc::new(Mutex::new(Vec::new()));
         let application = ApplicationClient::legacy().unwrap();
         let target = application.get_typed().core;
@@ -4016,19 +4201,12 @@ mod tests {
 
         assert_eq!(
             events.lock().unwrap().as_slice(),
-            [
-                "stop-start",
-                "stop-end",
-                "install",
-                "restarting",
-                "rebuild",
-                "finished"
-            ]
+            ["install", "restarting", "rebuild", "finished"]
         );
     }
 
     #[tokio::test]
-    async fn binary_install_failure_finishes_update_without_restarting_core() {
+    async fn binary_install_failure_does_not_stop_or_restart_a_stopped_core() {
         let events = Arc::new(Mutex::new(Vec::new()));
         let application = ApplicationClient::legacy().unwrap();
         let target = application.get_typed().core;
@@ -4066,7 +4244,7 @@ mod tests {
 
         assert_eq!(
             events.lock().unwrap().as_slice(),
-            ["stop-start", "stop-end", "install", "finished-error"]
+            ["install", "finished-error"]
         );
     }
 }

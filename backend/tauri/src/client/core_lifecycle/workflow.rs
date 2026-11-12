@@ -1,6 +1,8 @@
 use std::sync::Arc;
 
 use chimera_config::application::{ChimeraAppConfig, ChimeraAppConfigPatch};
+use chimera_core_manager::CoreKind;
+use chimera_ipc::api::status::CoreState;
 use struct_patch::Patch;
 
 use crate::client::application_workflow::workflow::ProfileRuntime;
@@ -65,6 +67,15 @@ pub(super) enum Command {
 /// The lower-level port remains the compatibility boundary for Chimera's
 /// staged `core::actor_v2::CoreFacade` while command admission follows REF's
 /// actor-owned core-lifecycle model.
+fn manager_core_kind(core: ClashCore) -> CoreKind {
+    match core {
+        ClashCore::ClashPremium => CoreKind::ClashPremium,
+        ClashCore::ClashRs | ClashCore::ClashRsAlpha => CoreKind::ClashRust,
+        ClashCore::Mihomo | ClashCore::MihomoAlpha => CoreKind::Mihomo,
+        ClashCore::ChimeraClient | ClashCore::ChimeraClientAlpha => CoreKind::ChimeraClient,
+    }
+}
+
 pub(super) struct CoreLifecycleWorkflow {
     application: ApplicationClient,
     clash: ClashConfigClient,
@@ -711,15 +722,45 @@ impl CoreLifecycleWorkflow {
     }
 
     async fn replace_binary(&self, artifact: PreparedCoreBinary) -> anyhow::Result<()> {
-        let current_core = self.application.get_typed().core;
-        if current_core == artifact.target {
+        let desired_core = self.application.get_typed().core;
+
+        // The selected core is desired state, not proof of what is currently
+        // running. A confirmed live receipt identifies the active executable
+        // even when an older host omits its applied-kind field. If the host is
+        // running but cannot provide that proof, stop conservatively before
+        // replacing a binary that may be in use.
+        let active_receipt = match self.core.active_runtime_receipt().await {
+            Ok(receipt) => receipt,
+            Err(error) => {
+                tracing::warn!(
+                    %error,
+                    "could not verify the active core before binary replacement; treating its identity as unknown"
+                );
+                None
+            }
+        };
+        let status = self.core.status().await?;
+        // Service status failures are projected to Stopped with timestamp 0;
+        // that compatibility value is unknown, not proof that the process exited.
+        let not_proven_stopped = active_receipt.is_some()
+            || status.state_changed_at == 0
+            || !matches!(status.state, CoreState::Stopped(_));
+        let target_kind = manager_core_kind(artifact.target);
+        let active_kind = active_receipt.map(|receipt| receipt.core_spec.kind);
+        let needs_stop =
+            not_proven_stopped && active_kind.is_none_or(|active_kind| active_kind == target_kind);
+        let restart = desired_core == artifact.target || needs_stop;
+
+        if needs_stop {
             self.core.stop().await?;
-            self.installer.install(&artifact).await?;
-            artifact.progress.restarting();
-            self.reconcile().await
-        } else {
-            self.installer.install(&artifact).await
         }
+
+        self.installer.install(&artifact).await?;
+        if restart {
+            artifact.progress.restarting();
+            self.reconcile().await?;
+        }
+        Ok(())
     }
 }
 
