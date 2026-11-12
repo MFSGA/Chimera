@@ -57,11 +57,11 @@
     "less": "4.9.1",
     "lodash-es": "4.18.1",
     "monaco-editor": "0.57.0",
-    "motion": "14.0.0",
+    "motion": "14.12.0",
     "radix-ui": "1.6.7",
     "react": "19.3.0",
     "react-dom": "19.3.0",
-    "react-hook-form": "7.89.0",
+    "react-hook-form": "7.92.0",
     "react-markdown": "10.1.0",
     "react-use": "17.6.1",
     "vaul": "1.1.2",
@@ -71,7 +71,7 @@
   },
   "devDependencies": {
     "@emotion/react": "11.14.0",
-    "@iconify/json": "2.2.549",
+    "@iconify/json": "2.2.555",
     "@monaco-editor/react": "4.7.0",
     "@svgr/core": "8.1.0",
     "@svgr/plugin-jsx": "8.1.0",
@@ -100,7 +100,7 @@
     "tailwindcss": "4.3.3",
     "typescript": "7.0.2",
     "unplugin-icons": "24.0.0",
-    "vite": "8.3.5",
+    "vite": "8.3.8",
     "vite-plugin-html": "3.2.2",
     "vite-plugin-sass-dts": "1.3.39"
   }
