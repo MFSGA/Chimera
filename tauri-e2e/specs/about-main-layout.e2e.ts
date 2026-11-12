@@ -31,8 +31,34 @@ describe('main about settings reference layout', () => {
   });
 
   it('matches the ref title, grid, and version-card CSS contract', async () => {
-    const card = await $('[data-slot="settings-card"]');
-    await card.waitForDisplayed({ timeout: 15_000 });
+    // The saved Windows failure screenshot showed the About card clearly
+    // rendered, while the embedded WebDriver's isDisplayed still returned
+    // false. Assert actual layout visibility inside the active route instead
+    // of trusting the driver's stale element visibility result.
+    await browser.waitUntil(
+      async () =>
+        browser.execute(() => {
+          const activeRoute = document.querySelector<HTMLElement>(
+            '[data-route-id="/(main)/main/settings/about"][data-route-present="true"]',
+          );
+          const card = activeRoute?.querySelector<HTMLElement>(
+            '[data-slot="settings-card"]',
+          );
+          if (!card) return false;
+          const rect = card.getBoundingClientRect();
+          const style = getComputedStyle(card);
+          return (
+            rect.width > 0 &&
+            rect.height > 0 &&
+            style.display !== 'none' &&
+            style.visibility !== 'hidden'
+          );
+        }),
+      {
+        timeout: 15_000,
+        timeoutMsg: 'The active About settings card has no visible layout.',
+      },
+    );
 
     const state = await browser.execute(() => {
       const activeRoute = document.querySelector<HTMLElement>(
