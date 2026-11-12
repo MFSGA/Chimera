@@ -14,6 +14,70 @@ import {
 const targetPath = '/main/profiles/profile';
 const profileName = `TDD Main Profile ${Date.now()}`;
 
+// The embedded Windows WebDriver can report isDisplayed=false for a flex child
+// that is plainly rendered (see the CI failure HTML and screenshot). Verify
+// the actual active Inspect route, nonzero layout and computed visibility.
+// This is a read-only UI check; no DOM interaction or snapshot state is faked.
+async function waitForRenderedInspectSlot(
+  slot: 'inspect-step-detail' | 'inspect-yaml-viewer' | 'inspect-empty',
+) {
+  let lastState: unknown = null;
+  try {
+    await browser.waitUntil(
+      async () => {
+        lastState = await browser.execute((requestedSlot) => {
+          const route = document.querySelector<HTMLElement>(
+            '[data-route-id="/(main)/main/profiles/inspect"][data-route-present="true"]',
+          );
+          const page = route?.querySelector<HTMLElement>(
+            '[data-slot="inspect-page"]',
+          );
+          const element = page?.querySelector<HTMLElement>(
+            `[data-slot="${requestedSlot}"]`,
+          );
+          if (!element) {
+            return {
+              rendered: false,
+              path: location.pathname,
+              activeRoute: Boolean(route),
+              inspectPage: Boolean(page),
+              slot: requestedSlot,
+            };
+          }
+          const bounds = element.getBoundingClientRect();
+          const style = getComputedStyle(element);
+          return {
+            rendered:
+              bounds.width > 0 &&
+              bounds.height > 0 &&
+              style.display !== 'none' &&
+              style.visibility !== 'hidden' &&
+              style.opacity !== '0',
+            path: location.pathname,
+            activeRoute: true,
+            slot: requestedSlot,
+            width: bounds.width,
+            height: bounds.height,
+            display: style.display,
+            visibility: style.visibility,
+            opacity: style.opacity,
+          };
+        }, slot);
+        return (lastState as { rendered: boolean }).rendered;
+      },
+      {
+        timeout: 15_000,
+        timeoutMsg: `The active Inspect ${slot} has no visible layout.`,
+      },
+    );
+  } catch (cause) {
+    throw new Error(
+      `The active Inspect ${slot} did not render: ${JSON.stringify(lastState)}.`,
+      { cause },
+    );
+  }
+}
+
 type ProfilesResponse = {
   current: string | null;
   items: Array<{ name: string; uid: string; type: 'config' | 'transform' }>;
@@ -246,8 +310,7 @@ describe('main profiles reference layout', () => {
     );
 
     if (snapshot) {
-      const details = await $('[data-slot="inspect-step-detail"]');
-      await details.waitForDisplayed({ timeout: 15_000 });
+      await waitForRenderedInspectSlot('inspect-step-detail');
       const outputTab = await $('[data-slot="inspect-tab-output"]');
       // Output is already selected for the final generated step. Do not
       // require a redundant click through an overlapping animated toolbar.
@@ -256,11 +319,9 @@ describe('main profiles reference layout', () => {
         await outputTab.click();
       }
       assert.equal(await outputTab.getAttribute('aria-selected'), 'true');
-      const yaml = await $('[data-slot="inspect-yaml-viewer"]');
-      await yaml.waitForDisplayed({ timeout: 15_000 });
+      await waitForRenderedInspectSlot('inspect-yaml-viewer');
     } else {
-      const empty = await $('[data-slot="inspect-empty"]');
-      await empty.waitForDisplayed({ timeout: 15_000 });
+      await waitForRenderedInspectSlot('inspect-empty');
     }
 
     // Switching snapshots is a visible interaction, not a direct cache or
@@ -284,13 +345,9 @@ describe('main profiles reference layout', () => {
       'inspect_applied_runtime',
     );
     if (appliedSnapshot) {
-      await $('[data-slot="inspect-step-detail"]').waitForDisplayed({
-        timeout: 15_000,
-      });
+      await waitForRenderedInspectSlot('inspect-step-detail');
     } else {
-      await $('[data-slot="inspect-empty"]').waitForDisplayed({
-        timeout: 15_000,
-      });
+      await waitForRenderedInspectSlot('inspect-empty');
     }
     const latest = await displayedElement('[data-slot="inspect-view-latest"]');
     await clickElement(latest);
