@@ -264,9 +264,19 @@ describe('legacy proxy localization', () => {
     }
 
     if (cleanupErrors.length > 0) {
+      // WDIO normally prints AggregateError.message but not its nested causes.
+      // Include the failing cleanup step and a bounded reason so a disrupted
+      // WebView cannot silently poison the next desktop E2E suite.
+      const reasons = cleanupErrors.map((error) => {
+        const cause =
+          error.cause instanceof Error
+            ? error.cause.message
+            : String(error.cause ?? 'unknown failure');
+        return `${error.message}: ${cause.slice(0, 300)}`;
+      });
       throw new AggregateError(
         cleanupErrors,
-        'Legacy proxy localization cleanup was incomplete.',
+        `Legacy proxy localization cleanup was incomplete: ${reasons.join('; ')}`,
       );
     }
   });
