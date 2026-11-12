@@ -1609,6 +1609,26 @@ pub trait PlatformExecutor<R: Runtime>: Send + Sync {
                                 isPrimary: true,
                                 relatedTarget: el
                             }}));
+                            // Native hover also emits non-bubbling pointerleave
+                            // for every ancestor that the pointer actually exits.
+                            // React/Radix Tooltip uses this lifecycle to close
+                            // its portal. Do not send leave to shared ancestors.
+                            for (var exited = previous;
+                                 exited && !exited.contains(el);
+                                 exited = exited.parentElement) {{
+                                exited.dispatchEvent(new PointerEvent('pointerleave', {{
+                                    bubbles: false,
+                                    cancelable: false,
+                                    clientX: {x},
+                                    clientY: {y},
+                                    button: 0,
+                                    buttons: 0,
+                                    pointerId: 1,
+                                    pointerType: 'mouse',
+                                    isPrimary: true,
+                                    relatedTarget: el
+                                }}));
+                            }}
                             previous.dispatchEvent(new MouseEvent('mouseout', {{
                                 bubbles: true,
                                 cancelable: true,
@@ -1629,6 +1649,29 @@ pub trait PlatformExecutor<R: Runtime>: Send + Sync {
                             isPrimary: true,
                             relatedTarget: previous
                         }}));
+                        // Enter from the outermost new ancestor toward the
+                        // target, as a native pointer would do. Repeated moves
+                        // inside one ancestor must not emit spurious enter.
+                        var entered = [];
+                        for (var ancestor = el;
+                             ancestor && (!previous || !ancestor.contains(previous));
+                             ancestor = ancestor.parentElement) {{
+                            entered.push(ancestor);
+                        }}
+                        for (var index = entered.length - 1; index >= 0; index--) {{
+                            entered[index].dispatchEvent(new PointerEvent('pointerenter', {{
+                                bubbles: false,
+                                cancelable: false,
+                                clientX: {x},
+                                clientY: {y},
+                                button: 0,
+                                buttons: 0,
+                                pointerId: 1,
+                                pointerType: 'mouse',
+                                isPrimary: true,
+                                relatedTarget: previous
+                            }}));
+                        }}
                         el.dispatchEvent(new MouseEvent('mouseover', {{
                             bubbles: true,
                             cancelable: true,

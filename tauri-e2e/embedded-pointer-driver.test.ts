@@ -57,7 +57,15 @@ class FakeEvent {
 
 class FakeElement {
   isConnected = true;
+  parentElement: FakeElement | null = null;
   events: FakeEvent[] = [];
+
+  contains(element: FakeElement | null): boolean {
+    for (let current = element; current; current = current.parentElement) {
+      if (current === this) return true;
+    }
+    return false;
+  }
 
   dispatchEvent(event: FakeEvent) {
     this.events.push(event);
@@ -105,10 +113,10 @@ test('embedded mouse move delivers a PointerEvent to Radix and a legacy mousemov
   assert.equal(harness.move(), true);
   assert.deepEqual(
     harness.first.events.map((event) => event.type),
-    ['pointerover', 'mouseover', 'pointermove'],
+    ['pointerover', 'pointerenter', 'mouseover', 'pointermove'],
   );
-  assert.equal(harness.first.events[2]?.pointerType, 'mouse');
-  assert.equal(harness.first.events[2]?.isTrusted, false);
+  assert.equal(harness.first.events[3]?.pointerType, 'mouse');
+  assert.equal(harness.first.events[3]?.isTrusted, false);
   assert.equal(harness.browserWindow.__chimeraE2eHoveredElement, harness.first);
 });
 
@@ -119,14 +127,68 @@ test('embedded pointer transitions emit an exit and new pointerover, with relate
   harness.move();
   assert.deepEqual(
     harness.first.events.map((event) => event.type),
-    ['pointerover', 'mouseover', 'pointermove', 'pointerout', 'mouseout'],
+    [
+      'pointerover',
+      'pointerenter',
+      'mouseover',
+      'pointermove',
+      'pointerout',
+      'pointerleave',
+      'mouseout',
+    ],
   );
   assert.deepEqual(
     harness.second.events.map((event) => event.type),
-    ['pointerover', 'mouseover', 'pointermove'],
+    ['pointerover', 'pointerenter', 'mouseover', 'pointermove'],
   );
-  assert.equal(harness.first.events[3]?.relatedTarget, harness.second);
+  assert.equal(harness.first.events[4]?.relatedTarget, harness.second);
   assert.equal(harness.second.events[0]?.relatedTarget, harness.first);
+});
+
+test('moving between siblings leaves neither their shared ancestor nor the document', () => {
+  const harness = createHarness();
+  const sharedParent = new FakeElement();
+  harness.first.parentElement = sharedParent;
+  harness.second.parentElement = sharedParent;
+
+  harness.move();
+  harness.select(harness.second);
+  harness.move();
+
+  assert.ok(
+    !sharedParent.events.some((event) => event.type === 'pointerleave'),
+    'A pointer moving between siblings must not leave the common parent.',
+  );
+  assert.equal(
+    harness.first.events.filter((event) => event.type === 'pointerleave')
+      .length,
+    1,
+  );
+  assert.equal(
+    harness.second.events.filter((event) => event.type === 'pointerenter')
+      .length,
+    1,
+  );
+});
+
+test('leaving a nested Radix trigger emits pointerleave on its ancestor', () => {
+  const harness = createHarness();
+  const tooltipTrigger = new FakeElement();
+  harness.first.parentElement = tooltipTrigger;
+
+  harness.move();
+  harness.select(harness.second);
+  harness.move();
+
+  const exit = tooltipTrigger.events.find(
+    (event) => event.type === 'pointerleave',
+  );
+  assert.ok(
+    exit,
+    'The trigger must receive its native pointerleave lifecycle.',
+  );
+  assert.equal(exit.relatedTarget, harness.second);
+  assert.equal(exit.pointerType, 'mouse');
 });
 
 test('repeated moves on the same target do not emit duplicate pointerover', () => {
@@ -135,7 +197,7 @@ test('repeated moves on the same target do not emit duplicate pointerover', () =
   harness.move();
   assert.deepEqual(
     harness.first.events.map((event) => event.type),
-    ['pointerover', 'mouseover', 'pointermove', 'pointermove'],
+    ['pointerover', 'pointerenter', 'mouseover', 'pointermove', 'pointermove'],
   );
 });
 
@@ -145,7 +207,7 @@ test('replaced route DOM targets do not receive stale pointerout events', () => 
   harness.first.isConnected = false;
   harness.select(harness.second);
   harness.move();
-  assert.equal(harness.first.events.length, 3);
+  assert.equal(harness.first.events.length, 4);
   assert.equal(harness.second.events[0]?.type, 'pointerover');
   assert.equal(harness.second.events[0]?.relatedTarget, null);
 });
