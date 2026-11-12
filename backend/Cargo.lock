@@ -1057,6 +1057,7 @@ dependencies = [
  "chimera-ipc",
  "chimera-jobs",
  "chimera-macro",
+ "chimera-os",
  "chimera-paths",
  "chimera-traffic",
  "chimera-utils",
@@ -1388,6 +1389,15 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 3.0.6",
+]
+
+[[package]]
+name = "chimera-os"
+version = "0.1.0"
+dependencies = [
+ "chimera-contracts",
+ "runas",
+ "snafu",
 ]
 
 [[package]]

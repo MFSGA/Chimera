@@ -2,6 +2,7 @@
 members = [
   "chimera-config",
   "chimera-core",
+  "chimera-os",
   "chimera-geodata",
   "chimera-traffic",
   "chimera-jobs",

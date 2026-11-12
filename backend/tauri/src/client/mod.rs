@@ -32,7 +32,9 @@ use chimera_config::profile::{
     FolderId, ProfileDefinition, ProfileId, ProfileLayout, ProfileMetadata, ProfileMetadataPatch,
     ProfileSource, Profiles, RemoteProfileOptions, RemoteProfileOptionsPatch,
 };
-use chimera_contracts::{bundle_metadata::BundleMetadata, net::ChangelogHttp};
+use chimera_contracts::{
+    bundle_metadata::BundleMetadata, net::ChangelogHttp, system_dns::SystemDnsCache,
+};
 use chimera_core::client::app_update::{self, AppUpdateArgs, AppUpdateClient, AppUpdateSettings};
 use struct_patch::Patch as _;
 
@@ -47,7 +49,6 @@ use self::{
     core_lifecycle::{CoreLifecycleClient, CoreLifecyclePort},
     event_sink::UiEventSink,
     session_state::SessionStateClient,
-    system_dns::SystemDnsCache,
 };
 #[allow(unused_imports)]
 pub(crate) use self::{
@@ -55,7 +56,6 @@ pub(crate) use self::{
     event_sink::{LegacyUiEventSink, NoopUiEventSink, TauriUiEventSink},
     ports::SessionPortResolver,
     runtime_inspection::{RuntimeInspection, RuntimeInspectionContent},
-    system_dns::OsSystemDnsCache,
 };
 
 use crate::{
@@ -1025,7 +1025,7 @@ mod tests {
 
     use super::core_lifecycle::CoreStatusSnapshot;
     use super::*;
-    use crate::client::system_dns::{NoopSystemDnsCache, SystemDnsCache};
+    use crate::client::system_dns::NoopSystemDnsCache;
     use crate::{config::chimera::ClashCore, core::RunType};
 
     struct RecordingCore {
@@ -1085,10 +1085,15 @@ mod tests {
     }
 
     impl SystemDnsCache for RecordingSystemDns {
-        fn flush(&self) -> anyhow::Result<()> {
+        fn flush(&self) -> Result<(), chimera_contracts::system_dns::SystemDnsError> {
             *self.flushes.lock().unwrap() += 1;
             if self.fail {
-                anyhow::bail!("injected DNS cache flush failure");
+                return Err(
+                    chimera_contracts::system_dns::SystemDnsError::FlushRejected {
+                        command: "injected DNS cache flush failure",
+                        code: Some(1),
+                    },
+                );
             }
             Ok(())
         }

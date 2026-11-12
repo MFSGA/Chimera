@@ -1,89 +1,10 @@
+//! System DNS cache flush through the injected OS port.
+
 use anyhow::Context as _;
+#[cfg(test)]
+use chimera_contracts::system_dns::{SystemDnsCache, SystemDnsError};
 
 use super::ChimeraClient;
-
-pub(crate) trait SystemDnsCache: Send + Sync + 'static {
-    fn flush(&self) -> anyhow::Result<()>;
-}
-
-#[derive(Debug, Default)]
-pub(crate) struct OsSystemDnsCache;
-
-#[cfg(target_os = "windows")]
-const WINDOWS_PROGRAM: &str = "ipconfig.exe";
-#[cfg(target_os = "windows")]
-const WINDOWS_ARGS: &[&str] = &["/flushdns"];
-
-#[cfg(target_os = "macos")]
-const MACOS_SCRIPT: &str = concat!(
-    "do shell script \"/usr/bin/dscacheutil -flushcache && ",
-    "/usr/bin/killall -HUP mDNSResponder\" with administrator privileges"
-);
-
-impl SystemDnsCache for OsSystemDnsCache {
-    fn flush(&self) -> anyhow::Result<()> {
-        flush_system_dns_cache()
-    }
-}
-
-#[cfg(target_os = "windows")]
-fn flush_system_dns_cache() -> anyhow::Result<()> {
-    let status = runas::Command::new(WINDOWS_PROGRAM)
-        .args(WINDOWS_ARGS)
-        .gui(true)
-        .show(false)
-        .status()
-        .context("failed to request permission to flush the Windows DNS cache")?;
-
-    ensure_success(status, "ipconfig /flushdns")
-}
-
-#[cfg(target_os = "macos")]
-fn flush_system_dns_cache() -> anyhow::Result<()> {
-    let status = std::process::Command::new("/usr/bin/osascript")
-        .args(["-e", MACOS_SCRIPT])
-        .status()
-        .context("failed to request permission to flush the macOS DNS cache")?;
-
-    ensure_success(status, "macOS DNS cache flush")
-}
-
-#[cfg(target_os = "linux")]
-fn flush_system_dns_cache() -> anyhow::Result<()> {
-    const CANDIDATES: &[(&str, &[&str])] = &[
-        ("resolvectl", &["flush-caches"]),
-        ("systemd-resolve", &["--flush-caches"]),
-        ("nscd", &["-i", "hosts"]),
-    ];
-
-    let mut attempts = Vec::new();
-    for (program, args) in CANDIDATES {
-        match std::process::Command::new(program).args(*args).status() {
-            Ok(status) if status.success() => return Ok(()),
-            Ok(status) => attempts.push(format!("{program} exited with status {status}")),
-            Err(error) => attempts.push(format!("{program}: {error}")),
-        }
-    }
-
-    anyhow::bail!(
-        "failed to flush the Linux DNS cache; tried resolvectl, systemd-resolve, and nscd: {}",
-        attempts.join("; ")
-    )
-}
-
-#[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
-fn flush_system_dns_cache() -> anyhow::Result<()> {
-    anyhow::bail!("flushing the system DNS cache is not supported on this platform")
-}
-
-#[cfg(any(target_os = "windows", target_os = "macos"))]
-fn ensure_success(status: std::process::ExitStatus, operation: &str) -> anyhow::Result<()> {
-    if status.success() {
-        Ok(())
-    } else {
-        anyhow::bail!("{operation} failed with status {status}")
-    }
-}
 
 #[cfg(test)]
 #[derive(Debug, Default)]
@@ -91,30 +12,8 @@ pub(crate) struct NoopSystemDnsCache;
 
 #[cfg(test)]
 impl SystemDnsCache for NoopSystemDnsCache {
-    fn flush(&self) -> anyhow::Result<()> {
+    fn flush(&self) -> Result<(), SystemDnsError> {
         Ok(())
-    }
-}
-
-#[cfg(all(test, target_os = "windows"))]
-mod windows_tests {
-    use super::{WINDOWS_ARGS, WINDOWS_PROGRAM};
-
-    #[test]
-    fn windows_flush_uses_ipconfig() {
-        assert_eq!(WINDOWS_PROGRAM, "ipconfig.exe");
-        assert_eq!(WINDOWS_ARGS, ["/flushdns"]);
-    }
-}
-
-#[cfg(all(test, target_os = "macos"))]
-mod macos_tests {
-    use super::MACOS_SCRIPT;
-
-    #[test]
-    fn macos_flush_covers_both_resolver_caches() {
-        assert!(MACOS_SCRIPT.contains("dscacheutil -flushcache"));
-        assert!(MACOS_SCRIPT.contains("killall -HUP mDNSResponder"));
     }
 }
 
