@@ -129,6 +129,45 @@ async function waitForPersistedSources(expected: UpdateSource[]) {
   }
 }
 
+// Source priority is meaningful: re-enabling a source appends it to the end.
+// Restore the original order through the same visible move-up controls a user
+// would use, rather than accepting a different persisted priority after cleanup.
+async function restoreSourceOrder(expected: UpdateSource[]) {
+  for (let targetIndex = 0; targetIndex < expected.length; targetIndex++) {
+    const source = expected[targetIndex];
+    let current = await readPersistedSources();
+    assert.deepEqual(
+      [...current].sort(),
+      [...expected].sort(),
+      'Restoring priorities must not add or remove update sources.',
+    );
+
+    while (current.indexOf(source) > targetIndex) {
+      const oldIndex = current.indexOf(source);
+      const moveUp = await $(
+        `//input[@data-slot="app-update-source-${source}"]/../following-sibling::span/button[1]`,
+      );
+      await moveUp.waitForClickable({ timeout: 15_000 });
+      await moveUp.click();
+      await browser.waitUntil(
+        async () =>
+          (await readPersistedSources()).indexOf(source) === oldIndex - 1,
+        {
+          timeout: 15_000,
+          timeoutMsg: `Update source ${source} did not move up in priority.`,
+        },
+      );
+      current = await readPersistedSources();
+    }
+    assert.equal(
+      current.indexOf(source),
+      targetIndex,
+      `Update source ${source} did not regain its original priority.`,
+    );
+  }
+  await waitForPersistedSources(expected);
+}
+
 describe('Chimera auto-update preference', () => {
   it('persists the setting across a page reload and restores the original value', async () => {
     await waitForApp();
@@ -186,10 +225,10 @@ describe('Chimera auto-update preference', () => {
         async () => {
           await browser.switchToWindow('main');
           await setSourceSelected(source, originalSelected);
-          await waitForPersistedSources(originalSources);
+          await restoreSourceOrder(originalSources);
           await browser.switchToWindow('legacy');
           await setSourceSelected(source, originalSelected);
-          await waitForPersistedSources(originalSources);
+          await restoreSourceOrder(originalSources);
           await browser.switchToWindow('main');
           assert.equal(await isSourceSelected(source), originalSelected);
         },
@@ -211,7 +250,7 @@ describe('Chimera auto-update preference', () => {
       assert.deepEqual(await readPersistedSources(), changedSources);
 
       await setSourceSelected(source, originalSelected);
-      await waitForPersistedSources(originalSources);
+      await restoreSourceOrder(originalSources);
       await browser.switchToWindow('main');
       await browser.waitUntil(
         async () => (await isSourceSelected(source)) === originalSelected,

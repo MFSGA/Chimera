@@ -69,6 +69,51 @@ async function waitForPath(pathname: string) {
   );
 }
 
+// WebView2's native Reload acknowledges the navigation request before the
+// next document has mounted. Match the contract of the language E2E tests:
+// only query the restored locale after observing a new, complete document.
+async function refreshAndWaitForDocument(handle: string) {
+  const previousTimeOrigin = await browser.execute(
+    () => performance.timeOrigin,
+  );
+  await browser.refresh();
+
+  let lastState: unknown = null;
+  try {
+    await browser.waitUntil(
+      async () => {
+        lastState = await browser.execute(() => ({
+          origin: performance.timeOrigin,
+          readyState: document.readyState,
+          hasRoot:
+            (document.getElementById('root')?.childElementCount ?? 0) > 0,
+          language: document.documentElement.lang,
+        }));
+        const state = lastState as {
+          origin: number;
+          readyState: DocumentReadyState;
+          hasRoot: boolean;
+        };
+        return (
+          state.origin !== previousTimeOrigin &&
+          state.readyState === 'complete' &&
+          state.hasRoot
+        );
+      },
+      {
+        timeout: 15_000,
+        interval: 250,
+        timeoutMsg: `${handle} did not mount a new document after reload.`,
+      },
+    );
+  } catch (cause) {
+    throw new Error(
+      `${handle} reload did not mount a new document: ${JSON.stringify(lastState)}.`,
+      { cause },
+    );
+  }
+}
+
 describe('legacy proxy localization', () => {
   // Contract (desktop UI E2E): set the test-owned app language to zh-cn, create
   // a local Profile through the legacy UI, attach its fixture through IPC, and
@@ -130,7 +175,7 @@ describe('legacy proxy localization', () => {
         timeoutMsg: 'The configured language did not switch to zh-cn.',
       },
     );
-    await browser.refresh();
+    await refreshAndWaitForDocument(activeWindow);
 
     const currentUrl = new URL(await browser.getUrl());
     currentUrl.pathname = '/profiles';
@@ -235,7 +280,7 @@ describe('legacy proxy localization', () => {
               localStorage.setItem(key, state.cache);
             }
           }, localeState);
-          await browser.refresh();
+          await refreshAndWaitForDocument(handle);
           await browser.waitUntil(
             async () =>
               browser.execute(
@@ -264,9 +309,19 @@ describe('legacy proxy localization', () => {
     }
 
     if (cleanupErrors.length > 0) {
+      // WDIO normally prints AggregateError.message but not its nested causes.
+      // Include the failing cleanup step and a bounded reason so a disrupted
+      // WebView cannot silently poison the next desktop E2E suite.
+      const reasons = cleanupErrors.map((error) => {
+        const cause =
+          error.cause instanceof Error
+            ? error.cause.message
+            : String(error.cause ?? 'unknown failure');
+        return `${error.message}: ${cause.slice(0, 300)}`;
+      });
       throw new AggregateError(
         cleanupErrors,
-        'Legacy proxy localization cleanup was incomplete.',
+        `Legacy proxy localization cleanup was incomplete: ${reasons.join('; ')}`,
       );
     }
   });

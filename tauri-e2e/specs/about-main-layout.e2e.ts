@@ -11,21 +11,71 @@ describe('main about settings reference layout', () => {
     });
     await openMainRoute('/main/settings/about');
     await browser.setWindowSize(1240, 638);
+    // A previous settings route can remain mounted while its exit animates.
+    // Wait for the actual About outlet, not merely the updated URL.
+    await browser.waitUntil(
+      async () =>
+        browser.execute(() => {
+          const active = document.querySelector<HTMLElement>(
+            '[data-route-id="/(main)/main/settings/about"][data-route-present="true"]',
+          );
+          return Boolean(
+            active && Number(getComputedStyle(active).opacity) >= 0.99,
+          );
+        }),
+      {
+        timeout: 15_000,
+        timeoutMsg: 'The active About settings route did not finish entering.',
+      },
+    );
   });
 
   it('matches the ref title, grid, and version-card CSS contract', async () => {
-    const card = await $('[data-slot="settings-card"]');
-    await card.waitForDisplayed({ timeout: 15_000 });
+    // The saved Windows failure screenshot showed the About card clearly
+    // rendered, while the embedded WebDriver's isDisplayed still returned
+    // false. Assert actual layout visibility inside the active route instead
+    // of trusting the driver's stale element visibility result.
+    await browser.waitUntil(
+      async () =>
+        browser.execute(() => {
+          const activeRoute = document.querySelector<HTMLElement>(
+            '[data-route-id="/(main)/main/settings/about"][data-route-present="true"]',
+          );
+          const card = activeRoute?.querySelector<HTMLElement>(
+            '[data-slot="settings-card"]',
+          );
+          if (!card) return false;
+          const rect = card.getBoundingClientRect();
+          const style = getComputedStyle(card);
+          return (
+            rect.width > 0 &&
+            rect.height > 0 &&
+            style.display !== 'none' &&
+            style.visibility !== 'hidden'
+          );
+        }),
+      {
+        timeout: 15_000,
+        timeoutMsg: 'The active About settings card has no visible layout.',
+      },
+    );
 
     const state = await browser.execute(() => {
+      const activeRoute = document.querySelector<HTMLElement>(
+        '[data-route-id="/(main)/main/settings/about"][data-route-present="true"]',
+      );
       const titleSlots = Array.from(
-        document.querySelectorAll<HTMLElement>('[data-slot="settings-title"]'),
+        activeRoute?.querySelectorAll<HTMLElement>(
+          '[data-slot="settings-title"]',
+        ) ?? [],
       );
       const stickyTitle = titleSlots[0];
       const mainTitle = titleSlots[1];
       const visibleTitle = mainTitle?.querySelector<HTMLElement>('p');
       const versionCard = Array.from(
-        document.querySelectorAll<HTMLElement>('[data-slot="settings-card"]'),
+        activeRoute?.querySelectorAll<HTMLElement>(
+          '[data-slot="settings-card"]',
+        ) ?? [],
       ).find((candidate) => {
         const parent = candidate.parentElement;
         return parent && getComputedStyle(parent).display === 'grid';
