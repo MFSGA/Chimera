@@ -266,9 +266,13 @@ describe('main profiles reference layout', () => {
     // Switching snapshots is a visible interaction, not a direct cache or
     // route mutation. A core that has never been applied must show an empty
     // state rather than presenting the latest generated document as applied.
-    const applied = await $('[data-slot="inspect-view-applied"]');
-    await applied.waitForClickable({ timeout: 15_000 });
-    await applied.click();
+    const applied = await displayedElement(
+      '[data-slot="inspect-view-applied"]',
+    );
+    // The toggle is visibly enabled, but WebView2's element clickable check
+    // can reject its overlapping animated slider. Exercise the real W3C
+    // pointer path and verify the resulting selected state below.
+    await clickElement(applied);
     await browser.waitUntil(
       async () => (await applied.getAttribute('data-state')) === 'on',
       {
@@ -288,8 +292,8 @@ describe('main profiles reference layout', () => {
         timeout: 15_000,
       });
     }
-    const latest = await $('[data-slot="inspect-view-latest"]');
-    await latest.click();
+    const latest = await displayedElement('[data-slot="inspect-view-latest"]');
+    await clickElement(latest);
     await browser.waitUntil(
       async () => (await latest.getAttribute('data-state')) === 'on',
       {
