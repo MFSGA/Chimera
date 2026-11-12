@@ -292,6 +292,9 @@ describe('main profiles reference layout', () => {
     const applied = await displayedElement(
       '[data-slot="inspect-view-applied"]',
     );
+    // The toggle is visibly enabled, but WebView2's element clickable check
+    // can reject its overlapping animated slider. Exercise the real W3C
+    // pointer path and verify the resulting selected state below.
     await clickElement(applied);
     await browser.waitUntil(
       async () => (await applied.getAttribute('data-state')) === 'on',

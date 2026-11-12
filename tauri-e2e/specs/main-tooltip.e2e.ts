@@ -204,6 +204,15 @@ describe('main tooltip reference surface', () => {
       .action('pointer', { parameters: { pointerType: 'mouse' } })
       .move({ origin: 'viewport', x: safeX, y: safeY, duration: 200 })
       .perform();
+    // Radix Tooltip is hoverable by default. Pointerleave first builds its
+    // trigger-to-content grace polygon; a *subsequent* real pointermove
+    // outside that polygon closes it. WebView2's embedded driver does not
+    // synthesize intermediate mousemove frames for one W3C move action.
+    await browser
+      .action('pointer', { parameters: { pointerType: 'mouse' } })
+      .pause(100)
+      .move({ origin: 'viewport', x: safeX - 4, y: safeY, duration: 100 })
+      .perform();
     await browser.waitUntil(
       async () =>
         browser.execute(
