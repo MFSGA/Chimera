@@ -8,12 +8,20 @@ authors.workspace = true
 
 [dependencies]
 chimera-contracts = { path = '../chimera-contracts', default-features = false }
+chimera-config = { path = '../chimera-config', default-features = false, features = ['nesting'] }
 anyhow = '1'
 async-trait = '0.1'
 reqwest = { workspace = true }
+backon = { version = '1.0.1', features = ['tokio-sleep'] }
+snafu = { workspace = true }
+base64 = '0.23'
+percent-encoding = '2.3'
+time = '0.3'
 url = '2'
 
 [dev-dependencies]
+serde_json = '1'
+serde = { version = '1', features = ['derive'] }
 axum = '0.8'
 tokio = { workspace = true }
 chimera-contracts = { path = '../chimera-contracts', default-features = false, features = ['test-support'] }

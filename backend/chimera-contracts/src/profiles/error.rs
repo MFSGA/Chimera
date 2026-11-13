@@ -1,8 +1,12 @@
 //! Canonical error path serialization from ref/profiles/error.rs.
 //! Only the shared path value is needed until the Profile error contract is migrated.
 
-use serde::{Serialize, Serializer};
 use std::path::{Path, PathBuf};
+
+use serde::{Serialize, Serializer};
+use snafu::Snafu;
+
+use crate::BoxedCause;
 
 /// A filesystem path as it appears in an error. The lossy conversion keeps it
 /// serializable when the path is not valid UTF-8.
@@ -37,6 +41,29 @@ impl From<&PathBuf> for ErrorPath {
     fn from(path: &PathBuf) -> Self {
         Self(path.clone())
     }
+}
+
+#[derive(Debug, Snafu, Serialize, specta::Type)]
+#[snafu(visibility(pub))]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum SubscriptionFetchError {
+    #[snafu(display("could not build the http client"))]
+    BuildHttpClient {
+        #[serde(skip)]
+        source: BoxedCause,
+    },
+    #[snafu(display("could not request the subscription"))]
+    RequestSubscription {
+        #[serde(skip)]
+        source: BoxedCause,
+    },
+    #[snafu(display("the subscription server answered with HTTP {status}"))]
+    SubscriptionHttpStatus { status: u16 },
+    #[snafu(display("could not read the subscription response body"))]
+    ReadSubscriptionBody {
+        #[serde(skip)]
+        source: BoxedCause,
+    },
 }
 
 #[cfg(test)]
