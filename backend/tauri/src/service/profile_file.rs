@@ -14,7 +14,9 @@ use atomicwrites::{AtomicFile, OverwriteBehavior, replace_atomic};
 use chimera_config::profile::{
     ExternalProfilePath, ManagedProfilePath, Profiles, RemoteProfileOptions,
 };
-use chimera_contracts::profiles::ports::SubscriptionFetcher as SharedSubscriptionFetcher;
+use chimera_contracts::profiles::{
+    error::ProfileFileError, ports::SubscriptionFetcher as SharedSubscriptionFetcher,
+};
 use chimera_contracts::{bundle_metadata::BundleMetadata, net::SystemProxySource};
 use chimera_net::{device_headers::DeviceHeaders, subscription_http::SubscriptionHttpFetcher};
 use serde::{Deserialize, Serialize};
@@ -1575,8 +1577,13 @@ pub fn normalize_yaml_document(content: &str) -> anyhow::Result<String> {
 impl ProfileFsPort for ProfileFileService {
     fn read(&self, path: &ManagedProfilePath) -> anyhow::Result<String> {
         let full = self.resolve(path)?;
-        std::fs::read_to_string(&full)
-            .with_context(|| format!("read profile file {}", full.display()))
+        std::fs::read_to_string(&full).map_err(|source| {
+            ProfileFileError::ReadFile {
+                path: (&full).into(),
+                source,
+            }
+            .into()
+        })
     }
 
     fn write_atomic(&self, path: &ManagedProfilePath, content: &str) -> anyhow::Result<()> {
@@ -1585,7 +1592,12 @@ impl ProfileFsPort for ProfileFileService {
         self.ensure_not_symlink(path)?;
         AtomicFile::new(&full, OverwriteBehavior::AllowOverwrite)
             .write(|file| file.write_all(content.as_bytes()))
-            .with_context(|| format!("atomic write {}", full.display()))
+            .map_err(|source| {
+                anyhow::Error::new(ProfileFileError::AtomicWrite {
+                    path: (&full).into(),
+                    source: Box::new(source),
+                })
+            })
     }
 
     fn remove(&self, path: &ManagedProfilePath) -> anyhow::Result<()> {
@@ -1594,20 +1606,29 @@ impl ProfileFsPort for ProfileFileService {
     }
 
     fn read_external(&self, target: &ExternalProfilePath) -> anyhow::Result<String> {
-        std::fs::read_to_string(target.as_path())
-            .with_context(|| format!("read external profile target {target}"))
+        std::fs::read_to_string(target.as_path()).map_err(|source| {
+            ProfileFileError::ReadExternalTarget {
+                target: target.clone(),
+                source,
+            }
+            .into()
+        })
     }
 
     fn ensure_not_symlink(&self, path: &ManagedProfilePath) -> anyhow::Result<()> {
         let full = self.resolve(path)?;
         match std::fs::symlink_metadata(&full) {
-            Ok(meta) if is_symlink_or_reparse(&meta) => bail!(
-                "refusing to write through unexpected symlink or reparse point at {}",
-                full.display()
-            ),
+            Ok(meta) if is_symlink_or_reparse(&meta) => Err(ProfileFileError::UnexpectedSymlink {
+                path: (&full).into(),
+            }
+            .into()),
             Ok(_) => Ok(()),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(e) => Err(e).with_context(|| format!("inspect profile file {}", full.display())),
+            Err(source) if source.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(source) => Err(ProfileFileError::InspectPath {
+                path: (&full).into(),
+                source,
+            }
+            .into()),
         }
     }
 
@@ -1623,19 +1644,42 @@ impl ProfileFsPort for ProfileFileService {
                 if symlink_points_to(&full, target.as_path())? {
                     return Ok(());
                 }
-                std::fs::remove_file(&full)?;
+                std::fs::remove_file(&full).map_err(|source| ProfileFileError::RemoveFile {
+                    path: (&full).into(),
+                    source,
+                })?;
             }
-            Ok(_) => bail!(
-                "existing non-symlink file at {}, refusing to replace",
-                full.display()
-            ),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => Err(e).with_context(|| format!("inspect profile file {}", full.display()))?,
+            Ok(_) => {
+                return Err(ProfileFileError::ExistingFileBlocksSymlink {
+                    path: (&full).into(),
+                }
+                .into());
+            }
+            Err(source) if source.kind() == std::io::ErrorKind::NotFound => {}
+            Err(source) => {
+                return Err(ProfileFileError::InspectPath {
+                    path: (&full).into(),
+                    source,
+                }
+                .into());
+            }
         }
         #[cfg(windows)]
-        std::os::windows::fs::symlink_file(target.as_path(), &full)?;
+        std::os::windows::fs::symlink_file(target.as_path(), &full).map_err(|source| {
+            ProfileFileError::CreateSymlink {
+                link: (&full).into(),
+                target: target.into(),
+                source,
+            }
+        })?;
         #[cfg(unix)]
-        std::os::unix::fs::symlink(target.as_path(), &full)?;
+        std::os::unix::fs::symlink(target.as_path(), &full).map_err(|source| {
+            ProfileFileError::CreateSymlink {
+                link: (&full).into(),
+                target: target.into(),
+                source,
+            }
+        })?;
         Ok(())
     }
 }
@@ -2300,6 +2344,58 @@ mod tests {
         assert_eq!(service.read(&path).unwrap(), "proxies: []\n");
         service.write_atomic(&path, "mode: rule\n").unwrap();
         assert_eq!(service.read(&path).unwrap(), "mode: rule\n");
+    }
+
+    #[test]
+    fn missing_managed_and_external_files_preserve_typed_io_errors() {
+        let (temp, service) = service();
+        let path = managed("missing-profile.yaml");
+        let expected_path = service.resolve(&path).unwrap();
+        let error = service.read(&path).unwrap_err();
+        match error.downcast_ref::<ProfileFileError>() {
+            Some(ProfileFileError::ReadFile { path, source }) => {
+                assert_eq!(path.to_string(), expected_path.display().to_string());
+                assert_eq!(source.kind(), std::io::ErrorKind::NotFound);
+            }
+            other => panic!("expected typed ReadFile failure, got {other:?}: {error:#}"),
+        }
+
+        let outside = temp.path().join("missing-external.yaml");
+        let target = ExternalProfilePath::new(outside.to_string_lossy()).unwrap();
+        let error = service.read_external(&target).unwrap_err();
+        match error.downcast_ref::<ProfileFileError>() {
+            Some(ProfileFileError::ReadExternalTarget {
+                target: failed_target,
+                source,
+            }) => {
+                assert_eq!(failed_target, &target);
+                assert_eq!(source.kind(), std::io::ErrorKind::NotFound);
+            }
+            other => panic!("expected typed external-read error, got {other:?}: {error:#}"),
+        }
+    }
+
+    #[test]
+    fn failed_atomic_write_preserves_typed_error_and_original_target() {
+        let (_temp, service) = service();
+        let path = managed("occupied-directory.yaml");
+        service.ensure_profiles_root().unwrap();
+        let full = service.resolve(&path).unwrap();
+        std::fs::create_dir(&full).unwrap();
+        std::fs::write(full.join("do-not-delete"), b"preserved").unwrap();
+
+        let error = service.write_atomic(&path, "modified: true\n").unwrap_err();
+        match error.downcast_ref::<ProfileFileError>() {
+            Some(ProfileFileError::AtomicWrite { path, source }) => {
+                assert_eq!(path.to_string(), full.display().to_string());
+                assert!(!source.to_string().is_empty());
+            }
+            other => panic!("expected typed AtomicWrite failure, got {other:?}: {error:#}"),
+        }
+        assert_eq!(
+            std::fs::read(full.join("do-not-delete")).unwrap(),
+            b"preserved"
+        );
     }
 
     #[test]
@@ -3402,7 +3498,14 @@ mod tests {
             eprintln!("symlink unsupported in this environment, skipping");
             return;
         }
-        assert!(service.ensure_not_symlink(&link).is_err());
+        let error = service.ensure_not_symlink(&link).unwrap_err();
+        assert!(
+            matches!(
+                error.downcast_ref::<ProfileFileError>(),
+                Some(ProfileFileError::UnexpectedSymlink { .. })
+            ),
+            "expected typed symlink refusal, got {error:#}"
+        );
     }
 
     #[test]
@@ -3422,7 +3525,14 @@ mod tests {
 
         let occupied = managed("occupied.yaml");
         service.write_atomic(&occupied, "x: 1\n").unwrap();
-        assert!(service.ensure_symlink(&occupied, &target).is_err());
+        let error = service.ensure_symlink(&occupied, &target).unwrap_err();
+        assert!(
+            matches!(
+                error.downcast_ref::<ProfileFileError>(),
+                Some(ProfileFileError::ExistingFileBlocksSymlink { .. })
+            ),
+            "existing file must be fenced by the typed error: {error:#}"
+        );
     }
 
     #[test]
