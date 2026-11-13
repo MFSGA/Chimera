@@ -2661,28 +2661,30 @@ mod tests {
         release_fetch.notify_one();
         allow_wait.send(()).unwrap();
 
-        // CommitRefreshed removes pending_refresh even when the reply port is gone.
-        // Bound the poll so a stuck pending_refresh fails the test instead of hanging CI.
-        let report = tokio::time::timeout(std::time::Duration::from_secs(2), async {
-            loop {
-                match client.refresh(ProfileId("r1".into()), None).await {
-                    Ok(report) => break report,
-                    Err(ProfilesError::RefreshFailed { message })
-                        if message.contains("in progress") =>
-                    {
-                        tokio::task::yield_now().await;
-                    }
-                    Err(ProfilesError::ProfileSyncJobs(chimera_jobs::Error::Busy)) => {
-                        tokio::task::yield_now().await;
-                    }
-                    Err(other) => {
-                        panic!("subsequent refresh must settle cleanly, got {other:?}")
-                    }
-                }
+        // Observe the owned job without repeatedly submitting refresh requests.
+        // The job finishes only after CommitRefreshed has settled its actor call.
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
+        loop {
+            let active_count = client
+                .profile_sync_status(ProfileId("r1".into()))
+                .await
+                .unwrap()
+                .active
+                .len();
+            if active_count == 0 {
+                break;
             }
-        })
-        .await
-        .expect("aborted refresh must clear pending_refresh promptly");
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "aborted refresh job remained active ({active_count} active run(s))"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+
+        let report = client
+            .refresh(ProfileId("r1".into()), None)
+            .await
+            .expect("subsequent refresh must succeed after the aborted job settles");
         assert!(
             report.snapshot.items[&ProfileId("r1".into())]
                 .definition

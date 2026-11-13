@@ -1694,6 +1694,11 @@ mod tests {
         run_type: RunType,
     }
 
+    struct ConfirmedStoppedCore {
+        events: Arc<Mutex<Vec<&'static str>>>,
+        run_type: RunType,
+    }
+
     struct CoreUpdateRecordingCore {
         events: Arc<Mutex<Vec<&'static str>>>,
         state: CoreState,
@@ -2664,6 +2669,44 @@ mod tests {
 
         fn recovery_notify(&self) -> Option<Arc<Notify>> {
             Some(self.recovery_notify.clone())
+        }
+
+        async fn on_profile_change(&self, _break_when: bool) {}
+    }
+
+    #[async_trait]
+    impl CoreLifecyclePort for ConfirmedStoppedCore {
+        async fn reconcile(
+            &self,
+            _clash: ClashConfig,
+            _target_core: ClashCore,
+            _run_type: RunType,
+        ) -> anyhow::Result<()> {
+            self.events.lock().unwrap().push("rebuild");
+            Ok(())
+        }
+
+        async fn stop(&self) -> anyhow::Result<()> {
+            self.events.lock().unwrap().push("stop");
+            Ok(())
+        }
+
+        async fn change_core(&self, _core: ClashCore) -> anyhow::Result<()> {
+            self.events.lock().unwrap().push("select");
+            Ok(())
+        }
+
+        async fn status(&self) -> anyhow::Result<CoreStatusSnapshot> {
+            Ok(CoreStatusSnapshot {
+                instance_id: None,
+                state: CoreState::Stopped(None),
+                state_changed_at: 1,
+                run_type: self.run_type,
+            })
+        }
+
+        fn recovery_notify(&self) -> Option<Arc<Notify>> {
+            None
         }
 
         async fn on_profile_change(&self, _break_when: bool) {}
@@ -4165,16 +4208,11 @@ mod tests {
         let events = Arc::new(Mutex::new(Vec::new()));
         let application = ApplicationClient::legacy().unwrap();
         let target = application.get_typed().core;
-        let release_stop = Arc::new(Notify::new());
-        release_stop.notify_one();
         let runtime_paths =
             RuntimePaths::from_config_root(std::path::PathBuf::from("test-runtime-root"));
         let client = CoreLifecycleClient::spawn_with_installer(
-            Arc::new(RecordingCore {
+            Arc::new(ConfirmedStoppedCore {
                 events: events.clone(),
-                stop_started: Arc::new(Notify::new()),
-                release_stop,
-                recovery_notify: Arc::new(Notify::new()),
                 run_type: RunType::Service,
             }),
             application,
@@ -4210,14 +4248,9 @@ mod tests {
         let events = Arc::new(Mutex::new(Vec::new()));
         let application = ApplicationClient::legacy().unwrap();
         let target = application.get_typed().core;
-        let release_stop = Arc::new(Notify::new());
-        release_stop.notify_one();
         let client = CoreLifecycleClient::spawn_with_installer(
-            Arc::new(RecordingCore {
+            Arc::new(ConfirmedStoppedCore {
                 events: events.clone(),
-                stop_started: Arc::new(Notify::new()),
-                release_stop,
-                recovery_notify: Arc::new(Notify::new()),
                 run_type: RunType::Normal,
             }),
             application,
