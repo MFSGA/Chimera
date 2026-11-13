@@ -1,6 +1,5 @@
-import { ensureDir } from 'jsr:@std/fs';
-import * as path from 'jsr:@std/path';
-import { colorize, consola } from './deno/utils/logger.ts';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import * as path from 'node:path';
 import {
   resolveChimeraClient,
   resolveChimeraClientAlpha,
@@ -9,14 +8,14 @@ import {
   resolveClashRsAlpha,
   resolveMihomo,
   resolveMihomoAlpha,
-  type ArchMapping,
+  type LatestVersionResolver,
 } from './manifest.ts';
+import type { ArchMapping } from './src/prepare/types.ts';
+import { colorize, consola } from './src/shared/logger.ts';
+import { WORKSPACE_ROOT } from './src/shared/repo-paths.ts';
 
 // === Constants ===
 
-const WORKSPACE_ROOT = path.join(import.meta.dirname!, '..');
-const MANIFEST_DIR = path.join(WORKSPACE_ROOT, 'manifest');
-const MANIFEST_VERSION_PATH = path.join(MANIFEST_DIR, 'version.json');
 const MANIFEST_VERSION = 1;
 
 // === Types ===
@@ -30,16 +29,16 @@ type SupportedCore =
   | 'clash_rs_alpha'
   | 'clash_premium';
 
-interface ManifestVersion {
+export interface ManifestVersion {
   manifest_version: number;
   latest: Record<SupportedCore, string>;
   arch_template: Record<SupportedCore, ArchMapping>;
   updated_at?: string;
 }
 
-// === Main ===
+type Resolver = () => LatestVersionResolver;
 
-const resolvers = [
+const resolvers: readonly Resolver[] = [
   resolveMihomo,
   resolveMihomoAlpha,
   resolveClashRs,
@@ -49,47 +48,67 @@ const resolvers = [
   resolveClashRsAlpha,
 ];
 
-consola.start(colorize`{cyan Resolving} latest versions`);
+export function buildVersionManifest(
+  results: Awaited<LatestVersionResolver>[],
+): ManifestVersion {
+  const manifest: ManifestVersion = {
+    manifest_version: MANIFEST_VERSION,
+    latest: {} as Record<SupportedCore, string>,
+    arch_template: {} as Record<SupportedCore, ArchMapping>,
+  };
 
-const results = await Promise.all(resolvers.map((r) => r()));
-
-consola.success('Resolved latest versions');
-consola.start('Generating manifest');
-
-const manifest: ManifestVersion = {
-  manifest_version: MANIFEST_VERSION,
-  latest: {} as Record<SupportedCore, string>,
-  arch_template: {} as Record<SupportedCore, ArchMapping>,
-};
-
-for (const result of results) {
-  manifest.latest[result.name as SupportedCore] = result.version;
-  manifest.arch_template[result.name as SupportedCore] = result.archMapping;
+  for (const result of results) {
+    manifest.latest[result.name as SupportedCore] = result.version;
+    manifest.arch_template[result.name as SupportedCore] = result.archMapping;
+  }
+  return manifest;
 }
 
-await ensureDir(MANIFEST_DIR);
+// The production entrypoint uses the upstream resolver order and Node file APIs.
+// Optional dependencies allow fixture-based verification without GitHub requests
+// or mutations to the checked-in manifest/version.json.
+export async function generateLatestVersion(
+  options: {
+    workspaceRoot?: string;
+    resolve?: readonly Resolver[];
+    now?: () => string;
+  } = {},
+): Promise<{ changed: boolean; manifest: ManifestVersion }> {
+  const workspaceRoot = options.workspaceRoot ?? WORKSPACE_ROOT;
+  const manifestDir = path.join(workspaceRoot, 'manifest');
+  const manifestPath = path.join(manifestDir, 'version.json');
 
-// If no changes, skip writing manifest
-let previousManifest: Partial<ManifestVersion> = {};
-try {
-  previousManifest = JSON.parse(await Deno.readTextFile(MANIFEST_VERSION_PATH));
-  delete previousManifest.updated_at;
-} catch {
-  // file may not exist yet
+  consola.start(colorize`{cyan Resolving} latest versions`);
+  const results = await Promise.all(
+    (options.resolve ?? resolvers).map((r) => r()),
+  );
+  consola.success('Resolved latest versions');
+  consola.start('Generating manifest');
+
+  const manifest = buildVersionManifest(results);
+  await mkdir(manifestDir, { recursive: true });
+
+  // Ref semantics: timestamp alone must not trigger a rewrite.
+  let previousManifest: Partial<ManifestVersion> = {};
+  try {
+    previousManifest = JSON.parse(await readFile(manifestPath, 'utf8'));
+    delete previousManifest.updated_at;
+  } catch {
+    // The manifest may not exist yet.
+  }
+
+  if (JSON.stringify(previousManifest) === JSON.stringify(manifest)) {
+    consola.success('No changes, skip writing manifest');
+    return { changed: false, manifest };
+  }
+
+  manifest.updated_at = (options.now ?? (() => new Date().toISOString()))();
+  consola.success('Generated manifest');
+  await writeFile(manifestPath, JSON.stringify(manifest, null, 2) + '\n');
+  consola.success('Manifest written');
+  return { changed: true, manifest };
 }
 
-if (JSON.stringify(previousManifest) === JSON.stringify(manifest)) {
-  consola.success('No changes, skip writing manifest');
-  Deno.exit(0);
+if (import.meta.main) {
+  await generateLatestVersion();
 }
-
-manifest.updated_at = new Date().toISOString();
-
-consola.success('Generated manifest');
-
-await Deno.writeTextFile(
-  MANIFEST_VERSION_PATH,
-  JSON.stringify(manifest, null, 2) + '\n',
-);
-
-consola.success('Manifest written');

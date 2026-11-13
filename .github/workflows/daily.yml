@@ -25,14 +25,12 @@ jobs:
         name: Install pnpm
         with:
           run_install: false
-      - name: Install Deno
-        uses: denoland/setup-deno@v2
-        with:
-          deno-version: v2.x
+      # Master uses the Node.js manifest generator; dev is kept on its
+      # existing Deno setup until the dev branch has migrated.
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
       - name: Generate Manifest
-        run: pnpm generate:manifest
+        run: pnpm run generate:manifest
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       # if nothing changed, skip commit

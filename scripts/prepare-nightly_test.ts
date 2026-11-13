@@ -1,68 +1,69 @@
 import assert from 'node:assert/strict';
+import { execFile } from 'node:child_process';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import * as path from 'node:path';
+import { test } from 'node:test';
+import { promisify } from 'node:util';
 
-const script = path.join(import.meta.dirname!, 'prepare-nightly.ts');
-const denoConfig = path.join(import.meta.dirname!, 'deno.jsonc');
+const exec = promisify(execFile);
+const entry = path.join(import.meta.dirname!, 'prepare-nightly.ts');
 
-async function git(cwd: string, args: string[]) {
-  const result = await new Deno.Command('git', {
-    args,
-    cwd,
-    stdout: 'piped',
-    stderr: 'piped',
-  }).output();
-  assert.equal(result.code, 0, new TextDecoder().decode(result.stderr));
-  return new TextDecoder().decode(result.stdout).trim();
+async function writeJson(root: string, target: string, value: unknown) {
+  const file = path.join(root, target);
+  await mkdir(path.dirname(file), { recursive: true });
+  await writeFile(file, JSON.stringify(value));
 }
 
-async function writeJson(root: string, name: string, value: unknown) {
-  const file = path.join(root, name);
-  await Deno.mkdir(path.dirname(file), { recursive: true });
-  await Deno.writeTextFile(file, JSON.stringify(value));
+async function readJson(root: string, target: string) {
+  return JSON.parse(await readFile(path.join(root, target), 'utf8'));
 }
 
-async function readJson(root: string, name: string) {
-  return JSON.parse(await Deno.readTextFile(path.join(root, name)));
-}
+async function fixture(run: (root: string, hash: string) => Promise<void>) {
+  const root = await mkdtemp(path.join(tmpdir(), 'chimera-nightly-node-'));
+  try {
+    await writeJson(root, 'backend/tauri/tauri.conf.json', {
+      version: '0.27.1',
+      bundle: {
+        targets: ['nsis', 'msi'],
+        createUpdaterArtifacts: true,
+        windows: {
+          webviewInstallMode: { silent: true, type: 'downloadBootstrapper' },
+        },
+      },
+      plugins: {
+        updater: {
+          endpoints: [
+            'https://example.test/update.json',
+            'https://example.test/update-proxy.json',
+          ],
+        },
+      },
+    });
+    await writeJson(root, 'backend/tauri/overrides/nightly.conf.json', {
+      version: '0.15.3',
+    });
+    await writeJson(root, 'backend/tauri/overrides/fixed-webview2.conf.json', {
+      bundle: {
+        windows: {
+          webviewInstallMode: { type: 'fixedRuntime', path: 'placeholder' },
+        },
+      },
+      plugins: {
+        updater: {
+          endpoints: ['https://example.test/update-fixed-webview.json'],
+        },
+      },
+    });
+    await writeJson(root, 'frontend/chimera/package.json', {
+      version: '0.27.1',
+    });
+    await writeJson(root, 'package.json', { version: '0.27.1' });
 
-async function runPrepare(root: string, flags: string[]) {
-  const result = await new Deno.Command(Deno.execPath(), {
-    args: ['run', '--frozen', '--config', denoConfig, '-A', script, ...flags],
-    cwd: root,
-    stdout: 'piped',
-    stderr: 'piped',
-  }).output();
-  assert.equal(
-    result.code,
-    0,
-    `${flags.join(' ')}: ${new TextDecoder().decode(result.stderr)}`,
-  );
-  return {
-    tauri: await readJson(root, 'backend/tauri/tauri.nightly.conf.json'),
-    app: await readJson(root, 'frontend/chimera/package.json'),
-    root: await readJson(root, 'package.json'),
-  };
-}
-
-Deno.test(
-  'Linux nightly uses an RPM-safe Tauri version while preserving updater SemVer',
-  async () => {
-    // The preparation script reads and writes only this isolated fake checkout.
-    const root = await Deno.makeTempDir({ prefix: 'chimera-nightly-version-' });
-    try {
-      await writeJson(root, 'backend/tauri/tauri.conf.json', {
-        version: '0.27.1',
-        bundle: { targets: 'all', createUpdaterArtifacts: true },
-      });
-      await writeJson(root, 'backend/tauri/overrides/nightly.conf.json', {
-        version: '0.15.3',
-      });
-      await writeJson(root, 'frontend/chimera/package.json', {
-        version: '0.27.1',
-      });
-      await writeJson(root, 'package.json', { version: '0.27.1' });
-      await git(root, ['init', '-q']);
-      await git(root, [
+    await exec('git', ['init', '-q'], { cwd: root });
+    await exec(
+      'git',
+      [
         '-c',
         'user.name=Fixture',
         '-c',
@@ -71,33 +72,116 @@ Deno.test(
         '--allow-empty',
         '-qm',
         'fixture',
-      ]);
-      const hash = (await git(root, ['rev-parse', 'HEAD'])).slice(0, 7);
-      const appVersion = `0.15.3-alpha+${hash}`;
+      ],
+      { cwd: root },
+    );
+    const { stdout } = await exec('git', ['rev-parse', 'HEAD'], { cwd: root });
+    await run(root, stdout.trim().slice(0, 7));
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+}
 
-      const linux = await runPrepare(root, ['--linux', '--disable-updater']);
-      assert.equal(linux.tauri.version, `0.15.3+alpha.${hash}`);
-      assert.match(linux.tauri.version, /^[a-zA-Z0-9._+%{}~^]+$/);
-      assert.equal(linux.tauri.bundle.createUpdaterArtifacts, false);
-      assert.equal(linux.app.version, appVersion);
-      assert.equal(linux.root.version, appVersion);
+async function prepare(root: string, args: string[]) {
+  await exec(process.execPath, [entry, ...args], { cwd: root });
+  return {
+    tauri: await readJson(root, 'backend/tauri/tauri.nightly.conf.json'),
+    app: await readJson(root, 'frontend/chimera/package.json'),
+    root: await readJson(root, 'package.json'),
+  };
+}
 
-      const linuxX64 = await runPrepare(root, ['--linux']);
-      assert.equal(linuxX64.tauri.version, `0.15.3+alpha.${hash}`);
-      assert.equal(linuxX64.tauri.bundle.createUpdaterArtifacts, true);
-      assert.equal(linuxX64.app.version, appVersion);
+test('Linux nightly uses RPM-safe version without breaking updater SemVer', async () => {
+  await fixture(async (root, hash) => {
+    const result = await prepare(root, ['--linux', '--disable-updater']);
+    assert.equal(result.tauri.version, `0.15.3+alpha.${hash}`);
+    assert.match(result.tauri.version, /^[a-zA-Z0-9._+%{}~^]+$/);
+    assert.equal(result.tauri.bundle.createUpdaterArtifacts, false);
+    assert.equal(result.app.version, `0.15.3-alpha+${hash}`);
+    assert.equal(result.root.version, result.app.version);
 
-      const mac = await runPrepare(root, []);
-      assert.equal(mac.tauri.version, appVersion);
-      assert.equal(mac.tauri.bundle.createUpdaterArtifacts, true);
-      assert.equal(mac.app.version, appVersion);
+    const enabled = await prepare(root, ['--linux']);
+    assert.equal(enabled.tauri.bundle.createUpdaterArtifacts, true);
+    assert.equal(enabled.tauri.version, `0.15.3+alpha.${hash}`);
 
-      const nsis = await runPrepare(root, ['--nsis']);
-      assert.equal(nsis.tauri.version, '0.15.3');
-      assert.deepEqual(nsis.tauri.bundle.targets, ['nsis']);
-      assert.equal(nsis.app.version, appVersion);
-    } finally {
-      await Deno.remove(root, { recursive: true });
-    }
-  },
-);
+    const mac = await prepare(root, []);
+    assert.equal(mac.tauri.version, `0.15.3-alpha+${hash}`);
+    assert.deepEqual(mac.tauri.bundle.targets, ['nsis', 'msi']);
+
+    const nsis = await prepare(root, ['--nsis']);
+    assert.equal(nsis.tauri.version, '0.15.3');
+    assert.deepEqual(nsis.tauri.bundle.targets, ['nsis']);
+    assert.equal(nsis.app.version, `0.15.3-alpha+${hash}`);
+    const msi = await prepare(root, ['--msi']);
+    assert.equal(msi.tauri.version, '0.15.3');
+  });
+});
+
+test('fixed WebView nightly preserves Chimera endpoints and uses local extracted runtime', async () => {
+  await fixture(async (root) => {
+    await mkdir(
+      path.join(
+        root,
+        'backend/tauri/Microsoft.WebView2.FixedVersionRuntime.127.0',
+      ),
+      { recursive: true },
+    );
+    const result = await prepare(root, ['--nsis', '--fixed-webview']);
+    assert.equal(
+      result.tauri.bundle.windows.webviewInstallMode.path,
+      './Microsoft.WebView2.FixedVersionRuntime.127.0',
+    );
+    assert.equal(
+      result.tauri.bundle.windows.webviewInstallMode.silent,
+      undefined,
+    );
+    assert.equal(
+      result.tauri.plugins.updater.endpoints[0],
+      'https://example.test/update-nightly-fixed-webview.json',
+    );
+    assert.equal(
+      result.tauri.plugins.updater.endpoints[1],
+      'https://example.test/update-nightly-proxy.json',
+    );
+  });
+});
+
+test('missing fixed WebView runtime aborts without altering previous files', async () => {
+  await fixture(async (root) => {
+    const rootFile = path.join(root, 'package.json');
+    const original = await readFile(rootFile, 'utf8');
+    await assert.rejects(
+      exec(process.execPath, [entry, '--fixed-webview'], { cwd: root }),
+      /WebView2 runtime not found/,
+    );
+    assert.equal(await readFile(rootFile, 'utf8'), original);
+    await assert.rejects(
+      readFile(path.join(root, 'backend/tauri/tauri.nightly.conf.json')),
+      { code: 'ENOENT' },
+    );
+  });
+});
+
+test('Git revision lookup failure does not write nightly configuration', async () => {
+  const root = await mkdtemp(
+    path.join(tmpdir(), 'chimera-nightly-invalid-git-'),
+  );
+  try {
+    await writeJson(root, 'backend/tauri/tauri.conf.json', {
+      version: '0.28.2',
+      bundle: {},
+    });
+    await writeJson(root, 'backend/tauri/overrides/nightly.conf.json', {});
+    await writeJson(root, 'frontend/chimera/package.json', {
+      version: '0.28.2',
+    });
+    await writeJson(root, 'package.json', { version: '0.28.2' });
+    await assert.rejects(
+      exec(process.execPath, [entry], { cwd: root }),
+      /failed to resolve nightly Git commit/,
+    );
+    assert.equal((await readJson(root, 'package.json')).version, '0.28.2');
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});

@@ -1,4 +1,3 @@
-import { consola } from './deno/utils/logger.ts';
 import { githubApiHeaders } from './github-api.ts';
 import { resolveChimeraClientAlphaFromGithub } from './src/prepare/chimera-client-alpha.ts';
 import type { ArchMapping } from './src/prepare/types.ts';
@@ -7,6 +6,7 @@ import {
   fetchText as fetchVersionText,
   isValidVersion,
 } from './src/prepare/versions.ts';
+import { consola } from './src/shared/logger.ts';
 
 export type { ArchMapping } from './src/prepare/types.ts';
 
@@ -26,7 +26,7 @@ const MIHOMO_ALPHA_ASSETS_URL =
   'https://github.com/MetaCubeX/mihomo/releases/expanded_assets/Prerelease-Alpha';
 
 async function githubFetch<T>(url: string): Promise<T> {
-  const token = Deno.env.get('GITHUB_TOKEN') || Deno.env.get('GH_TOKEN');
+  const token = process.env.GITHUB_TOKEN || process.env.GH_TOKEN;
   const resp = await fetch(url, { headers: githubApiHeaders(token) });
   if (!resp.ok) {
     const detail = (await resp.text()).trim();

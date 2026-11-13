@@ -1,0 +1,11 @@
+{
+  "extends": "./tsconfig.prepare.json",
+  "files": ["updater-nightly.ts", "updater-nightly_test.ts"],
+  "include": [
+    "updater-nightly.ts",
+    "updater-nightly_test.ts",
+    "updater-manifest.ts",
+    "src/shared/*.ts"
+  ],
+  "exclude": []
+}

@@ -1,0 +1,10 @@
+{
+  "extends": "./tsconfig.prepare.json",
+  "files": ["extract-data-slots.ts", "extract-data-slots_test.ts"],
+  "include": [
+    "extract-data-slots.ts",
+    "extract-data-slots_test.ts",
+    "src/shared/*.ts"
+  ],
+  "exclude": []
+}

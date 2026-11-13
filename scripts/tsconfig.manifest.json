@@ -1,0 +1,19 @@
+{
+  "extends": "./tsconfig.prepare.json",
+  "files": [
+    "manifest.ts",
+    "generate-latest-version.ts",
+    "manifest-node_test.ts"
+  ],
+  "include": [
+    "manifest.ts",
+    "generate-latest-version.ts",
+    "manifest-node_test.ts",
+    "github-api.ts",
+    "src/shared/*.ts",
+    "src/prepare/types.ts",
+    "src/prepare/versions.ts",
+    "src/prepare/chimera-client-alpha.ts"
+  ],
+  "exclude": ["src/prepare/*_test.ts", "src/prepare/test_utils.ts"]
+}

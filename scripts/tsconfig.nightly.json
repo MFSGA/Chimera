@@ -1,0 +1,10 @@
+{
+  "extends": "./tsconfig.prepare.json",
+  "files": ["prepare-nightly.ts", "prepare-nightly_test.ts"],
+  "include": [
+    "prepare-nightly.ts",
+    "prepare-nightly_test.ts",
+    "src/shared/*.ts"
+  ],
+  "exclude": []
+}

@@ -1,4 +1,6 @@
-import { fromFileUrl, globToRegExp } from '@std/path';
+import { appendFile } from 'node:fs/promises';
+import { runCommand } from '../shared/command.ts';
+import { WORKSPACE_ROOT } from '../shared/repo-paths.ts';
 
 /** The parts of the repository CI checks independently. */
 export type Part = 'frontend' | 'backend' | 'scripts';
@@ -14,7 +16,9 @@ export interface ChangeRule {
 
 /**
  * Ordered rules: the first rule matching a changed file decides its parts.
- * A file no rule matches checks every part, so new paths are over-checked.
+ * A file no rule matches checks every part, so a new directory or
+ * configuration file is over-checked rather than missed. Update this table
+ * when moving directories, configuration or frameworks.
  */
 export const CHANGE_RULES: readonly ChangeRule[] = [
   {
@@ -62,6 +66,28 @@ export const CHANGE_RULES: readonly ChangeRule[] = [
   },
 ];
 
+/** Compiles a glob where `*` stays in one segment and `**` crosses segments. */
+function globToRegExp(pattern: string): RegExp {
+  let source = '';
+  for (let i = 0; i < pattern.length; i++) {
+    const char = pattern[i];
+    if (char === '*' && pattern[i + 1] === '*') {
+      i++;
+      if (pattern[i + 1] === '/') {
+        i++;
+        source += '(?:.*/)?';
+      } else {
+        source += '.*';
+      }
+    } else if (char === '*') {
+      source += '[^/]*';
+    } else {
+      source += char.replace(/[.+^${}()|[\]\\?]/g, '\\$&');
+    }
+  }
+  return new RegExp(`^${source}$`);
+}
+
 const compiledRules = CHANGE_RULES.map((rule) => ({
   regexps: rule.patterns.map((pattern) => globToRegExp(pattern)),
   parts: rule.parts,
@@ -84,33 +110,28 @@ export function changedParts(files: Iterable<string>): Set<Part> {
 }
 
 async function changedFiles(cwd: string, base: string) {
-  const result = await new Deno.Command('git', {
+  const result = await runCommand('git', {
     cwd,
     args: ['diff', '--name-only', '--no-renames', '-z', base, 'HEAD', '--'],
-    stdout: 'piped',
-    stderr: 'piped',
-  }).output();
+  });
   if (result.code !== 0) {
-    throw new Error(new TextDecoder().decode(result.stderr));
+    throw new Error(result.stderr.toString('utf8'));
   }
-  return new TextDecoder().decode(result.stdout).split('\0').filter(Boolean);
+  return result.stdout.toString('utf8').split('\0').filter(Boolean);
 }
 
 if (import.meta.main) {
   // Without a base (pushes pass an empty one), every part is checked.
-  const base = Deno.args[0];
-  const workspaceRoot = fromFileUrl(new URL('../../..', import.meta.url));
+  const base = process.argv[2];
   const parts = base
-    ? changedParts(await changedFiles(workspaceRoot, base))
+    ? changedParts(await changedFiles(WORKSPACE_ROOT, base))
     : new Set(PARTS);
 
   const lines = PARTS.map((part) => `${part}=${parts.has(part)}`);
   console.log(lines.join('\n'));
 
-  const output = Deno.env.get('GITHUB_OUTPUT');
+  const output = process.env.GITHUB_OUTPUT;
   if (output) {
-    await Deno.writeTextFile(output, `${lines.join('\n')}\n`, {
-      append: true,
-    });
+    await appendFile(output, `${lines.join('\n')}\n`);
   }
 }

@@ -1,0 +1,10 @@
+{
+  "extends": "./tsconfig.prepare.json",
+  "files": ["src/ci/changed-parts.ts", "src/ci/changed-parts_test.ts"],
+  "include": [
+    "src/ci/changed-parts.ts",
+    "src/ci/changed-parts_test.ts",
+    "src/shared/*.ts"
+  ],
+  "exclude": []
+}

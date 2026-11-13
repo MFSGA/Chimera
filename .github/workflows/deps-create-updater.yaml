@@ -78,9 +78,13 @@ jobs:
       - name: Test updater asset mapping
         run: pnpm test:updater-manifest
 
-      - uses: denoland/setup-deno@v2
-        with:
-          deno-version: v2.x
+      - name: Typecheck nightly updater (Node.js)
+        if: ${{ inputs.nightly == true }}
+        run: pnpm run typecheck:updater:nightly
+
+      - name: Test nightly updater without GitHub mutations
+        if: ${{ inputs.nightly == true }}
+        run: pnpm run test:updater:nightly:node
 
       - name: Update Nightly Updater
         if: ${{ inputs.nightly == true }}

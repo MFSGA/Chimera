@@ -1,124 +1,128 @@
-import * as path from 'jsr:@std/path';
-import { merge } from 'npm:lodash-es';
-import { consola } from './deno/utils/logger.ts';
+import { readdir, readFile, writeFile } from 'node:fs/promises';
+import * as path from 'node:path';
+import { runCommand } from './src/shared/command.ts';
+import { consola } from './src/shared/logger.ts';
 
-const cwd = Deno.cwd();
-const TAURI_APP_DIR = path.join(cwd, 'backend/tauri');
-const TAURI_FIXED_WEBVIEW2_CONFIG_OVERRIDE_PATH = path.join(
-  TAURI_APP_DIR,
-  'overrides/fixed-webview2.conf.json',
-);
-const TAURI_DEV_APP_CONF_PATH = path.join(
-  TAURI_APP_DIR,
-  'tauri.nightly.conf.json',
-);
-const TAURI_APP_CONF = path.join(TAURI_APP_DIR, 'tauri.conf.json');
-const TAURI_DEV_APP_OVERRIDES_PATH = path.join(
-  TAURI_APP_DIR,
-  'overrides/nightly.conf.json',
-);
-const CHIMERA_PACKAGE_JSON_PATH = path.join(
-  cwd,
-  'frontend/chimera/package.json',
-);
-const ROOT_PACKAGE_JSON_PATH = path.join(cwd, 'package.json');
+type JsonObject = Record<string, any>;
 
-const isNSIS = Deno.args.includes('--nsis');
-const isMSI = Deno.args.includes('--msi');
-const isLinux = Deno.args.includes('--linux');
-const fixedWebview = Deno.args.includes('--fixed-webview');
-const disableUpdater = Deno.args.includes('--disable-updater');
-
-async function readJsonFile<T>(filePath: string): Promise<T> {
-  return JSON.parse(await Deno.readTextFile(filePath)) as T;
-}
-
-async function writeJsonFile(filePath: string, value: unknown) {
-  await Deno.writeTextFile(filePath, JSON.stringify(value, null, 2));
-}
-
-async function resolveFixedWebviewPath() {
-  for await (const entry of Deno.readDir(TAURI_APP_DIR)) {
-    if (entry.name.includes('WebView2')) {
-      return `./${path.basename(entry.name)}`;
+function mergeJson(base: JsonObject, override: JsonObject): JsonObject {
+  // Match the existing lodash merge behavior for JSON objects and arrays,
+  // without introducing a new runtime dependency or touching pnpm-lock.yaml.
+  for (const [key, value] of Object.entries(override)) {
+    const previous = base[key];
+    if (Array.isArray(value)) {
+      const values = Array.isArray(previous) ? [...previous] : [];
+      for (let i = 0; i < value.length; i++) {
+        values[i] =
+          value[i] && typeof value[i] === 'object' && !Array.isArray(value[i])
+            ? mergeJson(
+                previous?.[i] && typeof previous[i] === 'object'
+                  ? { ...previous[i] }
+                  : {},
+                value[i],
+              )
+            : value[i];
+      }
+      base[key] = values;
+    } else if (value && typeof value === 'object') {
+      base[key] = mergeJson(
+        previous && typeof previous === 'object' && !Array.isArray(previous)
+          ? { ...previous }
+          : {},
+        value,
+      );
+    } else {
+      base[key] = value;
     }
   }
-
-  throw new Error('WebView2 runtime not found');
+  return base;
 }
 
-async function getCurrentGitShortHash() {
-  const gitResult = await new Deno.Command('git', {
-    // The full object ID gives an identical seven-character build ID in
-    // shallow build jobs and full-history updater jobs.
-    args: ['rev-parse', 'HEAD'],
-    stdout: 'piped',
-  }).output();
-  return new TextDecoder().decode(gitResult.stdout).trim().slice(0, 7);
+async function readJson(file: string): Promise<JsonObject> {
+  return JSON.parse(await readFile(file, 'utf8')) as JsonObject;
 }
 
-async function main() {
-  consola.debug('Read config...');
-  const tauriAppConf =
-    await readJsonFile<Record<string, unknown>>(TAURI_APP_CONF);
-  const tauriAppOverrides = await readJsonFile<Record<string, unknown>>(
-    TAURI_DEV_APP_OVERRIDES_PATH,
+async function fixedWebviewPath(tauriDir: string): Promise<string> {
+  const entry = (await readdir(tauriDir)).find((name) =>
+    name.includes('WebView2'),
   );
-  let tauriConf = merge(tauriAppConf, tauriAppOverrides);
-  const chimeraPackageJson = await readJsonFile<Record<string, unknown>>(
-    CHIMERA_PACKAGE_JSON_PATH,
-  );
-  const rootPackageJson = await readJsonFile<Record<string, unknown>>(
-    ROOT_PACKAGE_JSON_PATH,
-  );
+  if (!entry) throw new Error('WebView2 runtime not found');
+  return `./${path.basename(entry)}`;
+}
 
-  if (fixedWebview) {
-    const fixedWebview2Config = await readJsonFile<Record<string, unknown>>(
-      TAURI_FIXED_WEBVIEW2_CONFIG_OVERRIDE_PATH,
+/**
+ * Prepare the nightly configuration in one workspace.
+ * The cwd override exists for disposable test repositories only.
+ */
+export async function prepareNightly(
+  cwd = process.cwd(),
+  args: readonly string[] = process.argv.slice(2),
+): Promise<void> {
+  const tauriDir = path.join(cwd, 'backend/tauri');
+  const tauriConf = mergeJson(
+    await readJson(path.join(tauriDir, 'tauri.conf.json')),
+    await readJson(path.join(tauriDir, 'overrides/nightly.conf.json')),
+  );
+  const chimeraPath = path.join(cwd, 'frontend/chimera/package.json');
+  const rootPath = path.join(cwd, 'package.json');
+  const chimeraPackage = await readJson(chimeraPath);
+  const rootPackage = await readJson(rootPath);
+
+  const isNSIS = args.includes('--nsis');
+  const isMSI = args.includes('--msi');
+  const isLinux = args.includes('--linux');
+  const isFixedWebview = args.includes('--fixed-webview');
+  const disableUpdater = args.includes('--disable-updater');
+
+  if (isFixedWebview) {
+    mergeJson(
+      tauriConf,
+      await readJson(path.join(tauriDir, 'overrides/fixed-webview2.conf.json')),
     );
-    tauriConf = merge(tauriConf, fixedWebview2Config);
-    const webviewInstallMode = tauriConf.bundle.windows.webviewInstallMode;
-    delete webviewInstallMode.silent;
-    webviewInstallMode.path = await resolveFixedWebviewPath();
+    const webviewMode = tauriConf.bundle.windows.webviewInstallMode;
+    delete webviewMode.silent;
+    webviewMode.path = await fixedWebviewPath(tauriDir);
+    // Preserve Chimera's separate fixed-WebView nightly updater endpoints.
     tauriConf.plugins.updater.endpoints =
       tauriConf.plugins.updater.endpoints.map((endpoint: string) =>
         endpoint.replace('update-', 'update-nightly-'),
       );
   }
 
-  if (isNSIS) {
-    tauriConf.bundle.targets = ['nsis'];
+  if (isNSIS) tauriConf.bundle.targets = ['nsis'];
+  if (disableUpdater) tauriConf.bundle.createUpdaterArtifacts = false;
+
+  const git = await runCommand('git', {
+    cwd,
+    args: ['rev-parse', 'HEAD'],
+  });
+  if (!git.success) {
+    throw new Error(
+      `failed to resolve nightly Git commit: ${git.stderr.toString('utf8')}`,
+    );
   }
+  const hash = git.stdout.toString('utf8').trim().slice(0, 7);
+  if (!/^[0-9a-f]{7}$/.test(hash))
+    throw new Error('invalid nightly commit hash');
+  const baseVersion = tauriConf.version;
+  const nightlyVersion = `${baseVersion}-alpha+${hash}`;
+  const linuxVersion = `${baseVersion}+alpha.${hash}`;
 
-  if (disableUpdater) {
-    tauriConf.bundle.createUpdaterArtifacts = false;
-  }
+  // Keep the existing RPM/DEB and Tauri/NSIS/MSI version semantics.
+  if (isLinux) tauriConf.version = linuxVersion;
+  else if (!isNSIS && !isMSI) tauriConf.version = nightlyVersion;
 
-  consola.debug('Get current git short hash');
-  const gitShortHash = await getCurrentGitShortHash();
-  consola.debug(`Current git short hash: ${gitShortHash}`);
-
-  const version = `${tauriConf.version}-alpha+${gitShortHash}`;
-  // Match ref: RPM/DEB bundle versions cannot contain `-`, but Tauri still
-  // requires SemVer. Build metadata is accepted by both package formats.
-  // Keep the updater/package.json version unchanged across platforms.
-  const linuxVersion = `${tauriConf.version}+alpha.${gitShortHash}`;
-
-  consola.debug('Write tauri version to tauri.nightly.conf.json');
-  if (isLinux) {
-    tauriConf.version = linuxVersion;
-  } else if (!isNSIS && !isMSI) {
-    tauriConf.version = version;
-  }
-  await writeJsonFile(TAURI_DEV_APP_CONF_PATH, tauriConf);
-  consola.debug('tauri.nightly.conf.json updated');
-
-  consola.debug('Write nightly version to package.json');
-  chimeraPackageJson.version = version;
-  await writeJsonFile(CHIMERA_PACKAGE_JSON_PATH, chimeraPackageJson);
-  rootPackageJson.version = version;
-  await writeJsonFile(ROOT_PACKAGE_JSON_PATH, rootPackageJson);
-  consola.debug('package.json updated');
+  chimeraPackage.version = nightlyVersion;
+  rootPackage.version = nightlyVersion;
+  await writeFile(
+    path.join(tauriDir, 'tauri.nightly.conf.json'),
+    JSON.stringify(tauriConf, null, 2),
+  );
+  await writeFile(chimeraPath, JSON.stringify(chimeraPackage, null, 2));
+  await writeFile(rootPath, JSON.stringify(rootPackage, null, 2));
+  consola.success(`Nightly configuration prepared for ${hash}`);
 }
 
-main();
+if (import.meta.main) {
+  await prepareNightly();
+}

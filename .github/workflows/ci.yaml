@@ -37,16 +37,19 @@ jobs:
         with:
           fetch-depth: 2
 
-      - uses: denoland/setup-deno@v2
+      - name: Install Node.js
+        uses: actions/setup-node@v7
         with:
-          deno-version: v2.x
+          node-version: 24
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          run_install: false
 
       - name: Classify changed paths
         id: classify
-        run: >-
-          deno run --frozen --config scripts/deno.jsonc
-          --allow-run=git --allow-read --allow-write --allow-env=GITHUB_OUTPUT
-          scripts/src/ci/changed-parts.ts "$BASE"
+        run: pnpm run check:changed-parts "$BASE"
         env:
           BASE: ${{ github.event_name == 'pull_request' && 'HEAD^1' || '' }}
 
@@ -199,10 +202,6 @@ jobs:
         if: startsWith(matrix.targets.os, 'ubuntu-') && (env.BACKEND == 'true' || env.SCRIPTS == 'true')
         run: deno test --allow-read --allow-write scripts/deno/utils/sidecar-integrity_test.ts
 
-      - name: Test changed path classification
-        if: startsWith(matrix.targets.os, 'ubuntu-') && env.SCRIPTS == 'true'
-        run: pnpm test:changed-parts
-
       - name: Test release draft preflight
         if: startsWith(matrix.targets.os, 'ubuntu-') && env.SCRIPTS == 'true'
         run: pnpm test:release-preflight
@@ -302,6 +301,46 @@ jobs:
       - name: Test resource preparation
         if: env.RUN == 'true'
         run: pnpm run test:prepare:node
+
+      - name: Typecheck CI change classification
+        if: env.SCRIPTS == 'true'
+        run: pnpm run typecheck:ci
+
+      - name: Test CI change classification
+        if: env.SCRIPTS == 'true'
+        run: pnpm run test:changed-parts
+
+      - name: Typecheck data-slot generation
+        if: env.SCRIPTS == 'true'
+        run: pnpm run typecheck:data-slots
+
+      - name: Test data-slot generation
+        if: env.SCRIPTS == 'true'
+        run: pnpm run test:data-slots
+
+      - name: Typecheck manifest generator
+        if: env.SCRIPTS == 'true'
+        run: pnpm run typecheck:manifest
+
+      - name: Test manifest generator
+        if: env.SCRIPTS == 'true'
+        run: pnpm run test:manifest:node
+
+      - name: Typecheck nightly preparation
+        if: env.SCRIPTS == 'true'
+        run: pnpm run typecheck:nightly
+
+      - name: Test nightly preparation
+        if: env.SCRIPTS == 'true'
+        run: pnpm run test:nightly:node
+
+      - name: Typecheck nightly updater
+        if: env.SCRIPTS == 'true'
+        run: pnpm run typecheck:updater:nightly
+
+      - name: Test nightly updater
+        if: env.SCRIPTS == 'true'
+        run: pnpm run test:updater:nightly:node
 
   build:
     name: Build Tauri
