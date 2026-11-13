@@ -52,6 +52,10 @@ pub enum ServiceCommandError {
         #[serde(skip)]
         source: UserError,
     },
+    // Chimera's staged Tauri host still resolves paths through legacy helpers;
+    // keep their errors distinct until it uses the injected PathResolver.
+    #[snafu(display("could not resolve the application directories: {message}"))]
+    ResolveLegacyServiceDirs { message: String },
     #[snafu(display("could not resolve the application directories: {source}"))]
     ResolveServiceDirs {
         #[snafu(source(from(InstallDirError, Box::new)))]
@@ -118,4 +122,7 @@ pub trait ServiceProcessControl: Send + Sync + 'static {
     async fn start_daemon(&self) -> Result<(), ServiceCommandError>;
     async fn stop_daemon(&self) -> Result<(), ServiceCommandError>;
     async fn update(&self) -> Result<(), ServiceCommandError>;
+    /// Chimera extension: its service CLI exposes a single native restart command.
+    /// Keep this operation atomic rather than composing stop + start.
+    async fn restart_daemon(&self) -> Result<(), ServiceCommandError>;
 }
