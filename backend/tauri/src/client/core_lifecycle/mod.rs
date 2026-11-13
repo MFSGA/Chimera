@@ -4203,6 +4203,65 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn refused_os_core_copy_keeps_target_and_does_not_restart() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let mut app = chimera_config::application::ChimeraAppConfig::default();
+        app.core = ClashCore::Mihomo;
+        let client = CoreLifecycleClient::spawn_with_installer(
+            Arc::new(CoreUpdateRecordingCore {
+                events: events.clone(),
+                state: CoreState::Stopped(None),
+                state_changed_at: 1,
+                active_kind: None,
+                receipt_error: false,
+            }),
+            ApplicationClient::static_state(app),
+            ClashConfigClient::legacy().unwrap(),
+            RuntimePaths::from_config_root(std::path::PathBuf::from("test-runtime-root")),
+            Arc::new(chimera_os::core_install::FsBinaryInstaller::new(Arc::new(
+                chimera_os::elevation::RefuseElevation,
+            ))),
+        )
+        .await
+        .unwrap();
+
+        let staging = Arc::new(tempfile::tempdir().unwrap());
+        let source = staging.path().join("staged-mihomo");
+        std::fs::write(&source, b"new-mihomo-binary").unwrap();
+        let destination_dir = tempfile::tempdir().unwrap();
+        let destination = destination_dir.path().join("mihomo");
+        // A directory is a deterministic copy failure on all supported OSes;
+        // no permissions are changed and no real elevation is attempted.
+        std::fs::create_dir(&destination).unwrap();
+        let marker = destination.join("existing-core-marker");
+        std::fs::write(&marker, b"preserved").unwrap();
+
+        let error = client
+            .replace_core_binary(PreparedCoreBinary {
+                target: ClashCore::Mihomo,
+                source: source.clone(),
+                destination: destination.clone(),
+                staging,
+                progress: Arc::new(RecordingProgress {
+                    events: events.clone(),
+                }),
+            })
+            .await
+            .expect_err("refused elevated fallback must fail the update");
+
+        assert!(
+            error.to_string().contains("could not authorize copying"),
+            "unexpected failure: {error:#}"
+        );
+        assert_eq!(std::fs::read(&marker).unwrap(), b"preserved");
+        // The staged source is owned by the update request. Once the failed
+        // operation completes, its temporary directory is intentionally gone.
+        assert!(!source.exists());
+        assert!(destination.is_dir());
+        assert_eq!(events.lock().unwrap().as_slice(), ["finished-error"]);
+    }
+
+    #[tokio::test]
     async fn updating_an_inactive_core_does_not_stop_or_restart_the_confirmed_active_core() {
         let events = run_binary_update(
             ClashCore::Mihomo,
