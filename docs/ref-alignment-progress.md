@@ -1,5 +1,14 @@
 # ref 对齐进度
 
+## DIFF-082：同步最新 origin/master，保留上游 CI 修复并 rebase（2026-11-13）
+
+- **来源与操作**：从本地 `master@7f08640f`、开发分支 `codex/ref-os-dns-20261112@2d8e2351` 开始，`git fetch --prune origin master` 获取远程 `origin/master@ba79abf6`，新增 6 笔主线提交（Profiles 转换链、E2E、manifest、CI 测试修复）。初始相对远程主线为落后 6、领先 13。仅 `backend/tauri/src/client/core_lifecycle/mod.rs` 与本地改动重叠，`ref`/runtime gitlink 无变化。随后对**当前开发分支**执行有 GPG 签名的 `git rebase origin/master`；没有更改本地 `master` 指针、远程 `master`、配置或子模块，也没有推送。
+- **唯一冲突及处理依据**：本地旧 `6d3dea47` 原本修正 Core Lifecycle 两个“已停止”测试夹具的 `state_changed_at=0` 误判；远程 `ba79abf6` 已用 `ConfirmedStoppedCore`（`state_changed_at=1`）修复**完全相同两项用例**，同时保留 Service 与 Normal 的原运行模式。为避免覆盖上游且重复建立 mock，rebase 对该单一旧提交执行 `--skip`；不再使用旧提交中的 `CoreUpdateRecordingCore` 夹具修正。旧 DIFF-079 是当时的历史结果，其测试夹具说明**由本条记录替代**。其余 12 笔提交按原顺序完成 rebase、重签，无 squash。
+- **旧 SHA → rebase 后 SHA**：`1f2ee880` → `bbbba22d`；`e03423b6` → `60a18761`；`f19a28a0` → `0b5fb57d`；`12903261` → `6ec8c245`；`08f63dd0` → `92a225e5`；`d2f91f9c` → `ba91584c`；`a1d43a63` → `2cdcec27`；`6d3dea47` → **由远程 `ba79abf6` 等价覆盖，不再提交**；`7841abf6` → `d781ef64`；`0e9a6c55` → `be331dba`；`a81fcee1` → `5138f5e3`；`3f6e0bbe` → `70388a27`；`2d8e2351` → `c38b24a1`。旧 DIFF-075～081 文本中的提交号用于记录它们发生时的历史位置；需要执行 `git show` / `git revert` 时应使用此处对应的新 SHA。
+- **rebase 后实际验证**：`cargo check --locked --manifest-path backend/Cargo.toml -p chimera --all-features --tests` **通过**；`cargo test --locked --manifest-path backend/Cargo.toml -p chimera --lib client::core_lifecycle::tests -- --test-threads=2` **39/39**；`cargo +stable test --locked --manifest-path backend/Cargo.toml -p chimera-contracts --lib` **5/5**；`cargo +stable test --locked --manifest-path backend/Cargo.toml -p chimera-os --lib -- --test-threads=2` **23/23**。完成检查时工作树干净、相对最新 origin/master 领先 12 落后 0。**尚未验证**当前重写提交在 Ubuntu/Windows 的远程 CI、真实 Service/核心更新提权、发行安装包和桌面 E2E；不得将本机 macOS 测试当作跨平台成功。
+- **下一阶段**：此处仅记录审计，不合并或推送；先确认开发分支、重写后提交签名与本地检查，再决定如何进入主线并等待真实 CI 信号。原有历史提交与 rebase 前的引用可经 Git reflog 回查，但不可直接当作当前主线 SHA。
+
+
 ## DIFF-081：Core Install CI 可验证性与真实拒绝授权回归（2026-11-13）
 
 - **审计基线**：继续沿用 `ref@59724e85c` 和主仓 Core Install 提交 `a81fcee1`、`3f6e0bbe`；本轮不修改上游引入的 OS 复制/提权实现、Core Install 共享契约、`ref` 和 runtime gitlink。重点检查 Windows/Linux 构建验证是否真正完成，以及生产更新流程中拒绝权限后的实际文件效果。
