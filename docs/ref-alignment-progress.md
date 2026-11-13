@@ -1,5 +1,15 @@
 # ref 对齐进度
 
+## DIFF-086：ProfileFsPort 文件操作的精准类型化错误映射（2026-11-13）
+
+- **基线与范围**：在固定 `ref@59724e85c`、`backend/chimera-runtime@d56b083` 和本地 `codex/ref-os-dns-20261112` 上继续承接 DIFF-085。只改 `backend/tauri/src/service/profile_file.rs` 文件 I/O 失败的错误映射与对应测试，不改 App/Profiles 配置、文件事务算法、IPC 错误协议或生产行为；未合并、未推送。此轮风险为文件操作错误来源和日志文本的变化。
+- **对应上游**：对照 `ref/backend/nyanpasu-profile-io/src/fs_service.rs` 的 `ProfileFsPort` 实现和 `ref/backend/nyanpasu-contracts/src/profiles/error.rs`，将 `read` 的直接 I/O 错误映射为 `ReadFile`（路径、原始 `io::Error`），将 `write_atomic` 的 `atomicwrites` 错误封装为 `AtomicWrite`（路径、原始库错误对象），将 `read_external` 映射为 `ReadExternalTarget`（外部目标、原始 `io::Error`），将 `ensure_not_symlink` 的叶节点拒绝与 metadata 读取错误分别归类为 `UnexpectedSymlink` 和 `InspectPath`。`ensure_symlink` 保持原判断/链接更新顺序，将已有文件占用、旧链接删除、metadata 读取、链接创建分别归类为 `ExistingFileBlocksSymlink`、`RemoveFile`、`InspectPath` 和 `CreateSymlink`。
+- **兼容与安全边界**：`resolve`、目录链验证、`ensure_managed_parent`、`remove_nofollow`、`symlink_points_to` 及物化 journal/cleanup/recovery 暂仍返回旧的 `anyhow::Result`，避免未保留失败阶段与真实 `io::Error` 的错误统一包装。现有 Tauri `ProfileFsPort`/`ProfileMaterializationPort` **仍然是 `anyhow` 签名**，本轮仅在实际生产代码中通过 `?`/`into()` 保留底层 `ProfileFileError`，使调用方可 `downcast_ref` 且原始来源链不丢失。上游 Contracts 的完整 typed Port **仍未作为生产 Trait 接线**；不同错误文本可能影响日志消费方，须在跨平台/桌面验收时检查。
+- **新增断言**：缺失托管文件与外部文件能精确 downcast 为 `ReadFile` / `ReadExternalTarget`，并保留目标及 `ErrorKind::NotFound`；将目录作为原子写入目标时返回 `AtomicWrite`，原目录标记内容不被改写；既有符号链接拒绝用例强化为 `UnexpectedSymlink`；已有正常文件阻挡 symlink 的保护强化为 `ExistingFileBlocksSymlink`。若 Windows 测试环境禁止创建测试链接，沿用旧测试的权限跳过规则，不能把跳过视为已覆盖 Windows symlink。
+- **实测验证**：`cargo check --locked -p chimera --all-features --tests` **通过**；`cargo test --locked -p chimera --lib service::profile_file::tests -- --test-threads=2` **45/45 通过**；`cargo test --locked -p chimera --lib client::profiles::tests -- --test-threads=2` **86/86 通过**；`cargo fmt --check`、提交钩子进一步校验。未执行 Windows/Linux CI、实际提权/真实配置、全部后端单测或桌面 E2E。
+- **后续工作**：分别审计路径解析/目录链错误、`remove_nofollow`、journal 读写与恢复的 typed mapping，在完整覆盖后再将生产 `ProfileFsPort` 和 `ProfileMaterializationPort` 替换为 Contracts 签名；严格保持 Windows reparse point 拒绝、no-follow、不覆盖旧状态及异步失败传播。
+
+
 ## DIFF-085：完整 Profile 错误及文件/事务 Port 契约下沉（2026-11-13）
 
 - **基线与范围**：继续固定 `ref@59724e85c` 和 `backend/chimera-runtime@d56b083`，仅在 `codex/ref-os-dns-20261112` 开发分支操作，不推送、不合并、不触碰实际用户 Profiles 数据或系统代理。Mac 开发助手连接恢复后发现磁盘仅剩 123 MiB，因此在确认 Cargo/rustc 未运行后仅清除 `backend/target/debug/incremental/chimera_lib-*` 等可再生成构建缓存，为编译/测试腾出空间，Git 工作树未受清理影响。
