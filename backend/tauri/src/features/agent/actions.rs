@@ -29,7 +29,8 @@ use super::{
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 use super::diagnostics::host_scope;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
-use crate::client::system_proxy::{SystemProxyActionError, ports::OsProxyConfig};
+use crate::client::system_proxy::SystemProxyActionError;
+use chimera_contracts::system_proxy::OsProxyConfig;
 
 const PROPOSAL_TTL: Duration = Duration::from_secs(60);
 const MIN_PROPOSAL_INTERVAL: Duration = Duration::from_millis(500);

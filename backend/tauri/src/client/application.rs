@@ -513,7 +513,7 @@ impl ChimeraClient {
         expected_core_state_changed_at: i64,
         expected_port: u16,
         desired_before: bool,
-        original: super::system_proxy::ports::OsProxyConfig,
+        original: chimera_contracts::system_proxy::OsProxyConfig,
     ) -> Result<(), super::system_proxy::SystemProxyActionError> {
         let _mutation = self.inner.system_proxy_mutation.lock().await;
         let Some(system_proxy) = &self.inner.system_proxy else {
@@ -543,7 +543,7 @@ impl ChimeraClient {
     pub(crate) async fn restore_system_proxy_after_failed_action(
         &self,
         _mutation: &SystemProxyMutation<'_>,
-        original: super::system_proxy::ports::OsProxyConfig,
+        original: chimera_contracts::system_proxy::OsProxyConfig,
     ) -> Result<(), super::system_proxy::SystemProxyActionError> {
         let Some(system_proxy) = &self.inner.system_proxy else {
             return Err(super::system_proxy::SystemProxyActionError::Stopped);

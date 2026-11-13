@@ -1,5 +1,15 @@
 # ref 对齐进度
 
+## DIFF-076：System Proxy / Autostart / PAC OS 适配拆分（2026-11-12）
+
+- **基线与范围**：主仓 `codex/ref-os-dns-20261112@e03423b6`，只读固定 `ref@59724e85c34abb6995c22d101c876cc06dc16576`。完成 OS 层的 System Proxy、Autostart 和 PAC 相关源码复制与真实生产装配；不更改 `ref/`、`backend/chimera-runtime`、用户代理设置、真实网络或系统登录项。
+- **上游路径**：`ref/backend/nyanpasu-contracts/src/system_proxy.rs` → `backend/chimera-contracts/src/system_proxy.rs`，保留 `OsProxyPort`、`AutoLaunchPort`、`PacPort`、配置数据和类型化错误合同；`ref/backend/nyanpasu-os/src/{system_proxy.rs,autostart.rs,pac.rs,blocking.rs}` → 新 `backend/chimera-os/src/` 对应原名。仅实施 `nyanpasu_contracts` → `chimera_contracts` 的 crate 映射和 manifest 依赖，`verge-dev` feature 由 Tauri 传递到 OS crate，保留禁止开发构建关闭正式自启动的行为。
+- **生产接线**：`backend/tauri/src/setup.rs` 继续使用 Tauri shell 的 `current_exe()` 和 AppImage 路径，构建新 `chimera_os::autostart::AutoLaunchBackend`，并注入新 `chimera_os::{system_proxy::SysproxyOsProxy,pac::HttpPacBackend}` 到原 `SystemProxyActor`。删除 `backend/tauri/src/client/system_proxy/{ports.rs,adapters.rs}`，该 Actor 的协调状态、写入序列、守护、PAC 回退、关闭恢复逻辑不改。更新 Application、Effects、Core Lifecycle、Agent 中受影响的 port 类型引用，避免重建平行实现；Main/Legacy/Agent 共享原 Actor/Client 的写入入口。
+- **风险与剩余差异**：L2，系统代理/登录项和 PAC 均可造成宿主副作用，未运行任何实际修改。旧 `backend/tauri/src/core/sysopt.rs` 仍包含直接 `sysproxy` 写入的历史类，但本轮静态搜索未发现 `Sysopt` 的生产调用点；独立的 IPC、Agent、Profile File 与 HTTP 工具仍有直接的 OS proxy **只读**访问，尚未对齐 `ref/backend/nyanpasu-os/src/system_proxy_source.rs`。后续需沿真实消费者 port 边界收敛读源并独立检查旧 Sysopt 可删除性，不在本轮擅自删除其余代码。System Proxy Actor 自身仍在 Tauri，而非独立 core；属于后续应用所有权迁移，不宣称已经完成核心/GUI 拆分。
+- **实际验证**：`cargo check --manifest-path backend/Cargo.toml -p chimera-os -p chimera-contracts --lib`、`cargo check --manifest-path backend/Cargo.toml -p chimera --all-features --tests` 均通过；`cargo test --manifest-path backend/Cargo.toml -p chimera-os --lib` **5/5**（含 Autostart 路径、DNS 授权拒绝、blocking panic）、`cargo test --manifest-path backend/Cargo.toml -p chimera --lib client::system_proxy::tests` **41/41**、`cargo test --manifest-path backend/Cargo.toml -p chimera --lib client::effects::executor::tests` **4/4**。这些均使用假 port，不更改宿主代理、PAC、登录项或网络。
+- **额外回归与缺口**：`cargo test --manifest-path backend/Cargo.toml -p chimera --lib client::core_lifecycle::` **35/37**，两项二进制更新测试稳定失败：`binary_replacement_of_a_stopped_selected_core_installs_then_restarts` 和 `binary_install_failure_does_not_stop_or_restart_a_stopped_core`，实际在 `install` 前多出 `stop-start`/`stop-end`。本轮在 Core Lifecycle 文件只更改 Proxy 类型路径，未改二进制更新逻辑；不能据此确认是新迁移回归或证明既有基线通过，单独列为独立排查项。Windows/Linux 目标编译、真实 PAC 下载/系统代理应用、桌面重启和 Service 端到端均未执行。
+- **回滚与下一步**：恢复这批 contracts/OS 文件和 Tauri 调用方类型路径，再恢复旧 Tauri `ports.rs`/`adapters.rs`；无持久化迁移或本机系统操作。下一步迁移 `system_proxy_source` 读源及 Service/Core Install 的 port 和 OS 机制，再按上游所有权将 Actor/Client 从 Tauri 下沉到 core；对两项 Core Lifecycle 用例另开小范围问题修复。
+
 ## DIFF-075：OS Contracts / System DNS 注入路径（2026-11-12，部分迁移）
 
 - **目标**：把 DNS flush 从 Tauri 内部的匿名 `anyhow` OS 实现迁移为上游同形的类型化 port、Shell elevation policy 和独立 OS adapter；依然由现有 `ChimeraClient`、Main/Legacy/Agent 共享应用入口调用，不新增第二套系统 DNS 实现。

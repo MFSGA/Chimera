@@ -165,21 +165,25 @@ pub fn setup(
         }
     };
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
-    let auto_launch = crate::client::system_proxy::adapters::AutoLaunchConfig::resolve(appimage)
-        .and_then(crate::client::system_proxy::adapters::AutoLaunchBackend::new)
+    let auto_launch = tauri::utils::platform::current_exe()
+        .map_err(
+            |source| chimera_contracts::system_proxy::AutoLaunchError::LocateExecutable { source },
+        )
+        .and_then(|exe| chimera_os::autostart::AutoLaunchConfig::resolve(&exe, appimage))
+        .and_then(chimera_os::autostart::AutoLaunchBackend::new)
         .context("failed to resolve the auto-launch registration")?;
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     let pac = {
         let cache_path = camino::Utf8PathBuf::from_path_buf(paths.cache_dir().join("pac.js"))
             .map_err(|path| anyhow::anyhow!("PAC cache path is not UTF-8: {}", path.display()))?;
-        crate::client::system_proxy::adapters::HttpPacBackend::new(cache_path)
+        chimera_os::pac::HttpPacBackend::new(cache_path)
             .context("failed to build the PAC backend")?
     };
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     let system_proxy =
         tauri::async_runtime::block_on(crate::client::system_proxy::SystemProxyClient::spawn(
             crate::client::system_proxy::SystemProxyArgs {
-                os: Arc::new(crate::client::system_proxy::adapters::SysproxyOsProxy),
+                os: Arc::new(chimera_os::system_proxy::SysproxyOsProxy),
                 auto_launch: Arc::new(auto_launch),
                 pac: Arc::new(pac),
                 schedule_guard_ticks: true,

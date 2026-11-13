@@ -1395,9 +1395,20 @@ dependencies = [
 name = "chimera-os"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
+ "auto-launch",
+ "camino",
  "chimera-contracts",
+ "dunce",
+ "reqwest",
  "runas",
  "snafu",
+ "sysproxy",
+ "tempfile",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "url",
 ]
 
 [[package]]

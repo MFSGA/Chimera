@@ -264,7 +264,7 @@ tokio = { workspace = true, features = ["test-util"] }
 default = ["default-meta", "agent"]
 agent = []
 nightly = []
-verge-dev = []
+verge-dev = ["chimera-os/verge-dev"]
 default-meta = []
 deadlock-detection = ["parking_lot/deadlock_detection"]
 e2e = ["dep:tauri-plugin-wdio-webdriver"]
