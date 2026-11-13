@@ -215,7 +215,7 @@ impl Drop for ChimeraClientInner {
 struct NoSelfProxyPort;
 
 #[cfg(test)]
-impl crate::service::profile_file::SelfProxyPortSource for NoSelfProxyPort {
+impl chimera_contracts::net::SelfProxyPortSource for NoSelfProxyPort {
     fn mixed_port(&self) -> Option<u16> {
         None
     }
