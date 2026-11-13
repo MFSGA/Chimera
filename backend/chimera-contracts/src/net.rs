@@ -13,3 +13,10 @@ pub trait SelfProxyPortSource: Send + Sync + 'static {
 pub trait ChangelogHttp: Send + Sync + 'static {
     async fn get_text(&self, url: &url::Url) -> Result<String>;
 }
+
+/// Reads the currently enabled OS proxy URL whenever a network client is created.
+/// A disabled system proxy is represented as `None`, matching the pinned ref.
+#[cfg_attr(any(test, feature = "test-support"), mockall::automock)]
+pub trait SystemProxySource: Send + Sync + 'static {
+    fn system_proxy(&self) -> Result<Option<String>>;
+}
