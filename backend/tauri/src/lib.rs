@@ -405,9 +405,10 @@ pub fn run() -> std::process::ExitCode {
         tauri::RunEvent::Exit => {
             // The event loop can no longer complete scheduled UI work.
             // Release hotkey actors awaiting a main-thread result.
-            if let Some(handoff) = app_handle.try_state::<
-                std::sync::Arc<crate::client::hotkey::main_thread::MainThreadHandoff>,
-            >() {
+            if let Some(handoff) = app_handle
+                .try_state::<std::sync::Arc<crate::client::hotkey::main_thread::MainThreadHandoff>>(
+                )
+            {
                 handoff.mark_event_loop_lost();
             }
         }
@@ -421,23 +422,10 @@ pub fn run() -> std::process::ExitCode {
         {
             match event {
                 tauri::WindowEvent::CloseRequested { .. } => {
+                    // WindowManager invokes the kind's on_dismissed hook and
+                    // queues geometry through SessionState. The Tauri event
+                    // thread must never wait on the actor's disk write.
                     log::debug!(target: "app", "window close requested: {label}");
-                    match app_handle.try_state::<crate::client::ChimeraClient>() {
-                        Some(client) => {
-                            if let Err(error) = chimera_utils::runtime::block_on(
-                                crate::window::persist_window_state(
-                                    app_handle,
-                                    client.inner(),
-                                    label.as_str(),
-                                ),
-                            ) {
-                                log::error!(target: "app", "failed to persist window state for {label}: {error:?}");
-                            }
-                        }
-                        None => {
-                            log::warn!(target: "app", "ChimeraClient unavailable while persisting window state for {label}");
-                        }
-                    }
                 }
                 tauri::WindowEvent::Destroyed => {
                     if let Some(registry) = app_handle.try_state::<

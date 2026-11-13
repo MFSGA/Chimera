@@ -180,6 +180,12 @@ pub async fn cleanup_processes_async(app_handle: &AppHandle) -> anyhow::Result<(
     if let Err(error) = crate::window::persist_active_window_state(app_handle, &client).await {
         log::error!(target: "app", "failed to persist active window state during cleanup: {error:?}");
     }
+    // on_dismissed may have queued a save immediately before exit. An actor
+    // read fences those messages; the legacy Verge mirror is written only
+    // after all previously queued typed writes have been applied.
+    if let Err(error) = client.flush_main_window_geometry_saves().await {
+        log::error!(target: "app", "failed to flush queued window state before shutdown: {error:?}");
+    }
     client.shutdown_core().await?;
     Ok(())
 }

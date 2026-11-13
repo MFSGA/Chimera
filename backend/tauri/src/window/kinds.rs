@@ -8,7 +8,28 @@ use super::{
 };
 use crate::config::{Config, chimera::WindowState};
 use anyhow::{Result, anyhow};
-use tauri::AppHandle;
+use tauri::{AppHandle, Manager};
+
+/// Both Chimera UIs share the same persisted main-window geometry. The typed
+/// SessionState snapshot is authoritative; use the legacy Verge state only
+/// before the client is registered in Tauri's state container.
+fn initial_main_window_state(app_handle: &AppHandle) -> Option<WindowState> {
+    match app_handle.try_state::<crate::client::ChimeraClient>() {
+        Some(client) => client.main_window_geometry().map(legacy_window_state),
+        None => Config::verge().latest().window_size_state.clone(),
+    }
+}
+
+fn legacy_window_state(state: chimera_config::state::window::WindowState) -> WindowState {
+    WindowState {
+        width: state.width,
+        height: state.height,
+        x: state.x,
+        y: state.y,
+        maximized: state.maximized,
+        fullscreen: state.fullscreen,
+    }
+}
 
 #[derive(Clone)]
 pub struct MainWindow;
@@ -30,11 +51,14 @@ impl AppWindow for MainWindow {
             .min_size(400.0, 600.0)
             .center(true)
     }
-    fn get_window_state(&self, _app_handle: &AppHandle) -> Option<WindowState> {
-        Config::verge().latest().window_size_state.clone()
+    fn get_window_state(&self, app_handle: &AppHandle) -> Option<WindowState> {
+        initial_main_window_state(app_handle)
     }
     fn close_override(&self, settings: &WindowCloseSettings) -> WindowCloseOverride {
         settings.main
+    }
+    fn on_dismissed(&self, window: &tauri::WebviewWindow) {
+        crate::log_err!(crate::window::queue_window_state_save(window));
     }
 }
 
@@ -60,11 +84,14 @@ impl AppWindow for LegacyWindow {
             .min_size(400.0, 600.0)
             .center(true)
     }
-    fn get_window_state(&self, _app_handle: &AppHandle) -> Option<WindowState> {
-        Config::verge().latest().window_size_state.clone()
+    fn get_window_state(&self, app_handle: &AppHandle) -> Option<WindowState> {
+        initial_main_window_state(app_handle)
     }
     fn close_override(&self, settings: &WindowCloseSettings) -> WindowCloseOverride {
         settings.main
+    }
+    fn on_dismissed(&self, window: &tauri::WebviewWindow) {
+        crate::log_err!(crate::window::queue_window_state_save(window));
     }
 }
 
@@ -150,6 +177,23 @@ impl AppWindow for EditorWindow {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn typed_main_geometry_maps_to_existing_window_state_shape() {
+        let typed = chimera_config::state::window::WindowState {
+            width: 1180,
+            height: 790,
+            x: -22,
+            y: 140,
+            maximized: true,
+            fullscreen: false,
+        };
+        let legacy = legacy_window_state(typed);
+        assert_eq!((legacy.width, legacy.height), (1180, 790));
+        assert_eq!((legacy.x, legacy.y), (-22, 140));
+        assert!(legacy.maximized);
+        assert!(!legacy.fullscreen);
+    }
 
     #[test]
     fn retained_editor_urls_and_labels_are_unchanged() {

@@ -1,7 +1,10 @@
 use std::sync::Arc;
 
 use anyhow::Context as _;
-use chimera_config::state::{PersistentState, PersistentStatePatch};
+use chimera_config::state::{
+    PersistentState, PersistentStatePatch,
+    window::{WindowLabel, WindowState},
+};
 use chimera_core::state::{PersistentStateManager, ReplaceIfVersionResult, Version};
 use ractor::{Actor, ActorProcessingErr, ActorRef, RpcReplyPort};
 use struct_patch::Patch;
@@ -34,6 +37,16 @@ pub enum SessionStateActorMessage {
     Patch {
         patch: PersistentStatePatch,
         reply: RpcReplyPort<anyhow::Result<SessionStateSnapshot>>,
+    },
+    /// Ref-style, ordered main-window geometry save. A missing reply makes
+    /// dismissal fire-and-forget on the native event thread.
+    SaveMainWindow {
+        geometry: WindowState,
+        reply: Option<RpcReplyPort<anyhow::Result<SessionStateSnapshot>>>,
+    },
+    #[cfg(test)]
+    TestDelay {
+        millis: u64,
     },
     Replace {
         state: PersistentState,
@@ -146,6 +159,26 @@ impl Actor for SessionStateActor {
                 .await;
                 let _ = reply.send(result);
             }
+            SessionStateActorMessage::SaveMainWindow { geometry, reply } => {
+                let result = async {
+                    let mut next = state.manager.snapshot_handle().load().state.clone();
+                    next.window_state.insert(
+                        WindowLabel(crate::consts::MAIN_WINDOW_LABEL.into()),
+                        geometry,
+                    );
+                    Self::commit(state, next).await
+                }
+                .await;
+                if let Some(reply) = reply {
+                    let _ = reply.send(result);
+                } else if let Err(error) = result {
+                    tracing::error!(%error, "queued main window geometry save failed");
+                }
+            }
+            #[cfg(test)]
+            SessionStateActorMessage::TestDelay { millis } => {
+                tokio::time::sleep(std::time::Duration::from_millis(millis)).await;
+            }
             SessionStateActorMessage::Replace { state: next, reply } => {
                 let _ = reply.send(Self::commit(state, next).await);
             }
@@ -178,6 +211,21 @@ mod tests {
     use tempfile::tempdir;
 
     struct FailingWindowMirror;
+
+    struct AcceptingWindowMirror;
+
+    impl WindowLegacyBridge for AcceptingWindowMirror {
+        fn prepare(
+            &self,
+            _snap: &PersistentState,
+        ) -> anyhow::Result<Box<dyn PreparedLegacyMirror>> {
+            Ok(Box::new(crate::state::mirror::NoopPreparedLegacyMirror))
+        }
+
+        fn snapshot_legacy(&self) -> anyhow::Result<PersistentState> {
+            Ok(PersistentState::default())
+        }
+    }
 
     impl WindowLegacyBridge for FailingWindowMirror {
         fn prepare(
@@ -222,6 +270,72 @@ mod tests {
             CallResult::SenderError => anyhow::bail!("session state actor reply dropped"),
             CallResult::Timeout => anyhow::bail!("session state actor call timed out"),
         }
+    }
+
+    #[tokio::test]
+    async fn queued_window_geometry_is_ordered_and_durable_before_get() {
+        let (actor, dir) = spawn_actor(Arc::new(AcceptingWindowMirror)).await;
+        let geometry = |width| WindowState {
+            width,
+            height: 768,
+            x: 10,
+            y: 20,
+            maximized: false,
+            fullscreen: false,
+        };
+
+        // A different window entry must survive the main-window patch.
+        let mut patch = PersistentState::new_empty_patch();
+        patch.window_state = Some(BTreeMap::from([(
+            WindowLabel("other".into()),
+            geometry(500),
+        )]));
+        match actor
+            .call(
+                |reply| SessionStateActorMessage::Patch { patch, reply },
+                None,
+            )
+            .await
+            .unwrap()
+        {
+            CallResult::Success(result) => {
+                result.unwrap();
+            }
+            _ => panic!("preparation patch failed"),
+        }
+
+        // A main-thread dismissal only casts. A subsequent Get is a fence:
+        // both queued writes must be applied before it returns.
+        for width in [900, 1024] {
+            actor
+                .cast(SessionStateActorMessage::SaveMainWindow {
+                    geometry: geometry(width),
+                    reply: None,
+                })
+                .unwrap();
+        }
+        let snapshot = get_snapshot(&actor).await.unwrap();
+        assert_eq!(
+            snapshot
+                .state
+                .window_state
+                .get(&WindowLabel(crate::consts::MAIN_WINDOW_LABEL.into()))
+                .unwrap()
+                .width,
+            1024
+        );
+        assert_eq!(
+            snapshot
+                .state
+                .window_state
+                .get(&WindowLabel("other".into()))
+                .unwrap()
+                .width,
+            500
+        );
+
+        let saved = std::fs::read_to_string(dir.path().join("session-state.yaml")).unwrap();
+        assert!(saved.contains("1024"), "queued geometry was not persisted");
     }
 
     #[tokio::test]

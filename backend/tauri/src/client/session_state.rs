@@ -101,6 +101,41 @@ impl SessionStateClient {
         }
     }
 
+    /// Read the actor-owned window geometry without consulting the legacy
+    /// Verge mirror. A valid typed state (including an empty one) is final.
+    pub(crate) fn main_window_geometry(&self) -> Option<WindowState> {
+        self.get_typed()
+            .window_state
+            .get(&WindowLabel(crate::consts::MAIN_WINDOW_LABEL.into()))
+            .cloned()
+    }
+
+    /// Synchronous acknowledgement from the same actor that accepts queued
+    /// saves; merging the one entry inside the actor avoids replacing another
+    /// queued update with a stale whole-map snapshot.
+    pub(crate) async fn save_main_window(&self, geometry: WindowState) -> anyhow::Result<()> {
+        match self.inner.as_ref() {
+            SessionStateClientInner::Actor { .. } => {
+                self.call(
+                    |reply| SessionStateActorMessage::SaveMainWindow {
+                        geometry,
+                        reply: Some(reply),
+                    },
+                    None,
+                )
+                .await?;
+            }
+            #[cfg(test)]
+            SessionStateClientInner::Static { state } => {
+                state.write().window_state.insert(
+                    WindowLabel(crate::consts::MAIN_WINDOW_LABEL.into()),
+                    geometry,
+                );
+            }
+        }
+        Ok(())
+    }
+
     pub(crate) async fn get(&self) -> anyhow::Result<SessionStateSnapshot> {
         match self.inner.as_ref() {
             SessionStateClientInner::Actor { .. } => {
@@ -116,6 +151,44 @@ impl SessionStateClient {
                 version: 0,
             }),
         }
+    }
+
+    /// Wait for all actor messages already queued by this client to finish.
+    /// Shutdown must not use the ordinary read timeout: exiting on timeout
+    /// could discard a geometry write that is still being persisted.
+    pub(crate) async fn wait_for_pending_writes(&self) -> anyhow::Result<()> {
+        match self.inner.as_ref() {
+            SessionStateClientInner::Actor { .. } => {
+                self.call(SessionStateActorMessage::Get, None).await?;
+            }
+            #[cfg(test)]
+            SessionStateClientInner::Static { .. } => {}
+        }
+        Ok(())
+    }
+
+    /// Queue the main window geometry on the session-state actor without
+    /// waiting on Tauri's window-event thread. The actor serializes saves
+    /// with other session-state mutations and persists the typed file.
+    pub(crate) fn queue_main_window_save(&self, geometry: WindowState) -> anyhow::Result<()> {
+        match self.inner.as_ref() {
+            SessionStateClientInner::Actor { actor_ref, .. } => {
+                actor_ref
+                    .cast(SessionStateActorMessage::SaveMainWindow {
+                        geometry,
+                        reply: None,
+                    })
+                    .map_err(|_| anyhow::anyhow!("session state actor stopped"))?;
+            }
+            #[cfg(test)]
+            SessionStateClientInner::Static { state } => {
+                state.write().window_state.insert(
+                    WindowLabel(crate::consts::MAIN_WINDOW_LABEL.into()),
+                    geometry,
+                );
+            }
+        }
+        Ok(())
     }
 
     pub(crate) async fn patch(
@@ -229,21 +302,28 @@ impl SessionStateClient {
 }
 
 impl super::ChimeraClient {
-    pub(crate) async fn save_main_window_state(
+    /// Called by the window-kind dismissal hook; follows ref's queued save.
+    pub(crate) fn queue_main_window_geometry_save(
         &self,
-        state: Option<WindowState>,
+        geometry: WindowState,
     ) -> anyhow::Result<()> {
-        let mut next = self.inner.session_state.get_typed();
-        let label = WindowLabel(crate::consts::MAIN_WINDOW_LABEL.into());
-        if let Some(state) = state {
-            next.window_state.insert(label, state);
-        } else {
-            next.window_state.remove(&label);
-        }
+        self.inner.session_state.queue_main_window_save(geometry)
+    }
 
-        let mut patch = PersistentState::new_empty_patch();
-        patch.window_state = Some(next.window_state);
-        self.inner.session_state.patch(patch).await?;
+    /// Fence all previously queued geometry saves during graceful shutdown,
+    /// then persist the legacy mirror for older consumers of verge.yaml.
+    pub(crate) async fn flush_main_window_geometry_saves(&self) -> anyhow::Result<()> {
+        self.inner.session_state.wait_for_pending_writes().await?;
+        crate::config::core::Config::verge().data().save_file()?;
+        Ok(())
+    }
+
+    pub(crate) fn main_window_geometry(&self) -> Option<WindowState> {
+        self.inner.session_state.main_window_geometry()
+    }
+
+    pub(crate) async fn save_main_window_state(&self, state: WindowState) -> anyhow::Result<()> {
+        self.inner.session_state.save_main_window(state).await?;
         crate::config::core::Config::verge().data().save_file()?;
         Ok(())
     }
@@ -296,6 +376,94 @@ mod tests {
         fn snapshot_legacy(&self) -> anyhow::Result<PersistentState> {
             Ok(self.legacy.clone())
         }
+    }
+
+    #[tokio::test]
+    async fn queued_and_acknowledged_geometry_writes_preserve_other_windows() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = Utf8PathBuf::from_path_buf(dir.path().join("session-state.yaml")).unwrap();
+        let bridge: Arc<dyn WindowLegacyBridge> = Arc::new(RecordingBridge {
+            legacy: PersistentState::default(),
+            mirrored: Arc::new(Mutex::new(None)),
+        });
+        let client = SessionStateClient::new(path, PersistentState::default(), bridge)
+            .await
+            .unwrap();
+        let geometry = |width| WindowState {
+            width,
+            height: 680,
+            x: 10,
+            y: 20,
+            maximized: false,
+            fullscreen: false,
+        };
+
+        let mut patch = PersistentState::new_empty_patch();
+        patch.window_state = Some(BTreeMap::from([(
+            WindowLabel("editor".into()),
+            geometry(500),
+        )]));
+        client.patch(patch).await.unwrap();
+
+        client.queue_main_window_save(geometry(900)).unwrap();
+        client.save_main_window(geometry(1024)).await.unwrap();
+
+        assert_eq!(client.main_window_geometry().map(|s| s.width), Some(1024));
+        let state = client.get().await.unwrap().state;
+        assert_eq!(state.window_state[&WindowLabel("main".into())].width, 1024);
+        assert_eq!(state.window_state[&WindowLabel("editor".into())].width, 500);
+        let saved: PersistentState =
+            serde_yaml::from_slice(&std::fs::read(dir.path().join("session-state.yaml")).unwrap())
+                .unwrap();
+        assert_eq!(saved.window_state[&WindowLabel("main".into())].width, 1024);
+        assert_eq!(saved.window_state[&WindowLabel("editor".into())].width, 500);
+    }
+
+    #[tokio::test]
+    async fn shutdown_barrier_waits_until_queued_geometry_is_durable() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = Utf8PathBuf::from_path_buf(dir.path().join("session-state.yaml")).unwrap();
+        let bridge: Arc<dyn WindowLegacyBridge> = Arc::new(RecordingBridge {
+            legacy: PersistentState::default(),
+            mirrored: Arc::new(Mutex::new(None)),
+        });
+        let client = SessionStateClient::new(path, PersistentState::default(), bridge)
+            .await
+            .unwrap();
+        let SessionStateClientInner::Actor { actor_ref, .. } = client.inner.as_ref() else {
+            panic!("session-state actor is unavailable");
+        };
+        // Keep the actor busy longer than its ordinary read timeout. This
+        // makes the test fail if shutdown regresses to `get()`.
+        actor_ref
+            .cast(SessionStateActorMessage::TestDelay {
+                millis: (SESSION_STATE_READ_TIMEOUT + Duration::from_secs(1)).as_millis() as u64,
+            })
+            .unwrap();
+        let geometry = WindowState {
+            width: 1120,
+            height: 740,
+            x: 15,
+            y: 25,
+            maximized: false,
+            fullscreen: false,
+        };
+
+        tokio::time::timeout(
+            SESSION_STATE_READ_TIMEOUT + Duration::from_secs(10),
+            async {
+                client.queue_main_window_save(geometry.clone()).unwrap();
+                client.wait_for_pending_writes().await.unwrap();
+            },
+        )
+        .await
+        .expect("shutdown barrier timed out while a queued write was pending");
+
+        assert_eq!(client.main_window_geometry(), Some(geometry.clone()));
+        let saved: PersistentState =
+            serde_yaml::from_slice(&std::fs::read(dir.path().join("session-state.yaml")).unwrap())
+                .unwrap();
+        assert_eq!(saved.window_state[&WindowLabel("main".into())], geometry);
     }
 
     #[tokio::test]

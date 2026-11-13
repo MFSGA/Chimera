@@ -251,6 +251,31 @@ pub(crate) fn capture_window_state(window: &WebviewWindow) -> Result<Option<Wind
     ))
 }
 
+/// Queue a geometry save from the native dismissal event without blocking the
+/// Tauri main thread. SessionState owns the typed write; shutdown drains its
+/// mailbox and then writes the old Verge compatibility mirror.
+pub(crate) fn queue_window_state_save(window: &WebviewWindow) -> Result<()> {
+    if window.is_minimized()? {
+        return Ok(());
+    }
+    let Some(state) = capture_window_state(window)? else {
+        return Ok(());
+    };
+    let geometry = chimera_config::state::window::WindowState {
+        width: state.width,
+        height: state.height,
+        x: state.x,
+        y: state.y,
+        maximized: state.maximized,
+        fullscreen: state.fullscreen,
+    };
+    let client = window
+        .app_handle()
+        .try_state::<crate::client::ChimeraClient>()
+        .ok_or_else(|| anyhow!("ChimeraClient not managed during window dismissal"))?;
+    client.queue_main_window_geometry_save(geometry)
+}
+
 pub(crate) async fn persist_window_state(
     app_handle: &AppHandle,
     client: &crate::client::ChimeraClient,
@@ -270,16 +295,21 @@ pub(crate) async fn persist_window_state(
         return Ok(());
     }
 
-    let state =
-        capture_window_state(&window)?.map(|state| chimera_config::state::window::WindowState {
+    let Some(state) = capture_window_state(&window)? else {
+        // Ref preserves the last persisted geometry when a monitor is
+        // unavailable; absence of a new capture is not a delete request.
+        return Ok(());
+    };
+    client
+        .save_main_window_state(chimera_config::state::window::WindowState {
             width: state.width,
             height: state.height,
             x: state.x,
             y: state.y,
             maximized: state.maximized,
             fullscreen: state.fullscreen,
-        });
-    client.save_main_window_state(state).await?;
+        })
+        .await?;
     Ok(())
 }
 
@@ -297,9 +327,17 @@ pub(crate) async fn persist_active_window_state(
         crate::consts::MAIN_WINDOW_LABEL
     };
 
-    let label = if app_handle.get_webview_window(preferred).is_some() {
+    // A hidden window already queued its geometry through on_dismissed.
+    // Capturing it again after hiding may overwrite the queued value.
+    // Likewise, an initially hidden/unready window has no valid first paint.
+    let presented = |label| {
+        app_handle
+            .get_webview_window(label)
+            .is_some_and(|window| window.is_visible().unwrap_or(false))
+    };
+    let label = if presented(preferred) {
         preferred
-    } else if app_handle.get_webview_window(fallback).is_some() {
+    } else if presented(fallback) {
         fallback
     } else {
         return Ok(());
