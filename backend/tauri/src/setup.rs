@@ -72,10 +72,15 @@ pub fn setup(
         tasks: tasks.clone(),
     });
     let traffic_store = open_traffic_store(&paths);
-    let profile_service = Arc::new(crate::service::profile_file::ProfileFileService::new(
-        paths.clone(),
-        Arc::new(LegacySelfProxyPort),
-    ));
+    let system_proxy_source: Arc<dyn chimera_contracts::net::SystemProxySource> =
+        Arc::new(chimera_os::system_proxy_source::OsSystemProxySource);
+    let profile_service = Arc::new(
+        crate::service::profile_file::ProfileFileService::new_with_system_proxy(
+            paths.clone(),
+            Arc::new(LegacySelfProxyPort),
+            system_proxy_source.clone(),
+        ),
+    );
 
     let runtime_paths = RuntimePaths::from_resolver(&paths)?;
     let mut migrations = crate::startup_failure::report_boundary(
@@ -229,13 +234,17 @@ pub fn setup(
             app.handle().clone(),
             update_proxy_port.clone(),
             bundle_metadata,
+            system_proxy_source.clone(),
         ));
     let app_update_events: Arc<dyn chimera_core::client::app_update::AppUpdateEventSink> = Arc::new(
         crate::adapters::app_update::TauriAppUpdateEventSink::new(app.handle().clone()),
     );
-    let changelog_http: Arc<dyn chimera_contracts::net::ChangelogHttp> = Arc::new(
-        crate::adapters::app_update::ReqwestChangelogHttp::new(update_proxy_port.mixed_port())?,
-    );
+    let changelog_http: Arc<dyn chimera_contracts::net::ChangelogHttp> =
+        Arc::new(chimera_net::changelog_http::ReqwestChangelogHttp::new(
+            update_proxy_port.clone(),
+            bundle_metadata,
+            system_proxy_source.clone(),
+        ));
 
     let client = crate::startup_failure::report_boundary(
         ChimeraClient::try_new_with_args(ClientSetupArgs {

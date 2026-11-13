@@ -1,5 +1,15 @@
 # ref 对齐进度
 
+## DIFF-083：System Proxy Source / Changelog HTTP 的 ref Port 及真实生产注入（2026-11-13）
+
+- **固定基线与边界**：继续以 `ref@59724e85c` 为只读基准。在 `codex/ref-os-dns-20261112` 迁移按需系统代理 URL 读取及更新、订阅、发布日志网络消费者，不读取/改写真实代理设置以进行测试。不合并、不推送、不修改 `ref` 或 runtime gitlink。风险为网络路由和启动依赖 L2。
+- **上游源码对应**：`ref/backend/nyanpasu-contracts/src/net.rs::SystemProxySource` → `backend/chimera-contracts/src/net.rs` 同形同步 Port；`ref/backend/nyanpasu-os/src/system_proxy_source.rs` → `backend/chimera-os/src/system_proxy_source.rs`，**实现只替换 crate 名**；`ref/backend/nyanpasu-net/src/changelog_http.rs` → 新独立 `backend/chimera-net/src/changelog_http.rs`，保留按每次请求读取代理、连接超时、总超时、错误源的机制，仅更换品牌 `Chimera/`、契约 crate 名和新增隔离测试。新 `chimera-net/src/policy.rs` 当前只引入上游同形 `get_self_proxy(port)`；其余 network policy/diagnostics/订阅适配器暂未迁移，不能宣称整个 net crate 已对齐。
+- **生产接线**：`backend/tauri/src/setup.rs` 创建唯一 `Arc<dyn SystemProxySource>`，分别注入 Profile File、`TauriAppUpdateBackend` 与新的 `chimera_net::changelog_http::ReqwestChangelogHttp`。App Update 保留 Chimera 特有 `fixed-webview` 更新端点与退出逻辑，移除 Tauri 直接 `utils/config::get_system_proxy` 查询。`service/profile_file.rs` 删除私有 `SystemProxySource` 和内置的 `Sysproxy::get_system_proxy`，在构造时接受 shared Port；自身代理优先、系统代理次之、失败回退直连的语义不变。Legacy `utils/config.rs::get_system_proxy` 保留兼容函数签名，但委托同一个 OS 实现以覆盖旧订阅/HTTP 调用方，不再重复实现原始查询。
+- **不迁移的真实差异**：IPC、Agent diagnostics/actions 及遗留 Sysopt 读取需要完整 `Sysproxy` 字段（enable/host/port/bypass）以进行状态诊断和恢复，不能错误地替换成只返回 URL 的共享 Port。这部分尚有直接 OS 读取，待后续分离类型化完整状态读取端口和所有权。测试用的 `ProfileFileService::new` 仅在 `cfg(test)` 下可用并注入无副作用假源；生产使用 `new_with_system_proxy`。
+- **本轮验收**：Tauri `cargo check --locked -p chimera --all-features --tests` 通过；Profile File 定向测试 **46/46**（新增系统代理读取错误回退直连、自身代理优先且不额外读取系统代理）；App Update 定向测试 **3/3**；新 `chimera-net` **1/1**（通过两个不同的本地 HTTP 代理验证同一 Changelog 客户端每次请求读取当前代理）。全部使用模拟端口或本地回环网络，未修改宿主系统代理。提交前还需 Rustfmt/Clippy hooks；未执行 Windows/Linux CI、真实用户代理切换、发行包更新及完整桌面 E2E。
+- **回滚**：可按 Contracts/OS source 与 Net/Tauri 接线批次依次回滚；无配置迁移或宿主网络侧效应。后续优先依 `ref/backend/nyanpasu-net/src` 迁移更完整的网络策略和订阅处理，但不得在尚无验证时破坏 Legacy Profile 兼容语义。
+
+
 ## DIFF-082：同步最新 origin/master，保留上游 CI 修复并 rebase（2026-11-13）
 
 - **来源与操作**：从本地 `master@7f08640f`、开发分支 `codex/ref-os-dns-20261112@2d8e2351` 开始，`git fetch --prune origin master` 获取远程 `origin/master@ba79abf6`，新增 6 笔主线提交（Profiles 转换链、E2E、manifest、CI 测试修复）。初始相对远程主线为落后 6、领先 13。仅 `backend/tauri/src/client/core_lifecycle/mod.rs` 与本地改动重叠，`ref`/runtime gitlink 无变化。随后对**当前开发分支**执行有 GPG 签名的 `git rebase origin/master`；没有更改本地 `master` 指针、远程 `master`、配置或子模块，也没有推送。

@@ -1,0 +1,19 @@
+[package]
+name = 'chimera-net'
+version.workspace = true
+repository.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+chimera-contracts = { path = '../chimera-contracts', default-features = false }
+anyhow = '1'
+async-trait = '0.1'
+reqwest = { workspace = true }
+url = '2'
+
+[dev-dependencies]
+axum = '0.8'
+tokio = { workspace = true }
+chimera-contracts = { path = '../chimera-contracts', default-features = false, features = ['test-support'] }
