@@ -28,16 +28,6 @@ use crate::client::hotkey::{
 
 struct LegacySelfProxyPort;
 
-impl crate::service::profile_file::SelfProxyPortSource for LegacySelfProxyPort {
-    fn mixed_port(&self) -> Option<u16> {
-        Some(
-            crate::config::core::Config::clash()
-                .latest()
-                .get_mixed_port(),
-        )
-    }
-}
-
 impl chimera_contracts::net::SelfProxyPortSource for LegacySelfProxyPort {
     fn mixed_port(&self) -> Option<u16> {
         Some(
@@ -79,6 +69,8 @@ pub fn setup(
             paths.clone(),
             Arc::new(LegacySelfProxyPort),
             system_proxy_source.clone(),
+            bundle_metadata,
+            crate::service::profile_file::subscription_device_headers(),
         ),
     );
 

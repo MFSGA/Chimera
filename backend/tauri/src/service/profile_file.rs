@@ -12,10 +12,11 @@ use std::{
 use anyhow::{Context, bail};
 use atomicwrites::{AtomicFile, OverwriteBehavior, replace_atomic};
 use chimera_config::profile::{
-    ExternalProfilePath, ManagedProfilePath, Profiles, RemoteProfileOptions, RemoteSyncInterval,
-    SubscriptionInfo,
+    ExternalProfilePath, ManagedProfilePath, Profiles, RemoteProfileOptions,
 };
-use chimera_contracts::net::SystemProxySource;
+use chimera_contracts::profiles::ports::SubscriptionFetcher as SharedSubscriptionFetcher;
+use chimera_contracts::{bundle_metadata::BundleMetadata, net::SystemProxySource};
+use chimera_net::{device_headers::DeviceHeaders, subscription_http::SubscriptionHttpFetcher};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use url::Url;
@@ -33,12 +34,8 @@ use crate::{
 const MATERIALIZATION_ROOT: &str = ".profile-materialization-v1";
 const ABSENT_HASH: &str = "b7c03610089b9f660990ee7db3290cc8d8564161b079319c9c7ba1f19dc2e190";
 
-/// Where the fetcher looks up the app's own mixed port when `self_proxy` is
-/// requested. Wired at the composition root (T07); tests inject a constant.
-#[cfg_attr(test, mockall::automock)]
-pub trait SelfProxyPortSource: Send + Sync + 'static {
-    fn mixed_port(&self) -> Option<u16>;
-}
+// The old public path is retained for Legacy callers; its owner is contracts.
+pub use chimera_contracts::net::SelfProxyPortSource;
 
 // Legacy tests construct a profile service without consulting host proxy settings.
 #[cfg(test)]
@@ -55,6 +52,8 @@ pub struct ProfileFileService {
     paths: PathResolver,
     self_proxy_port: Arc<dyn SelfProxyPortSource>,
     system_proxy: Arc<dyn SystemProxySource>,
+    bundle_metadata: BundleMetadata,
+    device_headers: DeviceHeaders,
     http_timeout: Duration,
 }
 
@@ -63,18 +62,31 @@ impl ProfileFileService {
         paths: PathResolver,
         self_proxy_port: Arc<dyn SelfProxyPortSource>,
         system_proxy: Arc<dyn SystemProxySource>,
+        bundle_metadata: BundleMetadata,
+        device_headers: DeviceHeaders,
     ) -> Self {
         Self {
             paths,
             self_proxy_port,
             system_proxy,
+            bundle_metadata,
+            device_headers,
             http_timeout: Duration::from_secs(30),
         }
     }
 
     #[cfg(test)]
     pub fn new(paths: PathResolver, self_proxy_port: Arc<dyn SelfProxyPortSource>) -> Self {
-        Self::new_with_system_proxy(paths, self_proxy_port, Arc::new(NoSystemProxyForTests))
+        Self::new_with_system_proxy(
+            paths,
+            self_proxy_port,
+            Arc::new(NoSystemProxyForTests),
+            BundleMetadata {
+                app_version: crate::utils::dirs::APP_VERSION,
+                ..chimera_contracts::bundle_metadata::TEST_BUNDLE_METADATA
+            },
+            subscription_device_headers(),
+        )
     }
 
     #[cfg(test)]
@@ -2068,6 +2080,9 @@ impl ProfileMaterializationPort for ProfileFileService {
     }
 }
 
+/// Existing Profiles Actor still uses an anyhow-based port. Route through the
+/// upstream typed HTTP owner and retain this boundary until Profile Actor ports
+/// themselves migrate to chimera-contracts.
 #[async_trait::async_trait]
 impl SubscriptionFetcher for ProfileFileService {
     async fn fetch(
@@ -2075,176 +2090,35 @@ impl SubscriptionFetcher for ProfileFileService {
         url: &Url,
         options: &RemoteProfileOptions,
     ) -> anyhow::Result<FetchedSubscription> {
-        use backon::Retryable;
+        let fetched = SubscriptionHttpFetcher::new(
+            self.self_proxy_port.clone(),
+            self.bundle_metadata,
+            self.system_proxy.clone(),
+            self.device_headers.clone(),
+        )
+        .with_http_timeout(self.http_timeout)
+        .fetch(url, options)
+        .await
+        .with_context(|| format!("subscription download failed: {url}"))?;
 
-        let mut builder = reqwest::ClientBuilder::new()
-            .use_rustls_tls()
-            .no_proxy()
-            .timeout(self.http_timeout);
-
-        // Proxy precedence mirrors the legacy subscriber (remote.rs:129-150):
-        // self_proxy wins, then system proxy, else direct.
-        let proxy_url = if options.self_proxy {
-            self.self_proxy_port
-                .mixed_port()
-                .map(|port| format!("http://127.0.0.1:{port}"))
-        } else {
-            None
-        };
-        let proxy_url = proxy_url.or_else(|| {
-            if options.with_proxy {
-                self.system_proxy.system_proxy().ok().flatten()
-            } else {
-                None
-            }
-        });
-        if let Some(proxy_url) = proxy_url {
-            use crate::utils::config::NyanpasuReqwestProxyExt;
-            builder = builder.swift_set_proxy(&proxy_url);
-        }
-
-        let user_agent = options
-            .user_agent
-            .clone()
-            .unwrap_or_else(|| format!("clash-chimera/v{}", crate::utils::dirs::APP_VERSION));
-        let client = builder.user_agent(user_agent).build()?;
-
-        let device_info = crate::utils::hwid::get_device_info();
-        let sanitize = crate::utils::hwid::sanitize_for_header;
-        let perform = || async {
-            client
-                .get(url.as_str())
-                .header("x-hwid", &device_info.hwid)
-                .header("x-device-os", sanitize(&device_info.device_os))
-                .header("x-ver-os", sanitize(&device_info.os_version))
-                .header("x-device-model", sanitize(&device_info.device_model))
-                .send()
-                .await?
-                .error_for_status()
-        };
-        let resp = perform
-            .retry(backon::ExponentialBuilder::default())
-            .when(|error: &reqwest::Error| {
-                !error.is_status()
-                    || error.status().is_some_and(|status| {
-                        !matches!(
-                            status,
-                            reqwest::StatusCode::FORBIDDEN
-                                | reqwest::StatusCode::NOT_FOUND
-                                | reqwest::StatusCode::UNAUTHORIZED
-                        )
-                    })
-            })
-            .await
-            .with_context(|| format!("subscription download failed: {url}"))?;
-
-        let subscription = parse_subscription_userinfo(resp.headers());
-        let filename = parse_profile_title(resp.headers());
-        let suggested_update_interval_minutes = parse_suggested_update_interval(resp.headers());
-        let content = resp
-            .text_with_charset("utf-8")
-            .await
-            .with_context(|| format!("read subscription response body: {url}"))?;
-        let content = if let Some(content) = content.strip_prefix('\u{feff}') {
-            content.to_owned()
-        } else {
-            content
-        };
-        Ok(FetchedSubscription {
-            content,
-            filename,
-            subscription,
-            suggested_update_interval_minutes,
-        })
+        Ok(fetched)
     }
 }
 
-fn parse_suggested_update_interval(headers: &reqwest::header::HeaderMap) -> Option<u64> {
-    let hours = headers
-        .get("profile-update-interval")
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.trim().parse::<u64>().ok())
-        .filter(|hours| *hours > 0)?;
-    let minutes = hours.checked_mul(60)?;
-    minutes.checked_mul(60)?;
-    Some(minutes)
-}
-
-fn parse_subscription_userinfo(headers: &reqwest::header::HeaderMap) -> SubscriptionInfo {
-    let Some(value) = headers
-        .get("subscription-userinfo")
-        .or_else(|| headers.get("Subscription-Userinfo"))
-    else {
-        return SubscriptionInfo::default();
-    };
-    let raw = value.to_str().unwrap_or("");
-    let field = |key: &str| crate::utils::help::parse_str::<u64>(raw, key);
-    SubscriptionInfo {
-        upload: field("upload"),
-        download: field("download"),
-        total: field("total"),
-        expire: field("expire")
-            .filter(|secs| *secs != 0)
-            .and_then(|secs| i64::try_from(secs).ok())
-            .and_then(|secs| time::OffsetDateTime::from_unix_timestamp(secs).ok()),
+/// Hardware identification belongs to the host; the network crate only
+/// receives sanitized header values, as in ref's DeviceHeaders boundary.
+pub(crate) fn subscription_device_headers() -> DeviceHeaders {
+    let info = crate::utils::hwid::get_device_info();
+    DeviceHeaders {
+        hwid: info.hwid,
+        device_os: chimera_net::device_headers::sanitize_for_header(&info.device_os),
+        os_version: chimera_net::device_headers::sanitize_for_header(&info.os_version),
+        device_model: chimera_net::device_headers::sanitize_for_header(&info.device_model),
     }
 }
 
-fn parse_profile_title(headers: &reqwest::header::HeaderMap) -> Option<String> {
-    if let Some(value) = headers.get("profile-title").and_then(|v| v.to_str().ok()) {
-        if value.trim().is_empty() {
-            return parse_filename_from_content_disposition(headers);
-        }
-        if let Some(encoded) = value.strip_prefix("base64:") {
-            use base64::Engine;
-            if let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(encoded)
-                && let Ok(decoded) = String::from_utf8(bytes)
-                && !decoded.trim().is_empty()
-            {
-                return Some(decoded);
-            }
-        } else {
-            return Some(value.to_owned());
-        }
-    }
-
-    parse_filename_from_content_disposition(headers)
-}
-
-fn parse_filename_from_content_disposition(headers: &reqwest::header::HeaderMap) -> Option<String> {
-    let value = headers
-        .get(reqwest::header::CONTENT_DISPOSITION)
-        .and_then(|v| v.to_str().ok())?;
-
-    value
-        .split(';')
-        .map(str::trim)
-        .filter_map(|part| part.split_once('='))
-        .find_map(|(name, value)| {
-            let name = name.trim();
-            let value = value.trim();
-            if name.eq_ignore_ascii_case("filename*") {
-                decode_rfc5987_filename(value)
-            } else if name.eq_ignore_ascii_case("filename") {
-                Some(value.trim_matches(['"', '\'']).to_owned())
-            } else {
-                None
-            }
-        })
-        .filter(|filename| !filename.is_empty())
-}
-
-fn decode_rfc5987_filename(value: &str) -> Option<String> {
-    let value = value.trim().trim_matches(['"', '\'']);
-    let encoded = value
-        .split_once('\'')
-        .and_then(|(_, rest)| rest.split_once('\'').map(|(_, encoded)| encoded))
-        .unwrap_or(value);
-    percent_encoding::percent_decode(encoded.as_bytes())
-        .decode_utf8()
-        .ok()
-        .map(|decoded| decoded.into_owned())
-}
+#[cfg(test)]
+use chimera_config::profile::RemoteSyncInterval;
 
 #[cfg(test)]
 mod tests {
@@ -3583,76 +3457,8 @@ mod tests {
         assert!(normalize_yaml_document(": not yaml [").is_err());
     }
 
-    #[test]
-    fn content_disposition_filename_parsing_matches_legacy_variants() {
-        let mut headers = reqwest::header::HeaderMap::new();
-        headers.insert(
-            reqwest::header::CONTENT_DISPOSITION,
-            reqwest::header::HeaderValue::from_static("attachment; Filename=\"a.yaml\""),
-        );
-        assert_eq!(
-            parse_filename_from_content_disposition(&headers).as_deref(),
-            Some("a.yaml")
-        );
-
-        headers.insert(
-            reqwest::header::CONTENT_DISPOSITION,
-            reqwest::header::HeaderValue::from_static(
-                "attachment; filename*=UTF-8'en'my%20cfg.yaml",
-            ),
-        );
-        assert_eq!(
-            parse_filename_from_content_disposition(&headers).as_deref(),
-            Some("my cfg.yaml")
-        );
-
-        headers.insert(
-            "profile-title",
-            reqwest::header::HeaderValue::from_static("   "),
-        );
-        headers.insert(
-            reqwest::header::CONTENT_DISPOSITION,
-            reqwest::header::HeaderValue::from_static("attachment; filename=fallback.yaml"),
-        );
-        assert_eq!(
-            parse_profile_title(&headers).as_deref(),
-            Some("fallback.yaml")
-        );
-    }
-
-    #[test]
-    fn subscription_expire_ignores_absurd_overflow_values() {
-        let mut headers = reqwest::header::HeaderMap::new();
-        headers.insert(
-            "subscription-userinfo",
-            reqwest::header::HeaderValue::from_static(
-                "upload=1; download=2; total=3; expire=18446744073709551615",
-            ),
-        );
-        let parsed = parse_subscription_userinfo(&headers);
-        assert_eq!(parsed.upload, Some(1));
-        assert!(parsed.expire.is_none());
-    }
-
-    #[test]
-    fn suggested_update_interval_parses_hours_and_ignores_invalid_values() {
-        let mut headers = reqwest::header::HeaderMap::new();
-        assert_eq!(parse_suggested_update_interval(&headers), None);
-
-        headers.insert(
-            "profile-update-interval",
-            reqwest::header::HeaderValue::from_static("2"),
-        );
-        assert_eq!(parse_suggested_update_interval(&headers), Some(120));
-
-        for invalid in ["not-a-number", "0", "18446744073709551615"] {
-            headers.insert(
-                "profile-update-interval",
-                reqwest::header::HeaderValue::from_str(invalid).unwrap(),
-            );
-            assert_eq!(parse_suggested_update_interval(&headers), None);
-        }
-    }
+    // Pure subscription header parsers and their tests now live in
+    // chimera-net/src/subscription.rs (direct upstream source).
 
     #[tokio::test]
     async fn fetch_parses_userinfo_and_title_headers() {
