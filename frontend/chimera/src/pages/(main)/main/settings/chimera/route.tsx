@@ -12,6 +12,7 @@ import LogFileConfig from './_modules/log-file-config';
 import LogLevelSelector from './_modules/log-level-selector';
 import TrafficRetentionSelector from './_modules/traffic-retention-selector';
 import TrayProxiesSelector from './_modules/tray-proxies-selector';
+import WindowCloseBehaviorCards from './_modules/window-close-behavior';
 
 export const Route = createFileRoute('/(main)/main/settings/chimera')({
   component: RouteComponent,
@@ -80,6 +81,11 @@ const UserInterfaceSettings = () => {
 
       <SettingsGroup>
         <LightenAnimationEffectsSwitch />
+      </SettingsGroup>
+
+      <SettingsLabel>{m.settings_chimera_window_close()}</SettingsLabel>
+      <SettingsGroup>
+        <WindowCloseBehaviorCards />
       </SettingsGroup>
     </div>
   );

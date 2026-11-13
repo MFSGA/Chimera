@@ -148,6 +148,8 @@ macro_rules! build_builder {
                 crate::ipc::save_window_size_state,
                 crate::ipc::create_main_window,
                 crate::ipc::create_legacy_window,
+                crate::ipc::report_window_ready,
+                crate::ipc::get_app_startup_status,
                 $($command_root $(::$command_path)*),*
             ])
             .events(collect_events![

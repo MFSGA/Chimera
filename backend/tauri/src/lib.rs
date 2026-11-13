@@ -284,8 +284,15 @@ pub fn run() -> std::process::ExitCode {
             #[cfg(feature = "agent")]
             features::agent::setup(app);
 
-            resolve::resolve_setup(app);
+            // All window/IPC state must exist before the first webview loads.
+            app.manage(crate::window::WindowManager::new(app.handle().clone()));
+            app.manage(crate::utils::resolve::AppStartupStatus::default());
             app.manage(crate::ipc::PendingDeepLink::default());
+
+            #[cfg(debug_assertions)]
+            setup_frontend_console_bridge(app);
+
+            resolve::resolve_setup(app);
 
             #[cfg(windows)]
             {
@@ -305,9 +312,6 @@ pub fn run() -> std::process::ExitCode {
                     ));
                 })?;
             }
-
-            #[cfg(debug_assertions)]
-            setup_frontend_console_bridge(app);
 
             #[cfg(any(target_os = "linux", all(debug_assertions, windows)))]
             app.deep_link().register_all()?;
@@ -329,21 +333,24 @@ pub fn run() -> std::process::ExitCode {
                         .state::<crate::ipc::PendingDeepLink>()
                         .store(url.clone());
 
-                    if !resolve::wait_for_frontend_ready(
-                        target_label,
-                        std::time::Duration::from_secs(15),
-                    ) {
-                        log::warn!(target: "app", "frontend {target_label} did not become ready before delivering scheme request");
-                        return;
-                    }
+                    let delivery_handle = on_open_url_handle.clone();
+                    std::thread::spawn(move || {
+                        if !resolve::wait_for_frontend_ready(
+                            target_label,
+                            std::time::Duration::from_secs(15),
+                        ) {
+                            log::warn!(target: "app", "frontend {target_label} did not become ready before delivering scheme request");
+                            return;
+                        }
 
-                    if let Err(error) = on_open_url_handle.emit_to(
-                        target_label,
-                        "scheme-request-received",
-                        entry,
-                    ) {
-                        log::error!(target: "app", "failed to emit scheme request {url} to {target_label}: {error:?}");
-                    }
+                        if let Err(error) = delivery_handle.emit_to(
+                            target_label,
+                            "scheme-request-received",
+                            entry,
+                        ) {
+                            log::error!(target: "app", "failed to emit scheme request {url} to {target_label}: {error:?}");
+                        }
+                    });
                 });
 
                 // The Client, window state and deep-link listener now exist.
@@ -362,14 +369,18 @@ pub fn run() -> std::process::ExitCode {
                     let entry = app
                         .state::<crate::ipc::PendingDeepLink>()
                         .store(url.clone());
-                    if resolve::wait_for_frontend_ready(
-                        target_label,
-                        std::time::Duration::from_secs(15),
-                    ) {
-                        app_handle.emit_to(target_label, "scheme-request-received", entry)?;
-                    } else {
-                        log::warn!(target: "app", "frontend {target_label} did not become ready before delivering startup scheme request");
-                    }
+                    std::thread::spawn(move || {
+                        if resolve::wait_for_frontend_ready(
+                            target_label,
+                            std::time::Duration::from_secs(15),
+                        ) {
+                            if let Err(error) = app_handle.emit_to(target_label, "scheme-request-received", entry) {
+                                log::error!(target: "app", "failed to deliver startup scheme request: {error:?}");
+                            }
+                        } else {
+                            log::warn!(target: "app", "frontend {target_label} did not become ready before delivering startup scheme request");
+                        }
+                    });
                 }
             }
 

@@ -1,7 +1,42 @@
-/// Tells WebView2 whether the window is in sight. Its controller otherwise
-/// remains visible while the native window is minimized.
+//! Code tied to the native webview engine. The window manager owns lifecycle
+//! decisions; this adapter owns WebView2-specific rendering behavior.
+//! Adapted from ref/backend/tauri/src/window/engine.rs at 59724e85c.
+
+use tauri::{Manager, Runtime, WebviewWindowBuilder};
+
 #[cfg(windows)]
-pub(super) fn set_in_sight(window: &tauri::WebviewWindow, in_sight: bool) {
+const WEBVIEW2_BROWSER_ARGS: &str = "--enable-features=msWebView2EnableDraggableRegions --disable-features=OverscrollHistoryNavigation,msExperimentalScrolling";
+
+pub fn configure_builder<'a, R: Runtime, M: Manager<R>>(
+    builder: WebviewWindowBuilder<'a, R, M>,
+) -> WebviewWindowBuilder<'a, R, M> {
+    #[cfg(windows)]
+    let builder = builder.additional_browser_args(WEBVIEW2_BROWSER_ARGS);
+    builder
+}
+
+/// Wait until the webview is actually mounted before accessing its settings.
+#[cfg(windows)]
+pub fn on_first_ready(window: &tauri::WebviewWindow) {
+    use webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2Settings6;
+    use windows_core::Interface;
+
+    let _ = window.with_webview(|webview| unsafe {
+        if let Ok(core) = webview.controller().CoreWebView2()
+            && let Ok(settings) = core.Settings()
+            && let Ok(settings6) = settings.cast::<ICoreWebView2Settings6>()
+        {
+            let _ = settings6.SetIsSwipeNavigationEnabled(false);
+        }
+    });
+}
+
+#[cfg(not(windows))]
+pub fn on_first_ready(_window: &tauri::WebviewWindow) {}
+
+/// WebView2's native controller visibility is separate from the Tauri window.
+#[cfg(windows)]
+pub fn set_in_sight(window: &tauri::WebviewWindow, in_sight: bool) {
     use webview2_com::Microsoft::Web::WebView2::Win32::{
         COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_LOW, COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_NORMAL,
         ICoreWebView2_19,
@@ -29,4 +64,4 @@ pub(super) fn set_in_sight(window: &tauri::WebviewWindow, in_sight: bool) {
 }
 
 #[cfg(not(windows))]
-pub(super) fn set_in_sight(_window: &tauri::WebviewWindow, _in_sight: bool) {}
+pub fn set_in_sight(_window: &tauri::WebviewWindow, _in_sight: bool) {}

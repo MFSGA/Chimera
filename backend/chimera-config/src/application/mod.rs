@@ -9,6 +9,7 @@ mod logging;
 mod traffic;
 mod update;
 mod widget;
+mod window_close;
 
 pub use clash_core::*;
 pub use i18n::*;
@@ -16,6 +17,7 @@ pub use logging::*;
 pub use traffic::*;
 pub use update::*;
 pub use widget::*;
+pub use window_close::*;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, Default, Type)]
 #[serde(rename_all = "snake_case")]
@@ -173,6 +175,11 @@ pub struct ChimeraAppConfig {
     pub always_on_top: bool,
     #[patch(attribute(specta(optional)))]
     pub tray_menu_mode: TrayMenuMode,
+    /// Ref-style window close policy. A missing field preserves Destroy.
+    #[patch(nesting)]
+    #[serde(default)]
+    #[patch(attribute(specta(optional)))]
+    pub window_close: WindowCloseSettings,
     #[patch(attribute(specta(optional)))]
     pub tray_menu_close_behavior: TrayMenuCloseBehavior,
     #[patch(attribute(specta(optional)))]
@@ -229,6 +236,7 @@ impl Default for ChimeraAppConfig {
             tray_selector_mode: ProxiesSelectorMode::default(),
             always_on_top: false,
             tray_menu_mode: TrayMenuMode::default(),
+            window_close: WindowCloseSettings::default(),
             tray_menu_close_behavior: TrayMenuCloseBehavior::default(),
             network_statistic_widget: NetworkStatisticWidgetConfig::default(),
             traffic_retention: TrafficRetention::default(),

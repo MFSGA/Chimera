@@ -10,7 +10,7 @@ use specta_typescript::Any;
 
 use chimera_ipc::api::status::CoreState;
 use sysproxy::Sysproxy;
-use tauri::{AppHandle, Emitter, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State, Webview};
 use tauri_plugin_dialog::DialogExt;
 
 use crate::{
@@ -27,7 +27,6 @@ use crate::{
     },
     core::{
         clash::{self, core::RunType},
-        handle,
         storage::{Storage, StorageOperationError, WebStorage},
         updater::{self, ManifestVersionLatest},
     },
@@ -80,12 +79,7 @@ impl PendingDeepLink {
     }
 }
 
-#[derive(specta::Type, serde::Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum EditorWindowType {
-    Profile,
-    CssEditor,
-}
+pub use crate::window::kinds::EditorWindowType;
 
 #[derive(specta::Type, serde::Serialize)]
 pub struct GetSysProxyResponse {
@@ -367,35 +361,12 @@ pub async fn view_profile(
 #[tauri::command]
 #[specta::specta]
 pub async fn create_editor_window(
-    app_handle: AppHandle,
+    windows: State<'_, crate::window::WindowManager>,
     window_type: EditorWindowType,
     uid: Option<String>,
 ) -> Result {
-    let profile_uid = match window_type {
-        EditorWindowType::Profile => {
-            Some(uid.ok_or_else(|| anyhow!("uid required for profile editor"))?)
-        }
-        EditorWindowType::CssEditor => None,
-    };
-    let (sender, receiver) = tokio::sync::oneshot::channel();
-    let handle = app_handle.clone();
-    app_handle
-        .run_on_main_thread(move || {
-            let result = match window_type {
-                EditorWindowType::Profile => resolve::create_profile_editor_window(
-                    &handle,
-                    profile_uid.as_deref().expect("profile uid was validated"),
-                ),
-                EditorWindowType::CssEditor => resolve::create_css_editor_window(&handle),
-            }
-            .map_err(|error| error.to_string());
-            let _ = sender.send(result);
-        })
-        .context("failed to schedule editor window creation")?;
-    receiver
-        .await
-        .context("editor window creation was cancelled")?
-        .map_err(anyhow::Error::msg)?;
+    let (kind, params) = crate::window::kinds::EditorWindow::for_type(window_type, uid.as_deref())?;
+    windows.open(&kind, params)?;
     Ok(())
 }
 
@@ -1283,27 +1254,35 @@ pub async fn save_window_size_state(
 
 #[tauri::command]
 #[specta::specta]
-pub fn create_main_window(app_handle: AppHandle) -> Result<()> {
-    std::thread::spawn(move || {
-        std::thread::sleep(std::time::Duration::from_millis(10));
-        let handle_inner = app_handle.clone();
-        let _ = app_handle.run_on_main_thread(move || {
-            resolve::create_main_window(&handle_inner);
-        });
-    });
+pub async fn create_main_window(windows: State<'_, crate::window::WindowManager>) -> Result<()> {
+    windows.open(&crate::window::kinds::MainWindow, None)?;
+    Ok(())
+}
+
+/// Status of this process's initial GUI startup task, independent of the
+/// ongoing core lifecycle and safe to query before core reconciliation ends.
+#[tauri::command]
+#[specta::specta]
+pub fn get_app_startup_status(status: State<'_, resolve::AppStartupStatus>) -> String {
+    status.phase().to_owned()
+}
+
+/// The invoking webview can only report its own readiness.
+#[tauri::command]
+#[specta::specta]
+pub fn report_window_ready(
+    windows: State<'_, crate::window::WindowManager>,
+    webview: Webview,
+) -> Result<()> {
+    windows.report_ready(webview.label());
+    resolve::mark_frontend_mounted(webview.label());
     Ok(())
 }
 
 #[tauri::command]
 #[specta::specta]
-pub fn create_legacy_window(app_handle: AppHandle) -> Result<()> {
-    std::thread::spawn(move || {
-        std::thread::sleep(std::time::Duration::from_millis(50));
-        let handle_inner = app_handle.clone();
-        let _ = app_handle.run_on_main_thread(move || {
-            resolve::create_legacy_window(&handle_inner);
-        });
-    });
+pub async fn create_legacy_window(windows: State<'_, crate::window::WindowManager>) -> Result<()> {
+    windows.open(&crate::window::kinds::LegacyWindow, None)?;
     Ok(())
 }
 

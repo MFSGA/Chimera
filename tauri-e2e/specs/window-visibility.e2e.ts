@@ -60,19 +60,53 @@ async function restoreMainWindow() {
 }
 
 describe('Windows WebView visibility follows its native window', () => {
+  // WIN-FIRST-RENDER: exercise both supported windows through the actual
+  // desktop renderer, rather than treating an IPC success as proof of display.
+  // A wedged frontend's 10-second watchdog is covered by the upstream table
+  // state tests; this case proves only the normal ready-handshake path.
+  it('reveals both primary windows after their frontends render', async function () {
+    if (process.platform !== 'win32') {
+      this.skip();
+    }
+
+    await browser.switchToWindow('legacy');
+    const legacyNavigation = await $('[data-testid="sidebar-route-settings"]');
+    await legacyNavigation.waitForDisplayed({ timeout: 15_000 });
+    await browser.waitUntil(
+      async () => browser.execute(() => document.visibilityState === 'visible'),
+      {
+        timeout: 15_000,
+        timeoutMsg: 'The legacy window was not revealed after frontend mount.',
+      },
+    );
+
+    await openMainRoute('/main/dashboard');
+    const mainWindowControl = await displayedElement(
+      '[data-slot="window-control-minimize-button"]',
+    );
+    await mainWindowControl.waitForDisplayed({ timeout: 15_000 });
+    await browser.waitUntil(
+      async () => browser.execute(() => document.visibilityState === 'visible'),
+      {
+        timeout: 15_000,
+        timeoutMsg: 'The main window was not revealed after frontend mount.',
+      },
+    );
+  });
   it('hides when minimized and becomes visible after restore', async function () {
     if (process.platform !== 'win32') {
       this.skip();
     }
 
     await openMainRoute('/main/dashboard');
-    const initialVisibility = await browser.execute(
-      () => document.visibilityState,
-    );
-    assert.equal(initialVisibility, 'visible');
 
     let failure: unknown;
     try {
+      const initialVisibility = await browser.execute(
+        () => document.visibilityState,
+      );
+      assert.equal(initialVisibility, 'visible');
+
       const minimize = await displayedElement(
         '[data-slot="window-control-minimize-button"]',
       );

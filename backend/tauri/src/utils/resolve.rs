@@ -1,6 +1,9 @@
 use std::{
     collections::HashSet,
-    sync::{OnceLock, RwLock},
+    sync::{
+        OnceLock, RwLock,
+        atomic::{AtomicU8, Ordering},
+    },
     time::{Duration, Instant},
 };
 
@@ -12,19 +15,39 @@ use tracing::debug;
 
 use crate::{
     config::{
-        chimera::{ClashCore, WindowState, WindowType},
+        chimera::{ClashCore, WindowType},
         core::Config,
     },
     core::{handle, tray},
     log_err,
     utils::init,
-    window::{AppWindow, WindowConfig},
+    window::{
+        WindowManager,
+        kinds::{EditorWindow, EditorWindowType, LegacyWindow, MainWindow},
+    },
 };
 
-/// Legacy window implementation (original UI)
-struct LegacyWindow;
-
 static FRONTEND_READY_WINDOWS: OnceLock<RwLock<HashSet<String>>> = OnceLock::new();
+
+/// A GUI-only indicator for the initial startup orchestration, not an
+/// alternative core lifecycle authority. It is never used to control the core.
+#[derive(Default)]
+pub struct AppStartupStatus(AtomicU8);
+
+impl AppStartupStatus {
+    pub fn phase(&self) -> &'static str {
+        match self.0.load(Ordering::Acquire) {
+            1 => "ready",
+            2 => "failed",
+            _ => "starting",
+        }
+    }
+
+    fn finish(&self, succeeded: bool) {
+        self.0
+            .store(if succeeded { 1 } else { 2 }, Ordering::Release);
+    }
+}
 
 fn frontend_ready_windows() -> &'static RwLock<HashSet<String>> {
     FRONTEND_READY_WINDOWS.get_or_init(|| RwLock::new(HashSet::new()))
@@ -34,7 +57,7 @@ fn is_primary_window_label(label: &str) -> bool {
     label == crate::consts::LEGACY_WINDOW_LABEL || label == crate::consts::MAIN_WINDOW_LABEL
 }
 
-fn mark_frontend_mounted(label: &str) {
+pub(crate) fn mark_frontend_mounted(label: &str) {
     if is_primary_window_label(label) {
         frontend_ready_windows()
             .write()
@@ -43,147 +66,31 @@ fn mark_frontend_mounted(label: &str) {
     }
 }
 
-impl AppWindow for LegacyWindow {
-    fn label(&self) -> &str {
-        crate::consts::LEGACY_WINDOW_LABEL
-    }
-
-    fn title(&self) -> &str {
-        crate::consts::APP_NAME
-    }
-
-    fn url(&self) -> &str {
-        "/"
-    }
-
-    fn config(&self) -> WindowConfig {
-        WindowConfig::new()
-            .singleton(true)
-            .visible_on_create(true)
-            .default_size(800.0, 636.0)
-            .min_size(400.0, 600.0)
-            .center(true)
-    }
-
-    fn get_window_state(&self) -> Option<WindowState> {
-        Config::verge().latest().window_size_state.clone()
-    }
-}
-
-/// Main window implementation (new UI)
-struct MainWindow;
-
-struct ProfileEditorWindow {
-    label: String,
-    url: String,
-}
-
-struct CssEditorWindow;
-
-impl AppWindow for ProfileEditorWindow {
-    fn label(&self) -> &str {
-        &self.label
-    }
-
-    fn title(&self) -> &str {
-        "Profile Editor"
-    }
-
-    fn url(&self) -> &str {
-        &self.url
-    }
-
-    fn config(&self) -> WindowConfig {
-        WindowConfig::new()
-            .singleton(true)
-            .visible_on_create(true)
-            .default_size(960.0, 680.0)
-            .min_size(600.0, 400.0)
-            .center(true)
-    }
-
-    fn get_window_state(&self) -> Option<WindowState> {
-        None
-    }
-}
-
-impl AppWindow for CssEditorWindow {
-    fn label(&self) -> &str {
-        "editor-css"
-    }
-
-    fn title(&self) -> &str {
-        "Clash Chimera - CSS Editor"
-    }
-
-    fn url(&self) -> &str {
-        "/editor/css"
-    }
-
-    fn config(&self) -> WindowConfig {
-        WindowConfig::new()
-            .singleton(true)
-            .visible_on_create(true)
-            .default_size(800.0, 636.0)
-            .min_size(400.0, 500.0)
-            .center(true)
-    }
-
-    fn get_window_state(&self) -> Option<WindowState> {
-        None
-    }
-}
-
-impl AppWindow for MainWindow {
-    fn label(&self) -> &str {
-        crate::consts::MAIN_WINDOW_LABEL
-    }
-
-    fn title(&self) -> &str {
-        crate::consts::APP_NAME
-    }
-
-    fn url(&self) -> &str {
-        "/main"
-    }
-
-    fn config(&self) -> WindowConfig {
-        WindowConfig::new()
-            .singleton(true)
-            .visible_on_create(true)
-            .default_size(800.0, 636.0)
-            .min_size(400.0, 600.0)
-            .center(true)
-    }
-
-    fn get_window_state(&self) -> Option<WindowState> {
-        Config::verge().latest().window_size_state.clone()
-    }
-}
-
-/// create legacy window
+/// Open either retained UI through the shared reference-style manager.
 #[tracing_attributes::instrument(skip(app_handle))]
 pub fn create_legacy_window(app_handle: &AppHandle) {
-    log_err!(LegacyWindow.create(app_handle));
+    log_err!(
+        app_handle
+            .state::<WindowManager>()
+            .open(&LegacyWindow, None)
+    );
 }
 
-/// create main window
 #[tracing_attributes::instrument(skip(app_handle))]
 pub fn create_main_window(app_handle: &AppHandle) {
-    log_err!(MainWindow.create(app_handle));
+    log_err!(app_handle.state::<WindowManager>().open(&MainWindow, None));
 }
 
 pub fn create_profile_editor_window(app_handle: &AppHandle, uid: &str) -> Result<()> {
-    let encoded_uid: String = url::form_urlencoded::byte_serialize(uid.as_bytes()).collect();
-    ProfileEditorWindow {
-        label: format!("profile-editor-{uid}"),
-        url: format!("/editor/profile?uid={encoded_uid}"),
-    }
-    .create(app_handle)
+    let (window, params) = EditorWindow::for_type(EditorWindowType::Profile, Some(uid))?;
+    app_handle.state::<WindowManager>().open(&window, params)?;
+    Ok(())
 }
 
 pub fn create_css_editor_window(app_handle: &AppHandle) -> Result<()> {
-    CssEditorWindow.create(app_handle)
+    let (window, params) = EditorWindow::for_type(EditorWindowType::CssEditor, None)?;
+    app_handle.state::<WindowManager>().open(&window, params)?;
+    Ok(())
 }
 
 pub fn mark_frontend_unmounted(label: &str) {
@@ -225,37 +132,35 @@ pub fn create_window(app_handle: &AppHandle) {
     }
 }
 
+/// Perform startup's blocking Service/port preparation without allowing the
+/// blocking worker to outlive its tracked owner. Once cancellation is
+/// requested, no core reconciliation is started from the prepared result.
+async fn prepare_startup_while_active<T, F>(
+    shutdown: tokio_util::sync::CancellationToken,
+    prepare: F,
+) -> std::result::Result<Option<T>, tauri::Error>
+where
+    T: Send + 'static,
+    F: FnOnce(tokio_util::sync::CancellationToken) -> T + Send + 'static,
+{
+    if shutdown.is_cancelled() {
+        return Ok(None);
+    }
+
+    let worker_shutdown = shutdown.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || prepare(worker_shutdown)).await?;
+    // The worker is fully joined before this task can finish, even when
+    // shutdown was requested during a slow or blocking configuration write.
+    Ok((!shutdown.is_cancelled()).then_some(result))
+}
+
 /// handle something when start app
 pub fn resolve_setup(app: &mut App) {
-    app.listen("react_app_mounted", move |event| {
-        let Ok(payload) = serde_json::from_str::<serde_json::Value>(event.payload()) else {
-            tracing::warn!("invalid react_app_mounted payload: {}", event.payload());
-            return;
-        };
-        let Some(label) = payload.get("label").and_then(serde_json::Value::as_str) else {
-            tracing::warn!(
-                "react_app_mounted payload missing label: {}",
-                event.payload()
-            );
-            return;
-        };
-        tracing::debug!("frontend react app mounted: {label}");
-        mark_frontend_mounted(label);
-    });
-
     handle::Handle::global().init(app.app_handle().clone());
     debug!("todo init handle for widget not tray");
     crate::consts::setup_app_handle(app.app_handle().clone());
 
     log_err!(init::init_resources());
-
-    let client = app.state::<crate::client::ChimeraClient>();
-    log_err!(init::init_service((*client).clone()));
-    log_err!(crate::client::ports::resolve_random_mixed_port(&client));
-
-    // 启动核心
-    log::trace!("launch core");
-    log_err!(tauri::async_runtime::block_on(client.init_core()));
 
     log::trace!("init storage");
     log_err!(crate::core::storage::setup(app));
@@ -297,6 +202,67 @@ pub fn resolve_setup(app: &mut App) {
         app_shutdown.shutdown.child_token(),
         app_shutdown.tasks.clone(),
     );
+
+    // The visible webview must not wait on service IPC or core reconciliation.
+    // Keep startup under the same AppShutdown tracker as the other owners:
+    // shutdown must wait for both blocking configuration writes and any
+    // in-flight core reconciliation before cleanup shuts down the core.
+    let client = (*app.state::<crate::client::ChimeraClient>()).clone();
+    let app_handle = app.app_handle().clone();
+    let startup_shutdown = app_shutdown.shutdown.child_token();
+    app_shutdown.tasks.spawn(async move {
+        // Service initialization is synchronous and may write its configured
+        // port. Do not detach the blocking worker on cancellation: the
+        // tracked owner joins it before shutdown begins core cleanup.
+        let prepared =
+            prepare_startup_while_active(startup_shutdown.clone(), move |preparation_shutdown| {
+                if !preparation_shutdown.is_cancelled() {
+                    log_err!(init::init_service(client.clone()));
+                }
+                client
+            })
+            .await;
+        match prepared {
+            Ok(None) => {
+                tracing::debug!("startup cancelled before core reconciliation");
+            }
+            Ok(Some(client)) => {
+                // Port resolution writes the legacy mirror. Serialize it with
+                // user port changes and let shutdown cancel a task waiting for
+                // that transaction lock before any write begins.
+                let resolved = tokio::select! {
+                    _ = startup_shutdown.cancelled() => None,
+                    result = crate::client::ports::resolve_random_mixed_port(&client) => Some(result),
+                };
+                let Some(resolved) = resolved else {
+                    tracing::debug!("startup cancelled before port reconciliation");
+                    return;
+                };
+                log_err!(resolved);
+                if startup_shutdown.is_cancelled() {
+                    tracing::debug!("startup cancelled before core reconciliation");
+                    return;
+                }
+
+                log::trace!("launch core (background)");
+                // Once submitted to the lifecycle actor, reconciliation must
+                // reach a terminal reply before the tracked task completes.
+                // Dropping that future on cancellation could leave a queued
+                // start racing the subsequent shutdown_core() command.
+                match client.init_core().await {
+                    Ok(()) => app_handle.state::<AppStartupStatus>().finish(true),
+                    Err(error) => {
+                        log::error!(target: "app", "core initialization failed: {error:#}");
+                        app_handle.state::<AppStartupStatus>().finish(false);
+                    }
+                }
+            }
+            Err(error) => {
+                log::error!(target: "app", "startup worker failed: {error}");
+                app_handle.state::<AppStartupStatus>().finish(false);
+            }
+        }
+    });
 }
 
 /// resolve core version
@@ -361,8 +327,99 @@ mod core_version_tests {
 }
 
 #[cfg(test)]
+mod startup_shutdown_tests {
+    use super::prepare_startup_while_active;
+    use crate::setup::AppShutdown;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
+    use tokio::sync::oneshot;
+    use tokio::time::{Duration, timeout};
+    use tokio_util::{sync::CancellationToken, task::TaskTracker};
+
+    #[tokio::test]
+    async fn cancelled_startup_does_not_start_service_preparation() {
+        let shutdown = CancellationToken::new();
+        shutdown.cancel();
+        let touched = Arc::new(AtomicBool::new(false));
+        let touched_in_worker = touched.clone();
+
+        let result = prepare_startup_while_active(shutdown, move |_| {
+            touched_in_worker.store(true, Ordering::SeqCst);
+            42
+        })
+        .await
+        .unwrap();
+
+        assert_eq!(result, None);
+        assert!(!touched.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn shutdown_drains_blocking_preparation_before_core_cleanup() {
+        let boundary = AppShutdown {
+            shutdown: CancellationToken::new(),
+            tasks: TaskTracker::new(),
+        };
+        let (entered_tx, entered_rx) = oneshot::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let core_started = Arc::new(AtomicBool::new(false));
+        let core_started_in_task = core_started.clone();
+        let cancellation = boundary.shutdown.child_token();
+
+        // Simulate a Service or port-config write that was already underway
+        // when the exit boundary requests shutdown.
+        boundary.tasks.spawn(async move {
+            let prepared = prepare_startup_while_active(cancellation, move |_| {
+                entered_tx.send(()).unwrap();
+                release_rx.recv_timeout(Duration::from_secs(3)).unwrap();
+                42
+            })
+            .await
+            .unwrap();
+            if prepared.is_some() {
+                core_started_in_task.store(true, Ordering::SeqCst);
+            }
+        });
+
+        timeout(Duration::from_secs(2), entered_rx)
+            .await
+            .unwrap()
+            .unwrap();
+        boundary.request_shutdown();
+        assert!(
+            timeout(Duration::from_millis(75), boundary.wait_shutdown())
+                .await
+                .is_err(),
+            "shutdown must not finish while the blocking write is in flight"
+        );
+
+        release_tx.send(()).unwrap();
+        timeout(Duration::from_secs(2), boundary.wait_shutdown())
+            .await
+            .unwrap();
+        assert!(
+            !core_started.load(Ordering::SeqCst),
+            "cancellation before preparation completes must suppress core startup"
+        );
+    }
+}
+
+#[cfg(test)]
 mod frontend_ready_tests {
     use super::*;
+
+    #[test]
+    fn app_startup_phase_tracks_initial_task_completion() {
+        let startup = AppStartupStatus::default();
+        assert_eq!(startup.phase(), "starting");
+        startup.finish(true);
+        assert_eq!(startup.phase(), "ready");
+        startup.finish(false);
+        assert_eq!(startup.phase(), "failed");
+    }
+
     use std::sync::{Mutex, OnceLock};
 
     fn test_lock() -> std::sync::MutexGuard<'static, ()> {

@@ -322,7 +322,12 @@ fn find_unused_port(fallback_port: u16) -> Result<u16> {
     }
 }
 
-pub(crate) fn resolve_random_mixed_port(client: &ChimeraClient) -> Result<()> {
+pub(crate) async fn resolve_random_mixed_port(client: &ChimeraClient) -> Result<()> {
+    // This startup mirror write must serialize with typed and legacy port
+    // updates. Read the current config only after acquiring the same lock.
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    let _system_proxy_mutation = client.lock_system_proxy_mutation().await;
+
     let clash = client.get_clash_config()?;
     if clash.mixed_port.kind != PortStrategyKind::Random {
         return Ok(());

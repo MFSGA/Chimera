@@ -1,20 +1,22 @@
 import {
+  commands,
+  isTauri,
   RootProvider,
   setMutationDegradationHandler,
+  unwrapResult,
   type Degradation,
   type DegradationPhase,
 } from '@chimera/interface';
 import { cn } from '@chimera/ui';
 import { TooltipProvider } from '@chimera/ui/tooltip';
+import { useQuery } from '@tanstack/react-query';
 import {
   createRootRoute,
   ErrorComponentProps,
   Outlet,
 } from '@tanstack/react-router';
-import { emit } from '@tauri-apps/api/event';
 import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
-import { useMount } from 'ahooks';
-import { lazy, useEffect } from 'react';
+import { lazy, useEffect, useState } from 'react';
 import { useChimeraStorageSubscribers } from '@/hooks/use-store';
 import 'dayjs/locale/ja';
 import 'dayjs/locale/ru';
@@ -29,6 +31,7 @@ import { BlockTaskProvider } from '@/components/providers/block-task-provider';
 import CustomCssProvider from '@/components/providers/custom-css-provider';
 import { LanguageProvider } from '@/components/providers/language-provider';
 import { ExperimentalThemeProvider } from '@/components/providers/theme-provider';
+import { getStartupStatusView } from '@/features/system-service/startup-status';
 import * as m from '@/paraglide/messages';
 
 dayjs.extend(relativeTime);
@@ -36,7 +39,19 @@ dayjs.extend(customParseFormat);
 
 const appWindow = getCurrentWebviewWindow();
 
+// The backend owns window visibility and reveals it only after this handshake.
+function reportWindowReady() {
+  if (!isTauri()) return;
+  void commands
+    .reportWindowReady()
+    .then(unwrapResult)
+    .catch((error) => {
+      console.error('failed to report the window ready', error);
+    });
+}
+
 export const Catch = ({ error }: ErrorComponentProps) => {
+  useEffect(reportWindowReady, []);
   const errorMessage = error instanceof Error ? error.message : String(error);
   const errorStack = error instanceof Error ? error.stack : undefined;
 
@@ -170,28 +185,66 @@ function MutationDegradationNotifier() {
   return null;
 }
 
+// This status belongs only to the initial GUI startup task; runtime state
+// continues to come from the shared core lifecycle after it is ready.
+function StartupStatusNotifier() {
+  const startup = useQuery({
+    queryKey: ['app-initial-startup'],
+    queryFn: () => commands.getAppStartupStatus(),
+    refetchInterval: (query) =>
+      !query.state.data || query.state.data === 'starting' ? 1000 : false,
+    enabled: isTauri(),
+  });
+  const [dismissedFailure, setDismissedFailure] = useState(false);
+  const [dismissedQueryError, setDismissedQueryError] = useState(false);
+  const startupFailed = startup.data === 'failed';
+
+  const view = getStartupStatusView(
+    startup.data,
+    startup.isError,
+    startupFailed ? dismissedFailure : dismissedQueryError,
+  );
+  if (!isTauri() || view === 'hidden') return null;
+
+  const failed = view === 'failed';
+  return (
+    <div
+      role="status"
+      aria-live="polite"
+      data-slot="app-startup-status"
+      className="bg-surface-container text-on-surface fixed right-4 bottom-4 z-50 max-w-sm rounded-lg px-4 py-3 text-sm shadow-lg"
+    >
+      <span className="font-medium">
+        {failed ? m.common_error() : m.dashboard_widget_core_status()}:{' '}
+      </span>
+      {failed
+        ? m.settings_clash_core_manager_card_loading_error()
+        : m.common_loading()}
+      {failed && (
+        <button
+          type="button"
+          className="ml-3 underline"
+          onClick={() => {
+            if (startupFailed) setDismissedFailure(true);
+            else setDismissedQueryError(true);
+          }}
+        >
+          {m.common_close()}
+        </button>
+      )}
+    </div>
+  );
+}
+
 export default function App() {
   useChimeraStorageSubscribers();
 
-  useMount(() => {
-    Promise.all([
-      appWindow.show(),
-      appWindow.unminimize(),
-      appWindow.setFocus(),
-    ])
-      .catch((error) => {
-        console.error(error);
-      })
-      .finally(() => {
-        emit('react_app_mounted', { label: appWindow.label }).catch((error) => {
-          console.error(error);
-        });
-      });
-  });
+  useEffect(reportWindowReady, []);
 
   return (
     <RootProvider>
       <MutationDegradationNotifier />
+      <StartupStatusNotifier />
       <SchemeProvider />
       <BlockTaskProvider>
         <LanguageProvider>

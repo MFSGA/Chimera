@@ -575,6 +575,14 @@ export const commands = {
     typedError<null, string>(__TAURI_INVOKE('create_main_window')),
   createLegacyWindow: () =>
     typedError<null, string>(__TAURI_INVOKE('create_legacy_window')),
+  /**  The invoking webview can only report its own readiness. */
+  reportWindowReady: () =>
+    typedError<null, string>(__TAURI_INVOKE('report_window_ready')),
+  /**
+   *  Status of this process's initial GUI startup task, independent of the
+   *  ongoing core lifecycle and safe to query before core reconciliation ends.
+   */
+  getAppStartupStatus: () => __TAURI_INVOKE<string>('get_app_startup_status'),
   agentGetManifest: () => __TAURI_INVOKE<AgentManifest>('agent_get_manifest'),
   agentGetAuditHistory: () =>
     typedError<AgentAuditHistoryView, string>(
@@ -1093,6 +1101,7 @@ export type ChimeraAppConfigPatch_Deserialize = {
   tray_selector_mode?: ProxiesSelectorMode | null;
   always_on_top?: boolean | null;
   tray_menu_mode?: TrayMenuMode | null;
+  window_close?: WindowCloseSettingsPatch_Deserialize;
   tray_menu_close_behavior?: TrayMenuCloseBehavior | null;
   network_statistic_widget?: NetworkStatisticWidgetConfig | null;
   traffic_retention?: TrafficRetention | null;
@@ -1132,6 +1141,7 @@ export type ChimeraAppConfigPatch_Serialize = {
   tray_selector_mode?: ProxiesSelectorMode | null;
   always_on_top?: boolean | null;
   tray_menu_mode?: TrayMenuMode | null;
+  window_close?: WindowCloseSettingsPatch_Serialize;
   tray_menu_close_behavior?: TrayMenuCloseBehavior | null;
   network_statistic_widget?: NetworkStatisticWidgetConfig | null;
   traffic_retention?: TrafficRetention | null;
@@ -1185,6 +1195,8 @@ export type ChimeraAppConfig_Deserialize = {
   tray_selector_mode?: ProxiesSelectorMode;
   always_on_top?: boolean;
   tray_menu_mode?: TrayMenuMode;
+  /**  Ref-style window close policy. A missing field preserves Destroy. */
+  window_close?: WindowCloseSettings;
   tray_menu_close_behavior?: TrayMenuCloseBehavior;
   network_statistic_widget?: NetworkStatisticWidgetConfig;
   /**  How long recorded connection traffic is kept. */
@@ -1241,6 +1253,8 @@ export type ChimeraAppConfig_Serialize = {
   tray_selector_mode: ProxiesSelectorMode;
   always_on_top: boolean;
   tray_menu_mode: TrayMenuMode;
+  /**  Ref-style window close policy. A missing field preserves Destroy. */
+  window_close: WindowCloseSettings;
   tray_menu_close_behavior: TrayMenuCloseBehavior;
   network_statistic_widget: NetworkStatisticWidgetConfig;
   /**  How long recorded connection traffic is kept. */
@@ -3738,6 +3752,47 @@ export type UsagePage = {
 };
 
 export type VehicleType = 'File' | 'HTTP' | 'Compatible' | 'Inline' | string;
+
+/**  What closing a window does. */
+export type WindowCloseBehavior =
+  /**  Destroy the window and its webview, freeing their memory. */
+  | 'destroy'
+  /**  Keep the window and its webview, hidden, so reopening is instant. */
+  | 'hide';
+
+/**  One window kind's choice: follow the global behavior or set its own. */
+export type WindowCloseOverride = 'inherit' | 'destroy' | 'hide';
+
+/**
+ *  How each kind of window closes: a global behavior that every kind follows
+ *  unless it sets its own.
+ *
+ *  A patch names only the fields it changes, so an edit of one field, made
+ *  from a page that last saw the others a moment ago, leaves them alone.
+ */
+export type WindowCloseSettings = {
+  global?: WindowCloseBehavior;
+  main?: WindowCloseOverride;
+  editor?: WindowCloseOverride;
+  tray_menu?: WindowCloseOverride;
+};
+
+export type WindowCloseSettingsPatch =
+  WindowCloseSettingsPatch_Serialize | WindowCloseSettingsPatch_Deserialize;
+
+export type WindowCloseSettingsPatch_Deserialize = {
+  global?: WindowCloseBehavior | null;
+  main?: WindowCloseOverride | null;
+  editor?: WindowCloseOverride | null;
+  tray_menu?: WindowCloseOverride | null;
+};
+
+export type WindowCloseSettingsPatch_Serialize = {
+  global?: WindowCloseBehavior | null;
+  main?: WindowCloseOverride | null;
+  editor?: WindowCloseOverride | null;
+  tray_menu?: WindowCloseOverride | null;
+};
 
 export type WindowState = {
   width: number;

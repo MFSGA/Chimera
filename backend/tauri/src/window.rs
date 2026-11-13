@@ -3,37 +3,44 @@ use tauri::{AppHandle, Manager, PhysicalPosition, PhysicalSize, WebviewWindow};
 
 use crate::config::{Config, chimera::WindowState};
 
+mod close;
 mod engine;
+pub mod kinds;
+mod manager;
+mod table;
 
-#[cfg(windows)]
-const WEBVIEW2_BROWSER_ARGS: &str = "--enable-features=msWebView2EnableDraggableRegions --disable-features=OverscrollHistoryNavigation,msExperimentalScrolling";
+pub use manager::WindowManager;
+
 const RESTORE_PLACEHOLDER_SIZE: (f64, f64) = (800.0, 800.0);
 
 #[derive(Debug, Clone)]
 pub struct WindowConfig {
     /// Whether only one instance of this window type is allowed
     pub singleton: bool,
-    /// Whether the window should be visible when created
-    pub visible_on_create: bool,
     pub default_size: (f64, f64),
     pub min_size: Option<(f64, f64)>,
+    pub max_size: Option<(f64, f64)>,
     pub center: bool,
     pub resizable: bool,
     pub always_on_top: Option<bool>,
     pub decorations: Option<bool>,
+    pub skip_taskbar: bool,
+    pub focused_on_create: bool,
 }
 
 impl Default for WindowConfig {
     fn default() -> Self {
         Self {
             singleton: true,
-            visible_on_create: true,
             default_size: (800.0, 636.0),
             min_size: Some((400.0, 600.0)),
+            max_size: None,
             center: true,
             resizable: true,
             always_on_top: None,
             decorations: None,
+            skip_taskbar: false,
+            focused_on_create: true,
         }
     }
 }
@@ -49,12 +56,6 @@ impl WindowConfig {
         self
     }
 
-    /// Set whether window is visible on creation
-    pub fn visible_on_create(mut self, visible: bool) -> Self {
-        self.visible_on_create = visible;
-        self
-    }
-
     pub fn default_size(mut self, width: f64, height: f64) -> Self {
         self.default_size = (width, height);
         self
@@ -62,6 +63,26 @@ impl WindowConfig {
 
     pub fn min_size(mut self, width: f64, height: f64) -> Self {
         self.min_size = Some((width, height));
+        self
+    }
+
+    pub fn max_size(mut self, width: f64, height: f64) -> Self {
+        self.max_size = Some((width, height));
+        self
+    }
+
+    pub fn resizable(mut self, resizable: bool) -> Self {
+        self.resizable = resizable;
+        self
+    }
+
+    pub fn skip_taskbar(mut self, skip: bool) -> Self {
+        self.skip_taskbar = skip;
+        self
+    }
+
+    pub fn focused_on_create(mut self, focused: bool) -> Self {
+        self.focused_on_create = focused;
         self
     }
 
@@ -74,18 +95,6 @@ impl WindowConfig {
         self.decorations = Some(decorations);
         self
     }
-}
-
-fn focus_existing_window(app_handle: &AppHandle, label: &str) -> bool {
-    let Some(window) = app_handle.get_webview_window(label) else {
-        return false;
-    };
-
-    engine::set_in_sight(&window, true);
-    crate::trace_err!(window.unminimize(), "set win unminimize");
-    crate::trace_err!(window.show(), "set win visible");
-    crate::trace_err!(window.set_focus(), "set win focus");
-    true
 }
 
 fn resolve_always_on_top(config: &WindowConfig) -> bool {
@@ -299,123 +308,102 @@ pub(crate) async fn persist_active_window_state(
     persist_window_state(app_handle, client, label).await
 }
 
-/// Trait for window management
-pub trait AppWindow {
-    fn label(&self) -> &str;
-    fn title(&self) -> &str;
-    fn url(&self) -> &str;
+/// Window URL parameters (from the pinned ref).
+pub type WindowParams = std::collections::HashMap<String, String>;
 
-    fn config(&self) -> WindowConfig {
-        WindowConfig::default()
+/// Builder for constructing URL parameters
+#[derive(Debug, Clone, Default)]
+pub struct WindowParamsBuilder {
+    params: WindowParams,
+}
+
+#[allow(dead_code)]
+impl WindowParamsBuilder {
+    pub fn new() -> Self {
+        Self::default()
     }
 
-    fn get_window_state(&self) -> Option<WindowState>;
+    pub fn param(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
+        self.params.insert(key.into(), value.into());
+        self
+    }
 
-    fn create(&self, app_handle: &AppHandle) -> Result<()> {
-        if focus_existing_window(app_handle, self.label()) {
-            return Ok(());
-        }
-
-        let config = self.config();
-        let window_state = self.get_window_state();
-        let mut builder = tauri::WebviewWindowBuilder::new(
-            app_handle,
-            self.label(),
-            tauri::WebviewUrl::App(self.url().into()),
-        )
-        .title(self.title())
-        .fullscreen(false)
-        .always_on_top(resolve_always_on_top(&config))
-        .resizable(config.resizable)
-        .disable_drag_drop_handler();
-
-        if let Some((width, height)) = config.min_size {
-            builder = builder.min_inner_size(width, height);
-        }
-
-        if window_state.is_some() {
-            builder = builder
-                .inner_size(RESTORE_PLACEHOLDER_SIZE.0, RESTORE_PLACEHOLDER_SIZE.1)
-                .position(0.0, 0.0);
+    pub fn param_if(
+        self,
+        condition: bool,
+        key: impl Into<String>,
+        value: impl Into<String>,
+    ) -> Self {
+        if condition {
+            self.param(key, value)
         } else {
-            let (width, height) = default_inner_size(config.default_size);
-            builder = builder.inner_size(width, height);
-
-            if config.center {
-                builder = builder.center();
-            }
+            self
         }
+    }
 
-        #[cfg(windows)]
-        let window = builder
-            .decorations(false)
-            .transparent(true)
-            .visible(false)
-            .additional_browser_args(WEBVIEW2_BROWSER_ARGS)
-            .build();
-
-        #[cfg(target_os = "macos")]
-        let window = {
-            let decorations = config.decorations.unwrap_or(true);
-            if decorations {
-                builder
-                    .decorations(true)
-                    .hidden_title(true)
-                    .title_bar_style(tauri::TitleBarStyle::Overlay)
-                    .visible(config.visible_on_create)
-                    .build()
-            } else {
-                builder
-                    .decorations(false)
-                    .visible(config.visible_on_create)
-                    .build()
-            }
-        };
-
-        #[cfg(all(not(windows), not(target_os = "macos")))]
-        let window = builder.build();
-
-        let window = match window {
-            Ok(window) => window,
-            Err(err) => {
-                log::error!(target: "app", "failed to create window, {err:?}");
-                return Err(err.into());
-            }
-        };
-
-        let visibility_window = window.clone();
-        window.on_window_event(move |event| {
-            if matches!(event, tauri::WindowEvent::Resized(_)) {
-                follow_minimized(&visibility_window);
-            }
-        });
-
-        restore_window_state(&window, window_state.as_ref(), config.min_size);
-
-        #[cfg(windows)]
-        crate::trace_err!(window.set_shadow(true), "set win shadow");
-
-        if should_center_window(&window, window_state.as_ref()).unwrap_or(true) {
-            crate::trace_err!(window.center(), "set win center");
+    pub fn param_opt(self, key: impl Into<String>, value: Option<impl Into<String>>) -> Self {
+        match value {
+            Some(value) => self.param(key, value),
+            None => self,
         }
+    }
 
-        #[cfg(target_os = "macos")]
-        if config.decorations.unwrap_or(true) {
-            let mtm = objc2_foundation::MainThreadMarker::new().unwrap();
-            macos::setup_traffic_lights_pos(window.clone(), (18.0, 22.0), mtm);
+    pub fn build(self) -> Option<WindowParams> {
+        if self.params.is_empty() {
+            None
+        } else {
+            Some(self.params)
         }
-
-        Ok(())
     }
 }
 
-/// Keeps WebView2 visibility aligned with native minimize and restore events.
-fn follow_minimized(window: &WebviewWindow) {
-    if window.is_minimized().unwrap_or(false) {
-        engine::set_in_sight(window, false);
-    } else if window.is_visible().unwrap_or(false) {
-        engine::set_in_sight(window, true);
+/// Build URL with optional parameters (matching ref's URL-encoding semantics).
+pub fn build_url_with_params(base_url: &str, params: Option<&WindowParams>) -> String {
+    match params {
+        Some(params) if !params.is_empty() => {
+            let query: Vec<String> = params
+                .iter()
+                .map(|(k, v)| format!("{}={}", urlencoding::encode(k), urlencoding::encode(v)))
+                .collect();
+            format!("{}?{}", base_url, query.join("&"))
+        }
+        _ => base_url.to_string(),
     }
+}
+
+/// What a window kind does when the manager applies its state.
+pub trait WindowHooks: Send + Sync + 'static {
+    fn on_dismissed(&self, window: &WebviewWindow);
+    fn close_override(&self, settings: &close::WindowCloseSettings) -> close::WindowCloseOverride;
+}
+
+impl<K: AppWindow> WindowHooks for K {
+    fn on_dismissed(&self, window: &WebviewWindow) {
+        AppWindow::on_dismissed(self, window);
+    }
+
+    fn close_override(&self, settings: &close::WindowCloseSettings) -> close::WindowCloseOverride {
+        AppWindow::close_override(self, settings)
+    }
+}
+
+/// A window kind describes its content and event hooks. WindowManager
+/// exclusively owns construction, readiness, visibility and retirement.
+pub trait AppWindow: Clone + Send + Sync + 'static {
+    fn label(&self) -> &str;
+    fn title(&self) -> &str;
+    fn url(&self) -> &str;
+    fn url_with_params(&self, params: Option<&WindowParams>) -> String {
+        build_url_with_params(self.url(), params)
+    }
+    fn config(&self) -> WindowConfig {
+        WindowConfig::default()
+    }
+    fn get_window_state(&self, app_handle: &AppHandle) -> Option<WindowState>;
+    fn close_override(&self, settings: &close::WindowCloseSettings) -> close::WindowCloseOverride;
+    fn on_created(&self, _window: &WebviewWindow) {}
+    fn on_window_event(&self, _window: &WebviewWindow, _event: &tauri::WindowEvent) {}
+    fn on_dismissed(&self, _window: &WebviewWindow) {}
 }
 
 #[cfg(test)]

@@ -19,6 +19,7 @@
     "test:dashboard-widget-placement": "tsx --test tests/dashboard-widget-placement.test.ts",
     "test:dashboard-widget-config": "tsx --test tests/dashboard-widget-config.test.ts tests/legacy-storage-events.test.ts ../interface/tests/kv-storage-write-echoes.test.ts ../interface/tests/kv-storage-state.test.ts ../interface/tests/kv-storage-provider.test.ts",
     "test:transparent-proxy-interfaces": "tsx --test tests/transparent-proxy-interfaces.test.ts",
+    "test:startup-status": "tsx --test tests/startup-status.test.ts",
     "test:transform-chain-model": "tsx --test tests/transform-chain-model.test.ts"
   },
   "dependencies": {
