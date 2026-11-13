@@ -1,5 +1,14 @@
 # ref 对齐进度
 
+## DIFF-077：Service OS process / shared contract（2026-11-12，生产接线）
+
+- **目标**：将固定上游 `ref@59724e85c` 的 Service OS 进程调用、授权、安装参数与状态查询从 Tauri 拆到 `backend/chimera-os/src/service.rs`，并让独立 `chimera-core` 的 Service Actor 直接使用 `chimera-contracts::service`，不再保留第二套私有命令/错误/port 定义。
+- **来源和结构**：复制适配 `ref/backend/nyanpasu-os/src/service.rs`、`ref/backend/nyanpasu-os/src/elevation/macos.rs` 到 `chimera-os`；`backend/chimera-core/src/actor_v2/service_process.rs` 改为从共享 Service contract 重导出命令/错误/port，只保留 Chimera IPC `StatusInfo` 解析和已有测试；Tauri `core/service/control.rs` 改为薄 shell bridge，复用新 OS `status`、`install_service_with_args`、`start/stop/uninstall/update/restart_service`，其健康监视停止仍在 Tauri 操作成功后执行。Tauri `ipc.rs` 继续通过兼容预览函数获得安装参数，无二套特权命令执行实现。
+- **有理由保留的 Chimera 差异**：服务可执行文件是 `chimera-service` 而非 `nyanpasu-service`；安装参数继续使用已有 `--nyanpasu-*` 兼容选项；实际 `chimera_service` 的 `update` 子命令不接受上游追加的 `--user`/`--nyanpasu-data-dir`，因此仅传 `update` 并有单测锁定；共享 port 增加 Chimera 原有的原生 `restart_daemon()`，不可改成 stop/start 两个命令；现存 Tauri shell 目录来源尚为 `utils::dirs`，共享契约暂保留 `ResolveLegacyServiceDirs` 结构化故障分支。`status` 保留原 5 秒超时和 `kill_on_drop`，阻止超时探测留下后台子进程。
+- **授权与安全性**：新 OS 安装辅助函数延迟求值 Tauri 路径及安装参数，直到 consent policy 允许后才进入操作系统授权机制；拒绝策略时既不构造安装辅助信息也不执行 helper，使用 fake runner/计数器回归。此次仅编译/模拟测试，不请求管理员授权，不执行真实 Service 安装/启动、系统代理修改或实际系统 DNS flush。未改变核心 Service 状态机、TUN、用户配置、runtime submodule 或 ref 指针。
+- **验证**：`cargo check --manifest-path backend/Cargo.toml -p chimera --all-features --tests` 通过；`cargo test --manifest-path backend/Cargo.toml -p chimera-core --lib actor_v2::service` **23/23**；`cargo test --manifest-path backend/Cargo.toml -p chimera --lib core::actor_v2::facade::tests` **7/7**；`cargo test --manifest-path backend/Cargo.toml -p chimera-os --lib` 最终 **11/11**（包含授权拒绝前置、Chimera update CLI 参数、Service 二进制命名和既有 OS 测试；未执行 macOS sudo 实际提权）；定向 Rustfmt 和 `git diff --check` 通过，两个签名提交的 Git hooks（Rustfmt、Clippy、Prettier）均通过。Mac 以外的平台编译、Service 真正提权/安装、桌面 E2E、全量 CI 未运行。上一批发现的两项 Core Lifecycle 二进制更新测试失败与 Service OS 提取不同，仍需独立诊断。
+- **剩余收敛**：本批服务 OS 命令统一，但 CoreActor V2 完整 ServiceActor/Host 状态所有权仍未完全迁入独立 core；Tauri 目录来源需在后续基线迁移中改为同一实例 `PathResolver`，并按功能门限验证 Windows SessionEnding、权限提示和 macOS Service sidecar。下一批 Core Install / Core Version，不应混用 ref 的不兼容更新命令参数。
+
 ## DIFF-076：System Proxy / Autostart / PAC OS 适配拆分（2026-11-12）
 
 - **基线与范围**：主仓 `codex/ref-os-dns-20261112@e03423b6`，只读固定 `ref@59724e85c34abb6995c22d101c876cc06dc16576`。完成 OS 层的 System Proxy、Autostart 和 PAC 相关源码复制与真实生产装配；不更改 `ref/`、`backend/chimera-runtime`、用户代理设置、真实网络或系统登录项。
