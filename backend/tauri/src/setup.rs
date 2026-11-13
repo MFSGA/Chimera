@@ -51,6 +51,7 @@ impl chimera_contracts::net::SelfProxyPortSource for LegacySelfProxyPort {
 pub fn setup(
     app: &mut tauri::App,
     paths: PathResolver,
+    resolved_paths: chimera_paths::PathResolver,
     bundle_metadata: chimera_contracts::bundle_metadata::BundleMetadata,
 ) -> anyhow::Result<()> {
     let shutdown = tokio_util::sync::CancellationToken::new();
@@ -119,9 +120,22 @@ pub fn setup(
         crate::startup_failure::StartupStage::CoreHost,
         &paths,
     )?;
+    // Match ref/backend/tauri/src/setup.rs: inject the original resolver from
+    // the process entry point. Never re-discover paths through Tauri globals.
+    let service_binary =
+        chimera_os::service::service_binary(resolved_paths.app_install_dir()?.as_std_path());
+    let os_service_process = Arc::new(chimera_os::service::OsServiceProcessControl::new(
+        service_binary,
+        resolved_paths,
+        Arc::new(crate::adapters::elevation::InteractiveElevationConsent),
+    ));
+    // Only the legacy IPC health-check notification remains a Tauri adapter.
+    let service_process: Arc<dyn chimera_contracts::service::ServiceProcessControl> =
+        Arc::new(crate::core::service::control::HealthMonitorStopAdapter::new(os_service_process));
     let core_facade = Arc::new(crate::core::actor_v2::CoreFacade::new_local_with_control(
         local_control,
         runtime_paths.clone(),
+        service_process,
     ));
     let core_facade_monitor = core_facade.clone();
     let core_bridge: Arc<dyn crate::client::core_lifecycle::CoreLifecyclePort> = Arc::new(

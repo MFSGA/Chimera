@@ -15,9 +15,10 @@ use chimera_contracts::service::SessionEndingSnafu;
 use chimera_contracts::{
     elevation::{ElevationConsent, ElevationOperation},
     service::{
-        AuthorizeServiceCommandSnafu, ResolveServiceUserSnafu, RunElevatedSnafu,
-        RunServiceStatusSnafu, ServiceCommand, ServiceCommandError, ServiceCommandExitSnafu,
-        ServiceStatusExitSnafu, ServiceStatusNotUtf8Snafu,
+        AuthorizeServiceCommandSnafu, ResolveServiceDirsSnafu, ResolveServiceUserSnafu,
+        RunElevatedSnafu, RunServiceStatusSnafu, ServiceCommand, ServiceCommandError,
+        ServiceCommandExitSnafu, ServiceProcessControl, ServiceStatusExitSnafu,
+        ServiceStatusNotUtf8Snafu,
     },
 };
 
@@ -81,7 +82,7 @@ pub async fn get_service_install_args(
     Ok(args)
 }
 
-/// Runs `nyanpasu-service` elevated and waits for it to exit successfully.
+/// Runs `chimera-service` elevated and waits for it to exit successfully.
 /// Arguments stay lazy so refusal also precedes install's user-lookup processes.
 async fn run_elevated(
     command: ServiceCommand,
@@ -150,26 +151,10 @@ pub async fn install_service(
     config_dir: &Path,
     app_dir: &Path,
 ) -> Result<(), ServiceCommandError> {
-    install_service_with_args(
-        consent,
-        service_binary,
-        get_service_install_args(data_dir, config_dir, app_dir),
-    )
-    .await
-}
-
-/// Staged Chimera bridge: resolve legacy shell paths only *after* the shell's
-/// consent policy permits requesting OS authorization. This preserves ref's
-/// lazy preparation contract without moving legacy directory policy into OS.
-pub async fn install_service_with_args(
-    consent: &dyn ElevationConsent,
-    service_binary: &Path,
-    args: impl std::future::Future<Output = Result<Vec<OsString>, ServiceCommandError>>,
-) -> Result<(), ServiceCommandError> {
     run_elevated(
         ServiceCommand::Install,
         service_binary,
-        args,
+        get_service_install_args(data_dir, config_dir, app_dir),
         consent,
         Arc::new(OsCommandRunner),
     )
@@ -291,6 +276,72 @@ fn ensure_session_active() -> Result<(), ServiceCommandError> {
     Ok(())
 }
 
+/// Runs service commands against the binary and application directories supplied by the shell.
+pub struct OsServiceProcessControl {
+    service_binary: PathBuf,
+    paths: chimera_paths::PathResolver,
+    consent: Arc<dyn ElevationConsent>,
+}
+
+impl OsServiceProcessControl {
+    /// Binds service process control to the supplied executable and path resolver;
+    /// `consent` is checked before every elevated service command.
+    pub fn new(
+        service_binary: PathBuf,
+        paths: chimera_paths::PathResolver,
+        consent: Arc<dyn ElevationConsent>,
+    ) -> Self {
+        Self {
+            service_binary,
+            paths,
+            consent,
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl ServiceProcessControl for OsServiceProcessControl {
+    async fn probe(&self) -> Result<String, ServiceCommandError> {
+        status(&self.service_binary).await
+    }
+
+    async fn install(&self) -> Result<(), ServiceCommandError> {
+        let app_dir = self
+            .paths
+            .app_install_dir()
+            .context(ResolveServiceDirsSnafu)?;
+        install_service(
+            self.consent.as_ref(),
+            &self.service_binary,
+            self.paths.app_data_dir().as_std_path(),
+            self.paths.app_config_dir().as_std_path(),
+            app_dir.as_std_path(),
+        )
+        .await
+    }
+
+    async fn uninstall(&self) -> Result<(), ServiceCommandError> {
+        uninstall_service(self.consent.as_ref(), &self.service_binary).await
+    }
+
+    async fn start_daemon(&self) -> Result<(), ServiceCommandError> {
+        start_service(self.consent.as_ref(), &self.service_binary).await
+    }
+
+    async fn stop_daemon(&self) -> Result<(), ServiceCommandError> {
+        stop_service(self.consent.as_ref(), &self.service_binary).await
+    }
+
+    async fn update(&self) -> Result<(), ServiceCommandError> {
+        update_service(self.consent.as_ref(), &self.service_binary).await
+    }
+
+    // Chimera Service exposes one native restart command; no stop/start emulation.
+    async fn restart_daemon(&self) -> Result<(), ServiceCommandError> {
+        restart_service(self.consent.as_ref(), &self.service_binary).await
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -301,23 +352,56 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn refused_install_never_resolves_shell_paths() {
+    async fn upstream_owner_uses_injected_paths_without_touching_host_files() {
         use crate::elevation::RefuseElevation;
-        use std::sync::atomic::{AtomicUsize, Ordering};
 
-        let prepared = AtomicUsize::new(0);
-        let error =
-            install_service_with_args(&RefuseElevation, Path::new("not-a-real-service"), async {
-                prepared.fetch_add(1, Ordering::SeqCst);
-                Ok(vec!["install".into()])
-            })
-            .await
-            .unwrap_err();
+        let temp = tempfile::tempdir().unwrap();
+        let dir = |name| {
+            camino::Utf8PathBuf::from_path_buf(temp.path().join(name))
+                .expect("temporary test path is UTF-8")
+        };
+        let paths = chimera_paths::PathResolver::with_base_dirs_and_install_dir(
+            dir("config"),
+            dir("data"),
+            Ok(dir("application")),
+        );
+        let owner = OsServiceProcessControl::new(
+            service_binary(temp.path()),
+            paths,
+            Arc::new(RefuseElevation),
+        );
         assert!(matches!(
-            error,
-            ServiceCommandError::AuthorizeServiceCommand { .. }
+            owner.install().await,
+            Err(ServiceCommandError::AuthorizeServiceCommand {
+                command: ServiceCommand::Install,
+                ..
+            })
         ));
-        assert_eq!(prepared.load(Ordering::SeqCst), 0);
+        for name in ["config", "data", "application"] {
+            assert!(
+                !temp.path().join(name).exists(),
+                "unexpected directory creation"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn upstream_owner_preserves_missing_install_directory_error() {
+        use crate::elevation::RefuseElevation;
+
+        let paths = chimera_paths::PathResolver::with_base_dirs(
+            "/unused-config".into(),
+            "/unused-data".into(),
+        );
+        let owner = OsServiceProcessControl::new(
+            PathBuf::from("never-execute-this-service"),
+            paths,
+            Arc::new(RefuseElevation),
+        );
+        assert!(matches!(
+            owner.install().await,
+            Err(ServiceCommandError::ResolveServiceDirs { .. })
+        ));
     }
 
     #[tokio::test]
