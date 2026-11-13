@@ -7,7 +7,7 @@ use anyhow::{Context as _, Result, anyhow};
 use async_trait::async_trait;
 use chimera_config::application::UpdateSource;
 use chimera_contracts::bundle_metadata::BundleMetadata;
-use chimera_contracts::net::{ChangelogHttp, SelfProxyPortSource};
+use chimera_contracts::net::{SelfProxyPortSource, SystemProxySource};
 use chimera_core::client::app_update::{
     AppUpdateBackend, AppUpdateDownloadProgress, AppUpdateEventSink, AppUpdateRelease,
     AppUpdateSettings, AppUpdateSnapshot, PreparedAppUpdate, VerifiedAppUpdate,
@@ -24,6 +24,7 @@ pub(crate) struct TauriAppUpdateBackend {
     app: tauri::AppHandle,
     proxy_port: Arc<dyn SelfProxyPortSource>,
     bundle_metadata: BundleMetadata,
+    system_proxy: Arc<dyn SystemProxySource>,
 }
 
 impl TauriAppUpdateBackend {
@@ -31,11 +32,13 @@ impl TauriAppUpdateBackend {
         app: tauri::AppHandle,
         proxy_port: Arc<dyn SelfProxyPortSource>,
         bundle_metadata: BundleMetadata,
+        system_proxy: Arc<dyn SystemProxySource>,
     ) -> Self {
         Self {
             app,
             proxy_port,
             bundle_metadata,
+            system_proxy,
         }
     }
 }
@@ -82,7 +85,7 @@ impl AppUpdateBackend for TauriAppUpdateBackend {
             if let Some(port) = self.proxy_port.mixed_port() {
                 builder = builder.proxy(format!("http://127.0.0.1:{port}").parse()?);
             }
-            if let Ok(Some(proxy)) = crate::utils::config::get_system_proxy() {
+            if let Ok(Some(proxy)) = self.system_proxy.system_proxy() {
                 builder = builder.proxy(proxy.parse().context("invalid system proxy")?);
             }
             let Some(mut update) = builder.build()?.check().await? else {
@@ -237,37 +240,6 @@ impl TauriAppUpdateEventSink {
 impl AppUpdateEventSink for TauriAppUpdateEventSink {
     fn publish(&self, snapshot: AppUpdateSnapshot) {
         crate::log_err!(AppUpdateStateChanged(snapshot).emit(&self.0));
-    }
-}
-
-pub(crate) struct ReqwestChangelogHttp(reqwest::Client);
-
-impl ReqwestChangelogHttp {
-    pub fn new(proxy_port: Option<u16>) -> anyhow::Result<Self> {
-        let mut builder = reqwest::Client::builder();
-        if let Some(port) = proxy_port {
-            let proxy = reqwest::Proxy::all(format!("http://127.0.0.1:{port}"))?;
-            builder = builder.proxy(proxy);
-        }
-        Ok(Self(builder.build()?))
-    }
-}
-
-#[async_trait]
-impl ChangelogHttp for ReqwestChangelogHttp {
-    async fn get_text(&self, url: &url::Url) -> Result<String> {
-        Ok(self
-            .0
-            .get(url.clone())
-            .header(
-                reqwest::header::USER_AGENT,
-                concat!("Chimera/", env!("CARGO_PKG_VERSION")),
-            )
-            .send()
-            .await?
-            .error_for_status()?
-            .text()
-            .await?)
     }
 }
 

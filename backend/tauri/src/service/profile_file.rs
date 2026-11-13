@@ -15,6 +15,7 @@ use chimera_config::profile::{
     ExternalProfilePath, ManagedProfilePath, Profiles, RemoteProfileOptions, RemoteSyncInterval,
     SubscriptionInfo,
 };
+use chimera_contracts::net::SystemProxySource;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use url::Url;
@@ -39,23 +40,14 @@ pub trait SelfProxyPortSource: Send + Sync + 'static {
     fn mixed_port(&self) -> Option<u16>;
 }
 
-trait SystemProxySource: Send + Sync + 'static {
-    fn http_proxy(&self) -> Option<String>;
-}
+// Legacy tests construct a profile service without consulting host proxy settings.
+#[cfg(test)]
+struct NoSystemProxyForTests;
 
-struct OsSystemProxySource;
-
-impl SystemProxySource for OsSystemProxySource {
-    fn http_proxy(&self) -> Option<String> {
-        match sysproxy::Sysproxy::get_system_proxy() {
-            Ok(sysproxy::Sysproxy {
-                enable: true,
-                host,
-                port,
-                ..
-            }) => Some(format!("http://{host}:{port}")),
-            _ => None,
-        }
+#[cfg(test)]
+impl SystemProxySource for NoSystemProxyForTests {
+    fn system_proxy(&self) -> anyhow::Result<Option<String>> {
+        Ok(None)
     }
 }
 
@@ -67,13 +59,22 @@ pub struct ProfileFileService {
 }
 
 impl ProfileFileService {
-    pub fn new(paths: PathResolver, self_proxy_port: Arc<dyn SelfProxyPortSource>) -> Self {
+    pub fn new_with_system_proxy(
+        paths: PathResolver,
+        self_proxy_port: Arc<dyn SelfProxyPortSource>,
+        system_proxy: Arc<dyn SystemProxySource>,
+    ) -> Self {
         Self {
             paths,
             self_proxy_port,
-            system_proxy: Arc::new(OsSystemProxySource),
+            system_proxy,
             http_timeout: Duration::from_secs(30),
         }
+    }
+
+    #[cfg(test)]
+    pub fn new(paths: PathResolver, self_proxy_port: Arc<dyn SelfProxyPortSource>) -> Self {
+        Self::new_with_system_proxy(paths, self_proxy_port, Arc::new(NoSystemProxyForTests))
     }
 
     #[cfg(test)]
@@ -2092,7 +2093,7 @@ impl SubscriptionFetcher for ProfileFileService {
         };
         let proxy_url = proxy_url.or_else(|| {
             if options.with_proxy {
-                self.system_proxy.http_proxy()
+                self.system_proxy.system_proxy().ok().flatten()
             } else {
                 None
             }
@@ -2290,16 +2291,33 @@ mod tests {
     struct NoSystemProxy;
 
     impl SystemProxySource for NoSystemProxy {
-        fn http_proxy(&self) -> Option<String> {
-            None
+        fn system_proxy(&self) -> anyhow::Result<Option<String>> {
+            Ok(None)
         }
     }
 
     struct FixedSystemProxy(String);
 
     impl SystemProxySource for FixedSystemProxy {
-        fn http_proxy(&self) -> Option<String> {
-            Some(self.0.clone())
+        fn system_proxy(&self) -> anyhow::Result<Option<String>> {
+            Ok(Some(self.0.clone()))
+        }
+    }
+
+    struct FailingSystemProxy(Arc<AtomicUsize>);
+
+    impl SystemProxySource for FailingSystemProxy {
+        fn system_proxy(&self) -> anyhow::Result<Option<String>> {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            anyhow::bail!("injected OS proxy read failed")
+        }
+    }
+
+    struct FixedSelfProxyPort(u16);
+
+    impl SelfProxyPortSource for FixedSelfProxyPort {
+        fn mixed_port(&self) -> Option<u16> {
+            Some(self.0)
         }
     }
 
@@ -3765,6 +3783,43 @@ mod tests {
         assert_eq!(fetched.content, "ok: true\n");
         assert_eq!(source_hits.load(Ordering::SeqCst), 1);
         assert_eq!(proxy_hits.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn failed_system_proxy_read_keeps_direct_subscription_fallback() {
+        let reads = Arc::new(AtomicUsize::new(0));
+        let (url, _server) = serve(Router::new().route("/", get(|| async { "ok: true\n" }))).await;
+        let (_temp, service) = service();
+        let service = service.with_system_proxy_source(Arc::new(FailingSystemProxy(reads.clone())));
+
+        let fetched = service
+            .fetch(&Url::parse(&url).unwrap(), &options(false, true))
+            .await
+            .unwrap();
+
+        assert_eq!(fetched.content, "ok: true\n");
+        assert_eq!(reads.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn self_proxy_has_priority_without_reading_system_proxy() {
+        let (proxy_url, _server) =
+            serve(Router::new().fallback(any(|| async { "ok: true\n" }))).await;
+        let port = Url::parse(&proxy_url).unwrap().port().unwrap();
+        let reads = Arc::new(AtomicUsize::new(0));
+        let (_temp, service) = service_with(Arc::new(FixedSelfProxyPort(port)));
+        let service = service.with_system_proxy_source(Arc::new(FailingSystemProxy(reads.clone())));
+
+        let fetched = service
+            .fetch(
+                &Url::parse("http://subscription.invalid/profile.yaml").unwrap(),
+                &options(true, true),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(fetched.content, "ok: true\n");
+        assert_eq!(reads.load(Ordering::SeqCst), 0);
     }
 
     #[tokio::test]
