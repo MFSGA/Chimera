@@ -52,10 +52,6 @@ pub enum ServiceCommandError {
         #[serde(skip)]
         source: UserError,
     },
-    // Chimera's staged Tauri host still resolves paths through legacy helpers;
-    // keep their errors distinct until it uses the injected PathResolver.
-    #[snafu(display("could not resolve the application directories: {message}"))]
-    ResolveLegacyServiceDirs { message: String },
     #[snafu(display("could not resolve the application directories: {source}"))]
     ResolveServiceDirs {
         #[snafu(source(from(InstallDirError, Box::new)))]

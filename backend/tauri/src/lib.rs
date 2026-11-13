@@ -277,7 +277,7 @@ pub fn run() -> std::process::ExitCode {
             }
 
             specta_builder.mount_events(app);
-            setup::setup(app, setup_paths, metadata)?;
+            setup::setup(app, setup_paths, paths.clone(), metadata)?;
             core::updater::recover_interrupted_update();
             core::clash::setup(app)?;
 

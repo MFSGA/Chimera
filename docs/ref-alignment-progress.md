@@ -1,5 +1,15 @@
 # ref 对齐进度
 
+## DIFF-078：Service ref 对象/路径所有权纠偏（2026-11-12）
+
+- **原因与范围**：修正 DIFF-077 删除上游 `OsServiceProcessControl`、在 Tauri 重建 OS Service Port 的偏差。以 `ref@59724e85c` 为固定基线，不更新子模块、不改 CoreActor 状态机、不调用真实 Service 安装/提权。L2：影响生产 Service 的依赖注入。
+- **严格映射**：从 `ref/backend/nyanpasu-os/src/service.rs` 恢复 `OsServiceProcessControl { service_binary, paths, consent }` 和原本的 `ServiceProcessControl` 实现，`chimera_paths::PathResolver` 在 OS 层被持有。`backend/tauri/src/lib.rs` 将已有的统一 resolver 交给 `setup.rs`；`setup.rs` 按 `ref/backend/tauri/src/setup.rs` 的结构组合 `chimera_os::service::service_binary`、`OsServiceProcessControl::new` 并注入 CoreFacade，Service Actor 不再自己构造另一套 Tauri 特权命令实现。删除自创 `ResolveLegacyServiceDirs` 错误和 `install_service_with_args` 辅助函数，恢复上游安装目录解析与授权顺序。
+- **必要的 Chimera 差异**：保留 `chimera-service` 二进制名，实际 Chimera CLI 的 `update` 只能传 `update`（不能传 ref 上游 Unix 专属 `--user`/`--nyanpasu-data-dir`），保留原生 `restart_daemon` 接口和 `status` 的 `kill_on_drop` 超时保护。Tauri 中尚未迁移的只读 Service 状态查询与安装提示预览仍使用遗留路径 API，**不宣称全部 Service 读取路径与上游一致**。
+- **旧健康监测兼容性**：原有 Stop / Uninstall 成功后必须通知 `ipc::stop_health_check`，防止旧轮次恢复发布。新 `HealthMonitorStopAdapter` 只转发 `OsServiceProcessControl` 的 Service 命令，在两个操作成功后通知旧健康监测；自身不启动任何特权命令、不重新发现路径，也不会在失败时错误地关闭监测。后续随 Legacy IPC 健康所有权收敛可删除这一薄适配层。
+- **实际验证**：Tauri `cargo check -p chimera --all-features --tests` 通过；`chimera-os --lib` **12/12**（包括注入路径、安装目录不存在和拒绝授权）；`chimera-core --lib actor_v2::service` **23/23**；Tauri `core::actor_v2::facade::tests` **7/7**；Tauri `core::service::control::tests` **1/1**。均无实际 OS Service 操作。Windows/Linux 编译、权限交互、真实桌面 E2E、完整 CI、独立复审仍未进行；上一轮发现的 Core Lifecycle 两项二进制更新失败并未解决。
+- **回滚**：无数据迁移。若需要，可回滚这次 Service 纠偏提交，恢复到 `d2f91f9c` 的工作分支状态；不得把这一批未经跨平台验证的结果写作全部 ref 严格对齐完成。
+
+
 ## DIFF-077：Service OS process / shared contract（2026-11-12，生产接线）
 
 - **目标**：将固定上游 `ref@59724e85c` 的 Service OS 进程调用、授权、安装参数与状态查询从 Tauri 拆到 `backend/chimera-os/src/service.rs`，并让独立 `chimera-core` 的 Service Actor 直接使用 `chimera-contracts::service`，不再保留第二套私有命令/错误/port 定义。
