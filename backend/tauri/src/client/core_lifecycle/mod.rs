@@ -1137,7 +1137,7 @@ impl CoreLifecycleClient {
         expected_port: u16,
         expected_core_state_changed_at: i64,
         desired_before: bool,
-        original: crate::client::system_proxy::ports::OsProxyConfig,
+        original: chimera_contracts::system_proxy::OsProxyConfig,
         notifications: Arc<dyn crate::client::effects::ports::CommitNotifications>,
         persist_legacy_mirror: Arc<dyn Fn() -> anyhow::Result<()> + Send + Sync>,
     ) -> Result<(), crate::client::system_proxy::SystemProxyActionError> {
@@ -1803,8 +1803,8 @@ mod tests {
     }
 
     struct LifecycleTestProxy {
-        state: Mutex<crate::client::system_proxy::ports::OsProxyConfig>,
-        writes: Mutex<Vec<crate::client::system_proxy::ports::OsProxyConfig>>,
+        state: Mutex<chimera_contracts::system_proxy::OsProxyConfig>,
+        writes: Mutex<Vec<chimera_contracts::system_proxy::OsProxyConfig>>,
         pause_disable: bool,
         started: Mutex<Option<oneshot::Sender<()>>>,
         released: Mutex<bool>,
@@ -1812,7 +1812,7 @@ mod tests {
     }
 
     impl LifecycleTestProxy {
-        fn new(state: crate::client::system_proxy::ports::OsProxyConfig) -> Arc<Self> {
+        fn new(state: chimera_contracts::system_proxy::OsProxyConfig) -> Arc<Self> {
             Arc::new(Self {
                 state: Mutex::new(state),
                 writes: Mutex::new(Vec::new()),
@@ -1824,7 +1824,7 @@ mod tests {
         }
 
         fn pause_first_disable(
-            state: crate::client::system_proxy::ports::OsProxyConfig,
+            state: chimera_contracts::system_proxy::OsProxyConfig,
         ) -> (Arc<Self>, oneshot::Receiver<()>) {
             let (started_tx, started_rx) = oneshot::channel();
             (
@@ -1845,29 +1845,29 @@ mod tests {
             self.release.notify_all();
         }
 
-        fn current(&self) -> crate::client::system_proxy::ports::OsProxyConfig {
+        fn current(&self) -> chimera_contracts::system_proxy::OsProxyConfig {
             self.state.lock().unwrap().clone()
         }
 
-        fn writes(&self) -> Vec<crate::client::system_proxy::ports::OsProxyConfig> {
+        fn writes(&self) -> Vec<chimera_contracts::system_proxy::OsProxyConfig> {
             self.writes.lock().unwrap().clone()
         }
     }
 
-    impl crate::client::system_proxy::ports::OsProxyPort for LifecycleTestProxy {
+    impl chimera_contracts::system_proxy::OsProxyPort for LifecycleTestProxy {
         fn get(
             &self,
         ) -> Result<
-            crate::client::system_proxy::ports::OsProxyConfig,
-            crate::client::system_proxy::ports::OsProxyError,
+            chimera_contracts::system_proxy::OsProxyConfig,
+            chimera_contracts::system_proxy::OsProxyError,
         > {
             Ok(self.current())
         }
 
         fn set(
             &self,
-            config: &crate::client::system_proxy::ports::OsProxyConfig,
-        ) -> Result<(), crate::client::system_proxy::ports::OsProxyError> {
+            config: &chimera_contracts::system_proxy::OsProxyConfig,
+        ) -> Result<(), chimera_contracts::system_proxy::OsProxyError> {
             if self.pause_disable
                 && !config.enable
                 && let Some(started) = self.started.lock().unwrap().take()
@@ -1890,15 +1890,15 @@ mod tests {
 
     struct LifecycleTestAutoLaunch;
 
-    impl crate::client::system_proxy::ports::AutoLaunchPort for LifecycleTestAutoLaunch {
-        fn is_enabled(&self) -> Result<bool, crate::client::system_proxy::ports::AutoLaunchError> {
+    impl chimera_contracts::system_proxy::AutoLaunchPort for LifecycleTestAutoLaunch {
+        fn is_enabled(&self) -> Result<bool, chimera_contracts::system_proxy::AutoLaunchError> {
             Ok(false)
         }
 
         fn set_enabled(
             &self,
             _enabled: bool,
-        ) -> Result<(), crate::client::system_proxy::ports::AutoLaunchError> {
+        ) -> Result<(), chimera_contracts::system_proxy::AutoLaunchError> {
             Ok(())
         }
     }
@@ -1906,7 +1906,7 @@ mod tests {
     struct LifecycleTestPac;
 
     #[async_trait]
-    impl crate::client::system_proxy::ports::PacPort for LifecycleTestPac {
+    impl chimera_contracts::system_proxy::PacPort for LifecycleTestPac {
         fn is_supported(&self) -> bool {
             false
         }
@@ -1915,11 +1915,11 @@ mod tests {
             &self,
             _url: &url::Url,
             _cancel: CancellationToken,
-        ) -> Result<(), crate::client::system_proxy::ports::PacError> {
-            Err(crate::client::system_proxy::ports::PacError::DownloadCancelled)
+        ) -> Result<(), chimera_contracts::system_proxy::PacError> {
+            Err(chimera_contracts::system_proxy::PacError::DownloadCancelled)
         }
 
-        fn disable(&self) -> Result<(), crate::client::system_proxy::ports::PacError> {
+        fn disable(&self) -> Result<(), chimera_contracts::system_proxy::PacError> {
             Ok(())
         }
     }
@@ -1962,7 +1962,7 @@ mod tests {
     }
 
     async fn spawn_lifecycle_system_proxy(
-        os: Arc<dyn crate::client::system_proxy::ports::OsProxyPort>,
+        os: Arc<dyn chimera_contracts::system_proxy::OsProxyPort>,
     ) -> (
         crate::client::system_proxy::SystemProxyClient,
         CancellationToken,
@@ -1985,8 +1985,8 @@ mod tests {
         (client, shutdown, tasks)
     }
 
-    fn stale_proxy_config() -> crate::client::system_proxy::ports::OsProxyConfig {
-        crate::client::system_proxy::ports::OsProxyConfig {
+    fn stale_proxy_config() -> chimera_contracts::system_proxy::OsProxyConfig {
+        chimera_contracts::system_proxy::OsProxyConfig {
             enable: true,
             host: "127.0.0.1".into(),
             port: 7890,

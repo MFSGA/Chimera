@@ -11,6 +11,9 @@ use std::{sync::Arc, time::Duration};
 use ractor::{Actor, ActorProcessingErr, ActorRef, RpcReplyPort, concurrency::JoinHandle};
 use tokio_util::sync::CancellationToken;
 
+use chimera_contracts::system_proxy::{
+    AutoLaunchPort, OsProxyConfig, OsProxyPort, PacError, PacPort,
+};
 use snafu::{IntoError as _, ResultExt as _};
 
 use super::{
@@ -20,7 +23,6 @@ use super::{
         PacFallback, RestorePacSnafu, RestoreProxySnafu, ShutDownSnafu, SystemProxyError,
         failure_text,
     },
-    ports::{AutoLaunchPort, OsProxyConfig, OsProxyPort, PacError, PacPort},
 };
 use crate::client::effects::{
     plan::{EffectKind, ProxyGuardDesired, SystemProxyDesired},
