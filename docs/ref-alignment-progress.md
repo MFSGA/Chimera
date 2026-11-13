@@ -1,5 +1,15 @@
 # ref 对齐进度
 
+## DIFF-085：完整 Profile 错误及文件/事务 Port 契约下沉（2026-11-13）
+
+- **基线与范围**：继续固定 `ref@59724e85c` 和 `backend/chimera-runtime@d56b083`，仅在 `codex/ref-os-dns-20261112` 开发分支操作，不推送、不合并、不触碰实际用户 Profiles 数据或系统代理。Mac 开发助手连接恢复后发现磁盘仅剩 123 MiB，因此在确认 Cargo/rustc 未运行后仅清除 `backend/target/debug/incremental/chimera_lib-*` 等可再生成构建缓存，为编译/测试腾出空间，Git 工作树未受清理影响。
+- **共享错误契约**：以 `ref/backend/nyanpasu-contracts/src/profiles/error.rs` 为源复制完整 `ExpectedNode`、`ProfileFileError`（文件读写、目录/符号链接安全、materialization journal、cleanup fencing、恢复和异常路径）、`ErrorPath` 及已有的 `SubscriptionFetchError`，在 `backend/chimera-contracts/src/profiles/error.rs` 只替换 config crate 名。增加 Chimera 既有路径的显示序列化回归和 `ReadFile` wire shape、原始 `std::io::Error` 来源链测试；不改现有线上错误 wire 协议。
+- **文件和物化端口**：以 `ref/backend/nyanpasu-contracts/src/profiles/ports.rs` 替换之前仅有订阅部分的 Contracts Port，完整保留 `ProfileFsPort`、`ProfileMaterializationPort`、`SubscriptionFetcher` 的上游类型化签名，以及 `MaterializationResource`、`PreparedMaterialization`、`PreparedCleanup`、`CleanupOutcome`、`ProfileDegradation*`、`MaterializationReconcileReport`。除 crate 名和文件行尾规范化外结构与固定 ref 一致。
+- **Tauri 兼容性**：`backend/tauri/src/state/profiles/ports.rs` 原有重复的八种事务/降级数据类型改为共享 Contract 重导出。原有 `ProfileFsPort` / `ProfileMaterializationPort` 的 **`anyhow::Result` 签名暂保留**，它们的 `ProfileFileService` 实现、已有状态机、文件物化、恢复和调用线程规则均未改动。上游 typed Port 已可编译，但尚**未作为生产端口接线**。此分界保证不把所有文件错误草率归成同一个变体，后续需要按文件操作失败阶段逐个转换，保留真实 `io::Error` 来源和清理围栏语义。
+- **实际验证**：`cargo test --locked -p chimera-contracts --lib` **8/8 通过**；`cargo check --locked -p chimera --all-features --tests` **通过**；`cargo test --locked -p chimera --lib service::profile_file::tests -- --test-threads=2` **43/43 通过**；`cargo test --locked -p chimera --lib client::profiles::tests -- --test-threads=2` **86/86 通过**。清理与测试过程未改动 `ref`、runtime 或开发分支以外的 Git 引用。仍未执行 Windows/Linux 真实 CI、完整桌面 E2E 和系统文件错误注入；不宣称跨平台验收通过。
+- **下轮与回滚**：先按 ref 审计 `ProfileFileService` 每个文件与 journal 操作的错误映射，再分阶段让其实现 typed Port 并调整 Actor/IPC 接口；不能简单把 `anyhow` 强制转换成某一个 `ProfileFileError`。此轮的 Contracts 和 Tauri 重导出将分批提交，按相反顺序可独立回滚。
+
+
 ## DIFF-084：订阅 HTTP、解析器、设备头和结构化网络错误下沉（2026-11-13）
 
 - **基线与目标**：基于只读固定 `ref@59724e85c`，将 Profiles 订阅下载中的请求、代理读取、响应头解析和错误归类，从 Tauri 的 Profile 文件服务移到独立 `chimera-net`。保持当前 `codex/ref-os-dns-20261112` 开发分支，不改 `ref` 或 runtime gitlink，不碰真实配置/宿主网络、不推送或合并 `master`。风险 L2：影响生产订阅 HTTP 请求与用户代理选择。
