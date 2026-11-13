@@ -296,7 +296,9 @@ impl ChimeraClient {
                 typed.clash_config.clone(),
                 Some(typed_profiles.snapshot_handle()),
                 runtime_paths,
-                Arc::new(core_lifecycle::FsBinaryInstaller),
+                Arc::new(chimera_os::core_install::FsBinaryInstaller::new(Arc::new(
+                    crate::adapters::elevation::InteractiveElevationConsent,
+                ))),
                 service,
             ))?;
         tauri::async_runtime::block_on(mutations.connect(core_lifecycle.clone()))?;

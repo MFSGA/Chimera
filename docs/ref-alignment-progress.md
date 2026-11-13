@@ -1,5 +1,15 @@
 # ref 对齐进度
 
+## DIFF-080：Core Install 共享契约与 OS 安装机制迁移（2026-11-13）
+
+- **固定基线及目标**：`ref@59724e85c`；迁移 Core 二进制复制、必要时提权、取消后的暂存租约及可选伴随目录发布。风险 L2（生产更新路径/权限边界），非目标是重新设计生命周期、更新归档格式、启用 Meow 功能或修改任何真实用户文件。未修改 ref / runtime 子模块。
+- **直接源码对应**：`ref/backend/nyanpasu-contracts/src/core_install.rs` → `backend/chimera-contracts/src/core_install.rs`（仅命名空间品牌映射）；`ref/backend/nyanpasu-os/src/core_install.rs` → `backend/chimera-os/src/core_install.rs`（生产实现保留上游复制/提权/暂存租约/伴随目录替换机制；测试夹具从 Meow 名称改为通用合成资产）；`ref/backend/nyanpasu-contracts/src/profiles/error.rs::ErrorPath` → `backend/chimera-contracts/src/profiles/error.rs::ErrorPath`。当前只提取上游 ErrorPath 的 path 基础转换/显示/序列化，不搬入其余尚无对应 Profile 契约的错误类型；这是完整 profiles 迁移前的显式范围限制。
+- **生产接线**：`backend/tauri/src/client/core_lifecycle/ports.rs` 不再定义私有 `BinaryInstaller`，直接重导出上游共享 Port；`workflow.rs::replace_binary` 将现有 `PreparedCoreBinary` 作为 `CoreBinaryInstallRequest` 传给共享 Port，保留原状态检查、进度回调及重启规则；`backend/tauri/src/client/mod.rs` 在生产组合处创建 `chimera_os::core_install::FsBinaryInstaller` 并注入 `InteractiveElevationConsent`。删除 `backend/tauri/src/client/core_lifecycle/adapters.rs` 的独立复制/提权实现。测试使用 RefuseElevation，不进行管理员授权。
+- **刻意保留的 Chimera 差异**：当前更新器只提供独立核心二进制，不分发 Meow 的 skills 伴随目录，因此生命周期构造请求时始终 `companion: None`。共享 Port 和 OS 模块仍保留上游可选 `CoreBinaryCompanionPaths` 的定义与事务式发布机制，以便维持源码结构、测试恢复安全，但不会在真实 Chimera 更新过程中触发它。`PreparedCoreBinary` 额外持有旧 UI 的进度回调，这一状态留在 Tauri 表示层，不替代共享安装 Port；其他既有 Core 生命周期判定均未调整。
+- **测试证据**：`cargo check -p chimera --all-features --tests` 已通过；OS Core Install 测试 **8/8**（普通复制不提权、拒绝提权不启动命令、取消保留暂存文件、目录交换成功及故障回滚/符号链接拒绝）；`chimera-contracts --lib` **5/5**（包括 ErrorPath JSON 序列化）；Tauri Core Lifecycle **38/38**（新增临时目录实际安装+拒绝授权+重启流程贯通用例）。格式与 Git hooks 以最终提交执行结果为准。未验证 Windows/Linux 构建、实际提权对话框、真实更新包、桌面 E2E 和远端 CI；不将这些条件标为通过。
+- **回滚/待解决**：无用户数据迁移；回滚本次契约和 OS 接线提交可恢复原有 Tauri 安装路径。尚需按上游继续完整迁移 Profile 错误体系，并在 Windows/Linux 实际构建和真实更新流程中验证权限/打包行为；不应提前扩大 `companion` 语义。
+
+
 ## DIFF-079：Core Version 读取链路与 Lifecycle 已停止状态测试修正（2026-11-12）
 
 - **目标与非目标**：以只读固定 `ref@59724e85c` 为源，将 core 版本读取改为上游类型化 Port / OS Sidecar Reader / Tauri 当前可执行文件来源；保留 Chimera Client、旧 UI 既有显示格式。同时独立修正此前两项 Core Lifecycle 测试夹具的不一致。暂不迁移 Core Install（该源码依赖尚未迁入的 `profiles::error::ErrorPath`，并含 Chimera 不支持的 Meow companion 语义），不触发实际服务安装、系统代理、网络配置。

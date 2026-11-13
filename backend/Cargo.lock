@@ -1404,6 +1404,7 @@ dependencies = [
  "chimera-paths",
  "chimera-utils",
  "dunce",
+ "futures",
  "mockall",
  "reqwest",
  "runas",

@@ -755,7 +755,17 @@ impl CoreLifecycleWorkflow {
             self.core.stop().await?;
         }
 
-        self.installer.install(&artifact).await?;
+        let request = chimera_contracts::core_install::CoreBinaryInstallRequest {
+            target: artifact.target,
+            source: artifact.source.clone(),
+            destination: artifact.destination.clone(),
+            staging: artifact.staging.clone(),
+            // Chimera's currently distributed core archives contain no companion
+            // directory. Keep the upstream optional contract without inventing
+            // Meow-specific or unsupported release contents.
+            companion: None,
+        };
+        self.installer.install(&request).await?;
         if restart {
             artifact.progress.restarting();
             self.reconcile().await?;

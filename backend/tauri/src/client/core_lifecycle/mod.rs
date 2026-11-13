@@ -65,9 +65,7 @@ fn classify_service_probe(info: chimera_ipc::types::StatusInfo<'static>) -> Serv
 }
 
 #[allow(unused_imports)]
-pub(crate) use adapters::{
-    FsBinaryInstaller, LegacyCoreBridge, LegacyRunningConfigBridge, LegacyServiceBridge,
-};
+pub(crate) use adapters::{LegacyCoreBridge, LegacyRunningConfigBridge, LegacyServiceBridge};
 #[allow(unused_imports)]
 pub(crate) use ports::{
     BinaryInstallProgress, CoreLifecyclePort, CoreStatusSnapshot, PreparedCoreBinary,
@@ -945,7 +943,9 @@ impl CoreLifecycleClient {
             application,
             clash,
             runtime_paths,
-            Arc::new(FsBinaryInstaller),
+            Arc::new(chimera_os::core_install::FsBinaryInstaller::new(Arc::new(
+                chimera_os::elevation::RefuseElevation,
+            ))),
             Arc::new(LegacyServiceBridge::new(Arc::new(
                 crate::core::actor_v2::CoreFacade::new_local(),
             ))),
@@ -1063,7 +1063,9 @@ impl CoreLifecycleClient {
                 clash,
                 None,
                 core.clone(),
-                Arc::new(FsBinaryInstaller),
+                Arc::new(chimera_os::core_install::FsBinaryInstaller::new(Arc::new(
+                    chimera_os::elevation::RefuseElevation,
+                ))),
                 runtime_paths,
                 service.clone(),
             )),
@@ -2407,7 +2409,15 @@ mod tests {
 
     #[async_trait]
     impl ports::BinaryInstaller for RecordingInstaller {
-        async fn install(&self, _artifact: &PreparedCoreBinary) -> anyhow::Result<()> {
+        async fn install(
+            &self,
+            artifact: &chimera_contracts::core_install::CoreBinaryInstallRequest,
+        ) -> Result<(), chimera_contracts::core_install::InstallCoreBinaryError> {
+            // Verify the lifecycle forwards the staged input to the upstream
+            // contract without introducing unsupported companion assets.
+            assert!(artifact.source.starts_with(artifact.staging.path()));
+            assert!(artifact.companion.is_none());
+            assert!(!artifact.destination.as_os_str().is_empty());
             self.events.lock().unwrap().push("install");
             Ok(())
         }
@@ -2415,9 +2425,18 @@ mod tests {
 
     #[async_trait]
     impl ports::BinaryInstaller for FailingInstaller {
-        async fn install(&self, _artifact: &PreparedCoreBinary) -> anyhow::Result<()> {
+        async fn install(
+            &self,
+            artifact: &chimera_contracts::core_install::CoreBinaryInstallRequest,
+        ) -> Result<(), chimera_contracts::core_install::InstallCoreBinaryError> {
             self.events.lock().unwrap().push("install");
-            anyhow::bail!("test install failure")
+            Err(
+                chimera_contracts::core_install::InstallCoreBinaryError::ElevatedCopyFailed {
+                    core: artifact.target,
+                    destination: (&artifact.destination).into(),
+                    exit_code: Some(1),
+                },
+            )
         }
     }
 
@@ -4132,6 +4151,55 @@ mod tests {
             .await
             .unwrap();
         events.lock().unwrap().clone()
+    }
+
+    #[tokio::test]
+    async fn core_binary_workflow_copies_through_upstream_os_installer_without_elevation() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let mut app = chimera_config::application::ChimeraAppConfig::default();
+        app.core = ClashCore::Mihomo;
+        let client = CoreLifecycleClient::spawn_with_installer(
+            Arc::new(CoreUpdateRecordingCore {
+                events: events.clone(),
+                state: CoreState::Stopped(None),
+                state_changed_at: 1,
+                active_kind: None,
+                receipt_error: false,
+            }),
+            ApplicationClient::static_state(app),
+            ClashConfigClient::legacy().unwrap(),
+            RuntimePaths::from_config_root(std::path::PathBuf::from("test-runtime-root")),
+            Arc::new(chimera_os::core_install::FsBinaryInstaller::new(Arc::new(
+                chimera_os::elevation::RefuseElevation,
+            ))),
+        )
+        .await
+        .unwrap();
+        let staging = Arc::new(tempfile::tempdir().unwrap());
+        let source = staging.path().join("staged-mihomo");
+        std::fs::write(&source, b"new-mihomo-binary").unwrap();
+        let destination_dir = tempfile::tempdir().unwrap();
+        let destination = destination_dir.path().join("mihomo");
+        std::fs::write(&destination, b"old-mihomo-binary").unwrap();
+
+        client
+            .replace_core_binary(PreparedCoreBinary {
+                target: ClashCore::Mihomo,
+                source,
+                destination: destination.clone(),
+                staging,
+                progress: Arc::new(RecordingProgress {
+                    events: events.clone(),
+                }),
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(std::fs::read(destination).unwrap(), b"new-mihomo-binary");
+        assert_eq!(
+            events.lock().unwrap().as_slice(),
+            ["restarting", "rebuild", "finished"]
+        );
     }
 
     #[tokio::test]
