@@ -2,6 +2,7 @@
 
 pub mod autostart;
 mod blocking;
+pub mod core_version;
 pub mod elevation;
 pub mod pac;
 pub mod service;

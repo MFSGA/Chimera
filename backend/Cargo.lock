@@ -1395,13 +1395,16 @@ dependencies = [
 name = "chimera-os"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "async-trait",
  "auto-launch",
  "camino",
+ "chimera-config",
  "chimera-contracts",
  "chimera-paths",
  "chimera-utils",
  "dunce",
+ "mockall",
  "reqwest",
  "runas",
  "serde_json",
