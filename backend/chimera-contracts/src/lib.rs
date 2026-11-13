@@ -5,6 +5,7 @@ pub mod elevation;
 pub mod net;
 pub mod service;
 pub mod system_dns;
+pub mod system_proxy;
 
 #[cfg(test)]
 mod os_port_contract_tests;
