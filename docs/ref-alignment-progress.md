@@ -1,5 +1,15 @@
 # ref 对齐进度
 
+## DIFF-081：Core Install CI 可验证性与真实拒绝授权回归（2026-11-13）
+
+- **审计基线**：继续沿用 `ref@59724e85c` 和主仓 Core Install 提交 `a81fcee1`、`3f6e0bbe`；本轮不修改上游引入的 OS 复制/提权实现、Core Install 共享契约、`ref` 和 runtime gitlink。重点检查 Windows/Linux 构建验证是否真正完成，以及生产更新流程中拒绝权限后的实际文件效果。
+- **三平台 CI 范围**：`.github/workflows/ci.yaml` 的后端矩阵包含 `ubuntu-24.04`、`macos-latest`、`windows-latest`，对应 `pnpm test:backend` 使用 `cargo test --locked --manifest-path ./backend/Cargo.toml --workspace --all-features`。当前本地工作分支未推送，**这些平台尚未在包含本轮改动的提交上执行 CI**。本机只有 `aarch64-apple-darwin` Rust target，不能从 macOS 本地测试推断 Windows/Linux 编译已通过。本轮也没有安装跨编译依赖、操作真实管理员授权或覆盖系统核心文件。
+- **macOS 发行包核对**：`backend/tauri/src/core/updater/instance.rs::extract_tar_gz_core` 当前按条目文件名 `clash-rs` 提取，虽然错误消息写作 Chimera Client，但 `scripts/src/prepare/binaries.ts`、`scripts/utils/resource.ts` 确认 macOS 的 Chimera Client/Alpha 发布包内执行文件路径仍是 `{archive-dir}/clash-rs`。因此没有仅凭品牌名称修改提取器；更准确的发行包兼容性仍需依赖真实归档下载/本地打包验证。
+- **新增真实拒绝授权回归**：`backend/tauri/src/client/core_lifecycle/mod.rs::tests::refused_os_core_copy_keeps_target_and_does_not_restart` 以已确认停止的 `CoreUpdateRecordingCore` + 真实 `chimera_os::core_install::FsBinaryInstaller(RefuseElevation)` + 临时目录驱动完整生命周期调用。目标目录被预先设为目录（跨平台可稳定触发普通复制失败），确认旧文件标记保留、错误含授权失败信息、没有重启/rebuild、进度上报 `finished-error`；完成后暂存 `TempDir` 按所有权规则清理。没有修改生产停机和安装语义。
+- **实际验证**：`cargo test --locked -p chimera --lib client::core_lifecycle::tests -- --test-threads=2` **39/39 通过**；`cargo +stable test --locked -p chimera-os --lib core_install -- --test-threads=2` **8/8 通过**，对照 CI stable 工具链；格式检查通过。后续执行 Git hooks 后记录最终提交状态。**仍未验证** Windows/Linux 本地或远端编译/完整测试、真实发行包更新、Windows UAC/macOS 提权对话框、桌面 E2E。
+- **后续验证与回滚**：在 CI 可以访问本轮提交时，优先审核三系统的 `Test backend workspace` 及 `Build backend` 日志；真实安装场景另做受控授权测试。本轮仅新增模拟安全失败路径测试与审计文档，若有问题可独立回滚，不需要改写已有 Core Install 提交。
+
+
 ## DIFF-080：Core Install 共享契约与 OS 安装机制迁移（2026-11-13）
 
 - **固定基线及目标**：`ref@59724e85c`；迁移 Core 二进制复制、必要时提权、取消后的暂存租约及可选伴随目录发布。风险 L2（生产更新路径/权限边界），非目标是重新设计生命周期、更新归档格式、启用 Meow 功能或修改任何真实用户文件。未修改 ref / runtime 子模块。
