@@ -29,6 +29,13 @@ use crate::{
 
 static FRONTEND_READY_WINDOWS: OnceLock<RwLock<HashSet<String>>> = OnceLock::new();
 
+fn spawn_tracked_on_tauri_runtime(
+    tasks: &tokio_util::task::TaskTracker,
+    task: impl std::future::Future<Output = ()> + Send + 'static,
+) {
+    tasks.spawn_on(task, tauri::async_runtime::handle().inner());
+}
+
 /// A GUI-only indicator for the initial startup orchestration, not an
 /// alternative core lifecycle authority. It is never used to control the core.
 #[derive(Default)]
@@ -210,7 +217,9 @@ pub fn resolve_setup(app: &mut App) {
     let client = (*app.state::<crate::client::ChimeraClient>()).clone();
     let app_handle = app.app_handle().clone();
     let startup_shutdown = app_shutdown.shutdown.child_token();
-    app_shutdown.tasks.spawn(async move {
+    // Tauri setup runs on the event-loop thread, not inside Tokio. Use its
+    // runtime explicitly so the tracked task can start without a current handle.
+    spawn_tracked_on_tauri_runtime(&app_shutdown.tasks, async move {
         // Service initialization is synchronous and may write its configured
         // port. Do not detach the blocking worker on cancellation: the
         // tracked owner joins it before shutdown begins core cleanup.
@@ -328,7 +337,7 @@ mod core_version_tests {
 
 #[cfg(test)]
 mod startup_shutdown_tests {
-    use super::prepare_startup_while_active;
+    use super::{prepare_startup_while_active, spawn_tracked_on_tauri_runtime};
     use crate::setup::AppShutdown;
     use std::sync::{
         Arc,
@@ -337,6 +346,21 @@ mod startup_shutdown_tests {
     use tokio::sync::oneshot;
     use tokio::time::{Duration, timeout};
     use tokio_util::{sync::CancellationToken, task::TaskTracker};
+
+    #[test]
+    fn tracked_startup_uses_tauri_runtime_outside_tokio_context() {
+        // The real Tauri setup callback runs on the native event-loop thread.
+        // The production startup path uses this same scheduling helper.
+        assert!(tokio::runtime::Handle::try_current().is_err());
+        let tasks = TaskTracker::new();
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        spawn_tracked_on_tauri_runtime(&tasks, async move {
+            done_tx.send(()).unwrap();
+        });
+        done_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        tasks.close();
+        tauri::async_runtime::block_on(tasks.wait());
+    }
 
     #[tokio::test]
     async fn cancelled_startup_does_not_start_service_preparation() {

@@ -79,6 +79,14 @@
 | LESSON-20261110-003 | 2026-11-10 | Effects / test expectations | 新增 transparent proxy effect 后两个完整 effect 序列断言漏加新 effect；更新 plan/executor 顺序断言并由 45 项测试覆盖 | Mitigated |
 | LESSON-20261110-004 | 2026-11-10 | Service / ref defect | pinned ref 配置允许 Mihomo Alpha，Service 仅允许 Mihomo；复现后统一 stable/alpha 判定并加入回归，Linux runtime 仍待实测 | Mitigated |
 | LESSON-20261111-001 | 2026-11-11 | Updater / mainline integration | 按旧分支拆批次 Rebase 后没有更新 `client/mod.rs` 构造依赖，lib check 11 处错误、test 另 3 处缺参；补齐 actor 启动注入与 Stable 测试参数，并重跑真实用例 | Mitigated |
+| LESSON-20261113-001 | 2026-11-13 | Tauri startup / Windows E2E | Push E2E run 43432488787: 原生 Tauri setup 线程调用 `TaskTracker::spawn` 触发 no reactor panic；改 `spawn_on(handle().inner())`，同步线程回归与 844 项 Rust lib 测试通过，待远端 E2E 复验 | Mitigated |
+| LESSON-20261113-002 | 2026-11-13 | Application config / CI | Push CI run 43432488898: 嵌套 `window_close` 新字段缺少顶层 patch 的 `serde(default)`，三平台 2 项稀疏 patch 测试失败；依 ref 补属性，233 项配置测试通过，待新 SHA CI 复验 | Mitigated |
+
+### LESSON-20261113-001/002：架构迁移要覆盖原生运行时与稀疏配置
+
+- **Windows 启动证据**：GitHub Actions [Tauri E2E push 43432488787](https://github.com/MFSGA/Chimera/actions/runs/43432488787)，原生 setup 执行 `TaskTracker::spawn` 在 `resolve.rs:213` panic：`there is no reactor running`。该作业的诊断 ZIP 只有启动日志，没有失败时截图，因此结论限于日志所确定的 Tokio 上下文问题。修复使用已有 `core/storage.rs` 的 `spawn_on(..., tauri::async_runtime::handle().inner())` 调度方式，并新增普通线程中调度与排空的回归测试。当前本地 `chimera --lib` 844/844 通过、1 ignored；远端实际桌面 E2E 尚未重跑。
+- **配置 CI 证据**：GitHub Actions [CI push 43432488898](https://github.com/MFSGA/Chimera/actions/runs/43432488898)，Ubuntu、Windows、macOS 的 `chimera-config` 都有 2 项测试失败（`missing field window_close`）。原因是迁入 `#[patch(nesting)]` 后，Chimera 顶层 Patch 缺少 ref 的 `#[patch(attribute(serde(default)))]`。补齐后旧字段别名与发布渠道稀疏 Patch 回归通过，并新增嵌套覆盖不触碰其他字段的测试；配置全库 233/233 本地通过。尚未以新 SHA 重跑三平台 CI。
+- **防复发**：从原生应用启动回调安排 Tokio 任务必须明确运行时上下文；引入嵌套 `struct_patch` 字段时必须验证完全缺失的稀疏补丁以及仅更新一个子字段的场景。不要只凭 `cargo check` 认定操作系统 GUI 启动和配置兼容行为已验证。
 
 ### LESSON-20261103-001：原生路径重写测试不能假定 Unix 分隔符
 

@@ -99,6 +99,7 @@ pub enum WindowType {
 #[serde(default)]
 #[patch(attribute(serde_with::skip_serializing_none))]
 #[patch(attribute(derive(Debug, Default, Clone, Serialize, Deserialize, specta::Type)))]
+#[patch(attribute(serde(default)))]
 #[patch(attribute(specta(skip_attr = "serde")))]
 pub struct ChimeraAppConfig {
     /// app listening port for app singleton
@@ -265,6 +266,24 @@ mod tests {
         assert_eq!(patch.core, Some(ClashCore::ChimeraClient));
         assert_eq!(patch.tray_selector_mode, Some(ProxiesSelectorMode::Hidden));
         assert!(!patch.is_empty());
+    }
+
+    #[test]
+    fn missing_window_close_patch_defaults_and_nested_override_keeps_other_fields() {
+        let patch: ChimeraAppConfigPatch =
+            serde_yaml_ng::from_str("enable_silent_start: true\n").unwrap();
+        let mut config = ChimeraAppConfig::default();
+        config.window_close.global = WindowCloseBehavior::Hide;
+        config.apply(patch);
+        assert!(config.enable_silent_start);
+        assert_eq!(config.window_close.global, WindowCloseBehavior::Hide);
+
+        let patch: ChimeraAppConfigPatch =
+            serde_yaml_ng::from_str("window_close:\n  editor: hide\n").unwrap();
+        config.apply(patch);
+        assert_eq!(config.window_close.global, WindowCloseBehavior::Hide);
+        assert_eq!(config.window_close.main, WindowCloseOverride::Inherit);
+        assert_eq!(config.window_close.editor, WindowCloseOverride::Hide);
     }
 
     #[test]
