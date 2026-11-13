@@ -64,7 +64,9 @@ export default defineConfig(async ({ command, mode }) => {
       paraglideVitePlugin({
         project: './project.inlang',
         outdir: './src/paraglide',
-        strategy: ['custom-extension'],
+        // The cache strategy is unset on first launch, so baseLocale must end
+        // the chain until LanguageProvider applies the backend's locale.
+        strategy: ['custom-extension', 'baseLocale'],
       }),
     ],
 
