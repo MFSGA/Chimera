@@ -13,3 +13,6 @@ impl ElevationConsent for RefuseElevation {
         Err(ElevationConsentError::AuthorizeElevation { operation })
     }
 }
+
+#[cfg(target_os = "macos")]
+pub(crate) mod macos;

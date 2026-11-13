@@ -4,5 +4,6 @@ pub mod autostart;
 mod blocking;
 pub mod elevation;
 pub mod pac;
+pub mod service;
 pub mod system_dns;
 pub mod system_proxy;

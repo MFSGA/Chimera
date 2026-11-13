@@ -1399,9 +1399,12 @@ dependencies = [
  "auto-launch",
  "camino",
  "chimera-contracts",
+ "chimera-paths",
+ "chimera-utils",
  "dunce",
  "reqwest",
  "runas",
+ "serde_json",
  "snafu",
  "sysproxy",
  "tempfile",
@@ -1409,6 +1412,8 @@ dependencies = [
  "tokio-util",
  "tracing",
  "url",
+ "whoami",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
