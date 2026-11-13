@@ -38,6 +38,22 @@ pub enum ClashCore {
     ChimeraClientAlpha,
 }
 
+impl ClashCore {
+    /// The name of the installed core binary, without the platform suffix.
+    /// Kept distinct from Display as in ref; Chimera adds two Client variants.
+    pub fn binary_name(&self) -> &'static str {
+        match self {
+            Self::ClashPremium => "clash",
+            Self::ClashRs => "clash-rs",
+            Self::ClashRsAlpha => "clash-rs-alpha",
+            Self::Mihomo => "mihomo",
+            Self::MihomoAlpha => "mihomo-alpha",
+            Self::ChimeraClient => "chimera-client",
+            Self::ChimeraClientAlpha => "chimera-client-alpha",
+        }
+    }
+}
+
 impl Default for ClashCore {
     fn default() -> Self {
         match cfg!(feature = "default-meta") {
@@ -92,6 +108,21 @@ impl TryFrom<&chimera_utils::core::CoreType> for ClashCore {
 mod tests {
     use super::ClashCore;
     use chimera_utils::core::{ClashCoreType, CoreType};
+
+    #[test]
+    fn binary_name_follows_the_upstream_sidecar_contract_with_chimera_extensions() {
+        for (core, binary) in [
+            (ClashCore::ClashPremium, "clash"),
+            (ClashCore::ClashRs, "clash-rs"),
+            (ClashCore::ClashRsAlpha, "clash-rs-alpha"),
+            (ClashCore::Mihomo, "mihomo"),
+            (ClashCore::MihomoAlpha, "mihomo-alpha"),
+            (ClashCore::ChimeraClient, "chimera-client"),
+            (ClashCore::ChimeraClientAlpha, "chimera-client-alpha"),
+        ] {
+            assert_eq!(core.binary_name(), binary);
+        }
+    }
 
     #[test]
     fn chimera_client_alpha_keeps_its_channel_in_the_application_contract() {

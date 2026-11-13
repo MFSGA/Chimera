@@ -1,5 +1,15 @@
 # ref 对齐进度
 
+## DIFF-079：Core Version 读取链路与 Lifecycle 已停止状态测试修正（2026-11-12）
+
+- **目标与非目标**：以只读固定 `ref@59724e85c` 为源，将 core 版本读取改为上游类型化 Port / OS Sidecar Reader / Tauri 当前可执行文件来源；保留 Chimera Client、旧 UI 既有显示格式。同时独立修正此前两项 Core Lifecycle 测试夹具的不一致。暂不迁移 Core Install（该源码依赖尚未迁入的 `profiles::error::ErrorPath`，并含 Chimera 不支持的 Meow companion 语义），不触发实际服务安装、系统代理、网络配置。
+- **上游源码映射**：`ref/backend/nyanpasu-contracts/src/core_version.rs` → `backend/chimera-contracts/src/core_version.rs`（仅 crate 名及 Meow→ChimeraClient 测例）；`ref/backend/nyanpasu-os/src/core_version.rs` → `backend/chimera-os/src/core_version.rs`；`ref/backend/tauri/src/adapters/core_version.rs` → `backend/tauri/src/adapters/core_version.rs`。`backend/chimera-config/src/application/clash_core.rs` 增加上游同名 `binary_name()`，补足 ChimeraClient/Alpha 二进制名称。旧版 `get_core_version` IPC 仍由 `utils/resolve.rs` 提供，但改为调用共享 `SidecarCoreVersionReader`，而非保留独立的 `tauri_plugin_shell` 版本解析器。
+- **必须保留的差异与风险（L2）**：现有 ChimeraClient/Alpha 的 CLI 版本标志是 `-V`，与上游非 ClashRs 核心使用 `-v` 的默认分支不同，因此 OS reader 为这两个变体保留 `-V`；`ClashRs`/`ChimeraClient` 的旧 UI `v` 前缀仅在显示边界 `format_core_version` 保留，核心返回原始版本 token。版本读取通过运行同目录下的 sidecar 程序完成，不能将纯 mock 测试等同于真实打包/重启测试。
+- **Lifecycle 用例溯源**：`workflow.rs::replace_binary` 把 `CoreState::Stopped` 且 `state_changed_at=0` 定义为状态未知，并保守执行 Stop；之前两项宣称“已经停止”的测试使用 `RecordingCore`，恰好返回 `state_changed_at=0`，所以实际额外出现 `stop-start/stop-end`。用既有 `CoreUpdateRecordingCore` 明确生成 `state_changed_at=1` 的已确认停止状态，不改变生产停机逻辑、不修改期望事件、不移除任何测试；`unavailable_service_status_is_not_treated_as_proven_stopped` 仍覆盖时间戳 0 的失败关闭语义。
+- **验证与未覆盖范围**：Core Lifecycle 定向测试改动后 **37/37** 通过，独立测试提交 `6d3dea47` 的 Git hooks（Rustfmt/Clippy）也通过；`chimera-config` 测试 **2/2**，Core Version contracts **1/1**，OS Version reader **3/3**（包含两种 ChimeraClient 临时 sidecar shell 脚本的真实进程启动与 `-V` 校验），Tauri 旧 UI 显示格式回归 **1/1**；Tauri `--all-features --tests` 编译通过。Core Version 源码仍需在提交前通过最终 Git hooks。Windows/Linux 跨平台打包、真实发行 sidecar、桌面 UI E2E、全量 CI 未验证；不宣称 Core Install 已迁移。
+- **回滚**：本批只改源代码、测试和文档，无数据迁移；可逐个回滚测试夹具与 Core Version 对齐提交，不触及固定 `ref` / runtime gitlink。
+
+
 ## DIFF-078：Service ref 对象/路径所有权纠偏（2026-11-12）
 
 - **原因与范围**：修正 DIFF-077 删除上游 `OsServiceProcessControl`、在 Tauri 重建 OS Service Port 的偏差。以 `ref@59724e85c` 为固定基线，不更新子模块、不改 CoreActor 状态机、不调用真实 Service 安装/提权。L2：影响生产 Service 的依赖注入。

@@ -10,6 +10,7 @@ authors.workspace = true
 verge-dev = []
 
 [dependencies]
+anyhow = '1'
 chimera-contracts = { path = '../chimera-contracts', default-features = false }
 runas = { git = 'https://github.com/libnyanpasu/rust-runas.git' }
 snafu = { workspace = true }
@@ -27,11 +28,13 @@ url = '2'
 tempfile = '3.9.0'
 whoami = '2.0.0'
 chimera-paths = { path = '../chimera-paths' }
+chimera-config = { path = '../chimera-config', default-features = false, features = ['nesting'] }
 
 [target.'cfg(windows)'.dependencies]
 chimera-utils = { workspace = true, default-features = false, features = ['os'] }
 windows-sys = { version = '0.61', features = ['Win32_UI_WindowsAndMessaging'] }
 
 [dev-dependencies]
+mockall = '0.15'
 serde_json = '1'
 chimera-contracts = { path = '../chimera-contracts', default-features = false, features = ['test-support'] }

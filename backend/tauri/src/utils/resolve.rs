@@ -5,9 +5,7 @@ use std::{
 };
 
 use anyhow::Result;
-use semver::Version;
 use tauri::{App, AppHandle, Emitter, Listener, Manager};
-use tauri_plugin_shell::ShellExt;
 use tracing::debug;
 
 use crate::{
@@ -299,38 +297,19 @@ pub fn resolve_setup(app: &mut App) {
     );
 }
 
-/// resolve core version
-pub async fn resolve_core_version(app_handle: &AppHandle, core_type: &ClashCore) -> Result<String> {
-    let shell = app_handle.shell();
-    let core = core_type.clone().to_string();
-    // execute the command
-    let cmd = match core_type {
-        ClashCore::ClashPremium | ClashCore::Mihomo | ClashCore::MihomoAlpha => {
-            shell.sidecar(core)?.args(["-v"])
-        }
-        ClashCore::ClashRs
-        | ClashCore::ClashRsAlpha
-        | ClashCore::ChimeraClient
-        | ClashCore::ChimeraClientAlpha => shell.sidecar(core)?.args(["-V"]),
-    };
-    let out = cmd.output().await?;
-    if !out.status.success() {
-        return Err(anyhow::anyhow!("failed to get core version"));
-    }
-    let out = String::from_utf8_lossy(&out.stdout);
-    log::trace!(target: "app", "get core version: {out:?}");
-    let out = out.trim().split(' ').collect::<Vec<&str>>();
-    for item in out {
-        log::debug!(target: "app", "check item: {item}");
-        if item.starts_with('v')
-            || item.starts_with('n')
-            || item.starts_with("alpha")
-            || Version::parse(item).is_ok()
-        {
-            return Ok(format_core_version(core_type, item));
-        }
-    }
-    Err(anyhow::anyhow!("failed to get core version"))
+/// Resolve a sidecar version through the same typed OS reader as ref.
+/// The legacy UI's historical `v` prefix remains only at this presentation boundary.
+pub async fn resolve_core_version(
+    _app_handle: &AppHandle,
+    core_type: &ClashCore,
+) -> Result<String> {
+    use chimera_contracts::core_version::CoreVersionReader as _;
+
+    let reader = chimera_os::core_version::SidecarCoreVersionReader::new(std::sync::Arc::new(
+        crate::adapters::core_version::TauriCoreVersionExecutableSource,
+    ));
+    let version = reader.read(*core_type).await?;
+    Ok(format_core_version(core_type, &version))
 }
 
 fn format_core_version(core_type: &ClashCore, version: &str) -> String {
