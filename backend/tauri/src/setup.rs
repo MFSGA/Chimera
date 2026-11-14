@@ -4,16 +4,14 @@ use std::sync::Arc;
 
 use anyhow::Context as _;
 use chimera_contracts::net::SelfProxyPortSource as _;
+use chimera_os::system_dns::OsSystemDnsCache;
 use chimera_traffic::{RedbTrafficStore, TrafficStore};
 use chimera_utils::process::{AtomicStopStrategy, StopStrategy};
 use tauri::Manager;
 
 use crate::{
     bridge::{clash::LegacyClashBridge, verge::LegacyVergeBridge, window::LegacyWindowBridge},
-    client::{
-        ChimeraClient, ClientSetupArgs, LegacyBridgeSet, OsSystemDnsCache, RuntimePaths,
-        TauriUiEventSink,
-    },
+    client::{ChimeraClient, ClientSetupArgs, LegacyBridgeSet, RuntimePaths, TauriUiEventSink},
     utils::path::PathResolver,
 };
 
@@ -30,16 +28,6 @@ use crate::client::hotkey::{
 
 struct LegacySelfProxyPort;
 
-impl crate::service::profile_file::SelfProxyPortSource for LegacySelfProxyPort {
-    fn mixed_port(&self) -> Option<u16> {
-        Some(
-            crate::config::core::Config::clash()
-                .latest()
-                .get_mixed_port(),
-        )
-    }
-}
-
 impl chimera_contracts::net::SelfProxyPortSource for LegacySelfProxyPort {
     fn mixed_port(&self) -> Option<u16> {
         Some(
@@ -53,6 +41,7 @@ impl chimera_contracts::net::SelfProxyPortSource for LegacySelfProxyPort {
 pub fn setup(
     app: &mut tauri::App,
     paths: PathResolver,
+    resolved_paths: chimera_paths::PathResolver,
     bundle_metadata: chimera_contracts::bundle_metadata::BundleMetadata,
 ) -> anyhow::Result<()> {
     let shutdown = tokio_util::sync::CancellationToken::new();
@@ -73,10 +62,17 @@ pub fn setup(
         tasks: tasks.clone(),
     });
     let traffic_store = open_traffic_store(&paths);
-    let profile_service = Arc::new(crate::service::profile_file::ProfileFileService::new(
-        paths.clone(),
-        Arc::new(LegacySelfProxyPort),
-    ));
+    let system_proxy_source: Arc<dyn chimera_contracts::net::SystemProxySource> =
+        Arc::new(chimera_os::system_proxy_source::OsSystemProxySource);
+    let profile_service = Arc::new(
+        crate::service::profile_file::ProfileFileService::new_with_system_proxy(
+            paths.clone(),
+            Arc::new(LegacySelfProxyPort),
+            system_proxy_source.clone(),
+            bundle_metadata,
+            crate::service::profile_file::subscription_device_headers(),
+        ),
+    );
 
     let runtime_paths = RuntimePaths::from_resolver(&paths)?;
     let mut migrations = crate::startup_failure::report_boundary(
@@ -121,9 +117,22 @@ pub fn setup(
         crate::startup_failure::StartupStage::CoreHost,
         &paths,
     )?;
+    // Match ref/backend/tauri/src/setup.rs: inject the original resolver from
+    // the process entry point. Never re-discover paths through Tauri globals.
+    let service_binary =
+        chimera_os::service::service_binary(resolved_paths.app_install_dir()?.as_std_path());
+    let os_service_process = Arc::new(chimera_os::service::OsServiceProcessControl::new(
+        service_binary,
+        resolved_paths,
+        Arc::new(crate::adapters::elevation::InteractiveElevationConsent),
+    ));
+    // Only the legacy IPC health-check notification remains a Tauri adapter.
+    let service_process: Arc<dyn chimera_contracts::service::ServiceProcessControl> =
+        Arc::new(crate::core::service::control::HealthMonitorStopAdapter::new(os_service_process));
     let core_facade = Arc::new(crate::core::actor_v2::CoreFacade::new_local_with_control(
         local_control,
         runtime_paths.clone(),
+        service_process,
     ));
     let core_facade_monitor = core_facade.clone();
     let core_bridge: Arc<dyn crate::client::core_lifecycle::CoreLifecyclePort> = Arc::new(
@@ -167,21 +176,25 @@ pub fn setup(
         }
     };
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
-    let auto_launch = crate::client::system_proxy::adapters::AutoLaunchConfig::resolve(appimage)
-        .and_then(crate::client::system_proxy::adapters::AutoLaunchBackend::new)
+    let auto_launch = tauri::utils::platform::current_exe()
+        .map_err(
+            |source| chimera_contracts::system_proxy::AutoLaunchError::LocateExecutable { source },
+        )
+        .and_then(|exe| chimera_os::autostart::AutoLaunchConfig::resolve(&exe, appimage))
+        .and_then(chimera_os::autostart::AutoLaunchBackend::new)
         .context("failed to resolve the auto-launch registration")?;
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     let pac = {
         let cache_path = camino::Utf8PathBuf::from_path_buf(paths.cache_dir().join("pac.js"))
             .map_err(|path| anyhow::anyhow!("PAC cache path is not UTF-8: {}", path.display()))?;
-        crate::client::system_proxy::adapters::HttpPacBackend::new(cache_path)
+        chimera_os::pac::HttpPacBackend::new(cache_path)
             .context("failed to build the PAC backend")?
     };
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     let system_proxy =
         tauri::async_runtime::block_on(crate::client::system_proxy::SystemProxyClient::spawn(
             crate::client::system_proxy::SystemProxyArgs {
-                os: Arc::new(crate::client::system_proxy::adapters::SysproxyOsProxy),
+                os: Arc::new(chimera_os::system_proxy::SysproxyOsProxy),
                 auto_launch: Arc::new(auto_launch),
                 pac: Arc::new(pac),
                 schedule_guard_ticks: true,
@@ -213,13 +226,17 @@ pub fn setup(
             app.handle().clone(),
             update_proxy_port.clone(),
             bundle_metadata,
+            system_proxy_source.clone(),
         ));
     let app_update_events: Arc<dyn chimera_core::client::app_update::AppUpdateEventSink> = Arc::new(
         crate::adapters::app_update::TauriAppUpdateEventSink::new(app.handle().clone()),
     );
-    let changelog_http: Arc<dyn chimera_contracts::net::ChangelogHttp> = Arc::new(
-        crate::adapters::app_update::ReqwestChangelogHttp::new(update_proxy_port.mixed_port())?,
-    );
+    let changelog_http: Arc<dyn chimera_contracts::net::ChangelogHttp> =
+        Arc::new(chimera_net::changelog_http::ReqwestChangelogHttp::new(
+            update_proxy_port.clone(),
+            bundle_metadata,
+            system_proxy_source.clone(),
+        ));
 
     let client = crate::startup_failure::report_boundary(
         ChimeraClient::try_new_with_args(ClientSetupArgs {
@@ -235,7 +252,9 @@ pub fn setup(
                 core_facade,
             )),
             profile_service,
-            system_dns: Arc::new(OsSystemDnsCache),
+            system_dns: Arc::new(OsSystemDnsCache::new(Arc::new(
+                crate::adapters::elevation::InteractiveElevationConsent,
+            ))),
             traffic_store,
             jobs,
             shutdown: app.state::<AppShutdown>().shutdown.child_token(),

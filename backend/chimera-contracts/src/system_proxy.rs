@@ -2,7 +2,7 @@
 //!
 //! Each trait is narrow and task-oriented so the actor can be exercised with
 //! plain fakes: nothing here mentions `sysproxy`, `auto_launch`, `reqwest` or
-//! Tauri. The concrete implementations live in [`super::adapters`].
+//! Tauri.
 
 use std::path::PathBuf;
 
@@ -23,7 +23,7 @@ pub struct OsProxyConfig {
 /// own error stays in `source`, boxed because this module does not name the
 /// crate that produced it; it reaches the user through the copied detail.
 #[derive(Debug, Snafu, Serialize, specta::Type)]
-#[snafu(visibility(pub(crate)))]
+#[snafu(visibility(pub))]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum OsProxyError {
     #[snafu(display("could not read the system proxy"))]
@@ -41,15 +41,15 @@ pub enum OsProxyError {
     },
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 impl OsProxyError {
-    pub(crate) fn unreadable(reason: &str) -> Self {
+    pub fn unreadable(reason: &str) -> Self {
         Self::ReadOsProxy {
             source: reason.into(),
         }
     }
 
-    pub(crate) fn refused(config: &OsProxyConfig, reason: &str) -> Self {
+    pub fn refused(config: &OsProxyConfig, reason: &str) -> Self {
         Self::WriteOsProxy {
             enable: config.enable,
             host: config.host.clone(),
@@ -61,7 +61,7 @@ impl OsProxyError {
 
 /// The platform proxy settings. Blocking by nature, so the actor calls these
 /// from a blocking pool rather than from its mailbox turn.
-#[cfg_attr(test, mockall::automock)]
+#[cfg_attr(any(test, feature = "test-support"), mockall::automock)]
 pub trait OsProxyPort: Send + Sync + 'static {
     fn get(&self) -> Result<OsProxyConfig, OsProxyError>;
     fn set(&self, config: &OsProxyConfig) -> Result<(), OsProxyError>;
@@ -72,7 +72,7 @@ pub trait OsProxyPort: Send + Sync + 'static {
 /// Why the autostart entry could not be addressed, read or written. Library
 /// causes are boxed for the same reason as in [`OsProxyError`].
 #[derive(Debug, Snafu)]
-#[snafu(visibility(pub(crate)))]
+#[snafu(visibility(pub))]
 pub enum AutoLaunchError {
     #[snafu(display("could not locate the running executable"))]
     LocateExecutable { source: std::io::Error },
@@ -100,9 +100,9 @@ pub enum AutoLaunchError {
     },
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 impl AutoLaunchError {
-    pub(crate) fn refused(reason: &str) -> Self {
+    pub fn refused(reason: &str) -> Self {
         Self::Register {
             source: reason.into(),
         }
@@ -110,7 +110,7 @@ impl AutoLaunchError {
 }
 
 /// Login-item / autostart registration.
-#[cfg_attr(test, mockall::automock)]
+#[cfg_attr(any(test, feature = "test-support"), mockall::automock)]
 pub trait AutoLaunchPort: Send + Sync + 'static {
     fn is_enabled(&self) -> Result<bool, AutoLaunchError>;
     fn set_enabled(&self, enabled: bool) -> Result<(), AutoLaunchError>;
@@ -119,7 +119,7 @@ pub trait AutoLaunchPort: Send + Sync + 'static {
 /// Why a PAC script could not be fetched, checked or installed. `url` is the
 /// script the user configured.
 #[derive(Debug, Snafu)]
-#[snafu(visibility(pub(crate)))]
+#[snafu(visibility(pub))]
 pub enum PacError {
     #[snafu(display("could not build the PAC http client"))]
     BuildHttpClient {
@@ -160,10 +160,10 @@ pub enum PacError {
     DownloadCancelled,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 impl PacError {
     /// A script that could not be fetched.
-    pub(crate) fn unreachable(reason: &str) -> Self {
+    pub fn unreachable(reason: &str) -> Self {
         Self::RequestScript {
             url: "http://pac.test/proxy.pac".into(),
             source: reason.into(),
@@ -171,7 +171,7 @@ impl PacError {
     }
 
     /// An installed url the OS would not give up.
-    pub(crate) fn kept(reason: &str) -> Self {
+    pub fn kept(reason: &str) -> Self {
         Self::ClearPac {
             source: reason.into(),
         }
@@ -180,7 +180,7 @@ impl PacError {
 
 /// Proxy auto-configuration. `apply` downloads, validates, caches and installs
 /// the script URL; the caller decides what to do when it fails.
-#[cfg_attr(test, mockall::automock)]
+#[cfg_attr(any(test, feature = "test-support"), mockall::automock)]
 #[async_trait::async_trait]
 pub trait PacPort: Send + Sync + 'static {
     fn is_supported(&self) -> bool;

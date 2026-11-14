@@ -316,6 +316,10 @@ mod tests {
         runtime::executor::ResolvedPortBindings,
     };
 
+    use chimera_contracts::system_proxy::{
+        MockAutoLaunchPort, MockOsProxyPort, MockPacPort, OsProxyConfig,
+    };
+
     use super::*;
     use crate::client::{
         effects::{adapters::EffectAdapterError, plan::ApplicationEffectInputs},
@@ -324,10 +328,7 @@ mod tests {
             adapters::PlatformAcceleratorValidator,
             ports::{HotkeyAction, HotkeyActionSink, ShortcutRegistrar},
         },
-        system_proxy::{
-            SystemProxyArgs, SystemProxyClient,
-            ports::{MockAutoLaunchPort, MockOsProxyPort, MockPacPort, OsProxyConfig},
-        },
+        system_proxy::{SystemProxyArgs, SystemProxyClient},
     };
     use tokio_util::{sync::CancellationToken, task::TaskTracker};
 

@@ -826,6 +826,9 @@ mod tests {
                     ..Default::default()
                 },
                 suggested_update_interval_minutes,
+
+                content_type: None,
+                file_name: None,
             })
         });
         fetcher
@@ -912,6 +915,9 @@ mod tests {
                 filename: None,
                 subscription: SubscriptionInfo::default(),
                 suggested_update_interval_minutes: None,
+
+                content_type: None,
+                file_name: None,
             })
         }
     }
@@ -967,6 +973,9 @@ mod tests {
                 filename: Some(filename.to_string()),
                 subscription: SubscriptionInfo::default(),
                 suggested_update_interval_minutes: None,
+
+                content_type: None,
+                file_name: None,
             })
         });
         fetcher
@@ -1096,6 +1105,9 @@ mod tests {
                     ..Default::default()
                 },
                 suggested_update_interval_minutes: Some(if call == 1 { 1 } else { 30 }),
+
+                content_type: None,
+                file_name: None,
             })
         });
         let dir = tempdir().unwrap();
@@ -1409,6 +1421,9 @@ mod tests {
                 filename: None,
                 subscription: SubscriptionInfo::default(),
                 suggested_update_interval_minutes: None,
+
+                content_type: None,
+                file_name: None,
             })
         });
         let dir = tempdir().unwrap();
@@ -1516,6 +1531,9 @@ mod tests {
                 filename: None,
                 subscription: SubscriptionInfo::default(),
                 suggested_update_interval_minutes: None,
+
+                content_type: None,
+                file_name: None,
             })
         });
         let client = ProfilesClient::new(
@@ -2634,6 +2652,9 @@ mod tests {
                         ..Default::default()
                     },
                     suggested_update_interval_minutes: None,
+
+                    content_type: None,
+                    file_name: None,
                 })
             }
         }
@@ -3777,6 +3798,9 @@ mod tests {
                     expire: None,
                 },
                 suggested_update_interval_minutes: Some(180),
+
+                content_type: None,
+                file_name: None,
             })
         });
         let client = ProfilesClient::new(
@@ -3882,6 +3906,9 @@ mod tests {
                     filename: None,
                     subscription: SubscriptionInfo::default(),
                     suggested_update_interval_minutes: None,
+
+                    content_type: None,
+                    file_name: None,
                 })
             }
         }
@@ -3961,6 +3988,9 @@ mod tests {
                     filename: None,
                     subscription: SubscriptionInfo::default(),
                     suggested_update_interval_minutes: None,
+
+                    content_type: None,
+                    file_name: None,
                 })
             }
         }
@@ -4124,6 +4154,9 @@ mod tests {
                 filename: Some("Server Title".into()),
                 subscription: SubscriptionInfo::default(),
                 suggested_update_interval_minutes: Some(360),
+
+                content_type: None,
+                file_name: None,
             })
         });
         let client = ProfilesClient::new(
@@ -4171,6 +4204,9 @@ mod tests {
                 filename: None,
                 subscription: SubscriptionInfo::default(),
                 suggested_update_interval_minutes: Some(240),
+
+                content_type: None,
+                file_name: None,
             })
         });
         let client = ProfilesClient::new(
@@ -4213,6 +4249,9 @@ mod tests {
                 filename: None,
                 subscription: SubscriptionInfo::default(),
                 suggested_update_interval_minutes: Some(360),
+
+                content_type: None,
+                file_name: None,
             })
         });
         let client = ProfilesClient::new(

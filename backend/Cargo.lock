@@ -1057,6 +1057,8 @@ dependencies = [
  "chimera-ipc",
  "chimera-jobs",
  "chimera-macro",
+ "chimera-net",
+ "chimera-os",
  "chimera-paths",
  "chimera-traffic",
  "chimera-utils",
@@ -1388,6 +1390,56 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 3.0.6",
+]
+
+[[package]]
+name = "chimera-net"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "axum",
+ "backon",
+ "base64 0.23.1",
+ "chimera-config",
+ "chimera-contracts",
+ "percent-encoding",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "snafu",
+ "time",
+ "tokio",
+ "url",
+]
+
+[[package]]
+name = "chimera-os"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "auto-launch",
+ "camino",
+ "chimera-config",
+ "chimera-contracts",
+ "chimera-paths",
+ "chimera-utils",
+ "dunce",
+ "futures",
+ "mockall",
+ "reqwest",
+ "runas",
+ "serde_json",
+ "snafu",
+ "sysproxy",
+ "tempfile",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "url",
+ "whoami",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

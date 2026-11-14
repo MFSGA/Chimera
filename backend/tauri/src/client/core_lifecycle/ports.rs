@@ -53,10 +53,8 @@ pub(crate) trait BinaryInstallProgress: Send + Sync + 'static {
     fn finished(&self, error: Option<&str>);
 }
 
-#[async_trait]
-pub(crate) trait BinaryInstaller: Send + Sync + 'static {
-    async fn install(&self, artifact: &PreparedCoreBinary) -> anyhow::Result<()>;
-}
+// Upstream core_install owns the port; the legacy UI keeps its progress wrapper.
+pub(crate) use chimera_contracts::core_install::BinaryInstaller;
 
 #[async_trait]
 pub(crate) trait ServiceTransitionLease: Send {

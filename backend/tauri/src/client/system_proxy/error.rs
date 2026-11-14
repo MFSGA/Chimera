@@ -6,8 +6,8 @@
 
 use snafu::Snafu;
 
-use super::ports::{AutoLaunchError, OsProxyError, PacError};
 use crate::client::effects::status::EffectHealth;
+use chimera_contracts::system_proxy::{AutoLaunchError, OsProxyError, PacError};
 
 pub(super) fn failure_text(error: &(dyn std::error::Error + 'static)) -> String {
     let mut text = error.to_string();

@@ -65,9 +65,7 @@ fn classify_service_probe(info: chimera_ipc::types::StatusInfo<'static>) -> Serv
 }
 
 #[allow(unused_imports)]
-pub(crate) use adapters::{
-    FsBinaryInstaller, LegacyCoreBridge, LegacyRunningConfigBridge, LegacyServiceBridge,
-};
+pub(crate) use adapters::{LegacyCoreBridge, LegacyRunningConfigBridge, LegacyServiceBridge};
 #[allow(unused_imports)]
 pub(crate) use ports::{
     BinaryInstallProgress, CoreLifecyclePort, CoreStatusSnapshot, PreparedCoreBinary,
@@ -945,7 +943,9 @@ impl CoreLifecycleClient {
             application,
             clash,
             runtime_paths,
-            Arc::new(FsBinaryInstaller),
+            Arc::new(chimera_os::core_install::FsBinaryInstaller::new(Arc::new(
+                chimera_os::elevation::RefuseElevation,
+            ))),
             Arc::new(LegacyServiceBridge::new(Arc::new(
                 crate::core::actor_v2::CoreFacade::new_local(),
             ))),
@@ -1063,7 +1063,9 @@ impl CoreLifecycleClient {
                 clash,
                 None,
                 core.clone(),
-                Arc::new(FsBinaryInstaller),
+                Arc::new(chimera_os::core_install::FsBinaryInstaller::new(Arc::new(
+                    chimera_os::elevation::RefuseElevation,
+                ))),
                 runtime_paths,
                 service.clone(),
             )),
@@ -1137,7 +1139,7 @@ impl CoreLifecycleClient {
         expected_port: u16,
         expected_core_state_changed_at: i64,
         desired_before: bool,
-        original: crate::client::system_proxy::ports::OsProxyConfig,
+        original: chimera_contracts::system_proxy::OsProxyConfig,
         notifications: Arc<dyn crate::client::effects::ports::CommitNotifications>,
         persist_legacy_mirror: Arc<dyn Fn() -> anyhow::Result<()> + Send + Sync>,
     ) -> Result<(), crate::client::system_proxy::SystemProxyActionError> {
@@ -1803,8 +1805,8 @@ mod tests {
     }
 
     struct LifecycleTestProxy {
-        state: Mutex<crate::client::system_proxy::ports::OsProxyConfig>,
-        writes: Mutex<Vec<crate::client::system_proxy::ports::OsProxyConfig>>,
+        state: Mutex<chimera_contracts::system_proxy::OsProxyConfig>,
+        writes: Mutex<Vec<chimera_contracts::system_proxy::OsProxyConfig>>,
         pause_disable: bool,
         started: Mutex<Option<oneshot::Sender<()>>>,
         released: Mutex<bool>,
@@ -1812,7 +1814,7 @@ mod tests {
     }
 
     impl LifecycleTestProxy {
-        fn new(state: crate::client::system_proxy::ports::OsProxyConfig) -> Arc<Self> {
+        fn new(state: chimera_contracts::system_proxy::OsProxyConfig) -> Arc<Self> {
             Arc::new(Self {
                 state: Mutex::new(state),
                 writes: Mutex::new(Vec::new()),
@@ -1824,7 +1826,7 @@ mod tests {
         }
 
         fn pause_first_disable(
-            state: crate::client::system_proxy::ports::OsProxyConfig,
+            state: chimera_contracts::system_proxy::OsProxyConfig,
         ) -> (Arc<Self>, oneshot::Receiver<()>) {
             let (started_tx, started_rx) = oneshot::channel();
             (
@@ -1845,29 +1847,29 @@ mod tests {
             self.release.notify_all();
         }
 
-        fn current(&self) -> crate::client::system_proxy::ports::OsProxyConfig {
+        fn current(&self) -> chimera_contracts::system_proxy::OsProxyConfig {
             self.state.lock().unwrap().clone()
         }
 
-        fn writes(&self) -> Vec<crate::client::system_proxy::ports::OsProxyConfig> {
+        fn writes(&self) -> Vec<chimera_contracts::system_proxy::OsProxyConfig> {
             self.writes.lock().unwrap().clone()
         }
     }
 
-    impl crate::client::system_proxy::ports::OsProxyPort for LifecycleTestProxy {
+    impl chimera_contracts::system_proxy::OsProxyPort for LifecycleTestProxy {
         fn get(
             &self,
         ) -> Result<
-            crate::client::system_proxy::ports::OsProxyConfig,
-            crate::client::system_proxy::ports::OsProxyError,
+            chimera_contracts::system_proxy::OsProxyConfig,
+            chimera_contracts::system_proxy::OsProxyError,
         > {
             Ok(self.current())
         }
 
         fn set(
             &self,
-            config: &crate::client::system_proxy::ports::OsProxyConfig,
-        ) -> Result<(), crate::client::system_proxy::ports::OsProxyError> {
+            config: &chimera_contracts::system_proxy::OsProxyConfig,
+        ) -> Result<(), chimera_contracts::system_proxy::OsProxyError> {
             if self.pause_disable
                 && !config.enable
                 && let Some(started) = self.started.lock().unwrap().take()
@@ -1890,15 +1892,15 @@ mod tests {
 
     struct LifecycleTestAutoLaunch;
 
-    impl crate::client::system_proxy::ports::AutoLaunchPort for LifecycleTestAutoLaunch {
-        fn is_enabled(&self) -> Result<bool, crate::client::system_proxy::ports::AutoLaunchError> {
+    impl chimera_contracts::system_proxy::AutoLaunchPort for LifecycleTestAutoLaunch {
+        fn is_enabled(&self) -> Result<bool, chimera_contracts::system_proxy::AutoLaunchError> {
             Ok(false)
         }
 
         fn set_enabled(
             &self,
             _enabled: bool,
-        ) -> Result<(), crate::client::system_proxy::ports::AutoLaunchError> {
+        ) -> Result<(), chimera_contracts::system_proxy::AutoLaunchError> {
             Ok(())
         }
     }
@@ -1906,7 +1908,7 @@ mod tests {
     struct LifecycleTestPac;
 
     #[async_trait]
-    impl crate::client::system_proxy::ports::PacPort for LifecycleTestPac {
+    impl chimera_contracts::system_proxy::PacPort for LifecycleTestPac {
         fn is_supported(&self) -> bool {
             false
         }
@@ -1915,11 +1917,11 @@ mod tests {
             &self,
             _url: &url::Url,
             _cancel: CancellationToken,
-        ) -> Result<(), crate::client::system_proxy::ports::PacError> {
-            Err(crate::client::system_proxy::ports::PacError::DownloadCancelled)
+        ) -> Result<(), chimera_contracts::system_proxy::PacError> {
+            Err(chimera_contracts::system_proxy::PacError::DownloadCancelled)
         }
 
-        fn disable(&self) -> Result<(), crate::client::system_proxy::ports::PacError> {
+        fn disable(&self) -> Result<(), chimera_contracts::system_proxy::PacError> {
             Ok(())
         }
     }
@@ -1962,7 +1964,7 @@ mod tests {
     }
 
     async fn spawn_lifecycle_system_proxy(
-        os: Arc<dyn crate::client::system_proxy::ports::OsProxyPort>,
+        os: Arc<dyn chimera_contracts::system_proxy::OsProxyPort>,
     ) -> (
         crate::client::system_proxy::SystemProxyClient,
         CancellationToken,
@@ -1985,8 +1987,8 @@ mod tests {
         (client, shutdown, tasks)
     }
 
-    fn stale_proxy_config() -> crate::client::system_proxy::ports::OsProxyConfig {
-        crate::client::system_proxy::ports::OsProxyConfig {
+    fn stale_proxy_config() -> chimera_contracts::system_proxy::OsProxyConfig {
+        chimera_contracts::system_proxy::OsProxyConfig {
             enable: true,
             host: "127.0.0.1".into(),
             port: 7890,
@@ -2407,7 +2409,15 @@ mod tests {
 
     #[async_trait]
     impl ports::BinaryInstaller for RecordingInstaller {
-        async fn install(&self, _artifact: &PreparedCoreBinary) -> anyhow::Result<()> {
+        async fn install(
+            &self,
+            artifact: &chimera_contracts::core_install::CoreBinaryInstallRequest,
+        ) -> Result<(), chimera_contracts::core_install::InstallCoreBinaryError> {
+            // Verify the lifecycle forwards the staged input to the upstream
+            // contract without introducing unsupported companion assets.
+            assert!(artifact.source.starts_with(artifact.staging.path()));
+            assert!(artifact.companion.is_none());
+            assert!(!artifact.destination.as_os_str().is_empty());
             self.events.lock().unwrap().push("install");
             Ok(())
         }
@@ -2415,9 +2425,18 @@ mod tests {
 
     #[async_trait]
     impl ports::BinaryInstaller for FailingInstaller {
-        async fn install(&self, _artifact: &PreparedCoreBinary) -> anyhow::Result<()> {
+        async fn install(
+            &self,
+            artifact: &chimera_contracts::core_install::CoreBinaryInstallRequest,
+        ) -> Result<(), chimera_contracts::core_install::InstallCoreBinaryError> {
             self.events.lock().unwrap().push("install");
-            anyhow::bail!("test install failure")
+            Err(
+                chimera_contracts::core_install::InstallCoreBinaryError::ElevatedCopyFailed {
+                    core: artifact.target,
+                    destination: (&artifact.destination).into(),
+                    exit_code: Some(1),
+                },
+            )
         }
     }
 
@@ -4132,6 +4151,114 @@ mod tests {
             .await
             .unwrap();
         events.lock().unwrap().clone()
+    }
+
+    #[tokio::test]
+    async fn core_binary_workflow_copies_through_upstream_os_installer_without_elevation() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let mut app = chimera_config::application::ChimeraAppConfig::default();
+        app.core = ClashCore::Mihomo;
+        let client = CoreLifecycleClient::spawn_with_installer(
+            Arc::new(CoreUpdateRecordingCore {
+                events: events.clone(),
+                state: CoreState::Stopped(None),
+                state_changed_at: 1,
+                active_kind: None,
+                receipt_error: false,
+            }),
+            ApplicationClient::static_state(app),
+            ClashConfigClient::legacy().unwrap(),
+            RuntimePaths::from_config_root(std::path::PathBuf::from("test-runtime-root")),
+            Arc::new(chimera_os::core_install::FsBinaryInstaller::new(Arc::new(
+                chimera_os::elevation::RefuseElevation,
+            ))),
+        )
+        .await
+        .unwrap();
+        let staging = Arc::new(tempfile::tempdir().unwrap());
+        let source = staging.path().join("staged-mihomo");
+        std::fs::write(&source, b"new-mihomo-binary").unwrap();
+        let destination_dir = tempfile::tempdir().unwrap();
+        let destination = destination_dir.path().join("mihomo");
+        std::fs::write(&destination, b"old-mihomo-binary").unwrap();
+
+        client
+            .replace_core_binary(PreparedCoreBinary {
+                target: ClashCore::Mihomo,
+                source,
+                destination: destination.clone(),
+                staging,
+                progress: Arc::new(RecordingProgress {
+                    events: events.clone(),
+                }),
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(std::fs::read(destination).unwrap(), b"new-mihomo-binary");
+        assert_eq!(
+            events.lock().unwrap().as_slice(),
+            ["restarting", "rebuild", "finished"]
+        );
+    }
+
+    #[tokio::test]
+    async fn refused_os_core_copy_keeps_target_and_does_not_restart() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let mut app = chimera_config::application::ChimeraAppConfig::default();
+        app.core = ClashCore::Mihomo;
+        let client = CoreLifecycleClient::spawn_with_installer(
+            Arc::new(CoreUpdateRecordingCore {
+                events: events.clone(),
+                state: CoreState::Stopped(None),
+                state_changed_at: 1,
+                active_kind: None,
+                receipt_error: false,
+            }),
+            ApplicationClient::static_state(app),
+            ClashConfigClient::legacy().unwrap(),
+            RuntimePaths::from_config_root(std::path::PathBuf::from("test-runtime-root")),
+            Arc::new(chimera_os::core_install::FsBinaryInstaller::new(Arc::new(
+                chimera_os::elevation::RefuseElevation,
+            ))),
+        )
+        .await
+        .unwrap();
+
+        let staging = Arc::new(tempfile::tempdir().unwrap());
+        let source = staging.path().join("staged-mihomo");
+        std::fs::write(&source, b"new-mihomo-binary").unwrap();
+        let destination_dir = tempfile::tempdir().unwrap();
+        let destination = destination_dir.path().join("mihomo");
+        // A directory is a deterministic copy failure on all supported OSes;
+        // no permissions are changed and no real elevation is attempted.
+        std::fs::create_dir(&destination).unwrap();
+        let marker = destination.join("existing-core-marker");
+        std::fs::write(&marker, b"preserved").unwrap();
+
+        let error = client
+            .replace_core_binary(PreparedCoreBinary {
+                target: ClashCore::Mihomo,
+                source: source.clone(),
+                destination: destination.clone(),
+                staging,
+                progress: Arc::new(RecordingProgress {
+                    events: events.clone(),
+                }),
+            })
+            .await
+            .expect_err("refused elevated fallback must fail the update");
+
+        assert!(
+            error.to_string().contains("could not authorize copying"),
+            "unexpected failure: {error:#}"
+        );
+        assert_eq!(std::fs::read(&marker).unwrap(), b"preserved");
+        // The staged source is owned by the update request. Once the failed
+        // operation completes, its temporary directory is intentionally gone.
+        assert!(!source.exists());
+        assert!(destination.is_dir());
+        assert_eq!(events.lock().unwrap().as_slice(), ["finished-error"]);
     }
 
     #[tokio::test]
