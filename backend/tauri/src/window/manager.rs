@@ -274,6 +274,12 @@ fn apply(handle: &AppHandle, label: &str) {
     }
 
     if actions.show {
+        #[cfg(target_os = "macos")]
+        if label == crate::consts::MAIN_WINDOW_LABEL || label == crate::consts::LEGACY_WINDOW_LABEL
+        {
+            crate::utils::dock::macos::show_dock_icon();
+        }
+
         engine::set_in_sight(&window, true);
         crate::trace_err!(window.unminimize(), "set win unminimize");
         crate::trace_err!(window.show(), "set win visible");

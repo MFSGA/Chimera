@@ -2383,3 +2383,12 @@ Only the product naming, existing config formats and Chimera Client wiring remai
 - **架构差异**：Chimera 仍使用现有 Executor pipeline；TUN ownership 与 guard ownership 共享当前 `GuardOverrides` snapshot 节点，`tun.enable` / `stack` / DNS defaults 的最终化仍留在现有 Finalizing 节点。没有迁移 ref 独立的 Runtime plan 与独立 KeepInherited/ManagedSettings/Defaults snapshot nodes。
 - **验证**：`chimera-config` 默认 features **212/212**；`--no-default-features --features nesting` **203/203**；Clippy all-targets/all-features 通过（保留两个既有测试 fixture dead-code warnings）；Tauri RuntimeBuilder tests **9/9**，request-impact tests **5/5**，typed Clash patch reconcile test **1/1**，Specta binding freshness **1/1**；`pnpm typecheck`、`pnpm lint:frontend-boundaries`、`pnpm lint:oxlint`、`pnpm --filter chimera-ui build`、Rustfmt、Prettier 与 `git diff --check` 通过。Vite 保留既有 configLoader/native 和 large-chunk warnings。没有执行真实 Core/TUN 设备、主机路由、DNS 或系统代理验证。
 - **状态**：来源功能已移植到当前主仓，参考 gitlink 保留为 `59724e85`；真实 Core/TUN 设备及主机网络验证仍待后续执行。
+
+## 2026-11-14：主窗口显示前恢复 macOS 应用激活
+
+- **目标 / 验收**：对齐启动窗口最终显示路径，macOS 上在显示 Chimera 主界面或保留的 Legacy 界面之前将应用激活策略设为 `Regular` 并激活应用，避免 Tauri 显示窗口但应用仍处于不可前台激活状态。非 macOS 行为保持不变。
+- **非目标**：不改变 `enable_silent_start`、主/Legacy UI 路由、前端就绪握手、10 秒窗口就绪兜底、Core/Service 启动顺序或用户配置；本批没有复现原始“不显示”问题，因此不将该差异描述为已确认根因。
+- **基线 / 风险 / 接口**：父仓库 `origin/master` 与工作分支起点 `ccaeff0ed44c6556d7755f01dcf135ea4fe70d3a`；固定 ref gitlink 与只读工作区 `59724e85c34abb6995c22d101c876cc06dc16576`。风险 L2（macOS 原生应用激活策略）；没有 IPC、持久化格式或公开接口变化。仅在 `WindowManager::apply` 已运行于主线程且目标为 Main/Legacy 时调用 AppKit。
+- **源码映射**：`ref/backend/tauri/src/utils/dock.rs::macos::show_dock_icon` 与 `ref/backend/tauri/src/window/manager.rs::apply` 的 show 分支 → `backend/tauri/src/utils/dock.rs` 与 `backend/tauri/src/window/manager.rs::apply`。Chimera 同时支持 Main/Legacy 两个主界面，所以两者均恢复普通激活策略；没有移植 ref 在关闭主窗口时切换到 Accessory 的行为，避免影响 Chimera 同时存在的 Legacy/editor 窗口及当前一直保留 Dock 图标的产品行为。
+- **验证**：macOS `cargo check --offline --locked --manifest-path backend/Cargo.toml -p chimera --lib` 通过；`cargo test --offline --locked --manifest-path backend/Cargo.toml -p chimera --lib window::table::tests -- --test-threads=1` **12/12 通过**；Rustfmt、进度文档 Prettier 与 `git diff --check` 通过。首次编译因隔离 worktree 缺少被 `.gitignore` 排除的 sidecar/resources 失败；为避免下载或复制资源，本次只在隔离 worktree 建立指向已有本地资源目录的 ignored symlink 后重跑成功。编译/测试包含项目现有 warnings。没有运行桌面冷启动、WDIO 或像素可见性验证，因此不能证明该 AppKit 差异就是原始问题的根因或已覆盖所有启动故障。
+- **回滚**：移除 `utils/dock.rs`、`utils/mod.rs` 模块声明及 `WindowManager::apply` 中的 macOS 调用；不回退其它启动、Client/Service 或窗口状态改动。代码随 `codex/ref-startup-window-20261114` 推送；`ref` gitlink 保持不变。
