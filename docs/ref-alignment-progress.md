@@ -2392,3 +2392,12 @@ Only the product naming, existing config formats and Chimera Client wiring remai
 - **源码映射**：`ref/backend/tauri/src/utils/dock.rs::macos::show_dock_icon` 与 `ref/backend/tauri/src/window/manager.rs::apply` 的 show 分支 → `backend/tauri/src/utils/dock.rs` 与 `backend/tauri/src/window/manager.rs::apply`。Chimera 同时支持 Main/Legacy 两个主界面，所以两者均恢复普通激活策略；没有移植 ref 在关闭主窗口时切换到 Accessory 的行为，避免影响 Chimera 同时存在的 Legacy/editor 窗口及当前一直保留 Dock 图标的产品行为。
 - **验证**：macOS `cargo check --offline --locked --manifest-path backend/Cargo.toml -p chimera --lib` 通过；`cargo test --offline --locked --manifest-path backend/Cargo.toml -p chimera --lib window::table::tests -- --test-threads=1` **12/12 通过**；Rustfmt、进度文档 Prettier 与 `git diff --check` 通过。首次编译因隔离 worktree 缺少被 `.gitignore` 排除的 sidecar/resources 失败；为避免下载或复制资源，本次只在隔离 worktree 建立指向已有本地资源目录的 ignored symlink 后重跑成功。编译/测试包含项目现有 warnings。没有运行桌面冷启动、WDIO 或像素可见性验证，因此不能证明该 AppKit 差异就是原始问题的根因或已覆盖所有启动故障。
 - **回滚**：移除 `utils/dock.rs`、`utils/mod.rs` 模块声明及 `WindowManager::apply` 中的 macOS 调用；不回退其它启动、Client/Service 或窗口状态改动。代码随 `codex/ref-startup-window-20261114` 推送；`ref` gitlink 保持不变。
+
+## 2026-11-14：开发启动不再被 bindings 格式化阻断
+
+- **目标 / 验收**：debug Tauri setup 生成 IPC bindings 时使用由 `CARGO_MANIFEST_DIR` 定位的绝对目标路径和仓库本地 Prettier；Prettier 不存在或执行失败时不再让 setup 失败，避免非必要格式化阻止初始化窗口创建。Bindings 导出和结构规范化仍是必需步骤，失败仍会透传。
+- **非目标**：不更改 release / E2E 分支、IPC schema、生成文件内容、formatter 配置、用户数据、主/Legacy 窗口路由或 Core/Service 启动次序；不把 Specta 导出失败降级为成功。
+- **基线 / 风险 / 接口**：父仓库远端工作分支提交 `a283ffceefb619e9db71a3a4eaad787ef460b3cc`；固定 ref gitlink / 工作区 `59724e85c34abb6995c22d101c876cc06dc16576`，未改动。风险 L1（仅 debug、非 E2E 开发启动）；没有 IPC、持久化或公开接口变化。
+- **源码映射**：`ref/backend/tauri/src/lib.rs::run` 中基于 `CARGO_MANIFEST_DIR` 找本地 `.bin/prettier` 并忽略其输出 → `backend/tauri/src/lib.rs::run` 的 Tauri setup closure；Chimera 保留自己的 bindings 路径和 `normalize_typescript_bindings`，只迁移本地工具定位、绝对文件路径和格式化 best-effort 行为。该闭包早于 `WindowManager` 与首个窗口创建，因此 formatter 的可选失败不应阻断 UI。
+- **验证**：macOS `cargo check --offline --locked --manifest-path backend/Cargo.toml -p chimera --lib` 通过；`cargo test --offline --locked --manifest-path backend/Cargo.toml -p chimera --lib specta_export::tests::typescript_bindings_are_fresh -- --test-threads=1` **1/1 通过**；Rustfmt、进度文档 Prettier 与 `git diff --check` 通过。独立审查与固定 ref 比对确认本地工具定位、跨平台调用及 formatter 错误不阻断 setup；本次未运行时注入缺失/失败 formatter，也未改变进程工作目录验证绝对路径。编译保留项目现有 warnings。未运行桌面冷启动；本批测试确认生成契约新鲜，不证明实际窗口像素可见性。
+- **回滚**：仅恢复原先相对绑定路径与 `npx prettier` 阻断步骤；保留前一批 Dock activation 对齐。若回退，先确认新版本要求格式化失败继续启动的产品行为仍然适用。
