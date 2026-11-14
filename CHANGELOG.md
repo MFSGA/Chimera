@@ -1,3 +1,105 @@
+## [0.28.3] - 2026-11-14 01:39:16
+
+### ✅ Testing
+
+- **e2e:** Use physical pointer helper for inspect tabs by @MFSGA
+
+- **e2e:** Assert visible inspect output directly by @MFSGA
+
+- **e2e:** Stabilize profiles navigation contracts by @MFSGA
+
+- **e2e:** Emulate visible pointer interactions in desktop driver by @MFSGA
+
+- **e2e:** Stabilize tooltip hover and nested ScrollArea wheel by @MFSGA
+
+- **updater:** Cover settings, lifecycle recovery and migration record by @MFSGA
+
+### ✨ Features
+
+- **network:** Integrate Linux transparent proxy and diagnostics by @MFSGA
+
+- **profiles:** Align transform chain editor with ref by @MFSGA
+
+- **profiles:** Provide inspect viewer and runtime graph primitives by @MFSGA
+
+- **runtime:** Migrate upstream include-all expansion by @MFSGA
+
+- **runtime:** Inspect effective and applied runtime snapshots by @MFSGA
+
+- **runtime:** Integrate configuration ownership and TUN auto-route by @MFSGA
+
+- **settings:** Refine transparent proxy interface controls by @MFSGA
+
+- **ui:** Expose include-all toggle and review compatibility by @MFSGA
+
+- **ui:** Align log, settings and grouped profile navigation by @MFSGA
+
+- **updater:** Share main and legacy UI update experience by @MFSGA
+
+- **updater:** Integrate Tauri backend, typed IPC and client lifecycle by @MFSGA
+
+- **updater:** Align shared app update client and preferences by @MFSGA
+
+### 🐛 Bug Fixes
+
+- **ci:** Pin Ubuntu runner and retry apt downloads by @MFSGA
+
+- **core:** Avoid restarting inactive cores during binary updates by @MFSGA
+
+- **e2e:** Preserve executable install dir with isolated roots by @MFSGA
+
+- **i18n:** Fall back to base locale on first launch by @MFSGA
+
+- **legacy:** Preserve include-all setting across runtime bridges by @MFSGA
+
+- **nixos:** Restore compatible NixOS development environment by @MFSGA
+
+- **profiles:** Load runtime configuration diff on demand by @MFSGA
+
+- **startup:** Repair app startup and sparse config patches by @MFSGA
+
+- **startup:** Defer secondary-instance window activation by @MFSGA
+
+- **tests:** Changed for ci by @MFSGA
+
+- **ui:** Preserve DropdownMenu content slot attributes by @MFSGA
+
+- **window:** Persist geometry through session state actor by @MFSGA
+
+### 🔨 Refactor
+
+- **check:** Rectify the check workflow by @MFSGA
+
+- **check:** Replace Deno with Node by @MFSGA
+
+- **ci:** Migrate release utilities to Node by @MFSGA
+
+- **ref:** Align utility initialization modules by @MFSGA
+
+- **runtime:** Expose legacy include-all as distinct inspect step by @MFSGA
+
+- **runtime:** Declare post-builtin defaults in ownership plan by @MFSGA
+
+- **runtime:** Inspect final core filtering and defaults by @MFSGA
+
+- **runtime:** Expose guard and TUN ownership stages by @MFSGA
+
+- **runtime:** Extract compatible field ownership plan by @MFSGA
+
+- **ui:** Align modal lifecycle and settings lists by @MFSGA
+
+- **window:** Align lifecycle and harden startup by @MFSGA
+
+### 🧹 Miscellaneous Tasks
+
+- **deps:** Update frontend toolchain and UI packages by @MFSGA
+
+- **runtime:** Pin compatible Service v1.11.2 by @MFSGA
+
+---
+
+**Full Changelog**: https://github.com/MFSGA/Chimera/compare/v0.28.2...v0.28.3
+
 ## [0.28.2] - 2026-11-11 08:25:22
 
 ### ✅ Testing
