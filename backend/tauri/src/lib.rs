@@ -261,19 +261,33 @@ pub fn run() -> std::process::ExitCode {
             #[cfg(all(debug_assertions, not(feature = "e2e")))]
             {
                 const SPECTA_BINDINGS_PATH: &str = "../../frontend/interface/src/ipc/bindings.ts";
+                let bindings_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join(SPECTA_BINDINGS_PATH);
                 specta_builder.export(
                     specta_typescript::Typescript::default()
                         .header("/* oxlint-disable */\n// @ts-nocheck"),
-                    SPECTA_BINDINGS_PATH,
+                    &bindings_path,
                 )?;
-                let npx_command = if cfg!(target_os = "windows") { "npx.cmd" } else { "npx" };
-                let status = std::process::Command::new(npx_command)
-                    .args(["prettier", "--write", SPECTA_BINDINGS_PATH])
-                    .status()?;
-                if !status.success() {
-                    return Err(format!("Prettier failed for {SPECTA_BINDINGS_PATH}").into());
-                }
-                specta_export::normalize_typescript_bindings(SPECTA_BINDINGS_PATH)?;
+                let prettier_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("../../node_modules/.bin")
+                    .join(if cfg!(target_os = "windows") {
+                        "prettier.cmd"
+                    } else {
+                        "prettier"
+                    });
+                let mut prettier = if cfg!(target_os = "windows") {
+                    let mut command = std::process::Command::new("cmd");
+                    command.arg("/C").arg(prettier_path);
+                    command
+                } else {
+                    std::process::Command::new(prettier_path)
+                };
+                let _ = prettier.args(["--write"]).arg(&bindings_path).output();
+                specta_export::normalize_typescript_bindings(&bindings_path)?;
+                log::debug!(
+                    "Exported TypeScript bindings, path: {}",
+                    bindings_path.display()
+                );
             }
 
             specta_builder.mount_events(app);
