@@ -4,6 +4,7 @@ import {
   RootProvider,
   setMutationDegradationHandler,
   unwrapResult,
+  useSettings,
   type Degradation,
   type DegradationPhase,
 } from '@chimera/interface';
@@ -16,7 +17,7 @@ import {
   Outlet,
 } from '@tanstack/react-router';
 import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
-import { lazy, useEffect, useState } from 'react';
+import { lazy, useEffect, useRef, useState } from 'react';
 import { useChimeraStorageSubscribers } from '@/hooks/use-store';
 import 'dayjs/locale/ja';
 import 'dayjs/locale/ru';
@@ -158,6 +159,20 @@ function formatDegradationItem(degradation: Degradation): string {
   });
 }
 
+function WindowReadyReporter() {
+  const { query } = useSettings();
+  const hasReported = useRef(false);
+
+  useEffect(() => {
+    if ((query.isSuccess || query.isError) && !hasReported.current) {
+      hasReported.current = true;
+      reportWindowReady();
+    }
+  }, [query.isSuccess, query.isError]);
+
+  return null;
+}
+
 function MutationDegradationNotifier() {
   useEffect(
     () =>
@@ -239,10 +254,9 @@ function StartupStatusNotifier() {
 export default function App() {
   useChimeraStorageSubscribers();
 
-  useEffect(reportWindowReady, []);
-
   return (
     <RootProvider>
+      <WindowReadyReporter />
       <MutationDegradationNotifier />
       <StartupStatusNotifier />
       <SchemeProvider />
