@@ -43,6 +43,7 @@ use crate::{
     },
     enhance::PostProcessingOutput,
     log_err,
+    utils::task::spawn_tracked_on_tauri_runtime,
 };
 
 const SERVICE_RESTART_BUDGET: u8 = 3;
@@ -1125,7 +1126,7 @@ impl CoreFacade {
         }
         let facade = self.clone();
         let monitor_shutdown = shutdown.child_token();
-        tasks.spawn(async move {
+        spawn_tracked_on_tauri_runtime(tasks, async move {
             tokio::select! {
                 _ = monitor_shutdown.cancelled() => {},
                 _ = facade.monitor_service_api_binding() => {},

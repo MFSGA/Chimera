@@ -16,7 +16,7 @@ use crate::{
     config::chimera::ClashCore,
     core::{handle, tray},
     log_err,
-    utils::{init, path::PathResolver},
+    utils::{init, path::PathResolver, task::spawn_tracked_on_tauri_runtime},
     window::{
         WindowManager,
         kinds::{EditorWindow, EditorWindowType, LegacyWindow, MainWindow},
@@ -24,13 +24,6 @@ use crate::{
 };
 
 static FRONTEND_READY_WINDOWS: OnceLock<RwLock<HashSet<String>>> = OnceLock::new();
-
-fn spawn_tracked_on_tauri_runtime(
-    tasks: &tokio_util::task::TaskTracker,
-    task: impl std::future::Future<Output = ()> + Send + 'static,
-) {
-    tasks.spawn_on(task, tauri::async_runtime::handle().inner());
-}
 
 /// A GUI-only indicator for the initial startup orchestration, not an
 /// alternative core lifecycle authority. It is never used to control the core.
@@ -386,8 +379,9 @@ mod core_version_tests {
 
 #[cfg(test)]
 mod startup_shutdown_tests {
-    use super::{prepare_startup_while_active, spawn_tracked_on_tauri_runtime};
+    use super::prepare_startup_while_active;
     use crate::setup::AppShutdown;
+    use crate::utils::task::spawn_tracked_on_tauri_runtime;
     use std::sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
