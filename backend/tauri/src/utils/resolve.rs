@@ -8,14 +8,12 @@ use std::{
 };
 
 use anyhow::Result;
+use chimera_config::application::{ChimeraAppConfig, WindowType as AppWindowType};
 use tauri::{App, AppHandle, Emitter, Listener, Manager};
 use tracing::debug;
 
 use crate::{
-    config::{
-        chimera::{ClashCore, WindowType},
-        core::Config,
-    },
+    config::chimera::ClashCore,
     core::{handle, tray},
     log_err,
     utils::init,
@@ -116,14 +114,81 @@ pub fn wait_for_frontend_ready(label: &str, timeout: Duration) -> bool {
     true
 }
 
-pub fn configured_window_label() -> &'static str {
-    match Config::verge()
-        .latest()
-        .window_type
-        .unwrap_or(WindowType::Main)
-    {
-        WindowType::Legacy => crate::consts::LEGACY_WINDOW_LABEL,
-        WindowType::Main => crate::consts::MAIN_WINDOW_LABEL,
+fn app_config_for_window(app_handle: &AppHandle) -> ChimeraAppConfig {
+    app_handle
+        .state::<crate::client::ChimeraClient>()
+        .get_app_config()
+        .unwrap_or_else(|error| {
+            log::error!(target: "app", "failed to read startup window settings: {error:#}");
+            ChimeraAppConfig::default()
+        })
+}
+
+fn window_label(window_type: AppWindowType) -> &'static str {
+    match window_type {
+        AppWindowType::Legacy => crate::consts::LEGACY_WINDOW_LABEL,
+        AppWindowType::Main => crate::consts::MAIN_WINDOW_LABEL,
+    }
+}
+
+fn initial_window_type(config: &ChimeraAppConfig) -> Option<AppWindowType> {
+    (!config.enable_silent_start).then_some(config.window_type)
+}
+
+pub fn configured_window_label(app_handle: &AppHandle) -> &'static str {
+    window_label(app_config_for_window(app_handle).window_type)
+}
+
+fn create_window_for_type(app_handle: &AppHandle, window_type: AppWindowType) {
+    match window_type {
+        AppWindowType::Legacy => create_legacy_window(app_handle),
+        AppWindowType::Main => create_main_window(app_handle),
+    }
+}
+
+#[cfg(test)]
+mod startup_window_config_tests {
+    use super::{initial_window_type, window_label};
+    use chimera_config::application::{ChimeraAppConfig, WindowType};
+
+    #[test]
+    fn startup_window_selection_uses_the_typed_window_type() {
+        let main_config = ChimeraAppConfig {
+            window_type: WindowType::Main,
+            ..ChimeraAppConfig::default()
+        };
+        assert_eq!(initial_window_type(&main_config), Some(WindowType::Main));
+        assert_eq!(
+            window_label(WindowType::Main),
+            crate::consts::MAIN_WINDOW_LABEL
+        );
+
+        let legacy_config = ChimeraAppConfig {
+            window_type: WindowType::Legacy,
+            ..ChimeraAppConfig::default()
+        };
+        assert_eq!(
+            initial_window_type(&legacy_config),
+            Some(WindowType::Legacy)
+        );
+        assert_eq!(
+            window_label(WindowType::Legacy),
+            crate::consts::LEGACY_WINDOW_LABEL
+        );
+    }
+
+    #[test]
+    fn silent_start_suppresses_initial_window_selection() {
+        let config = ChimeraAppConfig {
+            enable_silent_start: true,
+            ..ChimeraAppConfig::default()
+        };
+
+        assert_eq!(initial_window_type(&config), None);
+        assert_eq!(
+            window_label(config.window_type),
+            crate::consts::LEGACY_WINDOW_LABEL
+        );
     }
 }
 
@@ -131,10 +196,7 @@ pub fn configured_window_label() -> &'static str {
 /// This is the primary function to use when opening window from tray, etc.
 #[tracing_attributes::instrument(skip(app_handle))]
 pub fn create_window(app_handle: &AppHandle) {
-    match configured_window_label() {
-        crate::consts::LEGACY_WINDOW_LABEL => create_legacy_window(app_handle),
-        _ => create_main_window(app_handle),
-    }
+    create_window_for_type(app_handle, app_config_for_window(app_handle).window_type);
 }
 
 /// Perform startup's blocking Service/port preparation without allowing the
@@ -193,12 +255,9 @@ pub fn resolve_setup(app: &mut App) {
         log_err!(app.emit("update_systray", ()));
     }
 
-    let silent_start = Config::verge()
-        .latest()
-        .enable_silent_start
-        .unwrap_or(false);
-    if !silent_start {
-        create_window(app.app_handle());
+    let app_config = app_config_for_window(app.app_handle());
+    if let Some(window_type) = initial_window_type(&app_config) {
+        create_window_for_type(app.app_handle(), window_type);
     }
 
     let app_shutdown = app.state::<crate::setup::AppShutdown>().clone();

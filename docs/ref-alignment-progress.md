@@ -2401,3 +2401,12 @@ Only the product naming, existing config formats and Chimera Client wiring remai
 - **源码映射**：`ref/backend/tauri/src/lib.rs::run` 中基于 `CARGO_MANIFEST_DIR` 找本地 `.bin/prettier` 并忽略其输出 → `backend/tauri/src/lib.rs::run` 的 Tauri setup closure；Chimera 保留自己的 bindings 路径和 `normalize_typescript_bindings`，只迁移本地工具定位、绝对文件路径和格式化 best-effort 行为。该闭包早于 `WindowManager` 与首个窗口创建，因此 formatter 的可选失败不应阻断 UI。
 - **验证**：macOS `cargo check --offline --locked --manifest-path backend/Cargo.toml -p chimera --lib` 通过；`cargo test --offline --locked --manifest-path backend/Cargo.toml -p chimera --lib specta_export::tests::typescript_bindings_are_fresh -- --test-threads=1` **1/1 通过**；Rustfmt、进度文档 Prettier 与 `git diff --check` 通过。独立审查与固定 ref 比对确认本地工具定位、跨平台调用及 formatter 错误不阻断 setup；本次未运行时注入缺失/失败 formatter，也未改变进程工作目录验证绝对路径。编译保留项目现有 warnings。未运行桌面冷启动；本批测试确认生成契约新鲜，不证明实际窗口像素可见性。
 - **回滚**：仅恢复原先相对绑定路径与 `npx prettier` 阻断步骤；保留前一批 Dock activation 对齐。若回退，先确认新版本要求格式化失败继续启动的产品行为仍然适用。
+
+## 2026-11-14：启动窗体与唤窗路由读取共享应用配置
+
+- **目标 / 验收**：让初次窗口显示、深链接目标及快捷键切换目标读取已管理的共享应用配置快照，沿用 Chimera 的 `enable_silent_start` 和 Main/Legacy 选择；不再从 `Config::verge()` 另读一份 legacy 全局状态。
+- **非目标**：不改变静默启动策略、默认 Legacy 界面、窗口标签、深链接队列、快捷键行为、IPC、配置格式或 `verge.yaml` 兼容桥；不改 Core/Service 初始化顺序，也不把同步窗口显示延后到后台 Core 启动完成。
+- **基线 / 风险 / 接口**：父提交 `fc79f9ce43ba3d861b4f322d933fda8a4c023219`；固定 ref gitlink 与只读工作区 `59724e85c34abb6995c22d101c876cc06dc16576`。风险 L2（启动窗体选择与共享应用状态读取）。Tauri 内部 `configured_window_label` 改为接收 `&AppHandle`；无公开 IPC 或前端接口变化。
+- **源码映射**：`ref/backend/tauri/src/utils/resolve.rs::resolve_setup` 从 `NyanpasuClient.app_config_snapshot()` 读取静默启动状态 → `backend/tauri/src/utils/resolve.rs::resolve_setup` 从 `ChimeraClient::get_app_config()` 读取 `ChimeraAppConfig`。Chimera 增补的 `WindowType::{Main,Legacy}` 同时由该共享快照提供；初次打开、深链接和热键复用同一解析函数。旧 `IVerge` 配置仍通过 `bridge/verge.rs::application_from_legacy` 初始化 typed config 并由 mirror 兼容。
+- **验证**：定向启动窗体配置单测 **2/2 通过**；`bridge::verge::tests` **4/4 通过**，包括 legacy silent-start 开关与 Main/Legacy 投影；macOS `cargo check --offline --locked --manifest-path backend/Cargo.toml -p chimera --lib` 通过；Rustfmt、文档 Prettier 与 `git diff --check` 通过。独立审查无阻断发现，并确认设置管理先于窗口路由读取；测试只验证纯配置选择和标签映射，未创建真实 Tauri 窗口。Rust 编译保留项目既有 warnings。未运行桌面冷启动、前端 WebDriver 或 macOS/Windows/Linux 窗口可见性测试；这些纯 Rust 检查不证明实际 webview 已显示。
+- **回滚**：恢复 `resolve.rs` 对 `Config::verge().latest()` 的初次显示/路由读取及无参数 `configured_window_label` 调用；同时恢复 `lib.rs` 深链接和 `client/hotkey/adapters.rs` 的调用签名。保留已有 `application_from_legacy` 投影断言。
