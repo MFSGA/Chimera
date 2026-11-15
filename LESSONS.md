@@ -1095,6 +1095,7 @@ backend/Cargo.toml -p chimera --lib core::clash::proxies::tests:: -- --nocapture
 - 确认的根因与排除项：链接 `ENOSPC` 是 D 盘空间不足；pnpm 的 store 实际落在 D 盘，跨盘构建 target 并未隔离依赖缓存的空间需求。tarball 超时出现在同一空间紧张的环境中，不能单凭它认定代码或依赖本身有缺陷。
 - 修复与验证：维护者已清出原构建盘空间；仅删除本次创建的临时 C 盘 Cargo target，按 `cargo metadata` 确认默认输出为 `backend/target` 后，`cargo test --locked --quiet --manifest-path backend/Cargo.toml --workspace --all-features` 在默认目录退出码 0。Tauri 测试二进制 **777 passed / 1 ignored**，其他 workspace 测试与 doctests 均通过；其中包含 local host 配置优先级/错误测试和启动诊断测试。`specta_export::tests::typescript_bindings_are_fresh` 的内部 pnpm 打印 supply-chain metadata fetch 超时及“可能需要安装”的警告，但随后 Prettier 成功处理生成文件，绑定相等断言通过（1/1）。发布版本快进后，pnpm 1,642 条锁文件策略检查通过；`pnpm test:manifest` 的 Deno 测试阶段因持续无输出被中止，相关 assertions 未验证。不要把 pnpm 内部元数据告警或未完成的 Deno 测试记成成功。
 - 防复发：运行全量 Cargo 测试前同时检查 `backend/target` 和 pnpm store 所在盘的剩余空间；若切换 `CARGO_TARGET_DIR`，仍需为项目盘上的 pnpm store 留出空间。代理/缓存失败时记录实际下载目标和有效 store，不把未完成运行称为测试通过。
+- 再发证据（2026-11-14）：在启动诊断回归中，`backend/target/e2e` 占用 12.3 GiB，使默认 target 盘只剩 258 MiB；首次 `cargo test --offline --locked --manifest-path backend/Cargo.toml -p chimera --lib startup_failure::tests -- --test-threads=1` 在链接时因 `errno=28` 失败，未开始执行断言。仅清理该 ignored Cargo 构建目录后，剩余空间升至 9.5 GiB，原命令重跑 **9/9 通过**。今后启动 Cargo link/test 前先核对所有项目 target 目录的合计占用；保存 E2E 证据不需要保留可重建的 Cargo target。
 - 风险/回滚和清理证据：未触碰用户配置、宿主代理/TUN 或服务进程；清理目标仅为本次创建的临时 Cargo 构建目录。
 
 ### LESSON-20261106-001：嵌套 ScrollArea 的 WebDriver wheel 不等于原生浏览器滚轮
