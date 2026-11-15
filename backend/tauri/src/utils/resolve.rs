@@ -235,9 +235,6 @@ pub fn resolve_setup(app: &mut App, paths: &PathResolver) {
         resources_dir.as_deref()
     ));
 
-    log::trace!("init storage");
-    log_err!(crate::core::storage::setup(app, paths));
-
     // setup jobs
     /* log::trace!("setup jobs");
     {

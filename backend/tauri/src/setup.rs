@@ -46,22 +46,6 @@ pub fn setup(
 ) -> anyhow::Result<()> {
     let shutdown = tokio_util::sync::CancellationToken::new();
     let tasks = tokio_util::task::TaskTracker::new();
-    let jobs = crate::startup_failure::report_boundary(
-        tauri::async_runtime::block_on(crate::client::jobs::start(
-            paths.jobs_path(),
-            crate::utils::init::jobs_capture(),
-            shutdown.child_token(),
-            &tasks,
-        ))
-        .context("failed to start the jobs owner"),
-        crate::startup_failure::StartupStage::Jobs,
-        &paths,
-    )?;
-    app.manage(AppShutdown {
-        shutdown: shutdown.clone(),
-        tasks: tasks.clone(),
-    });
-    let traffic_store = open_traffic_store(&paths);
     let system_proxy_source: Arc<dyn chimera_contracts::net::SystemProxySource> =
         Arc::new(chimera_os::system_proxy_source::OsSystemProxySource);
     let profile_service = Arc::new(
@@ -89,6 +73,29 @@ pub fn setup(
         crate::startup_failure::StartupStage::MigrationRun,
         &paths,
         migrations.backup_info(),
+    )?;
+
+    crate::startup_failure::report_boundary(
+        crate::core::storage::setup(app, &paths),
+        crate::startup_failure::StartupStage::Storage,
+        &paths,
+    )?;
+
+    let traffic_store = open_traffic_store(&paths);
+    app.manage(AppShutdown {
+        shutdown: shutdown.clone(),
+        tasks: tasks.clone(),
+    });
+    let jobs = crate::startup_failure::report_boundary(
+        tauri::async_runtime::block_on(crate::client::jobs::start(
+            paths.jobs_path(),
+            crate::utils::init::jobs_capture(),
+            shutdown.child_token(),
+            &tasks,
+        ))
+        .context("failed to start the jobs owner"),
+        crate::startup_failure::StartupStage::Jobs,
+        &paths,
     )?;
 
     let legacy_lock = Arc::new(parking_lot::Mutex::new(()));
