@@ -5,6 +5,8 @@ use specta::Type;
 use tauri::{Manager, Runtime};
 use tauri_specta::Event;
 
+use crate::utils::task::spawn_tracked_on_tauri_runtime;
+
 /// 2
 pub mod api;
 pub mod connection_details;
@@ -44,7 +46,7 @@ pub fn setup<R: Runtime, M: Manager<R>>(manager: &M) -> anyhow::Result<()> {
     let tasks = owners.tasks.clone();
     let mut proxy_changes = client.subscribe_proxy_changes();
     let proxy_shutdown = shutdown.clone();
-    tasks.spawn(async move {
+    spawn_tracked_on_tauri_runtime(&tasks, async move {
         loop {
             let changed = tokio::select! {
                 _ = proxy_shutdown.cancelled() => break,
@@ -65,7 +67,7 @@ pub fn setup<R: Runtime, M: Manager<R>>(manager: &M) -> anyhow::Result<()> {
     let stream_shutdown = shutdown.clone();
     let stream_tasks = tasks.clone();
 
-    tasks.spawn(async move {
+    spawn_tracked_on_tauri_runtime(&tasks, async move {
         let mut connections = streams.subscribe();
         let mut events = streams.subscribe_ws();
         if stream_shutdown.is_cancelled() {
@@ -80,7 +82,7 @@ pub fn setup<R: Runtime, M: Manager<R>>(manager: &M) -> anyhow::Result<()> {
 
         let ws_app_handle = app_handle.clone();
         let ws_shutdown = stream_shutdown.clone();
-        stream_tasks.spawn(async move {
+        spawn_tracked_on_tauri_runtime(&stream_tasks, async move {
             loop {
                 let event = tokio::select! {
                     _ = ws_shutdown.cancelled() => break,
