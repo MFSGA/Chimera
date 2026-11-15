@@ -81,6 +81,10 @@
 | LESSON-20261111-001 | 2026-11-11 | Updater / mainline integration | 按旧分支拆批次 Rebase 后没有更新 `client/mod.rs` 构造依赖，lib check 11 处错误、test 另 3 处缺参；补齐 actor 启动注入与 Stable 测试参数，并重跑真实用例 | Mitigated |
 | LESSON-20261113-001 | 2026-11-13 | Tauri startup / Windows E2E | Push E2E run 43432488787: 原生 Tauri setup 线程调用 `TaskTracker::spawn` 触发 no reactor panic；改 `spawn_on(handle().inner())`，同步线程回归与 844 项 Rust lib 测试通过，待远端 E2E 复验 | Mitigated |
 | LESSON-20261113-002 | 2026-11-13 | Application config / CI | Push CI run 43432488898: 嵌套 `window_close` 新字段缺少顶层 patch 的 `serde(default)`，三平台 2 项稀疏 patch 测试失败；依 ref 补属性，233 项配置测试通过，待新 SHA CI 复验 | Mitigated |
+| LESSON-20261114-003 | 2026-11-14 | Service owner fencing / supervisor | 独立复核发现 CoreManager 锁不能阻止 Instance supervisor 自主 respawn；在 supervisor current-child 锁内校验 UUID/PID、恢复 DNS 并取消，Core Manager 全套 137 通过、2 忽略 | Mitigated |
+| LESSON-20261115-001 | 2026-11-15 | Startup retry / Rust tests | 退避测试将调用前采样时间误当调度基准，出现 1.000033459s 与 1s 的微小差异；为调度策略注入显式 Instant 后精确验证 ref 延迟 | Mitigated |
+| LESSON-20261115-002 | 2026-11-15 | Service owner fencing | `submit_v2` 仍将旧版无身份 `Recover` 直接送入 manager，可绕过新增 installation fence；拒绝旧命令并验证 config/data/无身份三种 admission 均失败关闭 | Mitigated |
+| LESSON-20261115-003 | 2026-11-15 | Rust test authoring | 新共享启动状态测试模块首次漏掉本地 `Arc`/`Mutex`/`HashMap` imports，测试编译时发现；补充显式 imports 后目标测试通过 | Mitigated |
 
 ### LESSON-20261113-001/002：架构迁移要覆盖原生运行时与稀疏配置
 
@@ -1181,3 +1185,56 @@ backend/Cargo.toml -p chimera --lib core::clash::proxies::tests:: -- --nocapture
 - 修复：在 `backend/tauri/src/client/mod.rs` 延续 ref 的 updater 初始化所有权，传入构建渠道、新增受启动/关闭任务管理的 `AppUpdateClient`、事件/HTTP 适配与 Bundle 元数据，保持测试客户端无真实 updater 副作用；三个 CoreLifecycle 夹具显式传 `ReleaseChannel::Stable`。保留原 `ref`/Service pin，不触碰原始 dirty updater 工作区。
 - 回归：修复后 backend lib cargo check 成功；Core app-update 27/27、应用配置 4/4、Tauri updater adapter 3/3、bundle 18/18、application client 12/12、application state 4/4、Specta bindings 1/1；TypeScript、前端生产构建与 E2E harness unit 44/44 通过。没有执行真实桌面 E2E、下载/签名安装与重启/回滚，不得把纯测试当作发布验收。
 - 防复发：跨分支迁移时必须从 `setup` 追踪到 `ClientSetupArgs`、typed state、actor spawn、业务命令和测试 fixture；编译 `--lib` 后还须编译/执行 `--lib` 测试，避免生产入口遗漏与测试夹具漏参。
+
+### LESSON-20261114-001：共享宿主锁必须在提交 actor mailbox 命令之前取得
+
+- 日期与时区：2026-11-14 US/Pacific。状态：Mitigated（独立复核在提交前发现 lock inversion；新增并运行并发回归测试）。
+- 证据与基线：分支 `codex/ref-startup-window-20261114`，父提交 `1a9c0b3f95c470b9dba0db76d1f00c0eee93dfcc`；ref `59724e85c34abb6995c22d101c876cc06dc16576`。`CoreLifecycleClient::execute_service_command` 在将 Service 请求放入 actor mailbox 之前取得共享 `HOST_TRANSITION_LOCK`；若 actor 正在执行的启动任务再于 actor 内等待同一锁，后提交的 Service 命令可能持锁等 actor，而启动持 actor 等锁。
+- 确认原因与影响：启动 owner 计划在 `RetireServiceThenLocal` 分支调用 `begin_transition()`，最初这段等待发生在 CoreLifecycle actor 命令内部。独立代码复核确认存在确定的交错等待顺序；未在共享分支推送该实现，也未把该推演表述为真实 Service 运行时故障。
+- 修复：由 `CoreLifecycleClient::startup_reconcile_with_timeout` 在 actor 入队前取得租约，并将租约随 `StartupReconcile` 命令传入 workflow；租约覆盖 owner 观测和必要 handoff，workflow 不再于 actor 内等待同一共享锁。
+- 防复发测试：`client::core_lifecycle::tests::startup_holds_service_transition_before_entering_lifecycle_actor` 阻塞启动 Service 探测并让另一条 Service 命令竞争租约，断言启动与排队命令都在时限内完成且命令次序正确。该测试 **1/1** 通过；`client::core_lifecycle::tests` **44/44** 通过。覆盖为模拟 Service lease/adapter，不是安装 Service、OS wrapper 或宿主网络实测。
+- 后续规则：任何会等待 actor mailbox 的调用，其共享宿主锁必须先在 mailbox 外取得并随请求持有；不要让 actor handler 等待一个可能由排队请求持有的锁。
+
+### LESSON-20261114-002：共享 Service Core 停止必须在 manager 内核对 owner
+
+- 日期与时区：2026-11-14 US/Pacific。状态：Mitigated（独立复核在推送前发现 probe→Stop 跨进程窗口；新增 IPC owner fence 和 manager 锁内回归测试）。
+- 证据与基线：分支 `codex/ref-startup-window-20261114`，父提交 `1a9c0b3f95c470b9dba0db76d1f00c0eee93dfcc`；ref `59724e85c34abb6995c22d101c876cc06dc16576`。启动先 probe Service status，再由另一个应用进程共享的 Service 执行 Stop；Tauri transition mutex 只在本进程生效，原 Stop IPC 不带 owner token。
+- 确认原因与影响：第二轮独立代码复核证明另一 Chimera 进程可以在 owner probe 后替换 Service Core，使启动任务的无条件 Stop 命中新 Core。未观察到生产环境实际发生的误停，不将静态交错推演写成运行事故。
+- 修复：新增 tagged `StopIfOwner` IPC，携带 Core 进程 UUID 与配置 revision；Service 转成 `CoreCommand::StopIfOwner` 后在 `CoreManager::ctrl` 同一锁内比对 active owner 并执行 Stop，所有 manager start / stop / reconcile 仍通过该锁串行。独立复核发现 manager 锁本身没有覆盖 `Instance` supervisor 的自主 respawn；因此还在 supervisor current-child 锁内按 UUID/PID 比对当前子进程，将 DNS pre-stop 放在同一条件取消临界区。旧 Service 拒绝未知命令时，客户端不会回退到无条件 Stop。对 foreign / unreadable Service evidence 分流，Local handback 不再经过通用 Service Stop。
+- 回归证据：`manager::tests::stop_if_owner_leaves_a_replacement_running` 覆盖错误 UUID 不触发 runtime stop、准确 UUID/revision 才停止；Manager 替换竞态测试使用 `FenceRuntimeInstance` 模拟。新增 `process::supervisor::tests::cancel_if_current_serializes_respawn_during_pre_stop` 运行真实测试子进程，在 pre-stop 持锁时等待它退出，并验证没有发布 respawn child；管理器全套 **137 通过、2 忽略**，真实 supervisor 用例 **1/1**。IPC 与 Tauri wire roundtrip 各 **1/1**；`startup_` 测试 **33/33**，包含 foreign handback 及 unreadable owner 不做本地启动。未覆盖 `Instance` owner closure 的端到端组合，也不是已安装 Service 的跨进程桌面 E2E。
+- 后续规则与范围：任何基于共享 daemon status 做的有副作用 host handoff，必须把观测到的 owner token 传入 server-side 原子 compare-and-mutate；本地 mutex 和事后探测不能封住跨进程 TOCTOU。普通主动 Stop 与其它非 startup 入口仍按各自 authorization/ownership 契约审核，不能据本条声称所有 Service stop 已 fenced。
+
+### LESSON-20261114-003：manager 锁之外还要围住 supervisor 自动 respawn
+
+- 日期与时区：2026-11-14 US/Pacific。状态：Mitigated（独立复核发现并修复；没有观察到生产误停）。
+- 基线：分支 `codex/ref-startup-window-20261114`；固定 ref `59724e85c34abb6995c22d101c876cc06dc16576`。Service 条件停止已在 `CoreManager::ctrl` 中比较 active UUID/revision 并调用 Stop。
+- 复核发现：CoreManager 的 ctrl 锁不能保护 `Instance` 内部 supervisor 自主处理的 child 退出和自动 respawn。交错顺序可能是 Stop 已校验旧 owner，Stop 开始 DNS pre-stop，旧 child 退出触发 supervisor 自动替换，之后 Stop 才取消当前 child；仅 manager 锁会留下该竞态。
+- 修复：`Supervisor::cancel_if_current` 持有当前 child 状态锁，确认 PID / owner 仍与预期一致，并在同一临界区执行 DNS pre-stop 和 child cancel。Supervisor spawn/respawn 发布 current process 与 Started 事件也在同一锁内；Core Manager 的 conditional stop 通过该 fence，冲突时恢复 Active 状态并保留替换 child。
+- 验证：Manager 合同测试 `stop_if_owner_does_not_stop_a_respawn_during_pre_stop_work` 通过 `FenceRuntimeInstance` 替身验证 owner 冲突处理；真实 Supervisor 测试 `process::supervisor::tests::cancel_if_current_serializes_respawn_during_pre_stop` 运行子进程并验证退出发生于取消临界区时没有 respawn，**1/1**；`cargo test --offline --locked --manifest-path backend/chimera-runtime/Cargo.toml -p chimera-core-manager --lib -- --test-threads=1` **137 通过、0 失败、2 忽略**；runtime `cargo check` 通过。未覆盖 `Instance::cancel_supervisor_if_owner` 的端到端 owner closure 组合，也不代表系统 Service wrapper 或跨进程桌面 E2E。
+- 防复发：共享进程的条件停止审查必须同时追踪 manager command serialization 和 manager 外部自主替换当前 child 的监督器；锁住业务 manager 不等于锁住全部执行 owner。该发现为代码审查推演，不是已确认运行事故。
+
+### LESSON-20261115-001：退避测试使用调度时钟而不是调用前时钟
+
+- 证据：新增启动重试策略测试首次运行 `cargo test --offline --locked --manifest-path backend/Cargo.toml -p chimera --lib client::application_workflow::startup::retry_tests:: -- --test-threads=1` 时，3 项中 1 项失败；断言把调度前采样的 `now` 当作计时起点，实际期限差为 `1.000033459s`，而预期固定写成 `1s`。
+- 修正：策略计算拆出接收显式 `Instant` 的内部方法，生产路径仍传入当前单调时钟，测试则用同一个基准精确断言 1/5/30 秒应用重试和 5/5/10/30/60 秒依赖退避；修复后 **3/3** 通过。
+- 防复发：对绝对 deadline 的测试必须断言与调度函数实际使用的同一时钟基准；不要把调用前采样、执行耗时和绝对 deadline 混成固定间隔断言。
+
+### LESSON-20261115-002：共享 Service 的恢复命令也必须携带安装身份
+
+- 日期与时区：2026-11-15 US/Pacific。状态：Mitigated（独立复核在变更推送前发现旧 wire 分支可绕过新的 owner fence）。
+- 基线：分支 `codex/ref-startup-window-20261114`，ref `59724e85c34abb6995c22d101c876cc06dc16576`；对应 `backend/chimera-runtime/chimera_service/src/server/manager_bridge.rs::CoreManagerService::submit_v2` 与 `chimera_ipc::api::core::v2::CoreCommandInfo::{Recover,RecoverIfServiceOwner}`。
+- 证据与影响：Service admission 原先仍将 `CoreCommandInfo::Recover` 无条件转换为 `CoreCommand::Recover`；该分支不经过新增的 config/data directory 身份比较，因此旧 IPC 客户端可触发共享 manager 的 quarantine recovery。审查确认的是可到达的静态旁路，没有证据表明实际安装 Service 曾因此回收其他实例的进程。
+- 修复与反例测试：保留旧 enum wire decoding 以明确报告不兼容，但在 `submit_v2` admission 前以 `OperationConflict` 拒绝所有无身份 Recover。Service 回归分别只修改 config dir、只修改 data dir、完全不携带身份，均断言 manager operation registry 未收到请求，定向测试 **3/3** 通过。
+- 防复发：增加 side-effect fence 时审阅 tagged enum 的每个 variant、legacy command 和兼容 fallback；拒绝路径必须在 `control.submit` 之前执行。任何旧客户端不能静默退回无 owner 的操作。
+
+### LESSON-20261115-003：测试模块需要显式导入自己的依赖
+
+- 日期与时区：2026-11-15 US/Pacific。状态：Mitigated（本轮测试编译阶段发现，未进入产品二进制）。
+- 证据：新增 `client::application_workflow::startup_state_tests::application_workflow_uses_the_lifecycle_startup_state` 后第一次运行定向测试时，编译器报告本地测试模块未导入 `Arc`、`Mutex` 和 `HashMap`。显式导入后相同定向测试 **1/1** 通过。
+- 防复发：独立 `#[cfg(test)]` 模块应声明自己使用的标准库与同步原语，不依赖父模块偶然的 `use`；修改后重新执行目标测试，而不能只依赖 `cargo check --lib`。
+
+### LESSON-20261115-004：Service admission 测试不能假设内部错误实现 Debug
+
+- 证据：新增匹配 Service 安装身份的正向 Recover 测试时，首次编译因 `OpError` 未实现 `Debug`，`Result::expect` 无法使用，定向 Service 测试退出 101。
+- 修正与验证：测试改为显式匹配 `submit_v2` 的结果，并在失败分支输出内部错误消息；修复后重新运行 `cargo test`。正向 admission 用例同时断言 operation ID 与 manager registry 记录。
+- 防复发：在领域错误类型不实现 `Debug` 时，测试按其稳定可读字段显式格式化，不为测试方便给产品错误类型添加无必要 trait；提交前执行实际目标测试。
