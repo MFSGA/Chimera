@@ -199,25 +199,25 @@ pub fn create_window(app_handle: &AppHandle) {
     create_window_for_type(app_handle, app_config_for_window(app_handle).window_type);
 }
 
-/// Perform startup's blocking Service/port preparation without allowing the
-/// blocking worker to outlive its tracked owner. Once cancellation is
-/// requested, no core reconciliation is started from the prepared result.
-async fn prepare_startup_while_active<T, F>(
+/// Await startup's Service preflight within its tracked owner. Once shutdown
+/// is requested, no later Core reconciliation is started from its result.
+async fn prepare_startup_while_active<T, E, F, Fut>(
     shutdown: tokio_util::sync::CancellationToken,
     prepare: F,
-) -> std::result::Result<Option<T>, tauri::Error>
+) -> anyhow::Result<Option<T>>
 where
     T: Send + 'static,
-    F: FnOnce(tokio_util::sync::CancellationToken) -> T + Send + 'static,
+    E: Into<anyhow::Error>,
+    F: FnOnce(tokio_util::sync::CancellationToken) -> Fut + Send + 'static,
+    Fut: std::future::Future<Output = Result<T, E>> + Send + 'static,
 {
     if shutdown.is_cancelled() {
         return Ok(None);
     }
 
-    let worker_shutdown = shutdown.clone();
-    let result = tauri::async_runtime::spawn_blocking(move || prepare(worker_shutdown)).await?;
-    // The worker is fully joined before this task can finish, even when
-    // shutdown was requested during a slow or blocking configuration write.
+    let result = prepare(shutdown.clone()).await.map_err(Into::into)?;
+    // Do not cancel an in-flight Service transition. It must finish before
+    // shutdown cleanup, and cancellation suppresses the later Core reconcile.
     Ok((!shutdown.is_cancelled()).then_some(result))
 }
 
@@ -270,27 +270,28 @@ pub fn resolve_setup(app: &mut App, paths: &PathResolver) {
         app_shutdown.tasks.clone(),
     );
 
-    // The visible webview must not wait on service IPC or core reconciliation.
+    // Window creation must not wait on service IPC or core reconciliation.
     // Keep startup under the same AppShutdown tracker as the other owners:
-    // shutdown must wait for both blocking configuration writes and any
-    // in-flight core reconciliation before cleanup shuts down the core.
+    // shutdown waits for any in-flight Service transition and Core
+    // reconciliation before cleanup shuts down the core.
     let client = (*app.state::<crate::client::ChimeraClient>()).clone();
     let app_handle = app.app_handle().clone();
     let startup_shutdown = app_shutdown.shutdown.child_token();
     // Tauri setup runs on the event-loop thread, not inside Tokio. Use its
     // runtime explicitly so the tracked task can start without a current handle.
     spawn_tracked_on_tauri_runtime(&app_shutdown.tasks, async move {
-        // Service initialization is synchronous and may write its configured
-        // port. Do not detach the blocking worker on cancellation: the
-        // tracked owner joins it before shutdown begins core cleanup.
-        let prepared =
-            prepare_startup_while_active(startup_shutdown.clone(), move |preparation_shutdown| {
-                if !preparation_shutdown.is_cancelled() {
-                    log_err!(init::init_service(client.clone()));
+        let prepared = prepare_startup_while_active(
+            startup_shutdown.clone(),
+            move |preparation_shutdown| async move {
+                if !preparation_shutdown.is_cancelled()
+                    && let Err(error) = init::init_service(client.clone()).await
+                {
+                    log::error!(target: "app", "Service startup preparation failed: {error:#}");
                 }
-                client
-            })
-            .await;
+                Ok::<_, anyhow::Error>(client)
+            },
+        )
+        .await;
         match prepared {
             Ok(None) => {
                 tracing::debug!("startup cancelled before core reconciliation");
@@ -410,9 +411,9 @@ mod startup_shutdown_tests {
         let touched = Arc::new(AtomicBool::new(false));
         let touched_in_worker = touched.clone();
 
-        let result = prepare_startup_while_active(shutdown, move |_| {
+        let result = prepare_startup_while_active(shutdown, move |_| async move {
             touched_in_worker.store(true, Ordering::SeqCst);
-            42
+            Ok::<_, anyhow::Error>(42)
         })
         .await
         .unwrap();
@@ -422,21 +423,21 @@ mod startup_shutdown_tests {
     }
 
     #[tokio::test]
-    async fn shutdown_drains_blocking_preparation_before_core_cleanup() {
+    async fn shutdown_drains_service_preparation_before_core_cleanup() {
         let boundary = AppShutdown::default();
         let (entered_tx, entered_rx) = oneshot::channel();
-        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = oneshot::channel();
         let core_started = Arc::new(AtomicBool::new(false));
         let core_started_in_task = core_started.clone();
         let cancellation = boundary.shutdown.child_token();
 
-        // Simulate a Service or port-config write that was already underway
-        // when the exit boundary requests shutdown.
+        // Simulate a Service transition that was already underway when the
+        // exit boundary requests shutdown.
         boundary.tasks.spawn(async move {
-            let prepared = prepare_startup_while_active(cancellation, move |_| {
+            let prepared = prepare_startup_while_active(cancellation, move |_| async move {
                 entered_tx.send(()).unwrap();
-                release_rx.recv_timeout(Duration::from_secs(3)).unwrap();
-                42
+                release_rx.await.unwrap();
+                Ok::<_, anyhow::Error>(42)
             })
             .await
             .unwrap();
@@ -454,7 +455,7 @@ mod startup_shutdown_tests {
             timeout(Duration::from_millis(75), boundary.wait_shutdown())
                 .await
                 .is_err(),
-            "shutdown must not finish while the blocking write is in flight"
+            "shutdown must not finish while Service preparation is in flight"
         );
 
         release_tx.send(()).unwrap();
