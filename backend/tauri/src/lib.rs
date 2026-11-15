@@ -340,7 +340,7 @@ pub fn run() -> std::process::ExitCode {
                         return;
                     };
 
-                    let target_label = resolve::configured_window_label();
+                    let target_label = resolve::configured_window_label(&on_open_url_handle);
                     resolve::create_window(&on_open_url_handle);
 
                     let entry = on_open_url_handle
@@ -379,7 +379,7 @@ pub fn run() -> std::process::ExitCode {
                     .get_current()?
                     .and_then(|urls| urls.first().map(ToString::to_string))
                 {
-                    let target_label = resolve::configured_window_label();
+                    let target_label = resolve::configured_window_label(&app_handle);
                     let entry = app
                         .state::<crate::ipc::PendingDeepLink>()
                         .store(url.clone());
