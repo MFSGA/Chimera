@@ -1,11 +1,23 @@
-use std::sync::Arc;
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, AtomicU64, Ordering},
+};
 
 use chimera_config::application::{ChimeraAppConfig, ChimeraAppConfigPatch};
-use chimera_core_manager::CoreKind;
+use chimera_core::actor_v2::service_status::ServiceHostStatus;
+use chimera_core_manager::{CoreError, CoreErrorKind, CoreKind};
 use chimera_ipc::api::status::CoreState;
 use struct_patch::Patch;
+use tokio::sync::watch;
 
-use crate::client::application_workflow::workflow::ProfileRuntime;
+use crate::client::application_workflow::startup::{
+    OwnerPlan, RuntimeEvidence, ServiceEvidence, StartupObservation, StartupOutcome, StartupReport,
+    StartupRetryTarget, StartupWorkflowState, effective_host, plan_owner,
+};
+use crate::client::application_workflow::{
+    inputs::{FrozenProfileContent, RuntimeInputs},
+    workflow::ProfileRuntime,
+};
 use crate::config::chimera::ClashCore;
 use crate::enhance::FsProfileContentSource;
 
@@ -14,8 +26,8 @@ use super::{
         application::ApplicationClient, clash_config::ClashConfigClient, runtime::RuntimePaths,
     },
     ports::{
-        BinaryInstaller, CoreLifecyclePort, PreparedCoreBinary, ServiceLifecyclePort,
-        ServiceTransitionLease,
+        BinaryInstaller, CoreLifecyclePort, CoreStatusSnapshot, PreparedCoreBinary,
+        ServiceLifecyclePort, ServiceTransitionLease,
     },
 };
 
@@ -40,6 +52,19 @@ pub(super) enum Command {
     },
     SelectCore(ClashCore),
     RecoverCore,
+    StartupReconcile {
+        operation_id: u64,
+        transition: Box<dyn ServiceTransitionLease>,
+    },
+    RecoverStartup {
+        operation_id: u64,
+        transition: Box<dyn ServiceTransitionLease>,
+    },
+    RetryStartup {
+        operation_id: u64,
+        identity: String,
+        transition: Box<dyn ServiceTransitionLease>,
+    },
     Reconcile,
     RetryDeferredProfiles {
         digest: String,
@@ -64,6 +89,76 @@ pub(super) enum Command {
     ServiceEndpointDown(Box<dyn ServiceTransitionLease>),
 }
 
+fn startup_failure_is_retryable(error: &anyhow::Error) -> bool {
+    error.chain().any(|cause| {
+        cause
+            .downcast_ref::<CoreError>()
+            .is_some_and(|error| error.retryable)
+            || cause
+                .downcast_ref::<crate::client::application_workflow::mutation::RuntimeCheckFailure>(
+                )
+                .is_some_and(|failure| {
+                    failure.cause()
+                        == crate::client::application_workflow::policy::TryCauseKind::Transient
+                })
+    })
+}
+
+fn startup_failure_waits_for_dependency(error: &anyhow::Error) -> bool {
+    error.chain().any(|cause| {
+        cause
+            .downcast_ref::<crate::client::application_workflow::mutation::RuntimeCheckFailure>()
+            .is_some_and(|failure| {
+                matches!(
+                    failure.record(),
+                    crate::client::application_workflow::mutation::CheckRecord::Unserviceable(_)
+                )
+            })
+    })
+}
+
+fn startup_stop_error_is_idempotent(error: &anyhow::Error) -> bool {
+    error.chain().any(|cause| {
+        cause
+            .downcast_ref::<CoreError>()
+            .is_some_and(|error| error.kind == Some(CoreErrorKind::NotStarted))
+    })
+}
+
+#[derive(Debug)]
+enum StartupOwnerFailure {
+    WaitingDependency(String),
+    Blocked(String),
+    RecoveryRequired(String),
+}
+
+impl StartupOwnerFailure {
+    fn outcome(self) -> StartupOutcome {
+        match self {
+            Self::WaitingDependency(reason) => StartupOutcome::ReadyDegraded {
+                health: crate::client::convergence::ConvergenceHealth::WaitingDependency,
+                reason,
+            },
+            Self::Blocked(reason) => StartupOutcome::ReadyDegraded {
+                health: crate::client::convergence::ConvergenceHealth::Blocked,
+                reason,
+            },
+            Self::RecoveryRequired(reason) => StartupOutcome::RecoveryRequired { reason },
+        }
+    }
+
+    fn stop_rejected(error: anyhow::Error, uncertain: bool) -> Self {
+        let reason = format!("the Core owner could not be stopped: {error:#}");
+        if uncertain {
+            Self::RecoveryRequired(reason)
+        } else if startup_failure_is_retryable(&error) {
+            Self::WaitingDependency(reason)
+        } else {
+            Self::Blocked(reason)
+        }
+    }
+}
+
 /// The lower-level port remains the compatibility boundary for Chimera's
 /// staged `core::actor_v2::CoreFacade` while command admission follows REF's
 /// actor-owned core-lifecycle model.
@@ -83,6 +178,9 @@ pub(super) struct CoreLifecycleWorkflow {
     core: Arc<dyn CoreLifecyclePort>,
     installer: Arc<dyn BinaryInstaller>,
     service: Arc<dyn ServiceLifecyclePort>,
+    startup: StartupWorkflowState,
+    service_failed_generation_shared: Arc<AtomicU64>,
+    service_status: Option<watch::Receiver<ServiceHostStatus>>,
 }
 
 impl CoreLifecycleWorkflow {
@@ -102,6 +200,97 @@ impl CoreLifecycleWorkflow {
             core,
             installer,
             service,
+            startup: StartupWorkflowState::default(),
+            service_failed_generation_shared: Arc::new(AtomicU64::new(0)),
+            service_status: None,
+        }
+    }
+
+    pub(super) fn with_service_status(
+        mut self,
+        service_status: watch::Receiver<ServiceHostStatus>,
+    ) -> Self {
+        self.service_status = Some(service_status);
+        self
+    }
+
+    pub(super) fn startup_state_handle(&self) -> StartupWorkflowState {
+        self.startup.clone()
+    }
+
+    pub(super) fn startup_owner_unproven_handle(&self) -> Arc<AtomicBool> {
+        self.startup.owner_unproven_handle()
+    }
+
+    pub(super) fn service_failed_generation_handle(&self) -> Arc<AtomicU64> {
+        self.service_failed_generation_shared.clone()
+    }
+
+    pub(super) fn startup_owner_unproven(&self) -> bool {
+        self.startup.owner_unproven()
+    }
+
+    fn mark_startup_owner_unproven(&self) {
+        self.startup.mark_owner_unproven();
+    }
+
+    fn mark_startup_owner_proven(&self) {
+        self.startup.mark_owner_proven();
+    }
+
+    pub(super) fn startup_report_handle(&self) -> Arc<parking_lot::Mutex<Option<StartupReport>>> {
+        self.startup.report_handle()
+    }
+
+    pub(super) fn startup_report(&self) -> Option<StartupReport> {
+        self.startup.lock_report().clone()
+    }
+
+    pub(super) fn startup_retry_schedule(&self) -> Option<(String, tokio::time::Instant)> {
+        self.startup
+            .retry_target_handle()
+            .lock()
+            .as_ref()
+            .and_then(|target| {
+                target
+                    .next_attempt
+                    .map(|deadline| (target.identity.clone(), deadline))
+            })
+    }
+
+    pub(super) fn startup_retry_due(&self, identity: &str) -> bool {
+        self.startup
+            .retry_target_handle()
+            .lock()
+            .as_ref()
+            .is_some_and(|target| {
+                target.identity == identity
+                    && target
+                        .next_attempt
+                        .is_some_and(|deadline| deadline <= tokio::time::Instant::now())
+                    && target.budget.remaining > 0
+            })
+    }
+
+    pub(super) fn begin_startup_retry(&self, identity: &str) -> bool {
+        self.startup
+            .retry_target_handle()
+            .lock()
+            .as_mut()
+            .is_some_and(|target| {
+                target.identity == identity && target.begin(tokio::time::Instant::now())
+            })
+    }
+
+    pub(super) fn defer_startup_retry(&self, identity: &str, reason: String) {
+        if let Some(target) = self
+            .startup
+            .retry_target_handle()
+            .lock()
+            .as_mut()
+            .filter(|target| target.identity == identity)
+        {
+            target.schedule_dependency(reason);
         }
     }
 
@@ -314,11 +503,59 @@ impl CoreLifecycleWorkflow {
     }
 
     pub(super) async fn execute(&self, command: Command) -> anyhow::Result<()> {
-        match command {
+        let refresh_startup_retry_identity =
+            matches!(&command, Command::PatchApplicationConfig { .. });
+        let refresh_startup_target = match &command {
+            Command::Reconcile
+            | Command::RecoverCore
+            | Command::RetryDeferredProfiles { .. }
+            | Command::ReconcileProfiles { .. }
+            | Command::SelectCore(_) => true,
+            Command::PatchApplicationConfig {
+                patch,
+                service_connected,
+            } => crate::client::application_workflow::impact::application_patch_requires_reconcile(
+                patch,
+                *service_connected,
+            ),
+            _ => false,
+        };
+        let result = match command {
             Command::ProfileMutation(_) => {
                 anyhow::bail!("Profile mutations must run through ApplicationWorkflowActor")
             }
             Command::RecoverCore | Command::Reconcile => self.reconcile().await,
+            Command::StartupReconcile {
+                operation_id,
+                transition,
+            } => {
+                let report = self.startup_reconcile(operation_id, transition).await;
+                match report.outcome.failure_reason() {
+                    Some(reason) => Err(anyhow::anyhow!(reason.to_owned())),
+                    None => Ok(()),
+                }
+            }
+            Command::RecoverStartup {
+                operation_id,
+                transition,
+            } => {
+                let report = self.recover_startup(operation_id, transition).await;
+                match report.outcome.failure_reason() {
+                    Some(reason) => Err(anyhow::anyhow!(reason.to_owned())),
+                    None => Ok(()),
+                }
+            }
+            Command::RetryStartup {
+                operation_id,
+                identity,
+                transition,
+            } => {
+                let report = self.retry_startup(operation_id, identity, transition).await;
+                match report.outcome.failure_reason() {
+                    Some(reason) => Err(anyhow::anyhow!(reason.to_owned())),
+                    None => Ok(()),
+                }
+            }
             Command::RetryDeferredProfiles { digest } => {
                 self.retry_deferred_profiles(&digest).await
             }
@@ -382,7 +619,123 @@ impl CoreLifecycleWorkflow {
             Command::ServiceEndpointDown(mut transition) => {
                 self.service.report_endpoint_down(transition.as_mut()).await
             }
+        };
+        if refresh_startup_target {
+            self.refresh_startup_retry_target_after_reconcile(&result)
+                .await;
+        } else if refresh_startup_retry_identity && result.is_ok() {
+            self.reschedule_startup_retry_after_committed_config_patch()
+                .await;
         }
+        result
+    }
+
+    /// A source-only application patch can still change the committed startup
+    /// target. Ref's `confirm_saved_inactive` wakes an open reestablish target
+    /// for a save and opens a fresh retry budget only when its identity moves.
+    async fn reschedule_startup_retry_after_committed_config_patch(&self) {
+        let Some(identity_before) = self
+            .startup
+            .lock_retry_target()
+            .as_ref()
+            .map(|target| target.identity.clone())
+        else {
+            return;
+        };
+
+        let identity = match self.startup_target_identity().await {
+            Ok(identity) => identity,
+            Err(_) => match self.unresolved_startup_target_identity().await {
+                Some(identity) => identity,
+                None => return,
+            },
+        };
+        let mut retry_target = self.startup.lock_retry_target();
+        let Some(target) = retry_target.as_mut() else {
+            return;
+        };
+        if target.identity != identity_before
+            || target.health == crate::client::convergence::ConvergenceHealth::RecoveryRequired
+        {
+            return;
+        }
+
+        if target.identity != identity {
+            let allow_receipt_reuse = target.allow_receipt_reuse;
+            *target = StartupRetryTarget::new(identity, allow_receipt_reuse);
+        } else if target.budget.remaining == 0 {
+            return;
+        }
+        target.health = crate::client::convergence::ConvergenceHealth::RetryScheduled;
+        target.next_attempt = Some(tokio::time::Instant::now());
+    }
+
+    async fn refresh_startup_retry_target_after_reconcile(&self, result: &anyhow::Result<()>) {
+        if self.startup.lock_retry_target().is_none() {
+            return;
+        }
+        if result.is_ok() {
+            *self.startup.lock_retry_target() = None;
+            return;
+        }
+
+        let identity = match self.startup_target_identity().await {
+            Ok(identity) => Some(identity),
+            Err(_) => self.unresolved_startup_target_identity().await,
+        };
+        if let Some(identity) = identity {
+            let mut retry_target = self.startup.lock_retry_target();
+            if retry_target
+                .as_ref()
+                .is_none_or(|target| target.identity != identity)
+            {
+                let allow_receipt_reuse = retry_target
+                    .as_ref()
+                    .is_some_and(|target| target.allow_receipt_reuse);
+                *retry_target = Some(StartupRetryTarget::new(identity, allow_receipt_reuse));
+            }
+        }
+
+        let error = result
+            .as_ref()
+            .expect_err("failed reconciliation has an error");
+        let operation_id = self
+            .startup_report()
+            .map_or(0, |report| report.operation_id);
+        let outcome = if self.core.outcome_uncertain() {
+            StartupOutcome::RecoveryRequired {
+                reason: format!("runtime target reconciliation is uncertain: {error:#}"),
+            }
+        } else if startup_failure_waits_for_dependency(error) {
+            StartupOutcome::ReadyDegraded {
+                health: crate::client::convergence::ConvergenceHealth::WaitingDependency,
+                reason: format!(
+                    "runtime target reconciliation is waiting for a dependency: {error:#}"
+                ),
+            }
+        } else if startup_failure_is_retryable(error) {
+            StartupOutcome::ReadyDegraded {
+                health: crate::client::convergence::ConvergenceHealth::RetryScheduled,
+                reason: format!("runtime target reconciliation failed transiently: {error:#}"),
+            }
+        } else {
+            StartupOutcome::ReadyDegraded {
+                health: crate::client::convergence::ConvergenceHealth::Blocked,
+                reason: format!("runtime target reconciliation failed: {error:#}"),
+            }
+        };
+        let report = StartupReport {
+            operation_id,
+            observation: None,
+            outcome,
+        };
+        let allow_receipt_reuse = self
+            .startup
+            .lock_retry_target()
+            .as_ref()
+            .is_some_and(|target| target.allow_receipt_reuse);
+        self.update_startup_retry_target(report, false, allow_receipt_reuse)
+            .await;
     }
 
     async fn uninstall_service(
@@ -487,18 +840,1305 @@ impl CoreLifecycleWorkflow {
             crate::core::service::ipc::get_ipc_state(),
         );
         if let Some(profiles) = &self.profiles {
-            self.core
-                .reconcile_profiles(
-                    clash,
-                    target_core,
-                    run_type,
-                    Arc::new(profiles.load().state.clone()),
-                    app,
-                    Default::default(),
-                )
+            self.reconcile_profiles(Arc::new(profiles.load().state.clone()), Default::default())
                 .await
         } else {
             self.core.reconcile(clash, target_core, run_type).await
+        }
+    }
+
+    /// Runs the reference StartupReconcile owner decision once. Repeated
+    /// requests return the first report and do not probe or mutate again.
+    pub(super) async fn startup_reconcile(
+        &self,
+        operation_id: u64,
+        transition: Box<dyn ServiceTransitionLease>,
+    ) -> StartupReport {
+        if let Some(report) = self.startup.lock_report().clone() {
+            return report;
+        }
+
+        self.mark_startup_owner_unproven();
+        let report = self
+            .startup_reconcile_once(operation_id, transition, false)
+            .await;
+        let report = self.update_startup_retry_target(report, false, false).await;
+        *self.startup.lock_report() = Some(report.clone());
+        report
+    }
+
+    pub(super) async fn recover_startup(
+        &self,
+        operation_id: u64,
+        transition: Box<dyn ServiceTransitionLease>,
+    ) -> StartupReport {
+        self.mark_startup_owner_unproven();
+        let report = self
+            .startup_reconcile_once(operation_id, transition, true)
+            .await;
+        let report = self.update_startup_retry_target(report, false, true).await;
+        let mut startup_report = self.startup.lock_report();
+        if startup_report.is_none() {
+            *startup_report = Some(report.clone());
+        }
+        report
+    }
+
+    pub(super) async fn retry_startup(
+        &self,
+        operation_id: u64,
+        identity: String,
+        transition: Box<dyn ServiceTransitionLease>,
+    ) -> StartupReport {
+        let allow_receipt_reuse = {
+            let retry_target = self.startup.lock_retry_target();
+            retry_target.as_ref().and_then(|target| {
+                (target.identity == identity
+                    && target.health == crate::client::convergence::ConvergenceHealth::Pending)
+                    .then_some(target.allow_receipt_reuse)
+            })
+        };
+        let Some(allow_receipt_reuse) = allow_receipt_reuse else {
+            return self.startup_report().unwrap_or(StartupReport {
+                operation_id,
+                observation: None,
+                outcome: StartupOutcome::Ready,
+            });
+        };
+        self.mark_startup_owner_unproven();
+        let report = self
+            .startup_reconcile_once(operation_id, transition, allow_receipt_reuse)
+            .await;
+        self.update_startup_retry_target(report, true, allow_receipt_reuse)
+            .await
+    }
+
+    async fn recovery_receipt_matches(
+        &self,
+        current: &CoreStatusSnapshot,
+        desired: crate::core::actor_v2::control_endpoint::ExecutionHost,
+        allow_receipt_reuse: bool,
+    ) -> Result<bool, String> {
+        if !allow_receipt_reuse || !matches!(current.state, CoreState::Running) {
+            return Ok(false);
+        }
+        let receipt = match self.core.active_runtime_receipt().await {
+            Ok(Some(receipt)) => receipt,
+            Ok(None) => return Ok(false),
+            Err(error) => {
+                tracing::debug!(%error, "startup recovery cannot verify an active runtime receipt");
+                return Ok(false);
+            }
+        };
+        let identity = match self.startup_target_identity().await {
+            Ok(identity) => identity,
+            Err(error) => {
+                tracing::debug!(%error, "startup recovery cannot identify the committed runtime target");
+                return Ok(false);
+            }
+        };
+        if receipt.host != desired
+            || receipt.run_intent
+                != crate::client::application_workflow::policy::CoreRunIntent::Running
+            || receipt.target.as_deref() != Some(identity.as_str())
+        {
+            return Ok(false);
+        }
+
+        let observed = self.core.status().await.map_err(|error| {
+            format!("could not recheck the runtime after receipt verification: {error:#}")
+        })?;
+        if !same_core_status(current, &observed) {
+            return Err(
+                "the Core owner changed while the recovery receipt was being verified".into(),
+            );
+        }
+        // `CoreStatusSnapshot` intentionally carries only lifecycle state and
+        // timestamp. A shared Service Core can receive an in-place revision
+        // update without changing either, so the final proof must query the
+        // host again through the adapter that validates the complete applied
+        // revision, source hash, epoch, and core kind.
+        let revalidated =
+            self.core.active_runtime_receipt().await.map_err(|error| {
+                format!("could not revalidate the running Core receipt: {error:#}")
+            })?;
+        if !revalidated
+            .as_ref()
+            .is_some_and(|current| Arc::ptr_eq(&receipt, current))
+        {
+            return Ok(false);
+        }
+        Ok(true)
+    }
+
+    async fn confirm_local_owner_stopped(
+        &self,
+        current: &CoreStatusSnapshot,
+    ) -> Result<(), StartupOwnerFailure> {
+        let before_stop = self.core.status().await.map_err(|error| {
+            StartupOwnerFailure::WaitingDependency(format!(
+                "could not refresh the Local Core owner: {error:#}"
+            ))
+        })?;
+        if !same_core_status(current, &before_stop)
+            || !matches!(before_stop.state, CoreState::Running)
+        {
+            return Err(StartupOwnerFailure::WaitingDependency(
+                "the Local Core owner changed before it could be stopped".into(),
+            ));
+        }
+        let stop_result = self.core.stop().await;
+        if self.core.outcome_uncertain() {
+            return Err(StartupOwnerFailure::RecoveryRequired(
+                "the Local Core stop outcome is uncertain".into(),
+            ));
+        }
+        let stopped = match self.core.status().await {
+            Ok(stopped) => stopped,
+            Err(error) => {
+                return Err(match stop_result {
+                    Err(stop_error) => StartupOwnerFailure::stop_rejected(
+                        stop_error,
+                        self.core.outcome_uncertain(),
+                    ),
+                    Ok(()) => StartupOwnerFailure::WaitingDependency(format!(
+                        "could not confirm the Local Core stop: {error:#}"
+                    )),
+                });
+            }
+        };
+        let stop_confirmed = stopped.run_type == current.run_type
+            && stopped.state_changed_at > 0
+            && matches!(&stopped.state, CoreState::Stopped(_));
+        if stop_confirmed {
+            if let Err(error) = stop_result
+                && !startup_stop_error_is_idempotent(&error)
+            {
+                return Err(StartupOwnerFailure::stop_rejected(
+                    error,
+                    self.core.outcome_uncertain(),
+                ));
+            }
+        } else {
+            if let Err(error) = stop_result {
+                return Err(StartupOwnerFailure::stop_rejected(
+                    error,
+                    self.core.outcome_uncertain(),
+                ));
+            }
+            return Err(StartupOwnerFailure::WaitingDependency(format!(
+                "the Local Core did not publish a confirmed stopped state: {stopped:?}"
+            )));
+        }
+        self.confirm_local_stopped_baseline(&stopped)
+            .await
+            .map_err(StartupOwnerFailure::WaitingDependency)
+    }
+
+    async fn confirm_local_stopped_baseline(
+        &self,
+        stopped: &CoreStatusSnapshot,
+    ) -> Result<(), String> {
+        if stopped.state_changed_at == 0 {
+            return Ok(());
+        }
+        let baseline = self
+            .core
+            .observe_runtime_baseline()
+            .await
+            .map_err(|error| {
+                format!("the Local Core stop lacks authoritative state evidence: {error:#}")
+            })?;
+        if !matches!(
+            baseline,
+            crate::client::application_workflow::mutation::KnownRuntimeState::Stopped
+        ) {
+            return Err(format!(
+                "the Local Core runtime is not proven stopped after retirement: {baseline:?}"
+            ));
+        }
+        let confirmed = self
+            .core
+            .status()
+            .await
+            .map_err(|error| format!("could not recheck the stopped Local Core: {error:#}"))?;
+        if !same_core_status(stopped, &confirmed)
+            || !matches!(&confirmed.state, CoreState::Stopped(_))
+        {
+            return Err("the Local Core state changed after its stop was confirmed".into());
+        }
+        Ok(())
+    }
+
+    async fn recover_service_error_stop(
+        &self,
+        service: ServiceEvidence,
+        previous_generation: u64,
+    ) -> Result<(ServiceEvidence, u64), StartupOwnerFailure> {
+        if !matches!(
+            &service,
+            ServiceEvidence::CoreStoppedWithReason {
+                runtime_owned: true,
+                ..
+            }
+        ) {
+            return Ok((service, previous_generation));
+        }
+
+        self.core
+            .recover_service_quarantine()
+            .await
+            .map_err(|error| {
+                StartupOwnerFailure::stop_rejected(error, self.core.outcome_uncertain())
+            })?;
+
+        let (service, fresh_generation) = self.service_evidence().await;
+        if fresh_generation != previous_generation || !service.proves_runtime_owner() {
+            return Err(StartupOwnerFailure::RecoveryRequired(
+                "the Service runtime identity changed during quarantine recovery; startup will not hand off another host".into(),
+            ));
+        }
+        let service = match service {
+            ServiceEvidence::CoreStoppedWithReason {
+                ready,
+                phase,
+                runtime_owned: true,
+                ..
+            } => {
+                // Recover returns only after the manager has cleared its
+                // quarantined epochs; some harmless stop reasons remain in
+                // the status snapshot when there was no quarantine.
+                ServiceEvidence::CoreStopped {
+                    ready,
+                    phase,
+                    runtime_owned: true,
+                }
+            }
+            service => service,
+        };
+        Ok((service, fresh_generation))
+    }
+
+    async fn retire_service_startup_owner(
+        &self,
+        service: &ServiceEvidence,
+        require_ready_stopped: bool,
+    ) -> Result<ServiceEvidence, StartupOwnerFailure> {
+        let expected_owner = service.expected_owner().map_err(|reason| {
+            StartupOwnerFailure::RecoveryRequired(format!(
+                "the Service Core owner cannot be fenced for retirement: {reason}"
+            ))
+        })?;
+        let stop_result = self.core.retire_service_core(expected_owner).await;
+        if self.core.outcome_uncertain() {
+            return Err(StartupOwnerFailure::RecoveryRequired(
+                "the Service Core stop outcome is uncertain".into(),
+            ));
+        }
+        let (after_stop, _) = self.service_evidence().await;
+        let confirmed = if require_ready_stopped {
+            matches!(
+                &after_stop,
+                ServiceEvidence::CoreStopped { ready: true, .. }
+            )
+        } else {
+            after_stop.proves_no_owned_core()
+        };
+        if confirmed {
+            if let Err(error) = stop_result
+                && !startup_stop_error_is_idempotent(&error)
+            {
+                return Err(StartupOwnerFailure::stop_rejected(
+                    error,
+                    self.core.outcome_uncertain(),
+                ));
+            }
+            return Ok(after_stop);
+        }
+        if matches!(&after_stop, ServiceEvidence::Unreadable { .. }) {
+            if let Err(error) = stop_result {
+                return Err(StartupOwnerFailure::stop_rejected(
+                    error,
+                    self.core.outcome_uncertain(),
+                ));
+            }
+            return Err(StartupOwnerFailure::WaitingDependency(format!(
+                "the Service Core stop could not be confirmed by a fresh probe: {after_stop:?}"
+            )));
+        }
+        if let Err(error) = stop_result {
+            return Err(StartupOwnerFailure::stop_rejected(
+                error,
+                self.core.outcome_uncertain(),
+            ));
+        }
+        Err(StartupOwnerFailure::WaitingDependency(format!(
+            "the Service Core stop was accepted but a fresh probe did not confirm release: {after_stop:?}"
+        )))
+    }
+
+    async fn startup_reconcile_once(
+        &self,
+        operation_id: u64,
+        _transition: Box<dyn ServiceTransitionLease>,
+        allow_receipt_reuse: bool,
+    ) -> StartupReport {
+        use crate::core::actor_v2::control_endpoint::ExecutionHost;
+
+        self.mark_startup_owner_unproven();
+        let app = self.application.get_typed();
+        let current = match self.core.status().await {
+            Ok(current) => current,
+            Err(error) => {
+                return StartupReport {
+                    operation_id,
+                    observation: None,
+                    outcome: StartupOutcome::ReadyDegraded {
+                        health: crate::client::convergence::ConvergenceHealth::WaitingDependency,
+                        reason: format!("the current Core owner could not be read: {error:#}"),
+                    },
+                };
+            }
+        };
+        let initial_owner = host_for_run_type(current.run_type);
+        let runtime = Some(runtime_evidence(&current));
+
+        if self.core.outcome_uncertain() {
+            return StartupReport {
+                operation_id,
+                observation: Some(StartupObservation {
+                    desired: effective_host(app.enable_service_mode, None, initial_owner),
+                    service: None,
+                    runtime,
+                }),
+                outcome: StartupOutcome::RecoveryRequired {
+                    reason: "a previous Core mutation has an uncertain outcome; startup will not issue another mutation".into(),
+                },
+            };
+        }
+
+        if !self.service.command_settled().await {
+            return StartupReport {
+                operation_id,
+                observation: Some(StartupObservation {
+                    desired: effective_host(app.enable_service_mode, None, initial_owner),
+                    service: None,
+                    runtime,
+                }),
+                outcome: StartupOutcome::ReadyDegraded {
+                    health: crate::client::convergence::ConvergenceHealth::WaitingDependency,
+                    reason: "a Service command started earlier is still running".into(),
+                },
+            };
+        }
+
+        let (service, service_ready_generation) = self.service_evidence().await;
+        let (service, service_ready_generation) = match self
+            .recover_service_error_stop(service.clone(), service_ready_generation)
+            .await
+        {
+            Ok(recovered) => recovered,
+            Err(failure) => {
+                return self.startup_owner_failure_report(
+                    operation_id,
+                    StartupObservation {
+                        desired: effective_host(
+                            app.enable_service_mode,
+                            service.phase().readiness(),
+                            initial_owner,
+                        ),
+                        service: Some(service),
+                        runtime,
+                    },
+                    failure,
+                );
+            }
+        };
+        let current = match self.core.status().await {
+            Ok(current) => current,
+            Err(error) => {
+                return StartupReport {
+                    operation_id,
+                    observation: Some(StartupObservation {
+                        desired: effective_host(
+                            app.enable_service_mode,
+                            service.phase().readiness(),
+                            initial_owner,
+                        ),
+                        service: Some(service),
+                        runtime: None,
+                    }),
+                    outcome: StartupOutcome::ReadyDegraded {
+                        health: crate::client::convergence::ConvergenceHealth::WaitingDependency,
+                        reason: format!("the Core owner could not be refreshed: {error:#}"),
+                    },
+                };
+            }
+        };
+        let initial_owner = host_for_run_type(current.run_type);
+        let runtime = Some(runtime_evidence(&current));
+        let failed_generation = self
+            .service_failed_generation_shared
+            .load(Ordering::Acquire);
+        let service_readiness =
+            if failed_generation != 0 && failed_generation == service_ready_generation {
+                Some(false)
+            } else {
+                service.phase().readiness()
+            };
+        let desired = if matches!(service, ServiceEvidence::ForeignCore { .. }) {
+            ExecutionHost::Local
+        } else {
+            effective_host(app.enable_service_mode, service_readiness, initial_owner)
+        };
+
+        // The legacy Core status projection uses timestamp zero when the
+        // selected Service endpoint could not answer. Do not read its
+        // synthetic Stopped state as a proof that the owner is idle.
+        if initial_owner == ExecutionHost::Service
+            && runtime.as_ref().is_some_and(|r| r.state.is_none())
+        {
+            return StartupReport {
+                operation_id,
+                observation: Some(StartupObservation {
+                    desired,
+                    service: Some(service),
+                    runtime,
+                }),
+                outcome: StartupOutcome::ReadyDegraded {
+                    health: crate::client::convergence::ConvergenceHealth::WaitingDependency,
+                    reason: "the Service host did not publish a current Core state".into(),
+                },
+            };
+        }
+
+        let plan = plan_owner(desired, initial_owner, &service);
+        let mut current = current;
+        let mut service = service;
+        match plan {
+            OwnerPlan::WaitForService { phase } => {
+                return StartupReport {
+                    operation_id,
+                    observation: Some(StartupObservation {
+                        desired,
+                        service: Some(service),
+                        runtime,
+                    }),
+                    outcome: StartupOutcome::ReadyDegraded {
+                        health: crate::client::convergence::ConvergenceHealth::WaitingDependency,
+                        reason: format!(
+                            "the Service host is {phase:?}; startup waits for readiness"
+                        ),
+                    },
+                };
+            }
+            OwnerPlan::Unproven { phase } => {
+                return StartupReport {
+                    operation_id,
+                    observation: Some(StartupObservation {
+                        desired,
+                        service: Some(service),
+                        runtime,
+                    }),
+                    outcome: StartupOutcome::ReadyDegraded {
+                        health: crate::client::convergence::ConvergenceHealth::RecoveryRequired,
+                        reason: format!(
+                            "the Service host ({phase:?}) may still hold a Core, so startup did not start another host"
+                        ),
+                    },
+                };
+            }
+            OwnerPlan::RetireServiceThenLocal => {
+                service = match self.retire_service_startup_owner(&service, false).await {
+                    Ok(service) => service,
+                    Err(failure) => {
+                        return self.startup_owner_failure_report(
+                            operation_id,
+                            StartupObservation {
+                                desired,
+                                service: Some(service),
+                                runtime,
+                            },
+                            failure,
+                        );
+                    }
+                };
+                current = match self.core.status().await {
+                    Ok(current) => current,
+                    Err(error) => {
+                        return StartupReport {
+                            operation_id,
+                            observation: Some(StartupObservation {
+                                desired,
+                                service: Some(service),
+                                runtime: None,
+                            }),
+                            outcome: StartupOutcome::ReadyDegraded {
+                                health:
+                                    crate::client::convergence::ConvergenceHealth::WaitingDependency,
+                                reason: format!(
+                                    "the Local Core owner could not be refreshed after Service retirement: {error:#}"
+                                ),
+                            },
+                        };
+                    }
+                };
+            }
+            OwnerPlan::HandBackToLocal => {
+                match &service {
+                    ServiceEvidence::CoreRunning { .. } => {
+                        service = match self.retire_service_startup_owner(&service, false).await {
+                            Ok(service) => service,
+                            Err(failure) => {
+                                return self.startup_owner_failure_report(
+                                    operation_id,
+                                    StartupObservation {
+                                        desired,
+                                        service: Some(service),
+                                        runtime,
+                                    },
+                                    failure,
+                                );
+                            }
+                        };
+                    }
+                    ServiceEvidence::Absent { .. }
+                    | ServiceEvidence::CoreStopped { .. }
+                    | ServiceEvidence::ForeignCore { .. } => {}
+                    ServiceEvidence::CoreStoppedWithReason { .. }
+                    | ServiceEvidence::Unreadable { .. } => {
+                        return StartupReport {
+                            operation_id,
+                            observation: Some(StartupObservation {
+                                desired,
+                                service: Some(service),
+                                runtime,
+                            }),
+                            outcome: StartupOutcome::RecoveryRequired {
+                                reason: "the Service Core owner is unreadable; startup will not stop Service or start Local".into(),
+                            },
+                        };
+                    }
+                }
+                if let Err(error) = self.core.select_execution_host(ExecutionHost::Local).await {
+                    return self
+                        .startup_failure(
+                            operation_id,
+                            StartupObservation {
+                                desired,
+                                service: Some(service),
+                                runtime,
+                            },
+                            error,
+                        )
+                        .await;
+                }
+                current = match self.core.status().await {
+                    Ok(current) => current,
+                    Err(error) => {
+                        return StartupReport {
+                            operation_id,
+                            observation: Some(StartupObservation {
+                                desired,
+                                service: Some(service),
+                                runtime: None,
+                            }),
+                            outcome: StartupOutcome::ReadyDegraded {
+                                health:
+                                    crate::client::convergence::ConvergenceHealth::WaitingDependency,
+                                reason: format!(
+                                    "the Local Core owner could not be read after handback: {error:#}"
+                                ),
+                            },
+                        };
+                    }
+                };
+            }
+            OwnerPlan::Owned => {
+                if initial_owner == ExecutionHost::Service
+                    && matches!(
+                        &service,
+                        ServiceEvidence::Unreadable { .. } | ServiceEvidence::ForeignCore { .. }
+                    )
+                {
+                    return StartupReport {
+                        operation_id,
+                        observation: Some(StartupObservation {
+                            desired,
+                            service: Some(service),
+                            runtime,
+                        }),
+                        outcome: StartupOutcome::RecoveryRequired {
+                            reason: "the current Service Core owner is not verified; startup did not submit a Service mutation".into(),
+                        },
+                    };
+                }
+                if initial_owner == ExecutionHost::Service {
+                    let state_matches_service = matches!(
+                        (
+                            &service,
+                            runtime.as_ref().and_then(|runtime| runtime.state.as_ref())
+                        ),
+                        (
+                            ServiceEvidence::CoreRunning { .. },
+                            Some(CoreState::Running)
+                        ) | (
+                            ServiceEvidence::CoreStopped { .. },
+                            Some(CoreState::Stopped(_))
+                        )
+                    );
+                    if !state_matches_service {
+                        return StartupReport {
+                            operation_id,
+                            observation: Some(StartupObservation {
+                                desired,
+                                service: Some(service),
+                                runtime,
+                            }),
+                            outcome: StartupOutcome::ReadyDegraded {
+                                health: crate::client::convergence::ConvergenceHealth::WaitingDependency,
+                                reason: "the Service probe and Core status do not describe the same settled owner state".into(),
+                            },
+                        };
+                    }
+                }
+            }
+            OwnerPlan::AdoptService => {
+                if matches!(
+                    &service,
+                    ServiceEvidence::ForeignCore { .. } | ServiceEvidence::Unreadable { .. }
+                ) {
+                    return StartupReport {
+                        operation_id,
+                        observation: Some(StartupObservation {
+                            desired,
+                            service: Some(service),
+                            runtime,
+                        }),
+                        outcome: StartupOutcome::RecoveryRequired {
+                            reason:
+                                "the Service Core owner is not verified; startup did not adopt it"
+                                    .into(),
+                        },
+                    };
+                }
+                if matches!(current.state, CoreState::Running) {
+                    if let Err(failure) = self.confirm_local_owner_stopped(&current).await {
+                        return self.startup_owner_failure_report(
+                            operation_id,
+                            StartupObservation {
+                                desired,
+                                service: Some(service),
+                                runtime,
+                            },
+                            failure,
+                        );
+                    }
+                } else if current.state_changed_at > 0
+                    && let Err(reason) = self.confirm_local_stopped_baseline(&current).await
+                {
+                    return StartupReport {
+                        operation_id,
+                        observation: Some(StartupObservation {
+                            desired,
+                            service: Some(service),
+                            runtime,
+                        }),
+                        outcome: StartupOutcome::ReadyDegraded {
+                            health:
+                                crate::client::convergence::ConvergenceHealth::WaitingDependency,
+                            reason,
+                        },
+                    };
+                }
+                if let Err(error) = self
+                    .core
+                    .select_execution_host(ExecutionHost::Service)
+                    .await
+                {
+                    return self
+                        .startup_failure(
+                            operation_id,
+                            StartupObservation {
+                                desired,
+                                service: Some(service),
+                                runtime,
+                            },
+                            error,
+                        )
+                        .await;
+                }
+                current = match self.core.status().await {
+                    Ok(current) => current,
+                    Err(error) => {
+                        return StartupReport {
+                            operation_id,
+                            observation: Some(StartupObservation {
+                                desired,
+                                service: Some(service),
+                                runtime: None,
+                            }),
+                            outcome: StartupOutcome::ReadyDegraded {
+                                health:
+                                    crate::client::convergence::ConvergenceHealth::WaitingDependency,
+                                reason: format!(
+                                    "the Service Core owner could not be read after adoption: {error:#}"
+                                ),
+                            },
+                        };
+                    }
+                };
+                let (fresh_service, _) = self.service_evidence().await;
+                service = fresh_service;
+                if matches!(
+                    &service,
+                    ServiceEvidence::ForeignCore { .. } | ServiceEvidence::Unreadable { .. }
+                ) {
+                    return StartupReport {
+                        operation_id,
+                        observation: Some(StartupObservation {
+                            desired,
+                            service: Some(service),
+                            runtime: Some(runtime_evidence(&current)),
+                        }),
+                        outcome: StartupOutcome::RecoveryRequired {
+                            reason: "the adopted Service Core owner changed or is not verified"
+                                .into(),
+                        },
+                    };
+                }
+            }
+        };
+
+        let owner = host_for_run_type(current.run_type);
+        let runtime = Some(runtime_evidence(&current));
+        if owner != desired {
+            return StartupReport {
+                operation_id,
+                observation: Some(StartupObservation {
+                    desired,
+                    service: Some(service),
+                    runtime,
+                }),
+                outcome: StartupOutcome::RecoveryRequired {
+                    reason: format!(
+                        "startup handoff selected {owner:?}, but the committed target requires {desired:?}"
+                    ),
+                },
+            };
+        }
+        if owner == ExecutionHost::Service {
+            let state_matches_service = matches!(
+                (
+                    &service,
+                    runtime.as_ref().and_then(|runtime| runtime.state.as_ref())
+                ),
+                (
+                    ServiceEvidence::CoreRunning { .. },
+                    Some(CoreState::Running)
+                ) | (
+                    ServiceEvidence::CoreStopped { .. },
+                    Some(CoreState::Stopped(_))
+                )
+            );
+            if !state_matches_service {
+                return StartupReport {
+                    operation_id,
+                    observation: Some(StartupObservation {
+                        desired,
+                        service: Some(service),
+                        runtime,
+                    }),
+                    outcome: StartupOutcome::ReadyDegraded {
+                        health: crate::client::convergence::ConvergenceHealth::WaitingDependency,
+                        reason: "the Service probe and selected Core status do not describe the same settled owner state".into(),
+                    },
+                };
+            }
+        }
+
+        // Every settled owner plan now enters the same S3 receipt/retirement
+        // checks before the committed target is applied in S4.
+        let is_running = runtime
+            .as_ref()
+            .is_some_and(|runtime| matches!(runtime.state.as_ref(), Some(CoreState::Running)));
+        if is_running {
+            match self
+                .recovery_receipt_matches(&current, desired, allow_receipt_reuse)
+                .await
+            {
+                Ok(true) => {
+                    self.mark_startup_owner_proven();
+                    return StartupReport {
+                        operation_id,
+                        observation: Some(StartupObservation {
+                            desired,
+                            service: Some(service),
+                            runtime,
+                        }),
+                        outcome: StartupOutcome::Ready,
+                    };
+                }
+                Ok(false) => {}
+                Err(reason) => {
+                    return StartupReport {
+                        operation_id,
+                        observation: Some(StartupObservation {
+                            desired,
+                            service: Some(service),
+                            runtime,
+                        }),
+                        outcome: StartupOutcome::ReadyDegraded {
+                            health:
+                                crate::client::convergence::ConvergenceHealth::WaitingDependency,
+                            reason,
+                        },
+                    };
+                }
+            }
+
+            let retired = if desired == ExecutionHost::Service {
+                match self.retire_service_startup_owner(&service, true).await {
+                    Ok(fresh_service) => {
+                        service = fresh_service;
+                        Ok(())
+                    }
+                    Err(failure) => Err(failure),
+                }
+            } else {
+                self.confirm_local_owner_stopped(&current).await
+            };
+            if let Err(failure) = retired {
+                return self.startup_owner_failure_report(
+                    operation_id,
+                    StartupObservation {
+                        desired,
+                        service: Some(service),
+                        runtime,
+                    },
+                    failure,
+                );
+            }
+        } else if desired == ExecutionHost::Local
+            && runtime.as_ref().is_some_and(|runtime| {
+                runtime.state_changed_at > 0
+                    && matches!(runtime.state.as_ref(), Some(CoreState::Stopped(_)))
+            })
+            && let Err(reason) = self.confirm_local_stopped_baseline(&current).await
+        {
+            return StartupReport {
+                operation_id,
+                observation: Some(StartupObservation {
+                    desired,
+                    service: Some(service),
+                    runtime,
+                }),
+                outcome: StartupOutcome::ReadyDegraded {
+                    health: crate::client::convergence::ConvergenceHealth::WaitingDependency,
+                    reason,
+                },
+            };
+        }
+
+        self.mark_startup_owner_proven();
+        let mut result = self
+            .reconcile_application(
+                self.application.get_typed(),
+                desired == ExecutionHost::Service,
+            )
+            .await;
+
+        if desired == ExecutionHost::Service
+            && initial_owner == ExecutionHost::Service
+            && result.is_err()
+            && !self.core.outcome_uncertain()
+        {
+            self.service_failed_generation_shared
+                .store(service_ready_generation, Ordering::Release);
+            match self.release_service_owner().await {
+                Ok(fresh_service) => {
+                    self.mark_startup_owner_proven();
+                    result = self
+                        .reconcile_application_after_service_release(self.application.get_typed())
+                        .await;
+                    return self.finish_startup_report(
+                        operation_id,
+                        StartupObservation {
+                            desired: ExecutionHost::Local,
+                            service: Some(fresh_service),
+                            runtime,
+                        },
+                        result,
+                    );
+                }
+                Err(reason) => {
+                    self.mark_startup_owner_unproven();
+                    return StartupReport {
+                        operation_id,
+                        observation: Some(StartupObservation {
+                            desired,
+                            service: Some(service),
+                            runtime,
+                        }),
+                        outcome: StartupOutcome::ReadyDegraded {
+                            health:
+                                crate::client::convergence::ConvergenceHealth::WaitingDependency,
+                            reason: format!(
+                                "Service was ready but its Core did not reconcile, and Local fallback could not prove release: {reason}"
+                            ),
+                        },
+                    };
+                }
+            }
+        }
+
+        self.finish_startup_report(
+            operation_id,
+            StartupObservation {
+                desired,
+                service: Some(service),
+                runtime,
+            },
+            result,
+        )
+    }
+
+    fn finish_startup_report(
+        &self,
+        operation_id: u64,
+        observation: StartupObservation,
+        result: anyhow::Result<()>,
+    ) -> StartupReport {
+        let outcome = match result {
+            Ok(()) => StartupOutcome::Ready,
+            Err(error) if self.core.outcome_uncertain() => {
+                self.mark_startup_owner_unproven();
+                StartupOutcome::RecoveryRequired {
+                    reason: format!(
+                        "startup Core reconciliation has an uncertain outcome: {error:#}"
+                    ),
+                }
+            }
+            Err(error) if startup_failure_waits_for_dependency(&error) => {
+                StartupOutcome::ReadyDegraded {
+                    health: crate::client::convergence::ConvergenceHealth::WaitingDependency,
+                    reason: format!(
+                        "startup Core reconciliation is waiting for a dependency: {error:#}"
+                    ),
+                }
+            }
+            Err(error) if startup_failure_is_retryable(&error) => StartupOutcome::ReadyDegraded {
+                health: crate::client::convergence::ConvergenceHealth::RetryScheduled,
+                reason: format!("startup Core reconciliation failed transiently: {error:#}"),
+            },
+            Err(error) => StartupOutcome::ReadyDegraded {
+                health: crate::client::convergence::ConvergenceHealth::Blocked,
+                reason: format!("startup Core reconciliation failed: {error:#}"),
+            },
+        };
+        if outcome == StartupOutcome::Ready
+            && (observation.desired
+                == crate::core::actor_v2::control_endpoint::ExecutionHost::Service
+                || !self.application.get_typed().enable_service_mode)
+        {
+            self.service_failed_generation_shared
+                .store(0, Ordering::Release);
+        }
+        StartupReport {
+            operation_id,
+            observation: Some(observation),
+            outcome,
+        }
+    }
+
+    async fn capture_reconcile_target(
+        &self,
+        app: ChimeraAppConfig,
+        clash: chimera_config::clash::config::ClashConfig,
+        profiles: Arc<chimera_config::profile::Profiles>,
+        staged_content: std::collections::BTreeMap<String, String>,
+    ) -> anyhow::Result<(
+        String,
+        ChimeraAppConfig,
+        chimera_config::clash::config::ClashConfig,
+        Arc<chimera_config::profile::Profiles>,
+        std::collections::BTreeMap<String, String>,
+    )> {
+        let inputs = self
+            .capture_profile_inputs_for(app, clash, profiles, staged_content)
+            .await?;
+        let target = inputs.target_key()?;
+        let (app, clash, profiles, staged_content) = inputs.into_parts().map_err(|error| {
+            anyhow::Error::new(
+                crate::client::application_workflow::mutation::RuntimeCheckFailure::
+                    candidate_unavailable(error.to_string()),
+            )
+        })?;
+        Ok((target, app, clash, profiles, staged_content))
+    }
+
+    async fn update_startup_retry_target(
+        &self,
+        mut report: StartupReport,
+        automatic: bool,
+        allow_receipt_reuse: bool,
+    ) -> StartupReport {
+        match &report.outcome {
+            StartupOutcome::Ready => {
+                *self.startup.lock_retry_target() = None;
+                return report;
+            }
+            StartupOutcome::RecoveryRequired { .. } | StartupOutcome::Unsettled { .. } => {
+                if let Some(target) = self.startup.lock_retry_target().as_mut() {
+                    target.health = crate::client::convergence::ConvergenceHealth::RecoveryRequired;
+                    target.next_attempt = None;
+                }
+                return report;
+            }
+            StartupOutcome::ReadyDegraded { .. } => {}
+        }
+
+        let identity = match self.startup_target_identity().await {
+            Ok(identity) => identity,
+            Err(error) => {
+                let reason = format!(
+                    "{}; committed runtime target identity is unavailable: {error:#}",
+                    report
+                        .outcome
+                        .failure_reason()
+                        .unwrap_or("startup did not converge")
+                );
+                if let Some(identity) = self.unresolved_startup_target_identity().await {
+                    let mut retry_target = self.startup.lock_retry_target();
+                    if retry_target
+                        .as_ref()
+                        .is_none_or(|target| target.identity != identity)
+                    {
+                        *retry_target =
+                            Some(StartupRetryTarget::new(identity, allow_receipt_reuse));
+                    }
+                    if let Some(target) = retry_target.as_mut() {
+                        report.outcome = target.schedule_dependency(reason);
+                        return report;
+                    }
+                }
+                report.outcome = StartupOutcome::ReadyDegraded {
+                    health: crate::client::convergence::ConvergenceHealth::Blocked,
+                    reason,
+                };
+                return report;
+            }
+        };
+        let mut retry_target = self.startup.lock_retry_target();
+        if retry_target
+            .as_ref()
+            .is_none_or(|target| target.identity != identity)
+        {
+            *retry_target = Some(StartupRetryTarget::new(identity, allow_receipt_reuse));
+        }
+        let target = retry_target
+            .as_mut()
+            .expect("startup retry target was initialized");
+        target.allow_receipt_reuse = allow_receipt_reuse;
+        let reason = report
+            .outcome
+            .failure_reason()
+            .unwrap_or("startup did not converge")
+            .to_owned();
+        let outcome = match report.outcome {
+            StartupOutcome::ReadyDegraded {
+                health:
+                    crate::client::convergence::ConvergenceHealth::WaitingDependency
+                    | crate::client::convergence::ConvergenceHealth::RecoveryRequired,
+                ..
+            } => target.schedule_dependency(reason),
+            StartupOutcome::ReadyDegraded {
+                health: crate::client::convergence::ConvergenceHealth::RetryScheduled,
+                ..
+            } => target.schedule_application(reason, automatic),
+            StartupOutcome::ReadyDegraded {
+                health: crate::client::convergence::ConvergenceHealth::Blocked,
+                ..
+            } => target.block(reason),
+            StartupOutcome::ReadyDegraded { .. } => target.block(reason),
+            StartupOutcome::Ready
+            | StartupOutcome::RecoveryRequired { .. }
+            | StartupOutcome::Unsettled { .. } => unreachable!("handled above"),
+        };
+        report.outcome = outcome;
+        report
+    }
+
+    async fn capture_profile_inputs_for(
+        &self,
+        app: ChimeraAppConfig,
+        clash: chimera_config::clash::config::ClashConfig,
+        profiles: Arc<chimera_config::profile::Profiles>,
+        staged_content: std::collections::BTreeMap<String, String>,
+    ) -> anyhow::Result<RuntimeInputs> {
+        let profiles_dir = crate::utils::dirs::app_profiles_dir()?;
+        let source = FsProfileContentSource::new(profiles_dir);
+        let content = FrozenProfileContent::capture_content(&profiles, &source, staged_content);
+        Ok(RuntimeInputs {
+            app,
+            clash,
+            profiles,
+            content,
+        })
+    }
+
+    pub(super) async fn startup_target_identity(&self) -> anyhow::Result<String> {
+        if let Some(profiles) = &self.profiles {
+            let profiles = Arc::new(profiles.load().state.clone());
+            let inputs = self
+                .capture_profile_inputs_for(
+                    self.application.get_typed(),
+                    self.clash.get()?,
+                    profiles,
+                    Default::default(),
+                )
+                .await?;
+            return inputs.target_key();
+        }
+        self.startup_source_identity(None)
+    }
+
+    async fn unresolved_startup_target_identity(&self) -> Option<String> {
+        let profiles = self
+            .profiles
+            .as_ref()
+            .map(|profiles| Arc::new(profiles.load().state.clone()));
+        let identity = self.startup_source_identity(profiles.as_ref()).ok()?;
+        Some(format!("profile-content-unavailable:{identity}"))
+    }
+
+    fn startup_source_identity(
+        &self,
+        profiles: Option<&Arc<chimera_config::profile::Profiles>>,
+    ) -> anyhow::Result<String> {
+        let app = self.application.get_typed();
+        let clash = self.clash.get()?;
+        let app_target = crate::client::application_workflow::impact::application_target(&app)
+            .ok_or_else(|| anyhow::anyhow!("application runtime identity cannot be serialized"))?;
+        let clash_target = crate::client::application_workflow::impact::clash_target(&clash)
+            .ok_or_else(|| anyhow::anyhow!("clash runtime identity cannot be serialized"))?;
+        let profile_target = match profiles {
+            Some(profiles) => crate::client::application_workflow::impact::profiles_target(
+                profiles,
+            )
+            .ok_or_else(|| anyhow::anyhow!("profiles runtime identity cannot be serialized"))?,
+            None => "no-profile-runtime".into(),
+        };
+        let projection = serde_json::to_vec(&(
+            app_target,
+            clash_target,
+            profile_target,
+            "profile-content-unavailable",
+        ))?;
+        Ok(crate::state::profiles::payload_digest(&projection))
+    }
+
+    async fn release_service_owner(&self) -> Result<ServiceEvidence, String> {
+        let (service, _) = self.service_evidence().await;
+        match &service {
+            ServiceEvidence::CoreRunning { .. } => {
+                let expected_owner = service.expected_owner()?;
+                self.core
+                    .retire_service_core(expected_owner)
+                    .await
+                    .map_err(|error| format!("conditional Service Core stop failed: {error:#}"))?;
+                if self.core.outcome_uncertain() {
+                    return Err("the Service Core stop outcome is uncertain".into());
+                }
+                let (after_stop, _) = self.service_evidence().await;
+                if after_stop.proves_no_owned_core() {
+                    Ok(after_stop)
+                } else {
+                    Err(format!(
+                        "a fresh Service probe did not confirm release: {after_stop:?}"
+                    ))
+                }
+            }
+            ServiceEvidence::Absent { .. }
+            | ServiceEvidence::CoreStopped { .. }
+            | ServiceEvidence::ForeignCore { .. } => Ok(service),
+            ServiceEvidence::CoreStoppedWithReason { .. } | ServiceEvidence::Unreadable { .. } => {
+                Err("the fresh Service owner probe was unreadable".into())
+            }
+        }
+    }
+
+    async fn service_evidence(&self) -> (ServiceEvidence, u64) {
+        let Ok(info) = self.service.probe().await else {
+            let generation = self
+                .service_status
+                .as_ref()
+                .map(|status| status.borrow().ready_generation)
+                .unwrap_or_default();
+            return (
+                ServiceEvidence::Unreadable {
+                    phase: chimera_core::actor_v2::service_policy::ServicePhase::Unknown,
+                },
+                generation,
+            );
+        };
+        let runtime_owned = self.service.runtime_owned(&info);
+        let previous = self
+            .service_status
+            .as_ref()
+            .map(|status| status.borrow().clone())
+            .unwrap_or_else(ServiceHostStatus::probing);
+        let status =
+            previous.observe_probe(info, runtime_owned, Some(self.service.restart_policy()));
+        let generation = status.ready_generation;
+        (ServiceEvidence::from_status(&status), generation)
+    }
+
+    async fn startup_failure(
+        &self,
+        operation_id: u64,
+        observation: StartupObservation,
+        error: anyhow::Error,
+    ) -> StartupReport {
+        self.mark_startup_owner_unproven();
+        let outcome = if self.core.outcome_uncertain() {
+            StartupOutcome::RecoveryRequired {
+                reason: format!("startup owner transition has an uncertain outcome: {error:#}"),
+            }
+        } else if startup_failure_waits_for_dependency(&error) {
+            StartupOutcome::ReadyDegraded {
+                health: crate::client::convergence::ConvergenceHealth::WaitingDependency,
+                reason: format!("startup owner transition is waiting for a dependency: {error:#}"),
+            }
+        } else if startup_failure_is_retryable(&error) {
+            StartupOutcome::ReadyDegraded {
+                health: crate::client::convergence::ConvergenceHealth::RetryScheduled,
+                reason: format!("startup owner transition failed transiently: {error:#}"),
+            }
+        } else {
+            StartupOutcome::ReadyDegraded {
+                health: crate::client::convergence::ConvergenceHealth::Blocked,
+                reason: format!("startup owner transition failed: {error:#}"),
+            }
+        };
+        StartupReport {
+            operation_id,
+            observation: Some(observation),
+            outcome,
+        }
+    }
+
+    fn startup_owner_failure_report(
+        &self,
+        operation_id: u64,
+        observation: StartupObservation,
+        failure: StartupOwnerFailure,
+    ) -> StartupReport {
+        self.mark_startup_owner_unproven();
+        StartupReport {
+            operation_id,
+            observation: Some(observation),
+            outcome: failure.outcome(),
         }
     }
 
@@ -586,6 +2226,26 @@ impl CoreLifecycleWorkflow {
         service_connected: bool,
     ) -> anyhow::Result<()> {
         let clash = self.clash.get()?;
+        let Some(profiles) = &self.profiles else {
+            let target_core = app.core;
+            let run_type = crate::core::RunType::classify(
+                app.enable_service_mode,
+                if service_connected {
+                    crate::core::service::ipc::IpcState::Connected
+                } else {
+                    crate::core::service::ipc::IpcState::Disconnected
+                },
+            );
+            return self.core.reconcile(clash, target_core, run_type).await;
+        };
+        let (target, app, clash, profiles, staged_content) = self
+            .capture_reconcile_target(
+                app,
+                clash,
+                Arc::new(profiles.load().state.clone()),
+                Default::default(),
+            )
+            .await?;
         let target_core = app.core;
         let run_type = crate::core::RunType::classify(
             app.enable_service_mode,
@@ -595,20 +2255,48 @@ impl CoreLifecycleWorkflow {
                 crate::core::service::ipc::IpcState::Disconnected
             },
         );
-        if let Some(profiles) = &self.profiles {
-            self.core
-                .reconcile_profiles(
-                    clash,
-                    target_core,
-                    run_type,
-                    Arc::new(profiles.load().state.clone()),
-                    app,
-                    Default::default(),
-                )
-                .await
-        } else {
-            self.core.reconcile(clash, target_core, run_type).await
-        }
+        self.core
+            .reconcile_profiles(
+                clash,
+                target_core,
+                run_type,
+                profiles,
+                app,
+                staged_content,
+                Some(target),
+            )
+            .await
+    }
+
+    async fn reconcile_application_after_service_release(
+        &self,
+        app: ChimeraAppConfig,
+    ) -> anyhow::Result<()> {
+        let clash = self.clash.get()?;
+        let Some(profiles) = &self.profiles else {
+            return self
+                .core
+                .reconcile_after_service_release(clash, app.core)
+                .await;
+        };
+        let (target, app, clash, profiles, staged_content) = self
+            .capture_reconcile_target(
+                app,
+                clash,
+                Arc::new(profiles.load().state.clone()),
+                Default::default(),
+            )
+            .await?;
+        self.core
+            .reconcile_profiles_after_service_release(
+                clash,
+                app.core,
+                profiles,
+                app,
+                staged_content,
+                Some(target),
+            )
+            .await
     }
 
     async fn reconcile_profiles(
@@ -618,13 +2306,24 @@ impl CoreLifecycleWorkflow {
     ) -> anyhow::Result<()> {
         let clash = self.clash.get()?;
         let app = self.application.get_typed();
+        let (target, app, clash, profiles, staged_content) = self
+            .capture_reconcile_target(app, clash, profiles, staged_content)
+            .await?;
         let target_core = app.core;
         let run_type = crate::core::RunType::classify(
             app.enable_service_mode,
             crate::core::service::ipc::get_ipc_state(),
         );
         self.core
-            .reconcile_profiles(clash, target_core, run_type, profiles, app, staged_content)
+            .reconcile_profiles(
+                clash,
+                target_core,
+                run_type,
+                profiles,
+                app,
+                staged_content,
+                Some(target),
+            )
             .await
     }
 
@@ -668,7 +2367,15 @@ impl CoreLifecycleWorkflow {
             )
             .await?;
         self.core
-            .reconcile_profiles(clash, target_core, run_type, profiles, app, profile_content)
+            .reconcile_profiles(
+                clash,
+                target_core,
+                run_type,
+                profiles,
+                app,
+                profile_content,
+                Some(expected_digest.to_owned()),
+            )
             .await
     }
 
@@ -682,6 +2389,14 @@ impl CoreLifecycleWorkflow {
         candidate_app.core = core;
         let profile_snapshot = Arc::new(profiles.load().state.clone());
         let clash = self.clash.get()?;
+        let (candidate_target, candidate_app, candidate_clash, candidate_profiles, staged_content) =
+            self.capture_reconcile_target(
+                candidate_app,
+                clash.clone(),
+                profile_snapshot.clone(),
+                Default::default(),
+            )
+            .await?;
         let run_type = crate::core::RunType::classify(
             candidate_app.enable_service_mode,
             crate::core::service::ipc::get_ipc_state(),
@@ -689,26 +2404,36 @@ impl CoreLifecycleWorkflow {
 
         self.core
             .reconcile_profiles(
-                clash.clone(),
+                candidate_clash,
                 core,
                 run_type,
-                profile_snapshot.clone(),
+                candidate_profiles,
                 candidate_app.clone(),
-                Default::default(),
+                staged_content,
+                Some(candidate_target),
             )
             .await?;
 
         if let Err(error) = self.application.patch_core(candidate_app.core).await {
             let previous_core = previous_app.core;
+            let (previous_target, previous_app, previous_clash, previous_profiles, staged_content) =
+                self.capture_reconcile_target(
+                    previous_app,
+                    clash,
+                    profile_snapshot,
+                    Default::default(),
+                )
+                .await?;
             let rollback = self
                 .core
                 .reconcile_profiles(
-                    clash,
+                    previous_clash,
                     previous_core,
                     run_type,
-                    profile_snapshot,
+                    previous_profiles,
                     previous_app,
-                    Default::default(),
+                    staged_content,
+                    Some(previous_target),
                 )
                 .await;
             return match rollback {
@@ -788,11 +2513,48 @@ async fn rollback_stale_proxy_action(
     }
 }
 
+fn host_for_run_type(
+    run_type: crate::core::RunType,
+) -> crate::core::actor_v2::control_endpoint::ExecutionHost {
+    use crate::core::{RunType, actor_v2::control_endpoint::ExecutionHost};
+
+    match run_type {
+        RunType::Service => ExecutionHost::Service,
+        RunType::Normal | RunType::Elevated => ExecutionHost::Local,
+    }
+}
+
+fn runtime_evidence(status: &CoreStatusSnapshot) -> RuntimeEvidence {
+    use crate::core::actor_v2::control_endpoint::ExecutionHost;
+
+    let host = host_for_run_type(status.run_type);
+    RuntimeEvidence {
+        host,
+        state: (host != ExecutionHost::Service || status.state_changed_at > 0)
+            .then(|| status.state.clone()),
+        state_changed_at: status.state_changed_at,
+    }
+}
+
+fn same_core_status(left: &CoreStatusSnapshot, right: &CoreStatusSnapshot) -> bool {
+    let same_state = match (&left.state, &right.state) {
+        (CoreState::Running, CoreState::Running) => true,
+        (CoreState::Stopped(left_reason), CoreState::Stopped(right_reason)) => {
+            left_reason == right_reason
+        }
+        _ => false,
+    };
+    left.instance_id == right.instance_id
+        && same_state
+        && left.state_changed_at == right.state_changed_at
+        && left.run_type == right.run_type
+}
+
 #[async_trait::async_trait]
 impl ProfileRuntime for CoreLifecycleWorkflow {
     fn status(&self) -> crate::client::core_lifecycle::CoreLifecycleStatus {
         crate::client::core_lifecycle::CoreLifecycleStatus {
-            uncertain: self.core.outcome_uncertain(),
+            uncertain: self.core.outcome_uncertain() || self.startup_owner_unproven(),
             ..Default::default()
         }
     }
@@ -812,20 +2574,13 @@ impl ProfileRuntime for CoreLifecycleWorkflow {
         profiles: Arc<chimera_config::profile::Profiles>,
         staged_content: std::collections::BTreeMap<String, String>,
     ) -> anyhow::Result<crate::client::application_workflow::inputs::RuntimeInputs> {
-        let profiles_dir = crate::utils::dirs::app_profiles_dir()?;
-        let source = FsProfileContentSource::new(profiles_dir);
-        let content =
-            crate::client::application_workflow::inputs::FrozenProfileContent::capture_content(
-                &profiles,
-                &source,
-                staged_content,
-            );
-        Ok(crate::client::application_workflow::inputs::RuntimeInputs {
-            app: self.application.get_typed(),
-            clash: self.clash.get()?,
+        self.capture_profile_inputs_for(
+            self.application.get_typed(),
+            self.clash.get()?,
             profiles,
-            content,
-        })
+            staged_content,
+        )
+        .await
     }
 
     async fn observe_runtime_baseline(
@@ -869,6 +2624,12 @@ impl ProfileRuntime for CoreLifecycleWorkflow {
         crate::client::application_workflow::mutation::AppliedCandidate,
         crate::client::application_workflow::mutation::CheckRecord,
     )> {
+        let target = inputs.target_key().map_err(|error| {
+            anyhow::Error::new(
+                crate::client::application_workflow::mutation::RuntimeCheckFailure::
+                    candidate_unavailable(error.to_string()),
+            )
+        })?;
         let (app, clash, profiles, profile_content) = inputs.into_parts().map_err(|error| {
             anyhow::Error::new(
                 crate::client::application_workflow::mutation::RuntimeCheckFailure::
@@ -888,6 +2649,7 @@ impl ProfileRuntime for CoreLifecycleWorkflow {
                 profiles,
                 app,
                 profile_content,
+                Some(target),
                 operation_id.clone(),
             )
             .await
@@ -900,7 +2662,11 @@ impl ProfileRuntime for CoreLifecycleWorkflow {
     ) -> anyhow::Result<()> {
         self.core
             .confirm_profile_runtime(operation_id.clone(), candidate)
-            .await
+            .await?;
+        // A committed Profile candidate was confirmed by the selected Core
+        // host; it supersedes any older startup retry target.
+        *self.startup.lock_retry_target() = None;
+        Ok(())
     }
 
     async fn discard_profile_runtime(&self, operation_id: &chimera_core_manager::OperationId) {

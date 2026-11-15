@@ -66,10 +66,6 @@ pub fn setup<R: Runtime, M: Manager<R>>(manager: &M) -> anyhow::Result<()> {
     let stream_tasks = tasks.clone();
 
     tasks.spawn(async move {
-        tokio::select! {
-            _ = stream_shutdown.cancelled() => return,
-            _ = tokio::time::sleep(std::time::Duration::from_secs(10)) => {}
-        }
         let mut connections = streams.subscribe();
         let mut events = streams.subscribe_ws();
         if stream_shutdown.is_cancelled() {

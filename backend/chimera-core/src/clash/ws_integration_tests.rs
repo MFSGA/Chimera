@@ -5,7 +5,13 @@ use axum::{
     response::IntoResponse,
     routing::get,
 };
-use std::collections::HashMap;
+use std::{
+    collections::HashMap,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+};
 use tokio::sync::mpsc;
 
 struct StaticSource {
@@ -45,6 +51,24 @@ impl ClashApiClientSource for RotatingSource {
     }
 }
 
+struct RecoveringSource {
+    server: String,
+    available: AtomicBool,
+    attempted: tokio::sync::Notify,
+}
+
+#[async_trait::async_trait]
+impl ClashApiClientSource for RecoveringSource {
+    async fn api_client(&self) -> Result<ApiClient> {
+        self.attempted.notify_one();
+        anyhow::ensure!(
+            self.available.load(Ordering::Acquire),
+            "Core API is not ready yet"
+        );
+        ApiClient::new_unbound(self.server.clone(), None)
+    }
+}
+
 async fn serve(router: Router) -> (String, tokio::task::JoinHandle<()>) {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
@@ -70,6 +94,52 @@ async fn wait_for_state(
     })
     .await
     .unwrap();
+}
+
+/// Starts the actor while its Core API source is unavailable, then makes the
+/// source available. The contract is that startup is attempted immediately
+/// and the actor eventually connects without a setup-layer startup delay.
+#[tokio::test]
+async fn start_retries_until_the_core_api_becomes_available() {
+    async fn stream(Path(kind): Path<String>, ws: WebSocketUpgrade) -> impl IntoResponse {
+        ws.on_upgrade(move |mut socket| async move {
+            if kind == "connections" {
+                socket
+                    .send(Message::Text(
+                        r#"{"downloadTotal":1,"uploadTotal":2,"connections":[],"memory":8}"#.into(),
+                    ))
+                    .await
+                    .unwrap();
+            }
+            while socket.recv().await.is_some() {}
+        })
+    }
+
+    let (server, task) = serve(Router::new().route("/{kind}", get(stream))).await;
+    let source = Arc::new(RecoveringSource {
+        server,
+        available: AtomicBool::new(false),
+        attempted: tokio::sync::Notify::new(),
+    });
+    let shutdown = CancellationToken::new();
+    let tasks = TaskTracker::new();
+    let client = StreamsClient::spawn(source.clone(), LogLevel::Info, shutdown.clone(), &tasks)
+        .await
+        .unwrap();
+    let mut events = client.subscribe_ws();
+    client.start().await.unwrap();
+
+    tokio::time::timeout(Duration::from_secs(1), source.attempted.notified())
+        .await
+        .expect("start should query the Core API source immediately");
+    source.available.store(true, Ordering::Release);
+    wait_for_state(&mut events, ClashConnectionsConnectorState::Connected).await;
+
+    let _ = client.stop().await;
+    shutdown.cancel();
+    tasks.close();
+    tasks.wait().await;
+    task.abort();
 }
 
 #[tokio::test]
