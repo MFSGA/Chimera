@@ -82,3 +82,39 @@ fn unreadable_parent_shape_is_an_error_without_creating_a_file() {
     );
     assert_eq!(std::fs::read(&parent).unwrap(), b"keep");
 }
+
+#[test]
+fn resource_initialization_uses_the_injected_data_and_bundle_directories() {
+    let temp = tempfile::tempdir().unwrap();
+    let data_dir = temp.path().join("isolated-data");
+    let resources_dir = temp.path().join("bundle").join("resources");
+    fs::create_dir_all(&resources_dir).unwrap();
+
+    #[cfg(target_os = "windows")]
+    let resource_names = ["Country.mmdb", "geoip.dat", "geosite.dat", "wintun.dll"];
+    #[cfg(not(target_os = "windows"))]
+    let resource_names = ["Country.mmdb", "geoip.dat", "geosite.dat"];
+
+    for name in resource_names {
+        fs::write(resources_dir.join(name), format!("bundle:{name}")).unwrap();
+    }
+
+    init_resources(&data_dir, Some(&resources_dir)).unwrap();
+
+    for name in resource_names {
+        assert_eq!(
+            fs::read(data_dir.join(name)).unwrap(),
+            format!("bundle:{name}").into_bytes()
+        );
+    }
+    assert!(!temp.path().join("default-data").exists());
+}
+
+#[test]
+fn resource_initialization_without_a_bundle_source_does_not_create_data_root() {
+    let temp = tempfile::tempdir().unwrap();
+    let data_dir = temp.path().join("isolated-data");
+
+    assert!(init_resources(&data_dir, None).is_err());
+    assert!(!data_dir.exists());
+}

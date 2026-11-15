@@ -1,11 +1,11 @@
-use std::{fs, path::Path};
+use std::{fs, path::Path, path::PathBuf};
 
 use anyhow::{Context as _, Result};
 use serde::Serialize;
 
 use crate::{
     config::{chimera::IVerge, clash::IClashTemp, profile::profiles::Profiles},
-    utils::{dirs, help, path::PathResolver},
+    utils::{help, path::PathResolver},
 };
 
 mod logging;
@@ -56,17 +56,20 @@ fn initialize_default_yaml<T: Serialize>(path: &Path, template: &T) -> Result<()
 #[cfg(test)]
 mod tests;
 
-/// initialize app resources
-/// after tauri setup
-pub fn init_resources() -> Result<()> {
-    let app_dir = dirs::app_data_dir()?;
-    let res_dir = dirs::app_resources_dir()?;
+/// The bundled `resources` directory, which only Tauri can locate.
+pub fn bundled_resources_dir(manager: &impl tauri::Manager<tauri::Wry>) -> tauri::Result<PathBuf> {
+    Ok(manager.path().resource_dir()?.join("resources"))
+}
+
+/// Initialize app resources after Tauri setup, using the already-resolved data root.
+pub fn init_resources(app_dir: &Path, res_dir: Option<&Path>) -> Result<()> {
+    let res_dir = res_dir.ok_or_else(|| anyhow::anyhow!("failed to locate bundled resources"))?;
 
     if !app_dir.exists() {
-        let _ = fs::create_dir_all(&app_dir);
+        let _ = fs::create_dir_all(app_dir);
     }
     if !res_dir.exists() {
-        let _ = fs::create_dir_all(&res_dir);
+        let _ = fs::create_dir_all(res_dir);
     }
 
     #[cfg(target_os = "windows")]

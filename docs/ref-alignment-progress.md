@@ -2410,3 +2410,12 @@ Only the product naming, existing config formats and Chimera Client wiring remai
 - **源码映射**：`ref/backend/tauri/src/utils/resolve.rs::resolve_setup` 从 `NyanpasuClient.app_config_snapshot()` 读取静默启动状态 → `backend/tauri/src/utils/resolve.rs::resolve_setup` 从 `ChimeraClient::get_app_config()` 读取 `ChimeraAppConfig`。Chimera 增补的 `WindowType::{Main,Legacy}` 同时由该共享快照提供；初次打开、深链接和热键复用同一解析函数。旧 `IVerge` 配置仍通过 `bridge/verge.rs::application_from_legacy` 初始化 typed config 并由 mirror 兼容。
 - **验证**：定向启动窗体配置单测 **2/2 通过**；`bridge::verge::tests` **4/4 通过**，包括 legacy silent-start 开关与 Main/Legacy 投影；macOS `cargo check --offline --locked --manifest-path backend/Cargo.toml -p chimera --lib` 通过；Rustfmt、文档 Prettier 与 `git diff --check` 通过。独立审查无阻断发现，并确认设置管理先于窗口路由读取；测试只验证纯配置选择和标签映射，未创建真实 Tauri 窗口。Rust 编译保留项目既有 warnings。未运行桌面冷启动、前端 WebDriver 或 macOS/Windows/Linux 窗口可见性测试；这些纯 Rust 检查不证明实际 webview 已显示。
 - **回滚**：恢复 `resolve.rs` 对 `Config::verge().latest()` 的初次显示/路由读取及无参数 `configured_window_label` 调用；同时恢复 `lib.rs` 深链接和 `client/hotkey/adapters.rs` 的调用签名。保留已有 `application_from_legacy` 投影断言。
+
+## 2026-11-14：启动资源复用已解析的数据根目录
+
+- **目标 / 验收**：按固定 `ref` 的资源初始化入口，把资源目标目录改为启动时已发现并准备的 `PathResolver::app_data_dir()`，把包内资源源目录改为 Tauri `Manager::path().resource_dir()`；不再由启动资源 helper 通过全局目录状态重复查找两个路径。
+- **非目标**：不改资源文件名单、文件较新时覆盖到数据根目录的既有规则、错误时继续显示 UI 的 best-effort 行为、数据目录布局、GIS/核心资源语义、日志或 Core/Service 次序。
+- **基线 / 风险 / 接口**：父提交 `192da09a47a588c1f9d47f41cb85a9245cd25d8b`；固定 ref gitlink 与只读工作区 `59724e85c34abb6995c22d101c876cc06dc16576`。风险 L2（启动时复制包内资源到应用数据目录）。`resolve_setup` 内部增加 `&PathResolver` 参数，`init_resources` 改为接收显式目标/源目录；无 IPC 或持久化 schema 变化。
+- **源码映射**：`ref/backend/tauri/src/utils/init/mod.rs::{bundled_resources_dir,init_resources}` → Chimera 同路径同名函数；`ref::resolve_setup` 使用 Tauri resource dir 与既有 `PathResolver` → Chimera `utils::resolve::resolve_setup(app, paths)`。只做必要的 Chimera 路径类型适配，并保留上游相同资源文件和复制时间戳规则。
+- **验证**：`utils::init::tests` **7/7 通过**，其中新增用例验证资源只复制到注入的数据目录，资源源目录缺失时不创建数据根目录；macOS `cargo check --offline --locked --manifest-path backend/Cargo.toml -p chimera --lib`、Rustfmt 与 `git diff --check` 通过。编译保留项目既有 warnings。未启动实际桌面包，因此未验证打包后 `resource_dir` 的内容/平台布局及窗口可见性。
+- **回滚**：将 `init_resources` 恢复为无参数全局目录查询，将 `resolve_setup` 恢复单参数，并恢复 `lib.rs` 调用；移除新增临时目录单测。无需用户配置迁移或宿主系统清理。
