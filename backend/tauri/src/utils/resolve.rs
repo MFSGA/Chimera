@@ -16,7 +16,7 @@ use crate::{
     config::chimera::ClashCore,
     core::{handle, tray},
     log_err,
-    utils::init,
+    utils::{init, path::PathResolver},
     window::{
         WindowManager,
         kinds::{EditorWindow, EditorWindowType, LegacyWindow, MainWindow},
@@ -222,12 +222,18 @@ where
 }
 
 /// handle something when start app
-pub fn resolve_setup(app: &mut App) {
+pub fn resolve_setup(app: &mut App, paths: &PathResolver) {
     handle::Handle::global().init(app.app_handle().clone());
     debug!("todo init handle for widget not tray");
     crate::consts::setup_app_handle(app.app_handle().clone());
 
-    log_err!(init::init_resources());
+    let resources_dir = init::bundled_resources_dir(app)
+        .inspect_err(|error| tracing::error!(%error, "failed to locate the bundled resources"))
+        .ok();
+    log_err!(init::init_resources(
+        paths.app_data_dir(),
+        resources_dir.as_deref()
+    ));
 
     log::trace!("init storage");
     log_err!(crate::core::storage::setup(app));

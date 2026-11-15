@@ -291,7 +291,7 @@ pub fn run() -> std::process::ExitCode {
             }
 
             specta_builder.mount_events(app);
-            setup::setup(app, setup_paths, paths.clone(), metadata)?;
+            setup::setup(app, setup_paths.clone(), paths.clone(), metadata)?;
             core::updater::recover_interrupted_update();
             core::clash::setup(app)?;
 
@@ -306,7 +306,7 @@ pub fn run() -> std::process::ExitCode {
             #[cfg(debug_assertions)]
             setup_frontend_console_bridge(app);
 
-            resolve::resolve_setup(app);
+            resolve::resolve_setup(app, &setup_paths);
 
             #[cfg(windows)]
             {
