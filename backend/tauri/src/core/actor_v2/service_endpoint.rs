@@ -4,14 +4,16 @@
 //! this adapter for Service core stop; reconcile and core selection remain on
 //! the legacy manager during migration.
 
-use std::{borrow::Cow, time::Duration};
+use std::{borrow::Cow, path::Path, time::Duration};
 
 use chimera_core_manager::{
     ConfigInput, CoreCommand, CoreError, CoreErrorKind, CoreKind, OperationId,
 };
 use chimera_ipc::{
     api::{
-        core::v2::{CoreCommandInfo, CoreOperationReq, CoreSubmitReq, OperationInfo},
+        core::v2::{
+            CoreCommandInfo, CoreOperationReq, CoreOwnerInfo, CoreSubmitReq, OperationInfo,
+        },
         status::RevisionIdInfo,
     },
     client::{ClientError, shortcuts::Client},
@@ -214,6 +216,20 @@ fn map_client_error(error: ClientError<'_>) -> CoreError {
     )
 }
 
+fn normalized_path_string(path: &Path) -> String {
+    dunce::canonicalize(path)
+        .unwrap_or_else(|_| path.to_path_buf())
+        .to_string_lossy()
+        .into_owned()
+}
+
+fn service_owner_recovery_command(config_dir: &Path, data_dir: &Path) -> CoreCommandInfo<'static> {
+    CoreCommandInfo::RecoverIfServiceOwner {
+        expected_config_dir: Cow::Owned(normalized_path_string(config_dir)),
+        expected_data_dir: Cow::Owned(normalized_path_string(data_dir)),
+    }
+}
+
 fn wire_submit_request(submission: &CoreSubmission) -> Result<CoreSubmitReq<'static>, CoreError> {
     let command = match &submission.envelope.command {
         CoreCommand::Reconcile(request) => {
@@ -262,7 +278,33 @@ fn wire_submit_request(submission: &CoreSubmission) -> Result<CoreSubmitReq<'sta
             }
         }
         CoreCommand::Stop => CoreCommandInfo::Stop,
-        CoreCommand::Recover => CoreCommandInfo::Recover,
+        CoreCommand::StopIfOwner(expected_owner) => CoreCommandInfo::StopIfOwner {
+            expected_owner: CoreOwnerInfo {
+                instance_id: expected_owner.instance_id.to_string(),
+                revision: RevisionIdInfo {
+                    epoch: expected_owner.revision.epoch.get(),
+                    generation: expected_owner.revision.generation,
+                    effective_hash: expected_owner.revision.effective_hash.clone(),
+                },
+            },
+        },
+        CoreCommand::Recover => {
+            let config_dir = crate::utils::dirs::app_config_dir().map_err(|error| {
+                CoreError::new(
+                    CoreErrorKind::BackendUnavailable,
+                    format!("failed to resolve this application's config directory: {error}"),
+                    false,
+                )
+            })?;
+            let data_dir = crate::utils::dirs::app_data_dir().map_err(|error| {
+                CoreError::new(
+                    CoreErrorKind::BackendUnavailable,
+                    format!("failed to resolve this application's data directory: {error}"),
+                    false,
+                )
+            })?;
+            service_owner_recovery_command(&config_dir, &data_dir)
+        }
         CoreCommand::Shutdown => {
             return Err(CoreError::new(
                 CoreErrorKind::OperationConflict,
@@ -303,7 +345,10 @@ fn app_core_kind_to_type(kind: CoreKind) -> Result<chimera_utils::core::CoreType
 mod tests {
     use super::*;
     use camino::Utf8PathBuf;
-    use chimera_core_manager::{CoreCommandEnvelope, CoreSpec, InstanceOptions, ReconcileRequest};
+    use chimera_core_manager::{
+        CoreCommandEnvelope, CoreOwner, CoreSpec, Epoch, InstanceOptions, ReconcileRequest,
+        RevisionId,
+    };
     use chimera_ipc::api::core::v2::CoreCommandInfo;
 
     #[test]
@@ -342,6 +387,61 @@ mod tests {
 
         assert_eq!(wire_type.as_ref(), &core_type);
         assert_eq!(config, "mode: rule\n");
+    }
+
+    #[test]
+    fn stop_if_owner_wire_keeps_process_and_revision_fence() {
+        let owner = CoreOwner::from_parts(
+            "9af54a67-fc31-4dcb-8422-26644c6277c8",
+            RevisionId {
+                epoch: Epoch::new(4).unwrap(),
+                generation: 12,
+                effective_hash: "0123456789abcdef".into(),
+            },
+        )
+        .unwrap();
+        let submission = CoreSubmission {
+            expected_owner: None,
+            envelope: CoreCommandEnvelope {
+                operation_id: "0011223344556677-8899aabb-ccddeeff".parse().unwrap(),
+                command: CoreCommand::StopIfOwner(owner),
+            },
+            core_type: None,
+        };
+
+        let wire = wire_submit_request(&submission).unwrap();
+        let CoreCommandInfo::StopIfOwner { expected_owner } = wire.command else {
+            panic!("owner-fenced stop changed shape");
+        };
+
+        assert_eq!(
+            expected_owner.instance_id,
+            "9af54a67-fc31-4dcb-8422-26644c6277c8"
+        );
+        assert_eq!(expected_owner.revision.epoch, 4);
+        assert_eq!(expected_owner.revision.generation, 12);
+        assert_eq!(expected_owner.revision.effective_hash, "0123456789abcdef");
+    }
+
+    #[test]
+    fn service_quarantine_recovery_wire_names_the_current_installation() {
+        let root = tempfile::tempdir().unwrap();
+        let config_dir = root.path().join("config");
+        let data_dir = root.path().join("data");
+        std::fs::create_dir_all(&config_dir).unwrap();
+        std::fs::create_dir_all(&data_dir).unwrap();
+
+        let command = service_owner_recovery_command(&config_dir, &data_dir);
+        let CoreCommandInfo::RecoverIfServiceOwner {
+            expected_config_dir,
+            expected_data_dir,
+        } = command
+        else {
+            panic!("Service recovery must include the app installation identity");
+        };
+
+        assert_eq!(expected_config_dir, normalized_path_string(&config_dir));
+        assert_eq!(expected_data_dir, normalized_path_string(&data_dir));
     }
 
     #[test]

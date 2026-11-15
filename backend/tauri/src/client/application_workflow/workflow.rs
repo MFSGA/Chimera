@@ -7,6 +7,7 @@ use chimera_core::state::DecisionHandle;
 use chimera_core_manager::OperationId;
 use tokio::sync::Mutex;
 
+use crate::client::application_workflow::startup::StartupWorkflowState;
 use crate::client::core_lifecycle::{CoreLifecycleStatus, ports::CoreStatusSnapshot};
 
 use super::{
@@ -73,6 +74,7 @@ pub(in crate::client) struct ApplicationWorkflow {
     pub(super) recovery_required: Arc<Mutex<Option<RecoveryContext>>>,
     pub(super) notifications: Option<Arc<dyn crate::client::effects::ports::CommitNotifications>>,
     pub(super) deferred: Option<DeferredTarget>,
+    pub(super) startup: StartupWorkflowState,
 }
 
 impl ApplicationWorkflow {
@@ -86,7 +88,12 @@ impl ApplicationWorkflow {
             recovery_required,
             notifications,
             deferred: None,
+            startup: StartupWorkflowState::default(),
         }
+    }
+
+    pub(in crate::client) fn connect_startup_state(&mut self, startup: StartupWorkflowState) {
+        self.startup = startup;
     }
 
     pub(in crate::client) fn deferred_retry(&self) -> Option<(String, tokio::time::Instant)> {

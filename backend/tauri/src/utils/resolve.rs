@@ -8,17 +8,15 @@ use std::{
 };
 
 use anyhow::Result;
+use chimera_config::application::{ChimeraAppConfig, WindowType as AppWindowType};
 use tauri::{App, AppHandle, Emitter, Listener, Manager};
 use tracing::debug;
 
 use crate::{
-    config::{
-        chimera::{ClashCore, WindowType},
-        core::Config,
-    },
+    config::chimera::ClashCore,
     core::{handle, tray},
     log_err,
-    utils::init,
+    utils::{init, path::PathResolver},
     window::{
         WindowManager,
         kinds::{EditorWindow, EditorWindowType, LegacyWindow, MainWindow},
@@ -116,14 +114,81 @@ pub fn wait_for_frontend_ready(label: &str, timeout: Duration) -> bool {
     true
 }
 
-pub fn configured_window_label() -> &'static str {
-    match Config::verge()
-        .latest()
-        .window_type
-        .unwrap_or(WindowType::Main)
-    {
-        WindowType::Legacy => crate::consts::LEGACY_WINDOW_LABEL,
-        WindowType::Main => crate::consts::MAIN_WINDOW_LABEL,
+fn app_config_for_window(app_handle: &AppHandle) -> ChimeraAppConfig {
+    app_handle
+        .state::<crate::client::ChimeraClient>()
+        .get_app_config()
+        .unwrap_or_else(|error| {
+            log::error!(target: "app", "failed to read startup window settings: {error:#}");
+            ChimeraAppConfig::default()
+        })
+}
+
+fn window_label(window_type: AppWindowType) -> &'static str {
+    match window_type {
+        AppWindowType::Legacy => crate::consts::LEGACY_WINDOW_LABEL,
+        AppWindowType::Main => crate::consts::MAIN_WINDOW_LABEL,
+    }
+}
+
+fn initial_window_type(config: &ChimeraAppConfig) -> Option<AppWindowType> {
+    (!config.enable_silent_start).then_some(config.window_type)
+}
+
+pub fn configured_window_label(app_handle: &AppHandle) -> &'static str {
+    window_label(app_config_for_window(app_handle).window_type)
+}
+
+fn create_window_for_type(app_handle: &AppHandle, window_type: AppWindowType) {
+    match window_type {
+        AppWindowType::Legacy => create_legacy_window(app_handle),
+        AppWindowType::Main => create_main_window(app_handle),
+    }
+}
+
+#[cfg(test)]
+mod startup_window_config_tests {
+    use super::{initial_window_type, window_label};
+    use chimera_config::application::{ChimeraAppConfig, WindowType};
+
+    #[test]
+    fn startup_window_selection_uses_the_typed_window_type() {
+        let main_config = ChimeraAppConfig {
+            window_type: WindowType::Main,
+            ..ChimeraAppConfig::default()
+        };
+        assert_eq!(initial_window_type(&main_config), Some(WindowType::Main));
+        assert_eq!(
+            window_label(WindowType::Main),
+            crate::consts::MAIN_WINDOW_LABEL
+        );
+
+        let legacy_config = ChimeraAppConfig {
+            window_type: WindowType::Legacy,
+            ..ChimeraAppConfig::default()
+        };
+        assert_eq!(
+            initial_window_type(&legacy_config),
+            Some(WindowType::Legacy)
+        );
+        assert_eq!(
+            window_label(WindowType::Legacy),
+            crate::consts::LEGACY_WINDOW_LABEL
+        );
+    }
+
+    #[test]
+    fn silent_start_suppresses_initial_window_selection() {
+        let config = ChimeraAppConfig {
+            enable_silent_start: true,
+            ..ChimeraAppConfig::default()
+        };
+
+        assert_eq!(initial_window_type(&config), None);
+        assert_eq!(
+            window_label(config.window_type),
+            crate::consts::LEGACY_WINDOW_LABEL
+        );
     }
 }
 
@@ -131,44 +196,44 @@ pub fn configured_window_label() -> &'static str {
 /// This is the primary function to use when opening window from tray, etc.
 #[tracing_attributes::instrument(skip(app_handle))]
 pub fn create_window(app_handle: &AppHandle) {
-    match configured_window_label() {
-        crate::consts::LEGACY_WINDOW_LABEL => create_legacy_window(app_handle),
-        _ => create_main_window(app_handle),
-    }
+    create_window_for_type(app_handle, app_config_for_window(app_handle).window_type);
 }
 
-/// Perform startup's blocking Service/port preparation without allowing the
-/// blocking worker to outlive its tracked owner. Once cancellation is
-/// requested, no core reconciliation is started from the prepared result.
-async fn prepare_startup_while_active<T, F>(
+/// Await startup's Service preflight within its tracked owner. Once shutdown
+/// is requested, no later Core reconciliation is started from its result.
+async fn prepare_startup_while_active<T, E, F, Fut>(
     shutdown: tokio_util::sync::CancellationToken,
     prepare: F,
-) -> std::result::Result<Option<T>, tauri::Error>
+) -> anyhow::Result<Option<T>>
 where
     T: Send + 'static,
-    F: FnOnce(tokio_util::sync::CancellationToken) -> T + Send + 'static,
+    E: Into<anyhow::Error>,
+    F: FnOnce(tokio_util::sync::CancellationToken) -> Fut + Send + 'static,
+    Fut: std::future::Future<Output = Result<T, E>> + Send + 'static,
 {
     if shutdown.is_cancelled() {
         return Ok(None);
     }
 
-    let worker_shutdown = shutdown.clone();
-    let result = tauri::async_runtime::spawn_blocking(move || prepare(worker_shutdown)).await?;
-    // The worker is fully joined before this task can finish, even when
-    // shutdown was requested during a slow or blocking configuration write.
+    let result = prepare(shutdown.clone()).await.map_err(Into::into)?;
+    // Do not cancel an in-flight Service transition. It must finish before
+    // shutdown cleanup, and cancellation suppresses the later Core reconcile.
     Ok((!shutdown.is_cancelled()).then_some(result))
 }
 
 /// handle something when start app
-pub fn resolve_setup(app: &mut App) {
+pub fn resolve_setup(app: &mut App, paths: &PathResolver) {
     handle::Handle::global().init(app.app_handle().clone());
     debug!("todo init handle for widget not tray");
     crate::consts::setup_app_handle(app.app_handle().clone());
 
-    log_err!(init::init_resources());
-
-    log::trace!("init storage");
-    log_err!(crate::core::storage::setup(app));
+    let resources_dir = init::bundled_resources_dir(app)
+        .inspect_err(|error| tracing::error!(%error, "failed to locate the bundled resources"))
+        .ok();
+    log_err!(init::init_resources(
+        paths.app_data_dir(),
+        resources_dir.as_deref()
+    ));
 
     // setup jobs
     /* log::trace!("setup jobs");
@@ -193,12 +258,9 @@ pub fn resolve_setup(app: &mut App) {
         log_err!(app.emit("update_systray", ()));
     }
 
-    let silent_start = Config::verge()
-        .latest()
-        .enable_silent_start
-        .unwrap_or(false);
-    if !silent_start {
-        create_window(app.app_handle());
+    let app_config = app_config_for_window(app.app_handle());
+    if let Some(window_type) = initial_window_type(&app_config) {
+        create_window_for_type(app.app_handle(), window_type);
     }
 
     let app_shutdown = app.state::<crate::setup::AppShutdown>().clone();
@@ -208,27 +270,28 @@ pub fn resolve_setup(app: &mut App) {
         app_shutdown.tasks.clone(),
     );
 
-    // The visible webview must not wait on service IPC or core reconciliation.
+    // Window creation must not wait on service IPC or core reconciliation.
     // Keep startup under the same AppShutdown tracker as the other owners:
-    // shutdown must wait for both blocking configuration writes and any
-    // in-flight core reconciliation before cleanup shuts down the core.
+    // shutdown waits for any in-flight Service transition and Core
+    // reconciliation before cleanup shuts down the core.
     let client = (*app.state::<crate::client::ChimeraClient>()).clone();
     let app_handle = app.app_handle().clone();
     let startup_shutdown = app_shutdown.shutdown.child_token();
     // Tauri setup runs on the event-loop thread, not inside Tokio. Use its
     // runtime explicitly so the tracked task can start without a current handle.
     spawn_tracked_on_tauri_runtime(&app_shutdown.tasks, async move {
-        // Service initialization is synchronous and may write its configured
-        // port. Do not detach the blocking worker on cancellation: the
-        // tracked owner joins it before shutdown begins core cleanup.
-        let prepared =
-            prepare_startup_while_active(startup_shutdown.clone(), move |preparation_shutdown| {
-                if !preparation_shutdown.is_cancelled() {
-                    log_err!(init::init_service(client.clone()));
+        let prepared = prepare_startup_while_active(
+            startup_shutdown.clone(),
+            move |preparation_shutdown| async move {
+                if !preparation_shutdown.is_cancelled()
+                    && let Err(error) = init::init_service(client.clone()).await
+                {
+                    log::error!(target: "app", "Service startup preparation failed: {error:#}");
                 }
-                client
-            })
-            .await;
+                Ok::<_, anyhow::Error>(client)
+            },
+        )
+        .await;
         match prepared {
             Ok(None) => {
                 tracing::debug!("startup cancelled before core reconciliation");
@@ -256,7 +319,14 @@ pub fn resolve_setup(app: &mut App) {
                 // reach a terminal reply before the tracked task completes.
                 // Dropping that future on cancellation could leave a queued
                 // start racing the subsequent shutdown_core() command.
-                match client.init_core().await {
+                let startup_result = client.init_core().await;
+                // Match ref's resolve_setup -> setup_proxies initial refresh.
+                // The ProxiesClient retries on its timer if the startup result
+                // did not leave a readable Core API yet.
+                if !startup_shutdown.is_cancelled() {
+                    client.request_proxy_refresh();
+                }
+                match startup_result {
                     Ok(()) => app_handle.state::<AppStartupStatus>().finish(true),
                     Err(error) => {
                         log::error!(target: "app", "core initialization failed: {error:#}");
@@ -348,9 +418,9 @@ mod startup_shutdown_tests {
         let touched = Arc::new(AtomicBool::new(false));
         let touched_in_worker = touched.clone();
 
-        let result = prepare_startup_while_active(shutdown, move |_| {
+        let result = prepare_startup_while_active(shutdown, move |_| async move {
             touched_in_worker.store(true, Ordering::SeqCst);
-            42
+            Ok::<_, anyhow::Error>(42)
         })
         .await
         .unwrap();
@@ -360,24 +430,21 @@ mod startup_shutdown_tests {
     }
 
     #[tokio::test]
-    async fn shutdown_drains_blocking_preparation_before_core_cleanup() {
-        let boundary = AppShutdown {
-            shutdown: CancellationToken::new(),
-            tasks: TaskTracker::new(),
-        };
+    async fn shutdown_drains_service_preparation_before_core_cleanup() {
+        let boundary = AppShutdown::default();
         let (entered_tx, entered_rx) = oneshot::channel();
-        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = oneshot::channel();
         let core_started = Arc::new(AtomicBool::new(false));
         let core_started_in_task = core_started.clone();
         let cancellation = boundary.shutdown.child_token();
 
-        // Simulate a Service or port-config write that was already underway
-        // when the exit boundary requests shutdown.
+        // Simulate a Service transition that was already underway when the
+        // exit boundary requests shutdown.
         boundary.tasks.spawn(async move {
-            let prepared = prepare_startup_while_active(cancellation, move |_| {
+            let prepared = prepare_startup_while_active(cancellation, move |_| async move {
                 entered_tx.send(()).unwrap();
-                release_rx.recv_timeout(Duration::from_secs(3)).unwrap();
-                42
+                release_rx.await.unwrap();
+                Ok::<_, anyhow::Error>(42)
             })
             .await
             .unwrap();
@@ -395,7 +462,7 @@ mod startup_shutdown_tests {
             timeout(Duration::from_millis(75), boundary.wait_shutdown())
                 .await
                 .is_err(),
-            "shutdown must not finish while the blocking write is in flight"
+            "shutdown must not finish while Service preparation is in flight"
         );
 
         release_tx.send(()).unwrap();

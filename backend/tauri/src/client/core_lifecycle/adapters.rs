@@ -30,6 +30,10 @@ impl ServiceLifecyclePort for LegacyServiceBridge {
         self.facade.probe_service().await
     }
 
+    async fn command_settled(&self) -> bool {
+        self.facade.service_command_settled().await
+    }
+
     fn restart_policy(
         &self,
     ) -> chimera_core::actor_v2::service_policy::ServiceRestartPolicySnapshot {
@@ -162,6 +166,27 @@ impl CoreLifecyclePort for LegacyCoreBridge {
         self.facade().reconcile(clash, target_core, run_type).await
     }
 
+    async fn retire_service_core(
+        &self,
+        expected_owner: chimera_core_manager::CoreOwner,
+    ) -> anyhow::Result<()> {
+        self.facade().retire_service_core(expected_owner).await
+    }
+
+    async fn recover_service_quarantine(&self) -> anyhow::Result<()> {
+        self.facade().recover_service_quarantine().await
+    }
+
+    async fn reconcile_after_service_release(
+        &self,
+        clash: ClashConfig,
+        target_core: ClashCore,
+    ) -> anyhow::Result<()> {
+        self.facade()
+            .reconcile_after_service_release(clash, target_core)
+            .await
+    }
+
     async fn reconcile_profiles(
         &self,
         clash: chimera_config::clash::config::ClashConfig,
@@ -170,9 +195,39 @@ impl CoreLifecyclePort for LegacyCoreBridge {
         profiles: Arc<chimera_config::profile::Profiles>,
         app: chimera_config::application::ChimeraAppConfig,
         staged_content: std::collections::BTreeMap<String, String>,
+        target: Option<String>,
     ) -> anyhow::Result<()> {
         self.facade()
-            .reconcile_with_profiles(clash, target_core, run_type, profiles, app, staged_content)
+            .reconcile_with_profiles(
+                clash,
+                target_core,
+                run_type,
+                profiles,
+                app,
+                staged_content,
+                target,
+            )
+            .await
+    }
+
+    async fn reconcile_profiles_after_service_release(
+        &self,
+        clash: chimera_config::clash::config::ClashConfig,
+        target_core: ClashCore,
+        profiles: Arc<chimera_config::profile::Profiles>,
+        app: chimera_config::application::ChimeraAppConfig,
+        staged_content: std::collections::BTreeMap<String, String>,
+        target: Option<String>,
+    ) -> anyhow::Result<()> {
+        self.facade()
+            .reconcile_with_profiles_after_service_release(
+                clash,
+                target_core,
+                profiles,
+                app,
+                staged_content,
+                target,
+            )
             .await
     }
 
@@ -198,6 +253,7 @@ impl CoreLifecyclePort for LegacyCoreBridge {
         profiles: Arc<chimera_config::profile::Profiles>,
         app: chimera_config::application::ChimeraAppConfig,
         staged_content: std::collections::BTreeMap<String, String>,
+        target: Option<String>,
         operation_id: chimera_core_manager::OperationId,
     ) -> anyhow::Result<(
         crate::client::application_workflow::mutation::AppliedCandidate,
@@ -211,6 +267,7 @@ impl CoreLifecyclePort for LegacyCoreBridge {
                 profiles,
                 app,
                 staged_content,
+                target,
                 operation_id,
             )
             .await
@@ -240,6 +297,13 @@ impl CoreLifecyclePort for LegacyCoreBridge {
 
     async fn status(&self) -> anyhow::Result<CoreStatusSnapshot> {
         Ok(self.facade().status().await)
+    }
+
+    async fn select_execution_host(
+        &self,
+        host: crate::core::actor_v2::control_endpoint::ExecutionHost,
+    ) -> anyhow::Result<()> {
+        self.facade().select_execution_host(host).await
     }
 
     async fn active_runtime_receipt(

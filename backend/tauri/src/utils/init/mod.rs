@@ -1,11 +1,11 @@
-use std::{fs, path::Path};
+use std::{fs, path::Path, path::PathBuf};
 
 use anyhow::{Context as _, Result};
 use serde::Serialize;
 
 use crate::{
     config::{chimera::IVerge, clash::IClashTemp, profile::profiles::Profiles},
-    utils::{dirs, help, path::PathResolver},
+    utils::{help, path::PathResolver},
 };
 
 mod logging;
@@ -56,17 +56,20 @@ fn initialize_default_yaml<T: Serialize>(path: &Path, template: &T) -> Result<()
 #[cfg(test)]
 mod tests;
 
-/// initialize app resources
-/// after tauri setup
-pub fn init_resources() -> Result<()> {
-    let app_dir = dirs::app_data_dir()?;
-    let res_dir = dirs::app_resources_dir()?;
+/// The bundled `resources` directory, which only Tauri can locate.
+pub fn bundled_resources_dir(manager: &impl tauri::Manager<tauri::Wry>) -> tauri::Result<PathBuf> {
+    Ok(manager.path().resource_dir()?.join("resources"))
+}
+
+/// Initialize app resources after Tauri setup, using the already-resolved data root.
+pub fn init_resources(app_dir: &Path, res_dir: Option<&Path>) -> Result<()> {
+    let res_dir = res_dir.ok_or_else(|| anyhow::anyhow!("failed to locate bundled resources"))?;
 
     if !app_dir.exists() {
-        let _ = fs::create_dir_all(&app_dir);
+        let _ = fs::create_dir_all(app_dir);
     }
     if !res_dir.exists() {
-        let _ = fs::create_dir_all(&res_dir);
+        let _ = fs::create_dir_all(res_dir);
     }
 
     #[cfg(target_os = "windows")]
@@ -118,54 +121,43 @@ pub fn init_resources() -> Result<()> {
 /// initialize service resources
 /// after tauri setup
 #[tracing::instrument(skip(client))]
-pub fn init_service(client: crate::client::ChimeraClient) -> Result<()> {
-    use chimera_utils::runtime::block_on;
-
+pub async fn init_service(client: crate::client::ChimeraClient) -> Result<()> {
     tracing::debug!("init services");
-    block_on(async move {
-        let enable_service = {
-            *crate::config::core::Config::verge()
-                .latest()
-                .enable_service_mode
-                .as_ref()
-                .unwrap_or(&false)
-        };
-        if enable_service {
-            match crate::core::service::control::probe_service_status().await {
-                Ok(status) => {
-                    tracing::info!(
-                        "service mode is enabled and service is running, do a update check"
-                    );
-                    if let Some(info) = status.server
-                        && let (Some(server_ver), Some(app_ver)) = (
-                            chimera_core::service::compat::parse_service_version(
-                                info.version.as_ref(),
-                            ),
-                            chimera_core::service::compat::parse_service_version(
-                                status.version.as_ref(),
-                            ),
-                        )
-                    {
-                        if app_ver > server_ver {
-                            tracing::info!(
-                                "client service ver is newer than exist one, do service update"
-                            );
-                            if let Err(e) = client.update_service().await {
-                                log::error!(target: "app", "failed to update service: {e:?}");
-                            }
-                        }
-                    } else {
-                        tracing::warn!(
-                            "service version not comparable; skipping the auto-update check"
+    let check_service_update = client
+        .get_app_config()
+        .context("failed to read typed Service Mode preference during startup")?
+        .enable_service_mode;
+    if check_service_update {
+        match crate::core::service::control::probe_service_status().await {
+            Ok(status) => {
+                tracing::info!("service mode is enabled and service is running, do a update check");
+                let service_version = status.server.as_ref().and_then(|info| {
+                    chimera_core::service::compat::parse_service_version(info.version.as_ref())
+                });
+                let app_version =
+                    chimera_core::service::compat::parse_service_version(status.version.as_ref());
+                match (service_version, app_version) {
+                    (Some(server_ver), Some(app_ver)) if app_ver > server_ver => {
+                        tracing::info!(
+                            "client service ver is newer than exist one, do service update"
                         );
+                        if let Err(error) =
+                            crate::core::service::update_service_for_startup(&client).await
+                        {
+                            log::error!(target: "app", "failed to update service: {error:?}");
+                        }
                     }
-                }
-                Err(e) => {
-                    log::error!(target: "app", "failed to get service status: {e:?}");
+                    (Some(_), Some(_)) => {}
+                    _ => tracing::warn!(
+                        "service version not comparable; skipping the auto-update check"
+                    ),
                 }
             }
+            Err(error) => {
+                log::error!(target: "app", "failed to get service status: {error:?}");
+            }
         }
-        crate::core::service::init_service(client).await;
-    });
+    }
+    crate::core::service::init_service(client).await?;
     Ok(())
 }

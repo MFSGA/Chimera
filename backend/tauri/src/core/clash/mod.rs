@@ -39,9 +39,20 @@ pub fn setup<R: Runtime, M: Manager<R>>(manager: &M) -> anyhow::Result<()> {
         .state::<crate::client::ChimeraClient>()
         .inner()
         .clone();
+    let owners = manager.state::<crate::setup::AppShutdown>().inner().clone();
+    let shutdown = owners.shutdown.child_token();
+    let tasks = owners.tasks.clone();
     let mut proxy_changes = client.subscribe_proxy_changes();
-    tauri::async_runtime::spawn(async move {
-        while proxy_changes.changed().await.is_ok() {
+    let proxy_shutdown = shutdown.clone();
+    tasks.spawn(async move {
+        loop {
+            let changed = tokio::select! {
+                _ = proxy_shutdown.cancelled() => break,
+                changed = proxy_changes.changed() => changed,
+            };
+            if changed.is_err() {
+                break;
+            }
             crate::core::handle::Handle::mutate_proxies();
         }
     });
@@ -51,25 +62,47 @@ pub fn setup<R: Runtime, M: Manager<R>>(manager: &M) -> anyhow::Result<()> {
     }
     manager.manage(connection_details::ConnectionDetailSubscriptions::new());
     let app_handle = manager.app_handle().clone();
+    let stream_shutdown = shutdown.clone();
+    let stream_tasks = tasks.clone();
 
-    tauri::async_runtime::spawn(async move {
-        tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+    tasks.spawn(async move {
         let mut connections = streams.subscribe();
         let mut events = streams.subscribe_ws();
+        if stream_shutdown.is_cancelled() {
+            return;
+        }
         if let Err(error) = streams.start().await {
             tracing::error!(%error, "Clash streams actor failed to start");
         }
+        if stream_shutdown.is_cancelled() {
+            return;
+        }
 
         let ws_app_handle = app_handle.clone();
-        tauri::async_runtime::spawn(async move {
-            while let Ok(event) = events.recv().await {
+        let ws_shutdown = stream_shutdown.clone();
+        stream_tasks.spawn(async move {
+            loop {
+                let event = tokio::select! {
+                    _ = ws_shutdown.cancelled() => break,
+                    event = events.recv() => event,
+                };
+                let Ok(event) = event else {
+                    break;
+                };
                 if let Err(error) = ws::ClashWsEvent::from(event).emit(&ws_app_handle) {
                     tracing::debug!(%error, "failed to emit Clash WebSocket event");
                 }
             }
         });
 
-        while let Ok(event) = connections.recv().await {
+        loop {
+            let event = tokio::select! {
+                _ = stream_shutdown.cancelled() => break,
+                event = connections.recv() => event,
+            };
+            let Ok(event) = event else {
+                break;
+            };
             if let Err(error) = ClashConnectionsEvent(event).emit(&app_handle) {
                 tracing::debug!(%error, "failed to emit Clash connections event");
             }

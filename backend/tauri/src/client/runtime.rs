@@ -404,6 +404,9 @@ pub(crate) struct RuntimeApplyReceipt {
     pub run_intent: super::application_workflow::policy::CoreRunIntent,
     pub local_ipc: chimera_core_manager::LocalIpcSettings,
     pub applied_revision: chimera_ipc::api::status::ConfigRevisionInfo,
+    /// The Profile-backed source identity this runtime was built from, when
+    /// the caller captured the complete committed target.
+    pub target: Option<String>,
     pub ports: super::ports::CandidatePortBindings,
     pub artifact: Option<Arc<RuntimeSnapshot>>,
 }

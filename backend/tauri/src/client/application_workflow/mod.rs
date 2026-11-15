@@ -18,6 +18,7 @@ pub(crate) mod participant;
 pub(crate) mod policy;
 pub(crate) mod ports;
 pub(in crate::client) mod profiles;
+pub(crate) mod startup;
 pub(in crate::client) mod tcc;
 pub(in crate::client) mod workflow;
 
@@ -152,3 +153,46 @@ impl ractor::Actor for TestApplicationWorkflowActor {
 
 #[cfg(test)]
 use futures_util::FutureExt;
+
+#[cfg(test)]
+mod startup_state_tests {
+    use std::{collections::HashMap, sync::Arc};
+
+    use tokio::sync::Mutex;
+
+    use super::{
+        startup::{StartupOutcome, StartupReport, StartupWorkflowState},
+        workflow::ApplicationWorkflow,
+    };
+
+    #[test]
+    fn application_workflow_uses_the_lifecycle_startup_state() {
+        let mut workflow = ApplicationWorkflow::new(
+            Arc::new(Mutex::new(HashMap::new())),
+            Arc::new(Mutex::new(None)),
+            None,
+        );
+        let startup = StartupWorkflowState::default();
+        workflow.connect_startup_state(startup.clone());
+
+        *startup.report_handle().lock() = Some(StartupReport {
+            operation_id: 7,
+            observation: None,
+            outcome: StartupOutcome::Unsettled {
+                reason: "test report".into(),
+            },
+        });
+        startup.mark_owner_unproven();
+
+        assert_eq!(
+            workflow
+                .startup
+                .report_handle()
+                .lock()
+                .as_ref()
+                .map(|report| report.operation_id),
+            Some(7)
+        );
+        assert!(workflow.startup.owner_unproven());
+    }
+}

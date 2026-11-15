@@ -170,10 +170,12 @@ pub async fn cleanup_processes_async(app_handle: &AppHandle) -> anyhow::Result<(
     debug!(target: "app", "cleanup processes");
     // let _ = super::resolve::save_window_state(app_handle, true);
     /* let widget_manager = app_handle.state::<crate::widget::WidgetManager>(); */
-    let client = app_handle
+    let Some(client) = app_handle
         .try_state::<ChimeraClient>()
         .map(|state| state.inner().clone())
-        .ok_or_else(|| anyhow!("ChimeraClient is not managed"))?;
+    else {
+        return Ok(());
+    };
     if let Err(error) = client.streams().stop().await {
         log::warn!(target: "app", "failed to stop Clash streams during cleanup: {error:?}");
     }

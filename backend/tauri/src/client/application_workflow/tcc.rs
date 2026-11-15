@@ -909,6 +909,7 @@ mod tests {
         fail_confirm: AtomicBool,
         fail_validation: AtomicBool,
         fail_restore: AtomicBool,
+        status_uncertain: AtomicBool,
         validations: AtomicUsize,
         rebuilds: AtomicUsize,
         started: StdMutex<Option<oneshot::Sender<()>>>,
@@ -929,6 +930,7 @@ mod tests {
                 fail_confirm: AtomicBool::new(false),
                 fail_validation: AtomicBool::new(false),
                 fail_restore: AtomicBool::new(false),
+                status_uncertain: AtomicBool::new(false),
                 validations: AtomicUsize::new(0),
                 rebuilds: AtomicUsize::new(0),
                 started: StdMutex::new(None),
@@ -949,6 +951,7 @@ mod tests {
                 fail_confirm: AtomicBool::new(false),
                 fail_validation: AtomicBool::new(false),
                 fail_restore: AtomicBool::new(false),
+                status_uncertain: AtomicBool::new(false),
                 validations: AtomicUsize::new(0),
                 rebuilds: AtomicUsize::new(0),
                 started: StdMutex::new(Some(started)),
@@ -987,6 +990,7 @@ mod tests {
                 fail_confirm: AtomicBool::new(false),
                 fail_validation: AtomicBool::new(false),
                 fail_restore: AtomicBool::new(false),
+                status_uncertain: AtomicBool::new(false),
                 validations: AtomicUsize::new(0),
                 rebuilds: AtomicUsize::new(0),
                 started: StdMutex::new(None),
@@ -1007,6 +1011,7 @@ mod tests {
                 fail_confirm: AtomicBool::new(false),
                 fail_validation: AtomicBool::new(false),
                 fail_restore: AtomicBool::new(true),
+                status_uncertain: AtomicBool::new(false),
                 validations: AtomicUsize::new(0),
                 rebuilds: AtomicUsize::new(0),
                 started: StdMutex::new(None),
@@ -1018,7 +1023,10 @@ mod tests {
     #[async_trait::async_trait]
     impl ProfileRuntime for TestProfileRuntime {
         fn status(&self) -> CoreLifecycleStatus {
-            CoreLifecycleStatus::default()
+            CoreLifecycleStatus {
+                uncertain: self.status_uncertain.load(Ordering::Acquire),
+                ..Default::default()
+            }
         }
 
         async fn core_status(&self) -> anyhow::Result<CoreStatusSnapshot> {
@@ -1326,6 +1334,7 @@ mod tests {
                 source_hash: "test-source-hash".into(),
                 effective_hash: "test-effective-hash".into(),
             },
+            target: None,
             ports: Default::default(),
             artifact: Some(artifact),
         })
@@ -1596,6 +1605,38 @@ mod tests {
             Some(RefusalCause::Evidence(EvidenceGap::NoRestorableBaseline))
         ));
         assert!(recovery_required.lock().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn unproven_startup_owner_blocks_profile_runtime_admission() {
+        let (mut manager, _directory) = profile_manager().await;
+        let runtime = Arc::new(TestProfileRuntime::new());
+        runtime.status_uncertain.store(true, Ordering::Release);
+        let (workflow, outcomes, _) = workflow(runtime.clone()).await;
+        let operation_id = OperationId::generate();
+        let version = manager.snapshot_handle().load().version;
+
+        let result = manager
+            .replace_if_version_with_participant(
+                version,
+                candidate_profiles(),
+                {
+                    let workflow = workflow.clone();
+                    move |decision| {
+                        participant(operation_id, decision, workflow, Duration::from_secs(1))
+                    }
+                },
+                || async { Ok(()) },
+                || async { Ok(()) },
+            )
+            .await;
+
+        assert!(result.is_err());
+        assert!(runtime.applied.lock().await.is_empty());
+        assert!(runtime.confirmed.lock().await.is_empty());
+        assert_eq!(runtime.validations.load(Ordering::Acquire), 0);
+        let receipt = outcomes.lock().await.get(&operation_id).cloned().unwrap();
+        assert_eq!(receipt.outcome, MutationOutcomeKind::RecoveryRequired);
     }
 
     #[tokio::test]

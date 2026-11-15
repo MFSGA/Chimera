@@ -780,7 +780,7 @@ pub mod service {
     #[tauri::command]
     #[specta::specta]
     pub async fn install_service(client: State<'_, ChimeraClient>) -> Result {
-        client.install_service().await?;
+        service::install_service_and_converge(&client).await?;
         Ok(())
     }
     #[tauri::command]
