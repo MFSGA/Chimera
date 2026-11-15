@@ -236,7 +236,7 @@ pub fn resolve_setup(app: &mut App, paths: &PathResolver) {
     ));
 
     log::trace!("init storage");
-    log_err!(crate::core::storage::setup(app));
+    log_err!(crate::core::storage::setup(app, paths));
 
     // setup jobs
     /* log::trace!("setup jobs");

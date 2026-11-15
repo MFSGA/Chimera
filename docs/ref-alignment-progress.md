@@ -2419,3 +2419,13 @@ Only the product naming, existing config formats and Chimera Client wiring remai
 - **源码映射**：`ref/backend/tauri/src/utils/init/mod.rs::{bundled_resources_dir,init_resources}` → Chimera 同路径同名函数；`ref::resolve_setup` 使用 Tauri resource dir 与既有 `PathResolver` → Chimera `utils::resolve::resolve_setup(app, paths)`。只做必要的 Chimera 路径类型适配，并保留上游相同资源文件和复制时间戳规则。
 - **验证**：`utils::init::tests` **7/7 通过**，其中新增用例验证资源只复制到注入的数据目录，资源源目录缺失时不创建数据根目录；macOS `cargo check --offline --locked --manifest-path backend/Cargo.toml -p chimera --lib`、Rustfmt 与 `git diff --check` 通过。编译保留项目既有 warnings。未启动实际桌面包，因此未验证打包后 `resource_dir` 的内容/平台布局及窗口可见性。
 - **回滚**：将 `init_resources` 恢复为无参数全局目录查询，将 `resolve_setup` 恢复单参数，并恢复 `lib.rs` 调用；移除新增临时目录单测。无需用户配置迁移或宿主系统清理。
+
+## 2026-11-14：启动 Storage 使用同一数据根目录
+
+- **目标 / 验收**：把 startup Storage 打开路径接到入口已解析并显式传入的 `PathResolver`，与 ref 在 setup 中使用 `paths.storage_path()` 的所有权一致。
+- **非目标**：不改变现有 `storage.db` 文件名、redb schema、旧数据、Storage IPC/事件、web storage 监听、事务语义或故障时 UI best-effort 行为；不迁移其它运行时 Core/Service 路径 helper。
+- **基线 / 风险 / 接口**：父提交 `e8494e863d753f3ab5526c4a52b231484b3eb15`；固定 ref gitlink 与只读工作区 `59724e85c34abb6995c22d101c876cc06dc16576`。风险 L2（打开持久 Storage 数据库）。`core::storage::setup` 内部增加 `&PathResolver` 参数并经 `open_storage` 测试边界使用其 `storage_path()`；无 IPC、schema 或文件位置变化。
+- **源码映射**：`ref/backend/tauri/src/setup.rs::setup` 中 `Storage::try_new(paths.storage_path())` → `backend/tauri/src/core/storage.rs::{setup,open_storage}`，调用自 `utils::resolve::resolve_setup`。新 Tauri 内部路径共享前两批传入的 resolver，不再调用 `utils::dirs::storage_path()`。
+- **保留差异 / 后续**：本批只迁移路径所有权；打开数据库失败仍沿用 Chimera `resolve_setup` 的 `log_err!` best-effort 行为，而 ref 会向 setup 返回错误。Storage IPC 随后会读取已管理的 `Storage`，因此失败语义需要单独迁移并覆盖，不把这条路径接线当作错误处理已对齐。
+- **验证**：新增隔离数据根用例 **1/1 通过**，确认 Storage DB 建在注入 data root、config root 不被创建；macOS `cargo check --offline --locked --manifest-path backend/Cargo.toml -p chimera --lib`、Rustfmt 与 `git diff --check` 通过。编译保留项目既有 warnings。未运行完整桌面冷启动或 web storage UI/E2E。
+- **回滚**：恢复 `core::storage::setup(app)` 的旧签名、`utils::dirs::storage_path()` 查找和 `resolve_setup` 调用；移除新增 helper 单测。没有 Storage 文件搬迁，无需备份或清理用户数据。

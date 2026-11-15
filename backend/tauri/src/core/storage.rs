@@ -1,4 +1,4 @@
-use crate::utils::dirs;
+use crate::utils::path::PathResolver;
 use anyhow::Context;
 use redb::{ReadableDatabase, ReadableTable, TableDefinition};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
@@ -411,9 +411,16 @@ pub fn register_web_storage_listener(
     );
 }
 
-pub fn setup<R: tauri::Runtime, M: tauri::Manager<R>>(app: &M) -> anyhow::Result<()> {
-    let storage_path = dirs::storage_path().context("failed to get storage path")?;
-    let storage = Storage::try_new(&storage_path)?;
+fn open_storage(paths: &PathResolver) -> anyhow::Result<Storage> {
+    let storage_path = paths.storage_path();
+    Storage::try_new(&storage_path).context("failed to open application storage")
+}
+
+pub fn setup<R: tauri::Runtime, M: tauri::Manager<R>>(
+    app: &M,
+    paths: &PathResolver,
+) -> anyhow::Result<()> {
+    let storage = open_storage(paths)?;
     app.manage(storage);
     Ok(())
 }
@@ -422,6 +429,21 @@ pub fn setup<R: tauri::Runtime, M: tauri::Manager<R>>(app: &M) -> anyhow::Result
 mod tests {
     use super::*;
     use std::{collections::BTreeMap, sync::Barrier, thread};
+
+    #[test]
+    fn startup_storage_uses_the_injected_data_root() {
+        let temp = tempfile::tempdir().unwrap();
+        let config_dir = temp.path().join("isolated-config");
+        let data_dir = temp.path().join("isolated-data");
+        std::fs::create_dir_all(&data_dir).unwrap();
+        let paths = PathResolver::with_base_dirs(config_dir.clone(), data_dir.clone());
+
+        let _storage = open_storage(&paths).expect("startup storage should use injected paths");
+
+        assert!(paths.storage_path().is_file());
+        assert!(!config_dir.exists());
+        assert_eq!(std::fs::read_dir(&data_dir).unwrap().count(), 1);
+    }
 
     fn open(dir: &tempfile::TempDir) -> StorageInner {
         StorageInner::try_new(&dir.path().join("storage.redb")).expect("storage should open")
