@@ -2440,6 +2440,16 @@ Only the product naming, existing config formats and Chimera Client wiring remai
 - **保留差异 / 后续**：Storage 失败会阻止 setup 继续，但 `lib.rs` 的 `builder.build` 失败分支仍以通用 `Internal` 和 `path=None` 显示 one-shot 错误窗；详细错误链含数据库路径，独立 Path 标签仍写 `unresolved path`。DIFF-069 Stage 2/3 需要让结构化边界报告传到错误窗，并加入真实 Tauri setup 失败验证。
 - **回滚**：恢复 `resolve_setup` 中的 best-effort Storage open 和原 Jobs 顺序，移除 `StartupStage::Storage` 与失败测试；Storage 数据文件无迁移，无需回滚用户数据。
 
+## 2026-11-14：Tauri setup 失败弹窗保留结构化路径
+
+- **目标 / 验收**：Storage、迁移、Jobs、CoreHost 或 TypedClient 的 startup boundary 失败后，Tauri `builder.build` 错误弹窗继续显示原始 stage、failure kind 与已分类路径；Storage 错误不再单独标注为 `unresolved path`。
+- **非目标**：不改失败边界的顺序、不在失败时启动窗口、不迁移独立 crash-reporter 子进程，也不改变错误分类、备份或用户数据。
+- **基线 / 风险 / 接口**：父提交 `2024f382eb2c7ecf675df3f0b4126a1086ac6e0f`；固定只读 ref `59724e85c34abb6995c22d101c876cc06dc16576`。风险 L2（启动错误呈现）。Tauri 内部 `setup::setup` 增加报告捕获参数；不改 IPC、持久化或外部 API。
+- **源码映射 / 部分对齐**：ref `backend/tauri/src/startup_failure.rs::StartupFailure::from_setup` 为 `OpenStorage` 生成 `paths.storage_path()`，再由 `setup.rs::TauriStartupFailureHost::show` 交给 `startup_failure::show(Report)`；Chimera `startup_failure.rs::report_boundary_with_backup_and_capture` 在原日志/错误链传播边界捕获同一个 `Report`，`lib.rs::builder.build` 失败出口用 `show_report` 呈现 stage、kind、path、detail 与已确认备份目录。迁移之后的 Storage、Jobs、CoreHost、TypedClient 边界都传入 `migrations.backup_info()`，只有仍存在且 manifest 已验证的快照才展示。Chimera 仍通过 Tauri builder 错误出口显示，未迁移 ref 的 `run_setup`、owner retain/exit 或独立 crash-reporter；报告捕获是这层 Tauri 错误包装的窄适配。
+- **验证**：`cargo test --offline --locked --manifest-path backend/Cargo.toml -p chimera --lib startup_failure::tests -- --test-threads=1` **9/9 通过**，新断言验证 Storage 报告精确路径和已验证备份目录进入弹窗文本。macOS `cargo check --offline --locked --manifest-path backend/Cargo.toml -p chimera --lib` 与 `cargo clippy --offline --locked --manifest-path backend/Cargo.toml -p chimera --all-targets --all-features` 通过，保留仓库已有 warnings。首轮链接因只剩 258 MiB 报 `errno=28`，未进入测试；删除 ignored 的 `backend/target/e2e` Cargo 构建缓存（12.3 GiB，未动源码或 E2E 证据）后，盘余 9.5 GiB 重跑通过。针对修改 Rust 文件的 `rustfmt`、记录文档的 Prettier 与 `git diff --check` 通过；未运行桌面 setup 故障注入，故未实证原生弹窗可见性。
+- **保留差异 / 后续**：没有经过结构化 boundary 的错误（如 `RuntimePaths::from_resolver`、`client.get_app_config()` 及 `core::clash::setup`）仍会使用通用 fallback；本批只保证已包装边界的 Report。Tauri `builder.build` 错误呈现与 ref 的 setup owner/error-host 流程仍不同。后续 DIFF-069 Stage 3 需要解决 setup 部分失败后的 owner 取消/移交，再考虑迁移 ref 的 `run_setup` 生命周期，而不是继续扩展这个报告侧带。
+- **回滚**：恢复 `setup::setup` 签名和 `lib.rs` 通用 `Internal/path=None` builder 错误出口；移除 capture 参数、`show_report` 和该报告回归测试。无持久数据修改。
+
 ## 2026-11-14：首窗就绪握手等待应用设置
 
 - **目标 / 验收**：让初始隐藏 WebView 在应用设置查询成功或失败后再报告 ready，依 ref 的 `WindowReadyReporter` 时序显示；错误边界仍报告 ready，确保异常页不会永远隐藏。

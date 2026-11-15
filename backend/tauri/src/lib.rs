@@ -224,6 +224,8 @@ pub fn run() -> std::process::ExitCode {
         specta_invoke_handler(invoke)
     };
 
+    let setup_failure_capture = std::sync::Arc::new(parking_lot::Mutex::new(None));
+    let setup_failure_capture_for_setup = std::sync::Arc::clone(&setup_failure_capture);
     builder = builder
         .on_page_load(|webview, payload| {
             if payload.event() == tauri::webview::PageLoadEvent::Started {
@@ -291,7 +293,13 @@ pub fn run() -> std::process::ExitCode {
             }
 
             specta_builder.mount_events(app);
-            setup::setup(app, setup_paths.clone(), paths.clone(), metadata)?;
+            setup::setup(
+                app,
+                setup_paths.clone(),
+                paths.clone(),
+                metadata,
+                &setup_failure_capture_for_setup,
+            )?;
             core::updater::recover_interrupted_update();
             core::clash::setup(app)?;
 
@@ -404,12 +412,16 @@ pub fn run() -> std::process::ExitCode {
     let app = match builder.build(context) {
         Ok(app) => app,
         Err(error) => {
-            startup_failure::show_one_shot(
-                startup_failure::FailureKind::Internal,
-                None,
-                &error,
-                None,
-            );
+            if let Some(report) = setup_failure_capture.lock().take() {
+                startup_failure::show_report(&report);
+            } else {
+                startup_failure::show_one_shot(
+                    startup_failure::FailureKind::Internal,
+                    None,
+                    &error,
+                    None,
+                );
+            }
             return std::process::ExitCode::FAILURE;
         }
     };

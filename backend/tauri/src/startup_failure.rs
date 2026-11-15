@@ -305,8 +305,21 @@ pub(crate) fn report_boundary_with_backup<T>(
     paths: &PathResolver,
     backup: Option<&BackupInfo>,
 ) -> anyhow::Result<T> {
+    report_boundary_with_backup_and_capture(result, stage, paths, backup, None)
+}
+
+pub(crate) fn report_boundary_with_backup_and_capture<T>(
+    result: anyhow::Result<T>,
+    stage: StartupStage,
+    paths: &PathResolver,
+    backup: Option<&BackupInfo>,
+    capture: Option<&parking_lot::Mutex<Option<Report>>>,
+) -> anyhow::Result<T> {
     result.map_err(|source| {
         let report = Report::from_error_with_backup(source.as_ref(), stage, paths, backup);
+        if let Some(capture) = capture {
+            *capture.lock() = Some(report.clone());
+        }
         tracing::error!(
             stage = ?report.failure.stage,
             kind = ?report.failure.kind,
@@ -333,6 +346,45 @@ pub(crate) fn report_boundary_with_backup<T>(
             report.failure.stage, report.failure.kind
         ))
     })
+}
+
+/// Presents a structured setup failure after Tauri has returned its setup error.
+/// The builder error does not retain the stage/path classification in a form
+/// the entry point can use, so callers retain this report across that boundary.
+pub(crate) fn show_report(report: &Report) {
+    let message = report_message(report);
+    tracing::error!(
+        stage = ?report.failure.stage,
+        kind = ?report.failure.kind,
+        path = ?report.failure.path,
+        revision = ?report.failure.revision,
+        backups_dir = ?report.backups_dir,
+        detail = %report.failure.detail,
+        "application startup failed during Tauri setup"
+    );
+    eprintln!("{message}");
+    crate::utils::dialog::error_dialog(message);
+}
+
+fn report_message(report: &Report) -> String {
+    let failure = &report.failure;
+    let location = failure
+        .path
+        .as_deref()
+        .map(|path| path.display().to_string())
+        .unwrap_or_else(|| "unresolved path".to_owned());
+    let recovery = report
+        .backups_dir
+        .as_ref()
+        .map(|path| format!("Verified migration backup: {}", path.display()))
+        .unwrap_or_else(|| {
+            "Check the reported path and permissions; do not remove existing configuration files."
+                .to_owned()
+        });
+    format!(
+        "Clash Chimera could not start during {:?} ({:?}).\n\nPath: {location}\n\n{recovery}\n\n{}",
+        failure.stage, failure.kind, failure.detail
+    )
 }
 
 /// Presents pre-Tauri failures without starting a reporter or event loop.
@@ -622,5 +674,52 @@ mod tests {
                 .next()
                 .is_none()
         );
+    }
+
+    #[test]
+    fn captured_storage_report_keeps_its_path_and_verified_backup_for_the_setup_dialog() {
+        use crate::core::backup::{self, BackupKind, BackupRequest, StorageSource};
+
+        let (_temp, paths) = fixture();
+        std::fs::write(paths.chimera_config_path(), b"legacy yaml").unwrap();
+        let storage = paths.storage_path();
+        let target = semver::Version::new(2, 0, 0);
+        let backup = backup::create_backup(&BackupRequest {
+            paths: &paths,
+            storage: StorageSource::File(&storage),
+            kind: BackupKind::Migration {
+                from: None,
+                target: &target,
+            },
+            now: time::OffsetDateTime::now_utc(),
+        })
+        .unwrap();
+        let capture = parking_lot::Mutex::new(None);
+        let error = anyhow::anyhow!("storage database is malformed");
+
+        let annotated = report_boundary_with_backup_and_capture::<()>(
+            Err(error),
+            StartupStage::Storage,
+            &paths,
+            Some(&backup),
+            Some(&capture),
+        )
+        .unwrap_err();
+
+        assert!(annotated.to_string().contains("startup Storage failed"));
+        let report = capture.lock().clone().expect("startup report was captured");
+        assert_eq!(report.failure.stage, StartupStage::Storage);
+        assert_eq!(report.failure.kind, FailureKind::Internal);
+        assert_eq!(report.failure.path, Some(paths.storage_path()));
+        assert_eq!(report.backups_dir, Some(paths.backups_dir()));
+
+        let message = report_message(&report);
+        assert!(message.contains("during Storage (Internal)"));
+        assert!(message.contains(&format!("Path: {}", paths.storage_path().display())));
+        assert!(message.contains(&format!(
+            "Verified migration backup: {}",
+            paths.backups_dir().display()
+        )));
+        assert!(!message.contains("Path: unresolved path"));
     }
 }

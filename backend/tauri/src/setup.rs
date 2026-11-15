@@ -43,6 +43,7 @@ pub fn setup(
     paths: PathResolver,
     resolved_paths: chimera_paths::PathResolver,
     bundle_metadata: chimera_contracts::bundle_metadata::BundleMetadata,
+    startup_failure_capture: &parking_lot::Mutex<Option<crate::startup_failure::Report>>,
 ) -> anyhow::Result<()> {
     let shutdown = tokio_util::sync::CancellationToken::new();
     let tasks = tokio_util::task::TaskTracker::new();
@@ -59,26 +60,31 @@ pub fn setup(
     );
 
     let runtime_paths = RuntimePaths::from_resolver(&paths)?;
-    let mut migrations = crate::startup_failure::report_boundary(
+    let mut migrations = crate::startup_failure::report_boundary_with_backup_and_capture(
         crate::core::migration::Runner::with_paths(paths.clone(), false)
             .context("failed to setup config migrations"),
         crate::startup_failure::StartupStage::MigrationPrepare,
         &paths,
+        None,
+        Some(startup_failure_capture),
     )?;
     let migration_result = migrations
         .run_pending()
         .context("failed to run config migrations before client setup");
-    crate::startup_failure::report_boundary_with_backup(
+    crate::startup_failure::report_boundary_with_backup_and_capture(
         migration_result,
         crate::startup_failure::StartupStage::MigrationRun,
         &paths,
         migrations.backup_info(),
+        Some(startup_failure_capture),
     )?;
 
-    crate::startup_failure::report_boundary(
+    crate::startup_failure::report_boundary_with_backup_and_capture(
         crate::core::storage::setup(app, &paths),
         crate::startup_failure::StartupStage::Storage,
         &paths,
+        migrations.backup_info(),
+        Some(startup_failure_capture),
     )?;
 
     let traffic_store = open_traffic_store(&paths);
@@ -86,7 +92,7 @@ pub fn setup(
         shutdown: shutdown.clone(),
         tasks: tasks.clone(),
     });
-    let jobs = crate::startup_failure::report_boundary(
+    let jobs = crate::startup_failure::report_boundary_with_backup_and_capture(
         tauri::async_runtime::block_on(crate::client::jobs::start(
             paths.jobs_path(),
             crate::utils::init::jobs_capture(),
@@ -96,6 +102,8 @@ pub fn setup(
         .context("failed to start the jobs owner"),
         crate::startup_failure::StartupStage::Jobs,
         &paths,
+        migrations.backup_info(),
+        Some(startup_failure_capture),
     )?;
 
     let legacy_lock = Arc::new(parking_lot::Mutex::new(()));
@@ -110,7 +118,7 @@ pub fn setup(
     let stop_strategy = Arc::new(AtomicStopStrategy::new(StopStrategy::default()));
     app.manage(Arc::clone(&stop_strategy));
     // The desktop executable handles windows_shutdown_helper_entry in main.rs.
-    let local_control = crate::startup_failure::report_boundary(
+    let local_control = crate::startup_failure::report_boundary_with_backup_and_capture(
         (|| {
             let shutdown_helper =
                 std::env::current_exe().context("failed to resolve the desktop shutdown helper")?;
@@ -123,6 +131,8 @@ pub fn setup(
         })(),
         crate::startup_failure::StartupStage::CoreHost,
         &paths,
+        migrations.backup_info(),
+        Some(startup_failure_capture),
     )?;
     // Match ref/backend/tauri/src/setup.rs: inject the original resolver from
     // the process entry point. Never re-discover paths through Tauri globals.
@@ -245,7 +255,7 @@ pub fn setup(
             system_proxy_source.clone(),
         ));
 
-    let client = crate::startup_failure::report_boundary(
+    let client = crate::startup_failure::report_boundary_with_backup_and_capture(
         ChimeraClient::try_new_with_args(ClientSetupArgs {
             paths: paths.clone(),
             runtime_paths: runtime_paths.clone(),
@@ -278,6 +288,8 @@ pub fn setup(
         }),
         crate::startup_failure::StartupStage::TypedClient,
         &paths,
+        migrations.backup_info(),
+        Some(startup_failure_capture),
     )?;
     rust_i18n::set_locale(client.get_app_config()?.language.as_str());
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
