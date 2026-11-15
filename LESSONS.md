@@ -803,15 +803,15 @@ backend/Cargo.toml -p chimera --lib core::clash::proxies::tests:: -- --nocapture
 - 严重度：Low
 - 模块：E2E / macOS / Legacy Connections
 - master commit / ref gitlink SHA / 平台与测试环境：`eb5001a4729e6df47090a261892aac5623982c3f`；项目记录的 ref gitlink `ae0db596e96ba09d7662cc7533a13ffe5b581bf7`，本机只读 ref checkout `4eaf13b9c5dc468fdfc38272bf76b20a681d2e54`；macOS WebKit 605.1.15 嵌入式 WebDriver。
-- 关联 Issue / PR / CI / 运行日志（脱敏）：本地执行 `pnpm --filter @chimera/tauri-e2e exec wdio run ./wdio.conf.ts --spec ./specs/connections-legacy-layout.e2e.ts`；WDIO session `37530cf2-72fd-4d97-aed6-4b64bec55a27`，spec 在 `beforeEach` 的页面可见性检查失败。
-- 预期行为：页面可见且路由动画完成后，Legacy Connections 的 UI E2E 才开始断言布局和交互；隐藏 WebView 必须明确报告为环境阻塞，不得当作产品回归或通过结果。
-- 真实异常、复现步骤与证据：spec 日志观察到 `document.visibilityState=hidden`、`document.hasFocus()=false`、`.page-transition` 的 `opacity=0`，两个 Motion animation 的 `currentTime=0`；`beforeEach` 等待连接搜索框可见超时，最终 `0` 个 spec 通过，连接详情操作没有执行。
-- 确认的根因与排除项：嵌入式 WebView 没有成为可见前台窗口，现有页面动画因此未推进。不是详情弹窗断言失败，也不能据此判断单击打开详情的产品逻辑错误。
+- 关联 Issue / PR / CI / 运行日志（脱敏）：本地执行 `pnpm --filter @chimera/tauri-e2e exec wdio run ./wdio.conf.ts --spec ./specs/connections-legacy-layout.e2e.ts`；原 WDIO session `37530cf2-72fd-4d97-aed6-4b64bec55a27` 与 2026-11-14 US/Pacific 复验 session `41778e04-8c12-48f7-b474-42a7f92e8591` 均在 `beforeEach` 的页面可见性检查失败。最新 failure-time 截图：`tauri-e2e/.tmp/artifacts/startup-ready-handshake/connections-legacy-layout-before-each-failure.png`（本机 ignored artifact）。本次复验对照的固定 `ref` 为 `59724e85c34abb6995c22d101c876cc06dc16576`；原标题里的 ref SHA 只对应 2026-10-23 历史运行。
+- 预期行为：页面可见且路由动画完成后，Legacy Connections 的 UI E2E 才开始断言布局和交互；隐藏 WebView 必须明确报告为可见性阻塞，不得当作产品回归或通过结果，并取得原生前台证据以区分应用问题与测试会话问题。
+- 真实异常、复现步骤与证据：原 spec 日志观察到 `document.visibilityState=hidden`、`document.hasFocus()=false`、`.page-transition` 的 `opacity=0`，两个 Motion animation 的 `currentTime=0`。2026-11-14 复验在 `WindowReadyReporter` 已按固定 ref 等待应用设置 query settle 后仍得到 `visibility=hidden`、`hasFocus=false`、`.page-transition opacity=0` 与负 `currentTime`；打开的 failure-time 截图显示 Legacy 导航已渲染但内容区为空。`beforeEach` 等待连接搜索框可见超时，最终 `0` 个场景通过，连接详情操作没有执行。另一个 `smoke.e2e.ts` 的 **5/5** 只证明资源渲染、导航与双 WebView fetch，不断言原生前台可见性，因此不能抵消这次失败。
+- 根因范围与排除项：已确认测试 WebView 在失败时 hidden，页面动画因此未推进；当前证据不足以区分应用没有把它带到前台，还是本地自动化会话未将 E2E 进程置于前台。不是详情弹窗断言失败，也不能据此判断单击打开详情的产品逻辑错误，或声称原生首窗已可见。
 - 修复提交、差异映射及保留的兼容性边界：没有修改测试等待条件、页面透明度或 WebDriver 输入路径来绕过前置检查。现有 `connections-legacy-layout.e2e.ts` 保留可见性和动画诊断；需要前台桌面会话验证视觉及点击交互。
 - 原实现失败、新实现通过的回归测试，及测试注册位置：没有新的产品回归测试结论。本次 spec 在 `beforeEach` 中止，详情单击交互未覆盖；现有 ref 浏览器测试验证的是双击，不代替 Legacy 单击验证。
-- 验证命令、实际用例数量、结果、未覆盖/跳过项：`pnpm e2e:tauri:build` 成功；目标 WDIO spec 失败在可见性前置条件，`0` 个 spec 完成。前端 typecheck、build、连接模型测试及边界检查另见本任务验证记录。
+- 验证命令、实际用例数量、结果、未覆盖/跳过项：`pnpm e2e:tauri:build` 成功；旧运行及 2026-11-14 复验中的目标 WDIO spec 均失败在可见性前置条件，`0` 个场景完成。当前复验之前的 `smoke.e2e.ts` 为 **5/5**，但没有原生可见性断言。前端 typecheck、build、连接模型测试及边界检查另见本任务验证记录。
 - 风险/回滚和清理证据（如涉及宿主状态）：E2E binary 使用隔离 runtime；本次只读 UI 流程未修改用户配置或宿主网络。无需产品回滚。
-- 关联重复事件、后续防复发措施、L3 门禁调整审批链接（如有）：docs/ref-alignment-connections.md 已记录此前相同的隐藏 WebView 限制；运行前台桌面 E2E 前继续保留 fail-closed 可见性检查，只有当检查通过并实际执行目标交互后才报告交互已验证。无 CI 门禁调整。
+- 关联重复事件、后续防复发措施、L3 门禁调整审批链接（如有）：docs/ref-alignment-connections.md 已记录此前相同的隐藏 WebView 症状；运行桌面 E2E 时继续保留 fail-closed 可见性检查，只有当检查通过并实际执行目标交互后才报告交互已验证。下一次复验应同时取得本次 E2E 进程对应的原生前台证据，确认问题来自产品还是测试会话。无 CI 门禁调整。
 
 ### LESSON-20261025-001：Release 预检必须有权限查看草稿
 
