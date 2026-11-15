@@ -85,13 +85,20 @@
 | LESSON-20261115-001 | 2026-11-15 | Startup retry / Rust tests | 退避测试将调用前采样时间误当调度基准，出现 1.000033459s 与 1s 的微小差异；为调度策略注入显式 Instant 后精确验证 ref 延迟 | Mitigated |
 | LESSON-20261115-002 | 2026-11-15 | Service owner fencing | `submit_v2` 仍将旧版无身份 `Recover` 直接送入 manager，可绕过新增 installation fence；拒绝旧命令并验证 config/data/无身份三种 admission 均失败关闭 | Mitigated |
 | LESSON-20261115-003 | 2026-11-15 | Rust test authoring | 新共享启动状态测试模块首次漏掉本地 `Arc`/`Mutex`/`HashMap` imports，测试编译时发现；补充显式 imports 后目标测试通过 | Mitigated |
-| LESSON-20261115-005 | 2026-11-15 | Tauri startup / local runtime | CI run 43720593308 在 WebDriver 就绪前退出；失败日志显示 setup 线程在 `LocalRuntimeHost::new_with_shutdown` 调用 `TaskTracker::spawn` 并 panic `there is no reactor running`；加同步线程回归并改用 Tauri runtime `spawn_on` | Mitigated |
+| LESSON-20261115-005 | 2026-11-15 | Tauri startup / local runtime | CI run 43720593308 显示 Local runtime 监视器在同步 setup 线程调用 `TaskTracker::spawn` 并 panic；同步线程回归覆盖该入口 | Mitigated |
+| LESSON-20261115-006 | 2026-11-15 | Tauri startup / Windows E2E | PR #638 run 43724729524 证明只修 Local runtime 漏了 `setup.rs:300` 快捷键泵、facade monitor 与 Clash setup forwarders；同步 setup 中的 tracked task 必须统一走 Tauri runtime scheduler | Mitigated |
 
 ### LESSON-20261113-001/002：架构迁移要覆盖原生运行时与稀疏配置
 
 - **Windows 启动证据**：GitHub Actions [Tauri E2E push 43432488787](https://github.com/MFSGA/Chimera/actions/runs/43432488787)，原生 setup 执行 `TaskTracker::spawn` 在 `resolve.rs:213` panic：`there is no reactor running`。该作业的诊断 ZIP 只有启动日志，没有失败时截图，因此结论限于日志所确定的 Tokio 上下文问题。修复使用已有 `core/storage.rs` 的 `spawn_on(..., tauri::async_runtime::handle().inner())` 调度方式，并新增普通线程中调度与排空的回归测试。当前本地 `chimera --lib` 844/844 通过、1 ignored；远端实际桌面 E2E 尚未重跑。
 - **配置 CI 证据**：GitHub Actions [CI push 43432488898](https://github.com/MFSGA/Chimera/actions/runs/43432488898)，Ubuntu、Windows、macOS 的 `chimera-config` 都有 2 项测试失败（`missing field window_close`）。原因是迁入 `#[patch(nesting)]` 后，Chimera 顶层 Patch 缺少 ref 的 `#[patch(attribute(serde(default)))]`。补齐后旧字段别名与发布渠道稀疏 Patch 回归通过，并新增嵌套覆盖不触碰其他字段的测试；配置全库 233/233 本地通过。尚未以新 SHA 重跑三平台 CI。
 - **防复发**：从原生应用启动回调安排 Tokio 任务必须明确运行时上下文；引入嵌套 `struct_patch` 字段时必须验证完全缺失的稀疏补丁以及仅更新一个子字段的场景。不要只凭 `cargo check` 认定操作系统 GUI 启动和配置兼容行为已验证。
+
+### LESSON-20261115-005/006：同步 setup 中所有跟踪任务必须显式选择 runtime
+
+- **证据**：PR #638 的 Windows Desktop run [43724729524](https://github.com/MFSGA/Chimera/actions/runs/43724729524) 在 WebDriver 就绪前退出。下载并打开失败附件 `tauri-e2e-diagnostics-43724729524` 后，三个启动尝试都在 `setup.rs:300` 报 `there is no reactor running`；无截图/视频，因为 app 未启动 WebDriver。首个修复只将 `LocalRuntimeHost` 监视器改为 Tauri runtime，未覆盖随后同步调用的快捷键 pump 与 Service API monitor。
+- **修正**：抽出 `utils::task::spawn_tracked_on_tauri_runtime`，供 `setup`、facade monitor、Local runtime、Clash event forwarders 和 window resolution 复用。此函数在 Tauri runtime handle 上调用 `TaskTracker::spawn_on`，同时保留统一 shutdown drain。
+- **防复发**：原生 Tauri `setup` 回调及其同步调用链不得使用裸 `TaskTracker::spawn`。逐项检查 setup 阶段所有 task tracker 调度点；在普通测试线程验证共享 helper 不依赖当前 Tokio context，并以 Windows desktop startup E2E 确认实际启动路径。
 
 ### LESSON-20261103-001：原生路径重写测试不能假定 Unix 分隔符
 

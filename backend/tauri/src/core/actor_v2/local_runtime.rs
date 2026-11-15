@@ -49,14 +49,8 @@ use crate::{
         clash::core::RunType,
     },
     enhance::PostProcessingOutput,
+    utils::task::spawn_tracked_on_tauri_runtime,
 };
-
-fn spawn_tracked_on_tauri_runtime(
-    tasks: &TaskTracker,
-    task: impl Future<Output = ()> + Send + 'static,
-) {
-    tasks.spawn_on(task, tauri::async_runtime::handle().inner());
-}
 
 fn publish_transform_failure(
     lifecycle: &crate::client::runtime::RuntimeLifecycle,

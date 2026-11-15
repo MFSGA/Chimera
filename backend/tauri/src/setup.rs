@@ -12,7 +12,7 @@ use tauri::Manager;
 use crate::{
     bridge::{clash::LegacyClashBridge, verge::LegacyVergeBridge, window::LegacyWindowBridge},
     client::{ChimeraClient, ClientSetupArgs, LegacyBridgeSet, RuntimePaths, TauriUiEventSink},
-    utils::path::PathResolver,
+    utils::{path::PathResolver, task::spawn_tracked_on_tauri_runtime},
 };
 
 #[cfg(test)]
@@ -297,11 +297,10 @@ pub fn setup(
     )?;
     rust_i18n::set_locale(client.get_app_config()?.language.as_str());
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
-    tasks.spawn(hotkey_action_pump(
-        hotkey_rx,
-        client.clone(),
-        shutdown.child_token(),
-    ));
+    spawn_tracked_on_tauri_runtime(
+        &tasks,
+        hotkey_action_pump(hotkey_rx, client.clone(), shutdown.child_token()),
+    );
     app.manage(client);
     startup_owners.core = None;
     core_facade_monitor.start_service_api_monitor(shutdown.child_token(), &tasks);
