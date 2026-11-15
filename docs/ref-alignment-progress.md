@@ -2429,3 +2429,33 @@ Only the product naming, existing config formats and Chimera Client wiring remai
 - **保留差异 / 后续**：本批只迁移路径所有权；打开数据库失败仍沿用 Chimera `resolve_setup` 的 `log_err!` best-effort 行为，而 ref 会向 setup 返回错误。Storage IPC 随后会读取已管理的 `Storage`，因此失败语义需要单独迁移并覆盖，不把这条路径接线当作错误处理已对齐。
 - **验证**：新增隔离数据根用例 **1/1 通过**，确认 Storage DB 建在注入 data root、config root 不被创建；macOS `cargo check --offline --locked --manifest-path backend/Cargo.toml -p chimera --lib`、Rustfmt 与 `git diff --check` 通过。编译保留项目既有 warnings。未运行完整桌面冷启动或 web storage UI/E2E。
 - **回滚**：恢复 `core::storage::setup(app)` 的旧签名、`utils::dirs::storage_path()` 查找和 `resolve_setup` 调用；移除新增 helper 单测。没有 Storage 文件搬迁，无需备份或清理用户数据。
+
+## 2026-11-14：Storage 打开失败按启动边界传播
+
+- **目标 / 验收**：对齐 ref 在 migrations 之后打开 Storage、把失败返回 setup 的顺序。Storage 无法打开时不得继续到首个主/Legacy 窗口和依赖该状态的 IPC；故障分类日志必须带上数据库路径。
+- **非目标**：不改变 redb schema、数据库位置/字节、IPC/事件与 listener 语义；不重做全局 setup owner 架构，也不改变 Core/Service 后台启动或 UI 选择。
+- **基线 / 风险 / 接口**：父提交 `e86544c175f75d5b412a51d32c1d5df3dce56ead`；固定 ref `59724e85c34abb6995c22d101c876cc06dc16576`。风险 L2（持久 Storage 和启动故障处理）。新增内部 `StartupStage::Storage`，`core::storage::setup` 移到 composition root 并通过 `report_boundary` 传播错误；无 IPC 或对外类型变化。
+- **源码映射 / 有意差异**：ref `backend/tauri/src/setup.rs::setup` 在 migrations 后先创建 Core/Service owners 并启动 Jobs，再打开 `Storage::try_new(paths.storage_path())?`，随后构造 Client。Chimera 在 migration backup 边界之后先调用 `core::storage::setup(app, &paths)`，新增 `StartupStage::Storage` 映射 `FailureKind::Internal` 与 `paths.storage_path()`，之后才创建 Jobs/Core/Service owners。**这是对 ref 顺序的有意偏离**：Storage 失败时不创建还需回收的后台 owner；现有 `AppShutdown` 仍管理 Storage 成功后的 Jobs。后续 DIFF-069 Stage 3 若完成 setup 失败时 owners 的可靠取消/回收，应重新评估将 Storage 顺序收敛到 ref。
+- **验证**：`core::storage::tests` **11/11 通过**，包括隔离无效数据库文件用例，确认错误边界失败、报告带 Storage 路径且原文件字节保留；`startup_failure::tests` **8/8 通过**。macOS `cargo check --offline --locked --manifest-path backend/Cargo.toml -p chimera --lib`、`cargo clippy --offline --locked --manifest-path backend/Cargo.toml -p chimera --all-targets --all-features`、Rustfmt、Prettier 与 `git diff --check` 通过；保留项目现有 warnings。后续启动窗口复验中 E2E build 通过、`smoke.e2e.ts` **5/5 通过**；它没有断言原生窗口像素可见。`connections-legacy-layout.e2e.ts` 在可见性前置钩子失败、**0 个场景完成**，重现项目已有 LESSON-20261023-003 记载的隐藏 WebView 症状，根因仍未确认。未通过桌面 Tauri setup 注入无效数据库，所以错误对话框及首窗失败路径仍未由桌面运行证明。
+- **保留差异 / 后续**：Storage 失败会阻止 setup 继续，但 `lib.rs` 的 `builder.build` 失败分支仍以通用 `Internal` 和 `path=None` 显示 one-shot 错误窗；详细错误链含数据库路径，独立 Path 标签仍写 `unresolved path`。DIFF-069 Stage 2/3 需要让结构化边界报告传到错误窗，并加入真实 Tauri setup 失败验证。
+- **回滚**：恢复 `resolve_setup` 中的 best-effort Storage open 和原 Jobs 顺序，移除 `StartupStage::Storage` 与失败测试；Storage 数据文件无迁移，无需回滚用户数据。
+
+## 2026-11-14：首窗就绪握手等待应用设置
+
+- **目标 / 验收**：让初始隐藏 WebView 在应用设置查询成功或失败后再报告 ready，依 ref 的 `WindowReadyReporter` 时序显示；错误边界仍报告 ready，确保异常页不会永远隐藏。
+- **非目标**：不等待 Core/Service 启动或运行时 reconcile，不改变首次路由、Main/Legacy 选择、设置查询内容、IPC 合同或 WebView 动画。
+- **基线 / 风险 / 接口**：父提交 `e86544c175f75d5b412a51d32c1d5df3dce56ead`；固定 ref `59724e85c34abb6995c22d101c876cc06dc16576`。风险 L2（首窗显示时序）；无 IPC、持久化或公开接口变化。
+- **源码映射**：`ref/frontend/nyanpasu/src/pages/__root.tsx::WindowReadyReporter` 在 `useSettings().query` 成功/失败后调用 `reportWindowReady`，`Catch` 仍直接报告 → `frontend/chimera/src/pages/__root.tsx::WindowReadyReporter` 使用同一 `useSettings` 条件，并保留 `Catch` 的错误页报告。
+- **验证**：`pnpm typecheck` 通过；`pnpm e2e:tauri:build` 通过；`smoke.e2e.ts` **5/5 通过**。定向 `connections-legacy-layout.e2e.ts` 在 beforeEach 的可见性前置检查失败、**0 个场景完成**；屏幕截图 `tauri-e2e/.tmp/artifacts/startup-ready-handshake/connections-legacy-layout-before-each-failure.png` 显示 Legacy 导航栏已渲染、内容区仍透明，诊断为 `document.visibilityState=hidden`、`document.hasFocus()=false`，`.page-transition` 动画未推进。与已有 LESSON-20261023-003 一致，因此本地 WebKit E2E 不能证明该时序修复已让原生首窗可见，也没有放宽可见性断言。日志和截图均为 ignored 的本机证据。
+- **保留差异 / 后续**：Chimera 仍在 setup 阶段优先显示窗口、后台启动 Core；ref 的 `resolve_setup` 同步等待 `startup_reconcile` 后才显示 Main。保留此产品差异，避免初始化等待阻止 UI 出现。Legacy visibility E2E 的证据只确认被测 WebView 为 hidden；当前尚不能归因于应用代码或自动化前台环境，也不能据此证明用户原生首窗可见。需要能把本次 E2E 进程带到前台的桌面会话或原生可见性断言复验。
+- **回滚**：移除 `WindowReadyReporter` 并恢复 `App` 挂载时立即报告；保留 `Catch` 错误页报告。
+
+## 2026-11-14：macOS 交通灯初始化运行于主线程
+
+- **目标 / 验收**：让 macOS 原生交通灯窗口适配只在 AppKit 主线程创建 `MainThreadMarker` 并安装，消除从 Tokio worker 创建窗口时的主线程断言 panic。
+- **非目标**：不改变交通灯位置、窗口装饰、fullscreen/resize 行为、窗口显隐、App activation、标签或非 macOS 窗口。
+- **基线 / 风险 / 接口**：父提交 `e86544c175f75d5b412a51d32c1d5df3dce56ead`；固定 ref `59724e85c34abb6995c22d101c876cc06dc16576`。风险 L2（macOS 原生窗口生命周期）；无 IPC、持久化或公开接口变化。
+- **源码映射**：ref 在 `window/kinds.rs::hide_traffic_lights` 通过 `WebviewWindow::run_on_main_thread` 调度 AppKit；`window/manager.rs::create` 用 Tauri builder 的 `traffic_light_position`。Chimera 保留 `window.rs::setup_traffic_lights_pos` 的 delegate 适配（用于 resize/fullscreen 后保持自定义位置），由 `window/manager.rs::create` 先调用 `run_on_main_thread`，再获取 marker；若调度或 marker 失败则记录错误而不 panic。
+- **验证**：E2E build 通过；真实 `smoke.e2e.ts` 经 `create_main_window` 打开第二个 Main WebView 并从两个窗口验证 fetch 合同，**5/5 通过**；对应运行日志未发现 `MainThreadMarker` panic。该场景不验证原生窗口前台可见状态；Legacy 首窗 visibility E2E 仍失败在 WebView hidden 前置条件，其根因未确认。针对本批 Rust 文件的 rustfmt 检查、`cargo check --offline --locked --manifest-path backend/Cargo.toml -p chimera --lib`、`cargo clippy --offline --locked --manifest-path backend/Cargo.toml -p chimera --all-targets --all-features` 与 `git diff --check` 通过；保留既有 warnings。全仓 `cargo fmt --all --check` 被未修改的 vendor/path 文件格式差异挡住，未格式化无关源码。
+- **保留差异 / 后续**：Ref 使用 builder traffic-light position 且只对 tray menu 隐藏按钮；Chimera 的 fullscreen/resize delegate 是历史窗口扩展，尚未证明可由 builder 语义完全替代，故保留并只修复线程边界。
+- **回滚**：恢复 `MainThreadMarker::new().unwrap()` 及直接 `setup_traffic_lights_pos` 调用；不要撤销独立的窗口就绪握手或 Storage 启动失败边界。
