@@ -22,6 +22,7 @@ use anyhow::Context;
 use chimera_config::clash::config::ClashConfig;
 use chimera_core_manager::{CoreCommand, CoreCommandEnvelope, CoreErrorKind, OperationId};
 use futures::FutureExt;
+use tokio_util::{sync::CancellationToken, task::TaskTracker};
 
 use super::{
     api::{ApiClient, ApiLease},
@@ -272,13 +273,19 @@ impl CoreFacade {
         control: chimera_core_manager::CoreControl,
         runtime_paths: crate::client::RuntimePaths,
         service_process: Arc<dyn chimera_contracts::service::ServiceProcessControl>,
+        shutdown: CancellationToken,
+        tasks: &TaskTracker,
     ) -> Self {
         Self {
             manager: Arc::new(CoreManager::new()),
-            local_runtime: Some(Arc::new(super::local_runtime::LocalRuntimeHost::new(
-                control,
-                runtime_paths,
-            ))),
+            local_runtime: Some(Arc::new(
+                super::local_runtime::LocalRuntimeHost::new_with_shutdown(
+                    control,
+                    runtime_paths,
+                    shutdown,
+                    tasks,
+                ),
+            )),
             service_endpoint: super::service_endpoint::ServiceEndpoint::service_default(),
             api_client: tokio::sync::Mutex::new(None),
             outcome_uncertain: Arc::new(AtomicBool::new(false)),
@@ -1019,13 +1026,21 @@ impl CoreFacade {
             .filter(|receipt| receipt.host == expected_host)
     }
 
-    pub(crate) fn start_service_api_monitor(self: &Arc<Self>) {
+    pub(crate) fn start_service_api_monitor(
+        self: &Arc<Self>,
+        shutdown: CancellationToken,
+        tasks: &TaskTracker,
+    ) {
         if self.local_runtime.is_none() {
             return;
         }
         let facade = self.clone();
-        tauri::async_runtime::spawn(async move {
-            facade.monitor_service_api_binding().await;
+        let monitor_shutdown = shutdown.child_token();
+        tasks.spawn(async move {
+            tokio::select! {
+                _ = monitor_shutdown.cancelled() => {},
+                _ = facade.monitor_service_api_binding() => {},
+            }
         });
     }
 

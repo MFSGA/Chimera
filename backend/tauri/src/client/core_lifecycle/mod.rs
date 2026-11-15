@@ -20,6 +20,7 @@ use std::{
 
 use futures_util::FutureExt;
 use ractor::{Actor, ActorProcessingErr, ActorRef, RpcReplyPort, rpc::CallResult};
+use tokio_util::{sync::CancellationToken, task::TaskTracker};
 
 use super::{
     ChimeraClient, application::ApplicationClient,
@@ -975,6 +976,8 @@ impl CoreLifecycleClient {
         installer: Arc<dyn ports::BinaryInstaller>,
         service: Arc<dyn ports::ServiceLifecyclePort>,
     ) -> anyhow::Result<Self> {
+        let shutdown = CancellationToken::new();
+        let tasks = TaskTracker::new();
         Self::spawn_with_profiles(
             core,
             application,
@@ -983,6 +986,8 @@ impl CoreLifecycleClient {
             runtime_paths,
             installer,
             service,
+            shutdown,
+            &tasks,
         )
         .await
     }
@@ -995,6 +1000,8 @@ impl CoreLifecycleClient {
         runtime_paths: RuntimePaths,
         installer: Arc<dyn ports::BinaryInstaller>,
         service: Arc<dyn ports::ServiceLifecyclePort>,
+        shutdown: CancellationToken,
+        tasks: &TaskTracker,
     ) -> anyhow::Result<Self> {
         let recovery_notify = core.recovery_notify();
         let workflow = CoreLifecycleWorkflow::new(
@@ -1023,11 +1030,16 @@ impl CoreLifecycleClient {
         .await?;
         if let Some(recovery_notify) = recovery_notify {
             let recovery_actor = actor_ref.clone();
-            tauri::async_runtime::spawn(async move {
+            let recovery_shutdown = shutdown.child_token();
+            tasks.spawn(async move {
                 loop {
-                    recovery_notify.notified().await;
-                    if recovery_actor.cast(Message::RecoverCore).is_err() {
-                        break;
+                    tokio::select! {
+                        _ = recovery_shutdown.cancelled() => break,
+                        _ = recovery_notify.notified() => {
+                            if recovery_actor.cast(Message::RecoverCore).is_err() {
+                                break;
+                            }
+                        }
                     }
                 }
             });

@@ -45,6 +45,7 @@ pub(crate) struct StartupFailure {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum StartupStage {
+    Setup,
     Jobs,
     MigrationPrepare,
     MigrationRun,
@@ -111,6 +112,7 @@ impl StartupFailure {
         paths: &PathResolver,
     ) -> Self {
         let default_kind = match stage {
+            StartupStage::Setup => FailureKind::Internal,
             StartupStage::Jobs => FailureKind::JobsDatabase,
             StartupStage::MigrationPrepare | StartupStage::MigrationRun => {
                 FailureKind::MigrationFailed
@@ -237,15 +239,14 @@ impl StartupFailure {
             _ if host_user_config && stage == StartupStage::CoreHost => FailureKind::UserConfig,
             _ => default_kind,
         };
-        let path = path.or_else(|| {
-            Some(match stage {
-                StartupStage::Jobs => paths.jobs_path(),
-                StartupStage::Storage => paths.storage_path(),
-                StartupStage::MigrationPrepare
-                | StartupStage::MigrationRun
-                | StartupStage::CoreHost
-                | StartupStage::TypedClient => paths.app_config_dir().to_owned(),
-            })
+        let path = path.or_else(|| match stage {
+            StartupStage::Setup => None,
+            StartupStage::Jobs => Some(paths.jobs_path()),
+            StartupStage::Storage => Some(paths.storage_path()),
+            StartupStage::MigrationPrepare
+            | StartupStage::MigrationRun
+            | StartupStage::CoreHost
+            | StartupStage::TypedClient => Some(paths.app_config_dir().to_owned()),
         });
         Self {
             stage,
@@ -546,6 +547,10 @@ mod tests {
         assert_eq!(user.failure.kind, FailureKind::UserConfig);
         assert_eq!(user.failure.path, Some(paths.app_config_dir().to_owned()));
         assert!(!user.failure.detail.is_empty());
+
+        let setup = Report::from_error(&error, StartupStage::Setup, &paths);
+        assert_eq!(setup.failure.kind, FailureKind::Internal);
+        assert_eq!(setup.failure.path, None);
     }
 
     #[tokio::test]

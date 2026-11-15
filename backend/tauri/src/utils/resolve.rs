@@ -423,10 +423,7 @@ mod startup_shutdown_tests {
 
     #[tokio::test]
     async fn shutdown_drains_blocking_preparation_before_core_cleanup() {
-        let boundary = AppShutdown {
-            shutdown: CancellationToken::new(),
-            tasks: TaskTracker::new(),
-        };
+        let boundary = AppShutdown::default();
         let (entered_tx, entered_rx) = oneshot::channel();
         let (release_tx, release_rx) = std::sync::mpsc::channel();
         let core_started = Arc::new(AtomicBool::new(false));

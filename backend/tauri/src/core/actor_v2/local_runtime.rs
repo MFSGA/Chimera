@@ -30,6 +30,7 @@ use chimera_ipc::api::core::v2::{
 };
 use chimera_ipc::api::status::CoreStateDetail;
 use parking_lot::RwLock;
+use tokio_util::{sync::CancellationToken, task::TaskTracker};
 
 use crate::{
     client::{
@@ -168,13 +169,36 @@ impl fmt::Debug for LocalRuntimeHost {
 }
 
 impl LocalRuntimeHost {
+    #[cfg(test)]
     pub(crate) fn new(control: CoreControl, runtime_paths: RuntimePaths) -> Self {
+        Self::new_with_shutdown(
+            control,
+            runtime_paths,
+            CancellationToken::new(),
+            &TaskTracker::new(),
+        )
+    }
+
+    pub(crate) fn new_with_shutdown(
+        control: CoreControl,
+        runtime_paths: RuntimePaths,
+        shutdown: CancellationToken,
+        tasks: &TaskTracker,
+    ) -> Self {
         let recovery_notify = Arc::new(tokio::sync::Notify::new());
         let mut status = control.subscribe();
         let recovery_signal = recovery_notify.clone();
-        tauri::async_runtime::spawn(async move {
+        let status_shutdown = shutdown.child_token();
+        tasks.spawn(async move {
             let mut previous = status.borrow().state.clone();
-            while status.changed().await.is_ok() {
+            loop {
+                let changed = tokio::select! {
+                    _ = status_shutdown.cancelled() => break,
+                    changed = status.changed() => changed,
+                };
+                if changed.is_err() {
+                    break;
+                }
                 let current = status.borrow_and_update().state.clone();
                 if matches!(previous, CoreState::Restarting { .. })
                     && matches!(current, CoreState::Running { .. })
