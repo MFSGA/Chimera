@@ -1286,6 +1286,13 @@ impl CoreLifecycleClient {
     }
 
     pub(super) async fn request_service_endpoint_down(&self) {
+        self.request_service_endpoint_down_if(|| true).await;
+    }
+
+    pub(super) async fn request_service_endpoint_down_if<F>(&self, still_current: F)
+    where
+        F: Fn() -> bool + Send + 'static,
+    {
         let (actor_ref, next_id, service) = match self.0.as_ref() {
             CoreLifecycleClientInner::Actor {
                 actor_ref,
@@ -1306,6 +1313,11 @@ impl CoreLifecycleClient {
                 return;
             }
         };
+        if !still_current() {
+            // The Service host lock is now ours. A retired health observation
+            // must drop its lease without submitting recovery after stop/restart.
+            return;
+        }
         let id = next_id.fetch_add(1, Ordering::Relaxed);
         let request = Request {
             command: Command::ServiceEndpointDown(transition),
@@ -1539,6 +1551,16 @@ impl ChimeraClient {
             .await;
     }
 
+    pub(crate) async fn request_service_endpoint_down_if<F>(&self, still_current: F)
+    where
+        F: Fn() -> bool + Send + 'static,
+    {
+        self.inner
+            .core_lifecycle
+            .request_service_endpoint_down_if(still_current)
+            .await;
+    }
+
     pub(crate) fn core_lifecycle_status(&self) -> CoreLifecycleStatus {
         self.inner.core_lifecycle.status()
     }
@@ -1590,9 +1612,7 @@ impl ChimeraClient {
     }
 
     pub(crate) async fn install_service(&self) -> anyhow::Result<()> {
-        self.inner.core_lifecycle.install_service().await?;
-        crate::core::service::ipc::ensure_health_check(self.clone());
-        Ok(())
+        self.inner.core_lifecycle.install_service().await
     }
 
     pub(crate) async fn uninstall_service(&self) -> anyhow::Result<()> {
@@ -1604,21 +1624,14 @@ impl ChimeraClient {
     }
 
     pub(crate) async fn start_service(&self, ready_timeout: Duration) -> anyhow::Result<()> {
-        self.inner
-            .core_lifecycle
-            .start_service(ready_timeout)
-            .await?;
-        crate::core::service::ipc::ensure_health_check(self.clone());
-        Ok(())
+        self.inner.core_lifecycle.start_service(ready_timeout).await
     }
 
     pub(crate) async fn restart_service(&self, ready_timeout: Duration) -> anyhow::Result<()> {
         self.inner
             .core_lifecycle
             .restart_service(ready_timeout)
-            .await?;
-        crate::core::service::ipc::ensure_health_check(self.clone());
-        Ok(())
+            .await
     }
 }
 

@@ -5,10 +5,7 @@ use chimera_ipc::api::status::CoreState;
 use chimera_ipc::types::StatusInfo;
 use once_cell::sync::Lazy;
 
-use crate::{
-    config::core::Config,
-    utils::dirs::{app_config_dir, app_data_dir, app_install_dir},
-};
+use crate::utils::dirs::{app_config_dir, app_data_dir, app_install_dir};
 
 pub mod control;
 pub mod ipc;
@@ -143,15 +140,28 @@ pub(crate) async fn ensure_tun_host_ready(
     }
 }
 
-/// Execute an explicit daemon start under the same transition lock used by the
-/// health loop, then converge the core to the Service host when Service Mode is
-/// desired. This prevents a health observation from interleaving a second host
-/// switch with the explicit command.
+/// Retire the health monitor while holding the host lock used by its probe.
+/// The Service lifecycle actor acquires that lock again for its own transition.
+async fn retire_health_check_before_service_transition() -> u64 {
+    let _transition = HOST_TRANSITION_LOCK.lock().await;
+    ipc::retire_health_check()
+}
+
+/// Execute an explicit daemon start after retiring any prior health round, then
+/// converge the core to the Service host when Service Mode is desired. The
+/// lifecycle actor owns the actual host-transition lock for the Service command.
 pub(crate) async fn start_service_and_converge(
     client: &crate::client::ChimeraClient,
     ready_timeout: std::time::Duration,
 ) -> anyhow::Result<()> {
-    client.start_service(ready_timeout).await
+    let expected_epoch = retire_health_check_before_service_transition().await;
+    let result = client.start_service(ready_timeout).await;
+    if result.is_ok() {
+        ipc::ensure_health_check_for_epoch(client.clone(), expected_epoch).await;
+    } else {
+        restore_health_check_if_running(client, expected_epoch).await;
+    }
+    result
 }
 
 /// Restarting the daemon is allowed while TUN is enabled, but the whole restart
@@ -162,40 +172,112 @@ pub(crate) async fn restart_service_and_converge(
     client: &crate::client::ChimeraClient,
     ready_timeout: std::time::Duration,
 ) -> anyhow::Result<()> {
-    client.restart_service(ready_timeout).await
+    let expected_epoch = retire_health_check_before_service_transition().await;
+    let result = client.restart_service(ready_timeout).await;
+    if result.is_ok() {
+        ipc::ensure_health_check_for_epoch(client.clone(), expected_epoch).await;
+    } else {
+        restore_health_check_if_running(client, expected_epoch).await;
+    }
+    result
 }
 
 pub(crate) async fn stop_service_and_converge(
     client: &crate::client::ChimeraClient,
 ) -> anyhow::Result<()> {
-    client.stop_service().await
+    let expected_epoch = retire_health_check_before_service_transition().await;
+    let result = client.stop_service().await;
+    if result.is_err() {
+        restore_health_check_if_running(client, expected_epoch).await;
+    }
+    result
 }
 
 pub(crate) async fn uninstall_service_and_converge(
     client: &crate::client::ChimeraClient,
 ) -> anyhow::Result<()> {
-    client.uninstall_service().await
+    let expected_epoch = retire_health_check_before_service_transition().await;
+    let result = client.uninstall_service().await;
+    if result.is_err() {
+        restore_health_check_if_running(client, expected_epoch).await;
+    }
+    result
 }
 
-pub async fn init_service(client: crate::client::ChimeraClient) {
-    let enable_service = {
-        *Config::verge()
-            .latest()
-            .enable_service_mode
-            .as_ref()
-            .unwrap_or(&false)
+pub(crate) async fn install_service_and_converge(
+    client: &crate::client::ChimeraClient,
+) -> anyhow::Result<()> {
+    let expected_epoch = retire_health_check_before_service_transition().await;
+    let result = client.install_service().await;
+    if result.is_ok() {
+        ipc::ensure_health_check_for_epoch(client.clone(), expected_epoch).await;
+    } else {
+        restore_health_check_if_running(client, expected_epoch).await;
+    }
+    result
+}
+
+pub(crate) async fn update_service_for_startup(
+    client: &crate::client::ChimeraClient,
+) -> anyhow::Result<()> {
+    let _expected_epoch = retire_health_check_before_service_transition().await;
+    client.update_service().await
+}
+
+async fn restore_health_check_if_running(
+    client: &crate::client::ChimeraClient,
+    expected_epoch: u64,
+) {
+    let should_start = {
+        let _transition = HOST_TRANSITION_LOCK.lock().await;
+        if ipc::service_transition_epoch() != expected_epoch {
+            return;
+        }
+        match control::probe_service_status().await {
+            Ok(status) => matches!(status.status, chimera_ipc::types::ServiceStatus::Running),
+            Err(error) => {
+                tracing::warn!(%error, "could not determine Service status after a failed transition");
+                // Keep an observer alive after a transient probe error. Its
+                // own fail-closed probe loop can retry without mutating host state.
+                true
+            }
+        }
     };
-    if !enable_service {
-        return;
+    if should_start {
+        ipc::ensure_health_check_for_epoch(client.clone(), expected_epoch).await;
+    }
+}
+
+pub async fn init_service(client: crate::client::ChimeraClient) -> anyhow::Result<()> {
+    let enable_service_mode = client
+        .get_app_config()
+        .context("failed to read typed Service Mode preference before monitor setup")?
+        .enable_service_mode;
+    if !enable_service_mode {
+        return Ok(());
     }
 
-    if let Ok(status) = control::probe_service_status().await
-        && matches!(status.status, chimera_ipc::types::ServiceStatus::Running)
-    {
-        // Monitor any running daemon, even when it is currently incompatible or
-        // owned by another runtime. The health loop remains fail-closed, but it
-        // can observe a later service update/reinstall and reconnect without an
-        // app restart.
-        ipc::ensure_health_check(client);
+    let monitor_epoch = {
+        let _transition = HOST_TRANSITION_LOCK.lock().await;
+        if let Ok(status) = control::probe_service_status().await
+            && matches!(status.status, chimera_ipc::types::ServiceStatus::Running)
+        {
+            // The UI remains available while the daemon probe runs; re-read the
+            // setting before starting a long-lived background monitor.
+            let mode_enabled = client
+                .get_app_config()
+                .context("failed to re-read typed Service Mode preference after daemon probe")?
+                .enable_service_mode;
+            mode_enabled.then(ipc::service_transition_epoch)
+        } else {
+            None
+        }
+    };
+
+    // The old monitor may need the host lock to finish retiring. Never wait for
+    // it while this startup probe still owns that lock.
+    if let Some(expected_epoch) = monitor_epoch {
+        ipc::ensure_health_check_for_epoch(client, expected_epoch).await;
     }
+    Ok(())
 }

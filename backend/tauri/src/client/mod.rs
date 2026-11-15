@@ -177,6 +177,8 @@ struct ChimeraClientInner {
     bundle_metadata: Option<BundleMetadata>,
     core_lifecycle: CoreLifecycleClient,
     core: Arc<dyn CoreLifecyclePort>,
+    shutdown: tokio_util::sync::CancellationToken,
+    tasks: tokio_util::task::TaskTracker,
     streams: chimera_core::clash::ws::StreamsClient,
     streams_shutdown: tokio_util::sync::CancellationToken,
     proxies: chimera_core::proxies_actor::ProxiesClient,
@@ -359,6 +361,8 @@ impl ChimeraClient {
             Some(app_updater),
             Some(changelog_http),
             Some(bundle_metadata),
+            shutdown.clone(),
+            tasks.clone(),
             #[cfg(test)]
             None,
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -476,6 +480,8 @@ impl ChimeraClient {
             None,
             None,
             None,
+            tokio_util::sync::CancellationToken::new(),
+            tokio_util::task::TaskTracker::new(),
             Some(test_profile_dir),
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
             effects,
@@ -502,6 +508,8 @@ impl ChimeraClient {
         app_updater: Option<AppUpdateClient>,
         changelog_http: Option<Arc<dyn ChangelogHttp>>,
         bundle_metadata: Option<BundleMetadata>,
+        shutdown: tokio_util::sync::CancellationToken,
+        tasks: tokio_util::task::TaskTracker,
         #[cfg(test)] _test_profile_dir: Option<Arc<tempfile::TempDir>>,
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
         effects: effects::actor::EffectsClient,
@@ -524,6 +532,8 @@ impl ChimeraClient {
             bundle_metadata,
             core_lifecycle,
             core,
+            shutdown,
+            tasks,
             streams,
             streams_shutdown,
             proxies,
@@ -570,6 +580,21 @@ impl ChimeraClient {
 }
 
 impl ChimeraClient {
+    pub(crate) fn shutdown_child_token(&self) -> tokio_util::sync::CancellationToken {
+        self.inner.shutdown.child_token()
+    }
+
+    pub(crate) fn spawn_tracked(
+        &self,
+        task: impl std::future::Future<Output = ()> + Send + 'static,
+    ) -> bool {
+        if self.inner.shutdown.is_cancelled() {
+            return false;
+        }
+        self.inner.tasks.spawn(task);
+        true
+    }
+
     pub(crate) fn streams(&self) -> &chimera_core::clash::ws::StreamsClient {
         &self.inner.streams
     }
@@ -1131,6 +1156,31 @@ mod tests {
         )
         .await;
         (client, events)
+    }
+
+    /// Initial state: the test client owns an uncancelled root token and an
+    /// empty tracker. Operation: start tracked work that waits on a child of
+    /// that token, then cancel the root and close the tracker. Expected result:
+    /// the work signals completion before `wait` returns. The oneshot is an
+    /// independent observation; this fails if the task escapes the tracker or
+    /// listens to a different shutdown token.
+    #[tokio::test]
+    async fn tracked_background_work_drains_after_root_shutdown() {
+        let (client, _) = recording_client(false).await;
+        let shutdown = client.shutdown_child_token();
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let (finished_tx, finished_rx) = tokio::sync::oneshot::channel();
+        assert!(client.clone().spawn_tracked(async move {
+            started_tx.send(()).unwrap();
+            shutdown.cancelled().await;
+            finished_tx.send(()).unwrap();
+        }));
+
+        started_rx.await.unwrap();
+        client.inner.shutdown.cancel();
+        client.inner.tasks.close();
+        client.inner.tasks.wait().await;
+        finished_rx.await.unwrap();
     }
 
     #[tokio::test]
