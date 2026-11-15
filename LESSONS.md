@@ -85,6 +85,7 @@
 | LESSON-20261115-001 | 2026-11-15 | Startup retry / Rust tests | 退避测试将调用前采样时间误当调度基准，出现 1.000033459s 与 1s 的微小差异；为调度策略注入显式 Instant 后精确验证 ref 延迟 | Mitigated |
 | LESSON-20261115-002 | 2026-11-15 | Service owner fencing | `submit_v2` 仍将旧版无身份 `Recover` 直接送入 manager，可绕过新增 installation fence；拒绝旧命令并验证 config/data/无身份三种 admission 均失败关闭 | Mitigated |
 | LESSON-20261115-003 | 2026-11-15 | Rust test authoring | 新共享启动状态测试模块首次漏掉本地 `Arc`/`Mutex`/`HashMap` imports，测试编译时发现；补充显式 imports 后目标测试通过 | Mitigated |
+| LESSON-20261115-005 | 2026-11-15 | Tauri startup / local runtime | CI run 43720593308 在 WebDriver 就绪前退出；失败日志显示 setup 线程在 `LocalRuntimeHost::new_with_shutdown` 调用 `TaskTracker::spawn` 并 panic `there is no reactor running`；加同步线程回归并改用 Tauri runtime `spawn_on` | Mitigated |
 
 ### LESSON-20261113-001/002：架构迁移要覆盖原生运行时与稀疏配置
 
@@ -1238,3 +1239,9 @@ backend/Cargo.toml -p chimera --lib core::clash::proxies::tests:: -- --nocapture
 - 证据：新增匹配 Service 安装身份的正向 Recover 测试时，首次编译因 `OpError` 未实现 `Debug`，`Result::expect` 无法使用，定向 Service 测试退出 101。
 - 修正与验证：测试改为显式匹配 `submit_v2` 的结果，并在失败分支输出内部错误消息；修复后重新运行 `cargo test`。正向 admission 用例同时断言 operation ID 与 manager registry 记录。
 - 防复发：在领域错误类型不实现 `Debug` 时，测试按其稳定可读字段显式格式化，不为测试方便给产品错误类型添加无必要 trait；提交前执行实际目标测试。
+
+### LESSON-20261115-005：同步 Tauri setup 创建的 TaskTracker 任务必须指定 runtime
+
+- 证据：主仓库 push E2E run [43720593308](https://github.com/MFSGA/Chimera/actions/runs/43720593308) 的失败时附件 `tauri-e2e-diagnostics-43720593308/wdio-2026-11-15T13-51-04-234Z.log` 显示应用在 WebDriver 启动前退出，并在 `local_runtime.rs:192` panic `there is no reactor running`。附件只有后端日志，没有窗口截图或视频，因为 WebDriver 未就绪。新增的同步线程回归在修复前同样 panic。
+- 修正与验证：`LocalRuntimeHost::new_with_shutdown` 将状态监视任务改为 `TaskTracker::spawn_on(..., tauri::async_runtime::handle().inner())`；普通测试线程回归用 oneshot 保持任务在途，确认 tracker 的 `wait()` 在释放前保持 pending、释放后排空。修复后 LocalRuntime 测试 **7/7** 通过；远端 E2E 尚未在修复 SHA 上复验。
+- 防复发：从同步 Tauri setup 调用的构造函数不得裸用 `tokio::spawn` 或 `TaskTracker::spawn`；显式绑定 Tauri async runtime handle，并对普通线程入口运行回归。审核所有同步 setup 构造器的后台任务，而非只检查首次触发该类错误的调用点。

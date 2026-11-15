@@ -9,7 +9,7 @@ use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
 };
-use std::{collections::HashMap, fmt};
+use std::{collections::HashMap, fmt, future::Future};
 
 use anyhow::{Context, bail};
 use chimera_config::clash::config::ClashConfig;
@@ -50,6 +50,13 @@ use crate::{
     },
     enhance::PostProcessingOutput,
 };
+
+fn spawn_tracked_on_tauri_runtime(
+    tasks: &TaskTracker,
+    task: impl Future<Output = ()> + Send + 'static,
+) {
+    tasks.spawn_on(task, tauri::async_runtime::handle().inner());
+}
 
 fn publish_transform_failure(
     lifecycle: &crate::client::runtime::RuntimeLifecycle,
@@ -189,7 +196,7 @@ impl LocalRuntimeHost {
         let mut status = control.subscribe();
         let recovery_signal = recovery_notify.clone();
         let status_shutdown = shutdown.child_token();
-        tasks.spawn(async move {
+        spawn_tracked_on_tauri_runtime(tasks, async move {
             let mut previous = status.borrow().state.clone();
             loop {
                 let changed = tokio::select! {
@@ -1774,5 +1781,29 @@ mod tests {
         };
 
         assert!(accept_reconcile_outcome(&outcome).is_ok());
+    }
+
+    #[test]
+    fn tracked_status_task_can_start_from_synchronous_setup() {
+        let tasks = TaskTracker::new();
+        let (started, started_rx) = std::sync::mpsc::channel();
+        let (release, release_rx) = tokio::sync::oneshot::channel();
+        spawn_tracked_on_tauri_runtime(&tasks, async move {
+            started.send(()).expect("test receiver is alive");
+            let _ = release_rx.await;
+        });
+        started_rx.recv().expect("tracked task should start");
+        assert_eq!(tasks.len(), 1);
+        tasks.close();
+        let wait_is_pending = tauri::async_runtime::block_on(async {
+            let mut wait = Box::pin(tasks.wait());
+            std::future::poll_fn(|context| {
+                std::task::Poll::Ready(wait.as_mut().poll(context).is_pending())
+            })
+            .await
+        });
+        assert!(wait_is_pending, "tracker must wait for its in-flight task");
+        release.send(()).expect("tracked task is still waiting");
+        tauri::async_runtime::block_on(tasks.wait());
     }
 }
