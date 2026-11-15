@@ -319,7 +319,14 @@ pub fn resolve_setup(app: &mut App, paths: &PathResolver) {
                 // reach a terminal reply before the tracked task completes.
                 // Dropping that future on cancellation could leave a queued
                 // start racing the subsequent shutdown_core() command.
-                match client.init_core().await {
+                let startup_result = client.init_core().await;
+                // Match ref's resolve_setup -> setup_proxies initial refresh.
+                // The ProxiesClient retries on its timer if the startup result
+                // did not leave a readable Core API yet.
+                if !startup_shutdown.is_cancelled() {
+                    client.request_proxy_refresh();
+                }
+                match startup_result {
                     Ok(()) => app_handle.state::<AppStartupStatus>().finish(true),
                     Err(error) => {
                         log::error!(target: "app", "core initialization failed: {error:#}");

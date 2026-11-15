@@ -13,7 +13,7 @@ use std::{
     panic::AssertUnwindSafe,
     sync::{
         Arc,
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::Duration,
 };
@@ -23,8 +23,11 @@ use ractor::{Actor, ActorProcessingErr, ActorRef, RpcReplyPort, rpc::CallResult}
 use tokio_util::{sync::CancellationToken, task::TaskTracker};
 
 use super::{
-    ChimeraClient, application::ApplicationClient,
-    application_workflow::workflow::ApplicationWorkflow, clash_config::ClashConfigClient,
+    ChimeraClient,
+    application::ApplicationClient,
+    application_workflow::startup::{StartupOutcome, StartupReport, StartupWorkflowState},
+    application_workflow::workflow::ApplicationWorkflow,
+    clash_config::ClashConfigClient,
     runtime::RuntimePaths,
 };
 use workflow::{Command, CoreLifecycleWorkflow};
@@ -36,7 +39,50 @@ const COMPLETED_LIMIT: usize = 32;
 
 type OperationId = u64;
 
-struct CompletedLifecycleOperation(anyhow::Result<()>);
+struct CompletedLifecycleOperation {
+    result: anyhow::Result<()>,
+    report: StartupReport,
+}
+
+fn completed_from_startup_report(report: StartupReport) -> CompletedLifecycleOperation {
+    let result = report
+        .outcome
+        .failure_reason()
+        .map_or(Ok(()), |reason| Err(anyhow::anyhow!(reason.to_owned())));
+    CompletedLifecycleOperation { result, report }
+}
+
+fn is_source_only_application_patch(command: &Command) -> bool {
+    matches!(
+        command,
+        Command::PatchApplicationConfig {
+            patch,
+            service_connected,
+        }
+            if !crate::client::application_workflow::impact::application_patch_requires_reconcile(
+                patch,
+                *service_connected,
+            )
+    )
+}
+
+fn cache_unsettled_startup_report(
+    startup_state: &StartupWorkflowState,
+    operation_id: OperationId,
+    reason: String,
+) -> CompletedLifecycleOperation {
+    startup_state.mark_owner_unproven();
+    let proposed = StartupReport {
+        operation_id,
+        observation: None,
+        outcome: StartupOutcome::Unsettled { reason },
+    };
+    let report = {
+        let mut cached = startup_state.lock_report();
+        cached.get_or_insert(proposed).clone()
+    };
+    completed_from_startup_report(report)
+}
 
 #[derive(Debug, Clone, Default, serde::Serialize, specta::Type)]
 pub(crate) struct CoreLifecycleStatus {
@@ -65,6 +111,19 @@ fn classify_service_probe(info: chimera_ipc::types::StatusInfo<'static>) -> Serv
     ServiceHostStatus::from_probe(info, owned)
 }
 
+fn startup_recovery_evidence_changed(
+    previous: &ServiceHostStatus,
+    current: &ServiceHostStatus,
+    owner_unproven: bool,
+) -> bool {
+    let readiness_advanced = current.phase.readiness() == Some(true)
+        && current.ready_generation != previous.ready_generation;
+    let owner_evidence_changed = owner_unproven
+        && crate::client::application_workflow::startup::ServiceEvidence::from_status(previous)
+            != crate::client::application_workflow::startup::ServiceEvidence::from_status(current);
+    readiness_advanced || owner_evidence_changed
+}
+
 #[allow(unused_imports)]
 pub(crate) use adapters::{LegacyCoreBridge, LegacyRunningConfigBridge, LegacyServiceBridge};
 #[allow(unused_imports)]
@@ -85,6 +144,7 @@ enum Message {
         result: anyhow::Result<()>,
         workflow_panicked: bool,
         lower_outcome_uncertain: bool,
+        startup_owner_unproven: bool,
         service_restart_policy: ServiceRestartPolicySnapshot,
         service_probe: Option<Result<chimera_ipc::types::StatusInfo<'static>, String>>,
         retry_reconcile_on_failure: bool,
@@ -93,6 +153,7 @@ enum Message {
         application_workflow: Option<ApplicationWorkflow>,
         request_runtime_rebuild: bool,
         deferred_retry: Option<String>,
+        startup_retry: Option<(String, tokio::time::Instant)>,
         reconciled: bool,
     },
     #[cfg(test)]
@@ -108,6 +169,13 @@ enum Message {
     RecoverCore,
     RuntimeDirty,
     DirtyTick,
+    StartupRetryDue {
+        identity: String,
+    },
+    StartupRetryLeaseFailed {
+        identity: String,
+        reason: String,
+    },
     DeferredRetry {
         digest: String,
     },
@@ -123,7 +191,10 @@ struct ApplicationWorkflowState {
     next_id: Arc<AtomicU64>,
     status: Arc<parking_lot::Mutex<CoreLifecycleStatus>>,
     service_status: ServiceHostWatch,
+    service: Arc<dyn ServiceLifecyclePort>,
     uncertain: bool,
+    startup_owner_unproven: bool,
+    startup_owner_unproven_shared: Arc<AtomicBool>,
     shutting_down: bool,
     shutdown_result: Option<Option<String>>,
     shutdown_waiters: Vec<Response>,
@@ -136,6 +207,8 @@ struct ApplicationWorkflowArgs {
     next_id: Arc<AtomicU64>,
     status: Arc<parking_lot::Mutex<CoreLifecycleStatus>>,
     service_status: ServiceHostWatch,
+    service: Arc<dyn ServiceLifecyclePort>,
+    startup_owner_unproven_shared: Arc<AtomicBool>,
 }
 
 struct Response {
@@ -231,6 +304,19 @@ impl ApplicationWorkflowState {
         });
     }
 
+    fn schedule_startup_retry(
+        &self,
+        myself: &ActorRef<Message>,
+        identity: String,
+        next_attempt: tokio::time::Instant,
+    ) {
+        let actor = myself.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep_until(next_attempt).await;
+            let _ = actor.cast(Message::StartupRetryDue { identity });
+        });
+    }
+
     fn publish(&self) {
         let mut status = self.status.lock();
         status.active = self.active.as_ref().map(|operation| operation.response.id);
@@ -240,7 +326,9 @@ impl ApplicationWorkflowState {
             .map(|request| request.response.id)
             .chain(self.shutdown_waiters.iter().map(|response| response.id))
             .collect();
-        status.uncertain = self.uncertain;
+        status.uncertain = self.uncertain
+            || self.startup_owner_unproven
+            || self.startup_owner_unproven_shared.load(Ordering::Acquire);
         status.shutting_down = self.shutting_down;
     }
 
@@ -288,14 +376,46 @@ impl ApplicationWorkflowState {
             return;
         }
         self.dirty = false;
+        let mut allowed = VecDeque::new();
         while let Some(request) = self.pending.pop_front() {
-            self.reject(
-                request,
-                anyhow::anyhow!(
+            if is_source_only_application_patch(&request.command) {
+                allowed.push_back(request);
+            } else {
+                self.reject(request, anyhow::anyhow!(
                     "previous core lifecycle operation has an uncertain outcome; restart the application before further mutations"
-                ),
-            );
+                ));
+            }
         }
+        self.pending = allowed;
+    }
+
+    fn reject_pending_for_unproven_startup_owner(&mut self) {
+        if !(self.startup_owner_unproven
+            || self.startup_owner_unproven_shared.load(Ordering::Acquire))
+            || self.shutting_down
+        {
+            return;
+        }
+        let mut allowed = VecDeque::new();
+        while let Some(request) = self.pending.pop_front() {
+            if matches!(
+                &request.command,
+                Command::StartupReconcile { .. }
+                    | Command::RecoverStartup { .. }
+                    | Command::RetryStartup { .. }
+            ) || is_source_only_application_patch(&request.command)
+            {
+                allowed.push_back(request);
+            } else {
+                self.reject(
+                    request,
+                    anyhow::anyhow!(
+                        "startup has not established the Core owner; retry startup reconciliation before runtime mutations"
+                    ),
+                );
+            }
+        }
+        self.pending = allowed;
     }
 
     fn close(&mut self) {
@@ -346,6 +466,7 @@ impl ApplicationWorkflowState {
             return;
         }
         self.reject_pending_for_uncertain();
+        self.reject_pending_for_unproven_startup_owner();
 
         let request = if self.shutting_down {
             if self.shutdown_result.is_some() {
@@ -399,18 +520,23 @@ impl ApplicationWorkflowState {
         let id = request.response.id;
         let shutdown = matches!(&request.command, Command::Shutdown);
         let deferred_retry = request.deferred_retry.clone();
-        let is_service_connected = crate::core::service::ipc::get_ipc_state().is_connected();
         let application_runtime_reconcile = matches!(
             &request.command,
-            Command::PatchApplicationConfig { patch, .. }
+            Command::PatchApplicationConfig {
+                patch,
+                service_connected,
+            }
                 if crate::client::application_workflow::impact::application_patch_requires_reconcile(
                     patch,
-                    is_service_connected,
+                    *service_connected,
                 )
         );
         let reconciled = matches!(
             &request.command,
             Command::Reconcile
+                | Command::StartupReconcile { .. }
+                | Command::RecoverStartup { .. }
+                | Command::RetryStartup { .. }
                 | Command::RetryDeferredProfiles { .. }
                 | Command::ReconcileProfiles { .. }
                 | Command::RecoverCore
@@ -433,6 +559,9 @@ impl ApplicationWorkflowState {
                 | Command::RestartService { .. }
                 | Command::StopService(_)
                 | Command::ServiceEndpointDown(_)
+                | Command::StartupReconcile { .. }
+                | Command::RecoverStartup { .. }
+                | Command::RetryStartup { .. }
         );
         let retry_reconcile_on_failure = matches!(
             &request.command,
@@ -451,13 +580,7 @@ impl ApplicationWorkflowState {
             self.publish_service_phase(phase);
         }
 
-        let mut command = request.command;
-        if let Command::PatchApplicationConfig {
-            service_connected, ..
-        } = &mut command
-        {
-            *service_connected = is_service_connected;
-        }
+        let command = request.command;
         let actor = myself.clone();
         let task = tokio::spawn(async move {
             let (result, workflow_panicked, request_runtime_rebuild, application_workflow) =
@@ -533,6 +656,8 @@ impl ApplicationWorkflowState {
                 }
             }
             let lower_outcome_uncertain = workflow.outcome_uncertain();
+            let startup_owner_unproven = workflow.startup_owner_unproven();
+            let startup_retry = workflow.startup_retry_schedule();
             let service_restart_policy = workflow.service_restart_policy();
             let service_probe = if service_mutation && !workflow_panicked {
                 Some(
@@ -555,6 +680,7 @@ impl ApplicationWorkflowState {
                     result,
                     workflow_panicked,
                     lower_outcome_uncertain,
+                    startup_owner_unproven,
                     service_restart_policy,
                     service_probe,
                     retry_reconcile_on_failure,
@@ -563,6 +689,7 @@ impl ApplicationWorkflowState {
                     application_workflow,
                     request_runtime_rebuild,
                     deferred_retry,
+                    startup_retry,
                     reconciled,
                 })
                 .is_err()
@@ -601,7 +728,10 @@ impl Actor for ApplicationWorkflowActor {
             next_id: args.next_id,
             status: args.status,
             service_status: args.service_status,
+            service: args.service,
             uncertain: false,
+            startup_owner_unproven: false,
+            startup_owner_unproven_shared: args.startup_owner_unproven_shared,
             shutting_down: false,
             shutdown_result: None,
             shutdown_waiters: Vec::new(),
@@ -628,7 +758,17 @@ impl Actor for ApplicationWorkflowActor {
                 };
                 let _ = reply.send(result);
             }
-            Message::Request(request) => {
+            Message::Request(mut request) => {
+                let service_connected = crate::core::service::ipc::get_ipc_state().is_connected();
+                if let Command::PatchApplicationConfig {
+                    service_connected: patch_service_connected,
+                    ..
+                } = &mut request.command
+                {
+                    *patch_service_connected = service_connected;
+                }
+                let source_only_application_patch =
+                    is_source_only_application_patch(&request.command);
                 if matches!(&request.command, Command::Shutdown) {
                     if let Some(error) = state.shutdown_result.clone() {
                         let result = match error {
@@ -646,11 +786,27 @@ impl Actor for ApplicationWorkflowActor {
                     }
                 } else if state.shutting_down {
                     state.reject(request, anyhow::anyhow!("core lifecycle is shutting down"));
-                } else if state.uncertain {
+                } else if state.uncertain && !source_only_application_patch {
                     state.reject(
                         request,
                         anyhow::anyhow!(
                             "previous core lifecycle operation has an uncertain outcome; restart the application before further mutations"
+                        ),
+                    );
+                } else if (state.startup_owner_unproven
+                    || state.startup_owner_unproven_shared.load(Ordering::Acquire))
+                    && !matches!(
+                        &request.command,
+                        Command::StartupReconcile { .. }
+                            | Command::RecoverStartup { .. }
+                            | Command::RetryStartup { .. }
+                    )
+                    && !source_only_application_patch
+                {
+                    state.reject(
+                        request,
+                        anyhow::anyhow!(
+                            "startup has not established the Core owner; retry startup reconciliation before runtime mutations"
                         ),
                     );
                 } else if state.pending.len() >= MAX_PENDING {
@@ -665,6 +821,7 @@ impl Actor for ApplicationWorkflowActor {
                 result,
                 workflow_panicked,
                 lower_outcome_uncertain,
+                startup_owner_unproven,
                 service_restart_policy,
                 service_probe,
                 retry_reconcile_on_failure,
@@ -673,6 +830,7 @@ impl Actor for ApplicationWorkflowActor {
                 application_workflow,
                 request_runtime_rebuild,
                 deferred_retry,
+                startup_retry,
                 reconciled,
             } => {
                 if state.active.as_ref().map(|operation| operation.response.id) == Some(id) {
@@ -689,6 +847,10 @@ impl Actor for ApplicationWorkflowActor {
                     debug_assert_eq!(active.shutdown, shutdown);
                     let _ = active.task.await;
                     state.workflow = Some(workflow);
+                    state.startup_owner_unproven = startup_owner_unproven;
+                    state
+                        .startup_owner_unproven_shared
+                        .store(startup_owner_unproven, Ordering::Release);
                     if application_workflow.is_some() {
                         state.application_workflow = application_workflow;
                     }
@@ -696,6 +858,9 @@ impl Actor for ApplicationWorkflowActor {
                         && let Some(application_workflow) = state.application_workflow.as_ref()
                     {
                         application_workflow.runtime_bound(ports);
+                    }
+                    if let Some((identity, next_attempt)) = startup_retry {
+                        state.schedule_startup_retry(&myself, identity, next_attempt);
                     }
                     state.uncertain |= workflow_panicked || lower_outcome_uncertain;
 
@@ -834,6 +999,65 @@ impl Actor for ApplicationWorkflowActor {
                     state.push_background(Command::Reconcile);
                 }
             }
+            Message::StartupRetryDue { identity } => {
+                if !state.uncertain && !state.shutting_down {
+                    if state.workflow.is_none() {
+                        state.schedule_startup_retry(
+                            &myself,
+                            identity,
+                            tokio::time::Instant::now() + DIRTY_WINDOW,
+                        );
+                    } else {
+                        let should_retry = state.workflow.as_ref().is_some_and(|workflow| {
+                            workflow.startup_retry_due(&identity)
+                                && workflow.begin_startup_retry(&identity)
+                        });
+                        if should_retry {
+                            let service = state.service.clone();
+                            let actor = myself.clone();
+                            let operation_id = state.allocate_operation_id();
+                            tokio::spawn(async move {
+                                match service.begin_transition().await {
+                                    Ok(transition) => {
+                                        let request = Request {
+                                            command: Command::RetryStartup {
+                                                operation_id,
+                                                identity,
+                                                transition,
+                                            },
+                                            response: Response {
+                                                id: operation_id,
+                                                reply: None,
+                                            },
+                                            deferred_retry: None,
+                                        };
+                                        if actor.cast(Message::Request(request)).is_err() {
+                                            tracing::warn!(
+                                                operation_id,
+                                                "failed to enqueue startup retry"
+                                            );
+                                        }
+                                    }
+                                    Err(error) => {
+                                        let _ = actor.cast(Message::StartupRetryLeaseFailed {
+                                            identity,
+                                            reason: format!("could not acquire the Service transition lease: {error:#}"),
+                                        });
+                                    }
+                                }
+                            });
+                        }
+                    }
+                }
+            }
+            Message::StartupRetryLeaseFailed { identity, reason } => {
+                if let Some(workflow) = state.workflow.as_ref() {
+                    workflow.defer_startup_retry(&identity, reason);
+                    if let Some((identity, next_attempt)) = workflow.startup_retry_schedule() {
+                        state.schedule_startup_retry(&myself, identity, next_attempt);
+                    }
+                }
+            }
             Message::DeferredRetry { digest } => {
                 if state.uncertain || state.shutting_down {
                     if let Some(application_workflow) = state.application_workflow.as_mut() {
@@ -918,6 +1142,9 @@ enum CoreLifecycleClientInner {
         service_status: tokio::sync::watch::Receiver<ServiceHostStatus>,
         service: Arc<dyn ports::ServiceLifecyclePort>,
         core: Arc<dyn CoreLifecyclePort>,
+        startup_state: StartupWorkflowState,
+        service_failed_generation: Arc<AtomicU64>,
+        startup_recovery_pending: Arc<AtomicBool>,
     },
     #[cfg(test)]
     Direct {
@@ -925,6 +1152,7 @@ enum CoreLifecycleClientInner {
         service_status: tokio::sync::watch::Receiver<ServiceHostStatus>,
         service: Arc<dyn ports::ServiceLifecyclePort>,
         core: Arc<dyn CoreLifecyclePort>,
+        startup_state: StartupWorkflowState,
     },
 }
 
@@ -1004,6 +1232,8 @@ impl CoreLifecycleClient {
         tasks: &TaskTracker,
     ) -> anyhow::Result<Self> {
         let recovery_notify = core.recovery_notify();
+        let service_status = ServiceHostWatch::new();
+        let service_status_rx = service_status.subscribe();
         let workflow = CoreLifecycleWorkflow::new(
             application,
             clash,
@@ -1012,11 +1242,15 @@ impl CoreLifecycleClient {
             installer,
             runtime_paths,
             service.clone(),
-        );
+        )
+        .with_service_status(service_status_rx.clone());
+        let startup_state = workflow.startup_state_handle();
+        let startup_owner_unproven = startup_state.owner_unproven_handle();
+        let startup_owner_unproven_signal = startup_owner_unproven.clone();
+        let service_failed_generation = workflow.service_failed_generation_handle();
+        let startup_recovery_pending = Arc::new(AtomicBool::new(false));
         let status = Arc::new(parking_lot::Mutex::new(CoreLifecycleStatus::default()));
         let next_id = Arc::new(AtomicU64::new(1));
-        let service_status = ServiceHostWatch::new();
-        let service_status_rx = service_status.subscribe();
         let (actor_ref, _handle) = Actor::spawn(
             None,
             ApplicationWorkflowActor,
@@ -1025,6 +1259,8 @@ impl CoreLifecycleClient {
                 next_id: next_id.clone(),
                 status: status.clone(),
                 service_status,
+                service: service.clone(),
+                startup_owner_unproven_shared: startup_owner_unproven.clone(),
             },
         )
         .await?;
@@ -1048,10 +1284,42 @@ impl CoreLifecycleClient {
             actor_ref,
             next_id,
             status,
-            service_status: service_status_rx,
+            service_status: service_status_rx.clone(),
             service,
             core,
+            startup_state,
+            service_failed_generation,
+            startup_recovery_pending,
         }));
+        #[cfg(not(test))]
+        {
+            let recovery_client = client.clone();
+            let mut status_updates = service_status_rx.clone();
+            let recovery_shutdown = shutdown.child_token();
+            tasks.spawn(async move {
+                let mut previous_status = status_updates.borrow().clone();
+                loop {
+                    tokio::select! {
+                        _ = recovery_shutdown.cancelled() => break,
+                        changed = status_updates.changed() => {
+                            if changed.is_err() {
+                                break;
+                            }
+                            let status = status_updates.borrow().clone();
+                            let recovery_evidence_changed = startup_recovery_evidence_changed(
+                                &previous_status,
+                                &status,
+                                startup_owner_unproven_signal.load(Ordering::Acquire),
+                            );
+                            previous_status = status;
+                            if recovery_evidence_changed && recovery_client.startup_recovery_needed() {
+                                recovery_client.request_startup_recovery();
+                            }
+                        }
+                    }
+                }
+            });
+        }
         #[cfg(not(test))]
         client.request_service_status_refresh();
         Ok(client)
@@ -1069,30 +1337,38 @@ impl CoreLifecycleClient {
         ));
         let (_service_status_tx, service_status_rx) =
             tokio::sync::watch::channel(ServiceHostStatus::probing());
+        let workflow = CoreLifecycleWorkflow::new(
+            application,
+            clash,
+            None,
+            core.clone(),
+            Arc::new(chimera_os::core_install::FsBinaryInstaller::new(Arc::new(
+                chimera_os::elevation::RefuseElevation,
+            ))),
+            runtime_paths,
+            service.clone(),
+        );
+        let startup_state = workflow.startup_state_handle();
         Self(Arc::new(CoreLifecycleClientInner::Direct {
-            workflow: tokio::sync::Mutex::new(CoreLifecycleWorkflow::new(
-                application,
-                clash,
-                None,
-                core.clone(),
-                Arc::new(chimera_os::core_install::FsBinaryInstaller::new(Arc::new(
-                    chimera_os::elevation::RefuseElevation,
-                ))),
-                runtime_paths,
-                service.clone(),
-            )),
+            workflow: tokio::sync::Mutex::new(workflow),
             service_status: service_status_rx,
             service,
             core,
+            startup_state,
         }))
     }
 
     pub(crate) async fn connect_application_workflow(
         &self,
-        workflow: ApplicationWorkflow,
+        mut workflow: ApplicationWorkflow,
     ) -> anyhow::Result<()> {
         match self.0.as_ref() {
-            CoreLifecycleClientInner::Actor { actor_ref, .. } => {
+            CoreLifecycleClientInner::Actor {
+                actor_ref,
+                startup_state,
+                ..
+            } => {
+                workflow.connect_startup_state(startup_state.clone());
                 match actor_ref
                     .call(
                         |reply| Message::ConnectApplicationWorkflow { workflow, reply },
@@ -1229,14 +1505,42 @@ impl CoreLifecycleClient {
     ) -> anyhow::Result<CompletedLifecycleOperation> {
         match self.0.as_ref() {
             CoreLifecycleClientInner::Actor {
-                actor_ref, next_id, ..
+                actor_ref,
+                next_id,
+                service,
+                startup_state,
+                status,
+                ..
             } => {
+                let startup_report = startup_state.report_handle();
+                let startup_owner_unproven = startup_state.owner_unproven_handle();
+                if let Some(report) = startup_report.lock().clone() {
+                    return Ok(completed_from_startup_report(report));
+                }
                 let id = next_id.fetch_add(1, Ordering::Relaxed);
+                let transition = match service.begin_transition().await {
+                    Ok(transition) => transition,
+                    Err(error) => {
+                        let completed = cache_unsettled_startup_report(
+                            startup_state,
+                            id,
+                            format!("could not acquire the Service transition lease: {error:#}"),
+                        );
+                        status.lock().uncertain = true;
+                        return Ok(completed);
+                    }
+                };
+                if let Some(report) = startup_report.lock().clone() {
+                    return Ok(completed_from_startup_report(report));
+                }
                 match actor_ref
                     .call(
                         |reply| {
                             Message::Request(Request {
-                                command: Command::Reconcile,
+                                command: Command::StartupReconcile {
+                                    operation_id: id,
+                                    transition,
+                                },
                                 response: Response {
                                     id,
                                     reply: Some(reply),
@@ -1248,7 +1552,31 @@ impl CoreLifecycleClient {
                     )
                     .await
                 {
-                    Ok(CallResult::Success(result)) => Ok(CompletedLifecycleOperation(result)),
+                    Ok(CallResult::Success(result)) => {
+                        let cached_report = startup_report.lock().clone();
+                        let report = match cached_report {
+                            Some(report) => report,
+                            None => {
+                                let reason = result
+                                    .as_ref()
+                                    .err()
+                                    .map(ToString::to_string)
+                                    .unwrap_or_else(|| {
+                                        "startup lifecycle completed without a report".into()
+                                    });
+                                startup_owner_unproven.store(true, Ordering::Release);
+                                status.lock().uncertain = true;
+                                let report = StartupReport {
+                                    operation_id: id,
+                                    observation: None,
+                                    outcome: StartupOutcome::Unsettled { reason },
+                                };
+                                *startup_report.lock() = Some(report.clone());
+                                report
+                            }
+                        };
+                        Ok(CompletedLifecycleOperation { result, report })
+                    }
                     Ok(CallResult::Timeout) => anyhow::bail!(
                         "startup core lifecycle operation {id} timed out; it may still be queued or running"
                     ),
@@ -1259,9 +1587,75 @@ impl CoreLifecycleClient {
                 }
             }
             #[cfg(test)]
-            CoreLifecycleClientInner::Direct { workflow, .. } => Ok(CompletedLifecycleOperation(
-                workflow.lock().await.execute(Command::Reconcile).await,
-            )),
+            CoreLifecycleClientInner::Direct {
+                workflow,
+                service,
+                startup_state,
+                ..
+            } => {
+                let startup_report = startup_state.report_handle();
+                if let Some(report) = startup_report.lock().clone() {
+                    return Ok(completed_from_startup_report(report));
+                }
+                let transition = match service.begin_transition().await {
+                    Ok(transition) => transition,
+                    Err(error) => {
+                        return Ok(cache_unsettled_startup_report(
+                            startup_state,
+                            1,
+                            format!("could not acquire the Service transition lease: {error:#}"),
+                        ));
+                    }
+                };
+                if let Some(report) = startup_report.lock().clone() {
+                    return Ok(completed_from_startup_report(report));
+                }
+                let result = workflow
+                    .lock()
+                    .await
+                    .execute(Command::StartupReconcile {
+                        operation_id: 1,
+                        transition,
+                    })
+                    .await;
+                let report = match startup_report.lock().clone() {
+                    Some(report) => report,
+                    None => {
+                        let reason = result
+                            .as_ref()
+                            .err()
+                            .map(ToString::to_string)
+                            .unwrap_or_else(|| {
+                                "direct startup lifecycle completed without a report".into()
+                            });
+                        return Ok(cache_unsettled_startup_report(startup_state, 1, reason));
+                    }
+                };
+                Ok(CompletedLifecycleOperation { result, report })
+            }
+        }
+    }
+
+    fn startup_recovery_needed(&self) -> bool {
+        match self.0.as_ref() {
+            CoreLifecycleClientInner::Actor {
+                startup_state,
+                service_failed_generation,
+                service_status,
+                core,
+                ..
+            } => {
+                !core.outcome_uncertain()
+                    && (startup_state.owner_unproven() || {
+                        let failed_generation = service_failed_generation.load(Ordering::Acquire);
+                        let status = service_status.borrow();
+                        failed_generation != 0
+                            && status.ready_generation != failed_generation
+                            && status.phase.readiness() == Some(true)
+                    })
+            }
+            #[cfg(test)]
+            CoreLifecycleClientInner::Direct { .. } => false,
         }
     }
 
@@ -1274,6 +1668,10 @@ impl CoreLifecycleClient {
     }
 
     pub(crate) fn request_runtime_rebuild(&self) {
+        if self.startup_recovery_needed() {
+            self.request_startup_recovery();
+            return;
+        }
         match self.0.as_ref() {
             CoreLifecycleClientInner::Actor { actor_ref, .. } => {
                 if actor_ref.cast(Message::RuntimeDirty).is_err() {
@@ -1283,6 +1681,73 @@ impl CoreLifecycleClient {
             #[cfg(test)]
             CoreLifecycleClientInner::Direct { .. } => {}
         }
+    }
+
+    fn request_startup_recovery(&self) {
+        let (actor_ref, next_id, service, startup_recovery_pending) = match self.0.as_ref() {
+            CoreLifecycleClientInner::Actor {
+                actor_ref,
+                next_id,
+                service,
+                startup_recovery_pending,
+                ..
+            } => (actor_ref, next_id, service, startup_recovery_pending),
+            #[cfg(test)]
+            CoreLifecycleClientInner::Direct { .. } => return,
+        };
+        if startup_recovery_pending
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
+            return;
+        }
+
+        let actor_ref = actor_ref.clone();
+        let next_id = next_id.clone();
+        let service = service.clone();
+        let startup_recovery_pending = startup_recovery_pending.clone();
+        let client = self.clone();
+        tokio::spawn(async move {
+            let result = async {
+                // Acquire the host lease before asking the serialized actor to
+                // run recovery, preserving the global host-lock/mailbox order.
+                let transition = service.begin_transition().await?;
+                if !client.startup_recovery_needed() {
+                    return Ok(());
+                }
+                let operation_id = next_id.fetch_add(1, Ordering::Relaxed);
+                match actor_ref
+                    .call(
+                        |reply| {
+                            Message::Request(Request {
+                                command: Command::RecoverStartup {
+                                    operation_id,
+                                    transition,
+                                },
+                                response: Response {
+                                    id: operation_id,
+                                    reply: Some(reply),
+                                },
+                                deferred_retry: None,
+                            })
+                        },
+                        Some(CALL_WAIT),
+                    )
+                    .await?
+                {
+                    CallResult::Success(result) => result,
+                    CallResult::Timeout => anyhow::bail!("startup owner recovery timed out"),
+                    CallResult::SenderError => {
+                        anyhow::bail!("startup owner recovery reply was dropped")
+                    }
+                }
+            }
+            .await;
+            startup_recovery_pending.store(false, Ordering::Release);
+            if let Err(error) = result {
+                tracing::warn!(%error, "automatic startup owner recovery did not complete");
+            }
+        });
     }
 
     pub(super) async fn request_service_endpoint_down(&self) {
@@ -1399,7 +1864,49 @@ impl CoreLifecycleClient {
     }
 
     pub(super) async fn reconcile(&self) -> anyhow::Result<()> {
+        if self.startup_recovery_needed() {
+            return self.recover_startup().await;
+        }
         self.execute(Command::Reconcile).await
+    }
+
+    async fn recover_startup(&self) -> anyhow::Result<()> {
+        match self.0.as_ref() {
+            CoreLifecycleClientInner::Actor {
+                next_id, service, ..
+            } => {
+                // Keep host-lock-before-mailbox ordering, matching every
+                // Service transition and the initial StartupReconcile path.
+                let transition = service.begin_transition().await?;
+                let operation_id = next_id.fetch_add(1, Ordering::Relaxed);
+                self.execute(Command::RecoverStartup {
+                    operation_id,
+                    transition,
+                })
+                .await
+            }
+            #[cfg(test)]
+            CoreLifecycleClientInner::Direct {
+                workflow,
+                service,
+                startup_state,
+                ..
+            } => {
+                let transition = service.begin_transition().await?;
+                let operation_id = startup_state
+                    .lock_report()
+                    .as_ref()
+                    .map_or(1, |report| report.operation_id.saturating_add(1));
+                workflow
+                    .lock()
+                    .await
+                    .execute(Command::RecoverStartup {
+                        operation_id,
+                        transition,
+                    })
+                    .await
+            }
+        }
     }
 
     pub(crate) async fn reconcile_profiles(
@@ -1498,7 +2005,7 @@ impl ChimeraClient {
     pub(crate) async fn init_core(&self) -> anyhow::Result<()> {
         // The producer gate is released only after a terminal lifecycle reply.
         // An ambiguous transport error must leave it held until startup is retried.
-        let startup = self
+        let completed = self
             .inner
             .core_lifecycle
             .startup_reconcile()
@@ -1507,11 +2014,29 @@ impl ChimeraClient {
                 anyhow::anyhow!(
                     "startup reconciliation did not return a terminal reply; Profile background producers remain held: {error:#}"
                 )
-            })?
-            .0;
-        let producers = match self.inner.typed_profiles.as_ref() {
-            Some(profiles) => profiles.start_producers().await.map_err(anyhow::Error::new),
-            None => Ok(()),
+            })?;
+        let startup = match &completed.report.outcome {
+            StartupOutcome::Ready => completed.result,
+            outcome => {
+                let reason = outcome
+                    .failure_reason()
+                    .unwrap_or("startup did not reach a ready state");
+                tracing::warn!(
+                    operation_id = completed.report.operation_id,
+                    ?outcome,
+                    "startup reconcile did not reach the ready state"
+                );
+                Err(anyhow::anyhow!(
+                    "startup reconcile {} did not reach ready: {reason}",
+                    completed.report.operation_id
+                ))
+            }
+        };
+        let may_start_producers = !self.inner.core_lifecycle.status().uncertain;
+        let producers = match (may_start_producers, self.inner.typed_profiles.as_ref()) {
+            (true, Some(profiles)) => profiles.start_producers().await.map_err(anyhow::Error::new),
+            (false, Some(_)) => Ok(()),
+            (_, None) => Ok(()),
         };
 
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -1640,7 +2165,7 @@ mod tests {
     use std::{
         sync::{
             Arc, Condvar, Mutex,
-            atomic::{AtomicBool, AtomicU8, Ordering as AtomicOrdering},
+            atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering as AtomicOrdering},
         },
         time::Duration,
     };
@@ -1692,6 +2217,122 @@ mod tests {
         assert!(!json.as_object().unwrap().contains_key("settled_ready"));
         assert!(!json.as_object().unwrap().contains_key("ready_generation"));
         assert_eq!(json["phase"], "ready");
+    }
+
+    #[test]
+    fn startup_recovery_evidence_detects_same_generation_probe_recovery() {
+        let mut previous = ServiceHostStatus::probing();
+        previous = previous.observe_probe(
+            chimera_ipc::types::StatusInfo {
+                name: std::borrow::Cow::Borrowed("chimera-service"),
+                version: std::borrow::Cow::Borrowed("1.0.0"),
+                status: chimera_ipc::types::ServiceStatus::Running,
+                server: Some(chimera_ipc::api::status::StatusResBody {
+                    version: std::borrow::Cow::Borrowed("1.11.1"),
+                    core_infos: chimera_ipc::api::status::CoreInfos {
+                        instance_id: Some("service-instance".into()),
+                        r#type: None,
+                        state: CoreState::Running,
+                        state_changed_at: 1,
+                        config_path: None,
+                        controller: None,
+                        health: None,
+                        revision: None,
+                        detail: Some(chimera_ipc::api::status::CoreStateDetail::Stopped {
+                            reason: None,
+                        }),
+                    },
+                    runtime_infos: chimera_ipc::api::status::RuntimeInfos {
+                        service_data_dir: std::borrow::Cow::Owned(Default::default()),
+                        service_config_dir: std::borrow::Cow::Owned(Default::default()),
+                        nyanpasu_config_dir: std::borrow::Cow::Owned(Default::default()),
+                        nyanpasu_data_dir: std::borrow::Cow::Owned(Default::default()),
+                    },
+                }),
+            },
+            true,
+            None,
+        );
+        let unavailable = previous.on_probe_failure();
+        let recovered = unavailable.observe_probe(
+            chimera_ipc::types::StatusInfo {
+                name: std::borrow::Cow::Borrowed("chimera-service"),
+                version: std::borrow::Cow::Borrowed("1.0.0"),
+                status: chimera_ipc::types::ServiceStatus::Running,
+                server: previous.server.clone(),
+            },
+            true,
+            None,
+        );
+
+        assert_eq!(unavailable.ready_generation, recovered.ready_generation);
+        assert!(startup_recovery_evidence_changed(
+            &unavailable,
+            &recovered,
+            true
+        ));
+        assert!(!startup_recovery_evidence_changed(
+            &unavailable,
+            &recovered,
+            false
+        ));
+    }
+
+    #[test]
+    fn startup_recovery_evidence_detects_ready_generation_change_alone() {
+        let mut previous = ServiceHostStatus::probing();
+        previous.phase = ServicePhase::Ready;
+        previous.settled_ready = true;
+        previous.ready_generation = 1;
+
+        let mut current = previous.clone();
+        current.ready_generation = 2;
+
+        assert_eq!(
+            crate::client::application_workflow::startup::ServiceEvidence::from_status(&previous),
+            crate::client::application_workflow::startup::ServiceEvidence::from_status(&current),
+            "a generation advance alone must be enough to request recovery"
+        );
+        assert!(startup_recovery_evidence_changed(
+            &previous, &current, false
+        ));
+    }
+
+    #[tokio::test]
+    async fn application_workflow_client_connects_shared_startup_state() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let client = spawn_startup_client(
+            Arc::new(ConfirmedStoppedCore {
+                events: events.clone(),
+                run_type: RunType::Normal,
+            }),
+            Arc::new(RecordingService {
+                events: events.clone(),
+            }),
+        )
+        .await;
+        let startup = match client.0.as_ref() {
+            CoreLifecycleClientInner::Actor { startup_state, .. } => startup_state.clone(),
+            #[cfg(test)]
+            CoreLifecycleClientInner::Direct { .. } => panic!("test client uses the actor"),
+        };
+        let report = startup.report_handle();
+        let references_before_connect = Arc::strong_count(&report);
+
+        let _connected = crate::client::application_workflow::ApplicationWorkflowClient::spawn(
+            client,
+            Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new())),
+            Arc::new(tokio::sync::Mutex::new(None)),
+            None,
+        )
+        .await
+        .expect("the production ApplicationWorkflow connection should succeed");
+
+        assert_eq!(
+            Arc::strong_count(&report),
+            references_before_connect + 1,
+            "the actor-held ApplicationWorkflow must retain the lifecycle report handle"
+        );
     }
 
     #[test]
@@ -1787,13 +2428,78 @@ mod tests {
         events: Arc<Mutex<Vec<&'static str>>>,
     }
 
+    struct UnreadableService {
+        events: Arc<Mutex<Vec<&'static str>>>,
+    }
+
+    struct StartupServiceProbe {
+        events: Arc<Mutex<Vec<&'static str>>>,
+        probes: AtomicU8,
+        confirms_stopped: bool,
+        runtime_owned: bool,
+    }
+
+    struct StartupFallbackServiceProbe {
+        inner: StartupServiceProbe,
+    }
+
+    struct StartupTransitionRaceService {
+        inner: StartupServiceProbe,
+        transition_lock: Arc<tokio::sync::Mutex<()>>,
+        transition_attempts: Arc<AtomicUsize>,
+        probe_entered: Arc<Notify>,
+        release_probe: Arc<Notify>,
+    }
+
+    struct RetiringCore {
+        inner: RecordingCore,
+        selected: Mutex<RunType>,
+    }
+
+    struct StartupOwnerCore {
+        events: Arc<Mutex<Vec<&'static str>>>,
+        selected: Mutex<RunType>,
+        local_status: Mutex<(CoreState, i64)>,
+        service_running: Arc<AtomicBool>,
+        local_receipt: Mutex<Option<Arc<crate::client::runtime::RuntimeApplyReceipt>>>,
+        service_receipt: Mutex<Option<Arc<crate::client::runtime::RuntimeApplyReceipt>>>,
+        receipt_queries: AtomicU8,
+        invalidate_receipt_after_first_query: bool,
+        stop_confirms: bool,
+        stop_error: Option<(chimera_core_manager::CoreErrorKind, bool)>,
+        service_retire_error: Option<(chimera_core_manager::CoreErrorKind, bool)>,
+        service_recover_error: Option<(chimera_core_manager::CoreErrorKind, bool)>,
+        outcome_uncertain: AtomicBool,
+    }
+
+    struct MutableStartupServiceProbe {
+        events: Arc<Mutex<Vec<&'static str>>>,
+        running: Arc<AtomicBool>,
+        stopped_reason: Option<String>,
+        runtime_owned: bool,
+    }
+
+    struct ForeignAfterRecoveryServiceProbe {
+        inner: MutableStartupServiceProbe,
+    }
+
     struct RestartBudgetService {
         events: Arc<Mutex<Vec<&'static str>>>,
         attempts: AtomicU8,
         exhausted: AtomicBool,
     }
 
+    struct StartupRetryLeaseService {
+        inner: RestartBudgetService,
+        transition_attempts: AtomicU8,
+    }
+
     struct RecordingServiceTransition {
+        events: Arc<Mutex<Vec<&'static str>>>,
+    }
+
+    struct StartupTransitionRaceLease {
+        _guard: tokio::sync::OwnedMutexGuard<()>,
         events: Arc<Mutex<Vec<&'static str>>>,
     }
 
@@ -1807,6 +2513,135 @@ mod tests {
         observations: Arc<Mutex<Vec<(RunType, ClashCore, bool)>>>,
         mutate_application_on_first_reconcile: AtomicBool,
         fail_first_reconcile: AtomicBool,
+    }
+
+    struct StartupDegradedServiceCore {
+        events: Arc<Mutex<Vec<&'static str>>>,
+        reconciles: AtomicU8,
+        stopped: AtomicBool,
+    }
+
+    struct StartupTransientCore {
+        events: Arc<Mutex<Vec<&'static str>>>,
+        reconciles: AtomicU8,
+        stops: AtomicU8,
+        recovered: Arc<Notify>,
+        outcome_uncertain: bool,
+    }
+
+    struct StartupReceiptCore {
+        events: Arc<Mutex<Vec<&'static str>>>,
+        status: Mutex<(CoreState, i64)>,
+        receipt: Mutex<Option<Arc<crate::client::runtime::RuntimeApplyReceipt>>>,
+        stop_confirms: bool,
+    }
+
+    fn startup_owner_core(
+        events: Arc<Mutex<Vec<&'static str>>>,
+        local_state: (CoreState, i64),
+        service_running: Arc<AtomicBool>,
+    ) -> StartupOwnerCore {
+        StartupOwnerCore {
+            events,
+            selected: Mutex::new(RunType::Normal),
+            local_status: Mutex::new(local_state),
+            service_running,
+            local_receipt: Mutex::new(None),
+            service_receipt: Mutex::new(None),
+            receipt_queries: AtomicU8::new(0),
+            invalidate_receipt_after_first_query: false,
+            stop_confirms: true,
+            stop_error: None,
+            service_retire_error: None,
+            service_recover_error: None,
+            outcome_uncertain: AtomicBool::new(false),
+        }
+    }
+
+    async fn spawn_startup_client(
+        core: Arc<dyn CoreLifecyclePort>,
+        service: Arc<dyn ServiceLifecyclePort>,
+    ) -> CoreLifecycleClient {
+        spawn_startup_client_with_application(core, service, ApplicationClient::legacy().unwrap())
+            .await
+    }
+
+    async fn spawn_startup_client_with_application(
+        core: Arc<dyn CoreLifecyclePort>,
+        service: Arc<dyn ServiceLifecyclePort>,
+        application: ApplicationClient,
+    ) -> CoreLifecycleClient {
+        spawn_startup_client_with_application_and_clash(
+            core,
+            service,
+            application,
+            ClashConfigClient::legacy().unwrap(),
+        )
+        .await
+    }
+
+    async fn spawn_startup_client_with_application_and_clash(
+        core: Arc<dyn CoreLifecyclePort>,
+        service: Arc<dyn ServiceLifecyclePort>,
+        application: ApplicationClient,
+        clash: ClashConfigClient,
+    ) -> CoreLifecycleClient {
+        let installer: Arc<dyn ports::BinaryInstaller> =
+            Arc::new(chimera_os::core_install::FsBinaryInstaller::new(Arc::new(
+                chimera_os::elevation::RefuseElevation,
+            )));
+        CoreLifecycleClient::spawn_with_service(
+            core,
+            application,
+            clash,
+            RuntimePaths::from_config_root(std::path::PathBuf::from("test-runtime-root")),
+            installer,
+            service,
+        )
+        .await
+        .unwrap()
+    }
+
+    async fn startup_target_for(
+        application: ApplicationClient,
+        clash: ClashConfigClient,
+        core: Arc<dyn CoreLifecyclePort>,
+        service: Arc<dyn ServiceLifecyclePort>,
+    ) -> String {
+        let workflow = CoreLifecycleWorkflow::new(
+            application,
+            clash,
+            None,
+            core,
+            Arc::new(chimera_os::core_install::FsBinaryInstaller::new(Arc::new(
+                chimera_os::elevation::RefuseElevation,
+            ))),
+            RuntimePaths::from_config_root(std::path::PathBuf::from("test-runtime-root")),
+            service,
+        );
+        workflow
+            .startup_target_identity()
+            .await
+            .expect("startup target should be available")
+    }
+
+    fn startup_test_receipt(
+        target: Option<String>,
+    ) -> Arc<crate::client::runtime::RuntimeApplyReceipt> {
+        startup_test_receipt_for(
+            target,
+            crate::core::actor_v2::control_endpoint::ExecutionHost::Local,
+        )
+    }
+
+    fn startup_test_receipt_for(
+        target: Option<String>,
+        host: crate::core::actor_v2::control_endpoint::ExecutionHost,
+    ) -> Arc<crate::client::runtime::RuntimeApplyReceipt> {
+        let mut receipt = crate::client::ports::test_runtime_receipt(Default::default());
+        receipt.target = target;
+        receipt.host = host;
+        Arc::new(receipt)
     }
 
     struct ApplicationPatchRecordingCore {
@@ -2384,6 +3219,749 @@ mod tests {
     }
 
     #[async_trait]
+    impl ServiceLifecyclePort for UnreadableService {
+        async fn probe(&self) -> anyhow::Result<chimera_ipc::types::StatusInfo<'static>> {
+            self.events.lock().unwrap().push("service-probe-failed");
+            anyhow::bail!("test Service probe is unavailable")
+        }
+
+        async fn begin_transition(&self) -> anyhow::Result<Box<dyn ServiceTransitionLease>> {
+            self.events.lock().unwrap().push("service-begin");
+            Ok(Box::new(RecordingServiceTransition {
+                events: self.events.clone(),
+            }))
+        }
+    }
+
+    #[async_trait]
+    impl ServiceLifecyclePort for StartupServiceProbe {
+        async fn probe(&self) -> anyhow::Result<chimera_ipc::types::StatusInfo<'static>> {
+            self.events.lock().unwrap().push("service-probe");
+            let probe = self.probes.fetch_add(1, AtomicOrdering::AcqRel);
+            let core_detail = if probe == 0 || !self.confirms_stopped {
+                chimera_ipc::api::status::CoreStateDetail::Running { epoch: 1, pid: 7 }
+            } else {
+                chimera_ipc::api::status::CoreStateDetail::Stopped { reason: None }
+            };
+            Ok(chimera_ipc::types::StatusInfo {
+                name: std::borrow::Cow::Borrowed("chimera-service"),
+                version: std::borrow::Cow::Borrowed("1.11.1"),
+                status: chimera_ipc::types::ServiceStatus::Running,
+                server: Some(chimera_ipc::api::status::StatusResBody {
+                    version: std::borrow::Cow::Borrowed("1.11.1"),
+                    core_infos: chimera_ipc::api::status::CoreInfos {
+                        instance_id: Some("9af54a67-fc31-4dcb-8422-26644c6277c8".into()),
+                        r#type: None,
+                        state: CoreState::Running,
+                        state_changed_at: 1,
+                        config_path: None,
+                        controller: None,
+                        health: None,
+                        revision: Some(chimera_ipc::api::status::ConfigRevisionInfo {
+                            epoch: 1,
+                            generation: 3,
+                            source_hash: "89abcdef01234567".into(),
+                            effective_hash: "0123456789abcdef".into(),
+                        }),
+                        detail: Some(core_detail),
+                    },
+                    runtime_infos: chimera_ipc::api::status::RuntimeInfos {
+                        service_data_dir: std::borrow::Cow::Owned(Default::default()),
+                        service_config_dir: std::borrow::Cow::Owned(Default::default()),
+                        nyanpasu_config_dir: std::borrow::Cow::Owned(Default::default()),
+                        nyanpasu_data_dir: std::borrow::Cow::Owned(Default::default()),
+                    },
+                }),
+            })
+        }
+
+        fn runtime_owned(&self, _info: &chimera_ipc::types::StatusInfo<'_>) -> bool {
+            self.runtime_owned
+        }
+
+        async fn begin_transition(&self) -> anyhow::Result<Box<dyn ServiceTransitionLease>> {
+            self.events.lock().unwrap().push("service-begin");
+            Ok(Box::new(RecordingServiceTransition {
+                events: self.events.clone(),
+            }))
+        }
+    }
+
+    #[async_trait]
+    impl ServiceLifecyclePort for StartupFallbackServiceProbe {
+        async fn probe(&self) -> anyhow::Result<chimera_ipc::types::StatusInfo<'static>> {
+            let mut info = self.inner.probe().await?;
+            if self.inner.probes.load(AtomicOrdering::Acquire) >= 2
+                && let Some(server) = info.server.as_mut()
+            {
+                server.core_infos.detail =
+                    Some(chimera_ipc::api::status::CoreStateDetail::Stopped { reason: None });
+            }
+            Ok(info)
+        }
+
+        fn runtime_owned(&self, _info: &chimera_ipc::types::StatusInfo<'_>) -> bool {
+            self.inner.runtime_owned
+        }
+
+        async fn begin_transition(&self) -> anyhow::Result<Box<dyn ServiceTransitionLease>> {
+            self.inner.begin_transition().await
+        }
+    }
+
+    #[async_trait]
+    impl ServiceLifecyclePort for StartupTransitionRaceService {
+        async fn probe(&self) -> anyhow::Result<chimera_ipc::types::StatusInfo<'static>> {
+            if self.inner.probes.load(AtomicOrdering::Acquire) == 0 {
+                self.probe_entered.notify_one();
+                self.release_probe.notified().await;
+            }
+            self.inner.probe().await
+        }
+
+        fn runtime_owned(&self, _info: &chimera_ipc::types::StatusInfo<'_>) -> bool {
+            true
+        }
+
+        async fn begin_transition(&self) -> anyhow::Result<Box<dyn ServiceTransitionLease>> {
+            self.transition_attempts
+                .fetch_add(1, AtomicOrdering::AcqRel);
+            let guard = self.transition_lock.clone().lock_owned().await;
+            self.inner.events.lock().unwrap().push("service-begin");
+            Ok(Box::new(StartupTransitionRaceLease {
+                _guard: guard,
+                events: self.inner.events.clone(),
+            }))
+        }
+    }
+
+    #[async_trait]
+    impl ServiceTransitionLease for StartupTransitionRaceLease {
+        async fn install_daemon(&mut self) -> anyhow::Result<()> {
+            self.events.lock().unwrap().push("service-install");
+            Ok(())
+        }
+
+        async fn uninstall_daemon(&mut self) -> anyhow::Result<()> {
+            self.events.lock().unwrap().push("service-uninstall");
+            Ok(())
+        }
+
+        async fn update_daemon(&mut self) -> anyhow::Result<()> {
+            self.events.lock().unwrap().push("service-update");
+            Ok(())
+        }
+
+        async fn start_daemon(&mut self) -> anyhow::Result<()> {
+            self.events.lock().unwrap().push("service-start");
+            Ok(())
+        }
+
+        async fn restart_daemon(&mut self) -> anyhow::Result<()> {
+            self.events.lock().unwrap().push("service-restart");
+            Ok(())
+        }
+
+        async fn stop_daemon(&mut self) -> anyhow::Result<()> {
+            self.events.lock().unwrap().push("service-stop");
+            Ok(())
+        }
+
+        async fn confirm_ready(&mut self, _timeout: Duration) -> anyhow::Result<()> {
+            self.events.lock().unwrap().push("service-ready");
+            Ok(())
+        }
+
+        async fn confirm_stopped(&mut self) -> anyhow::Result<()> {
+            self.events.lock().unwrap().push("service-confirm");
+            Ok(())
+        }
+    }
+
+    #[async_trait]
+    impl CoreLifecyclePort for RetiringCore {
+        async fn reconcile(
+            &self,
+            _clash: ClashConfig,
+            _target_core: ClashCore,
+            _run_type: RunType,
+        ) -> anyhow::Result<()> {
+            self.inner.events.lock().unwrap().push("rebuild");
+            Ok(())
+        }
+
+        async fn retire_service_core(
+            &self,
+            _expected_owner: chimera_core_manager::CoreOwner,
+        ) -> anyhow::Result<()> {
+            self.inner
+                .events
+                .lock()
+                .unwrap()
+                .push("service-core-retire");
+            Ok(())
+        }
+
+        async fn reconcile_after_service_release(
+            &self,
+            _clash: ClashConfig,
+            _target_core: ClashCore,
+        ) -> anyhow::Result<()> {
+            self.inner
+                .events
+                .lock()
+                .unwrap()
+                .push("rebuild-after-service-release");
+            Ok(())
+        }
+
+        async fn reconcile_profiles_after_service_release(
+            &self,
+            _clash: ClashConfig,
+            _target_core: ClashCore,
+            _profiles: Arc<chimera_config::profile::Profiles>,
+            _app: chimera_config::application::ChimeraAppConfig,
+            _staged_content: std::collections::BTreeMap<String, String>,
+            _target: Option<String>,
+        ) -> anyhow::Result<()> {
+            self.inner
+                .events
+                .lock()
+                .unwrap()
+                .push("rebuild-after-service-release");
+            Ok(())
+        }
+
+        async fn stop(&self) -> anyhow::Result<()> {
+            self.inner.stop().await
+        }
+
+        async fn change_core(&self, core: ClashCore) -> anyhow::Result<()> {
+            self.inner.change_core(core).await
+        }
+
+        async fn status(&self) -> anyhow::Result<CoreStatusSnapshot> {
+            let mut status = self.inner.status().await?;
+            let selected = *self.selected.lock().unwrap();
+            status.run_type = selected;
+            if selected == RunType::Normal && self.inner.run_type == RunType::Service {
+                status.instance_id = None;
+                status.state_changed_at = 0;
+            }
+            Ok(status)
+        }
+
+        async fn select_execution_host(
+            &self,
+            host: crate::core::actor_v2::control_endpoint::ExecutionHost,
+        ) -> anyhow::Result<()> {
+            *self.selected.lock().unwrap() = match host {
+                crate::core::actor_v2::control_endpoint::ExecutionHost::Local => RunType::Normal,
+                crate::core::actor_v2::control_endpoint::ExecutionHost::Service => RunType::Service,
+            };
+            self.inner.events.lock().unwrap().push(match host {
+                crate::core::actor_v2::control_endpoint::ExecutionHost::Local => "select-local",
+                crate::core::actor_v2::control_endpoint::ExecutionHost::Service => "select-service",
+            });
+            Ok(())
+        }
+
+        fn recovery_notify(&self) -> Option<Arc<Notify>> {
+            Some(self.inner.recovery_notify.clone())
+        }
+
+        async fn on_profile_change(&self, break_when: bool) {
+            self.inner.on_profile_change(break_when).await;
+        }
+    }
+
+    #[async_trait]
+    impl CoreLifecyclePort for StartupOwnerCore {
+        async fn reconcile(
+            &self,
+            _clash: ClashConfig,
+            _target_core: ClashCore,
+            run_type: RunType,
+        ) -> anyhow::Result<()> {
+            let (host, label) = match run_type {
+                RunType::Normal => {
+                    *self.local_status.lock().unwrap() = (CoreState::Running, 3);
+                    ("local", "rebuild-local")
+                }
+                RunType::Service => {
+                    self.service_running.store(true, AtomicOrdering::Release);
+                    ("service", "rebuild-service")
+                }
+                RunType::Elevated => anyhow::bail!("elevated Core is unsupported in this fixture"),
+            };
+            *self.selected.lock().unwrap() = run_type;
+            self.events.lock().unwrap().push(label);
+            tracing::debug!(host, "test startup Core reconciled");
+            Ok(())
+        }
+
+        async fn stop(&self) -> anyhow::Result<()> {
+            let selected = *self.selected.lock().unwrap();
+            let (state, event) = match selected {
+                RunType::Normal => {
+                    if self.stop_confirms {
+                        *self.local_status.lock().unwrap() = (CoreState::Stopped(None), 2);
+                    }
+                    (self.local_status.lock().unwrap().0.clone(), "stop-local")
+                }
+                RunType::Service => {
+                    if self.stop_confirms {
+                        self.service_running.store(false, AtomicOrdering::Release);
+                    }
+                    (
+                        if self.service_running.load(AtomicOrdering::Acquire) {
+                            CoreState::Running
+                        } else {
+                            CoreState::Stopped(None)
+                        },
+                        "stop-service",
+                    )
+                }
+                RunType::Elevated => anyhow::bail!("elevated Core is unsupported in this fixture"),
+            };
+            self.events.lock().unwrap().push(event);
+            if let Some((kind, retryable)) = self.stop_error {
+                if kind == chimera_core_manager::CoreErrorKind::StopUnconfirmed
+                    || kind == chimera_core_manager::CoreErrorKind::Quarantined
+                {
+                    self.outcome_uncertain.store(true, AtomicOrdering::Release);
+                }
+                return Err(chimera_core_manager::CoreError::new(
+                    kind,
+                    format!("injected {kind:?} stop error while {state:?}"),
+                    retryable,
+                )
+                .into());
+            }
+            Ok(())
+        }
+
+        async fn recover_service_quarantine(&self) -> anyhow::Result<()> {
+            self.events.lock().unwrap().push("service-core-recover");
+            if let Some((kind, retryable)) = self.service_recover_error {
+                if matches!(
+                    kind,
+                    chimera_core_manager::CoreErrorKind::StopUnconfirmed
+                        | chimera_core_manager::CoreErrorKind::Quarantined
+                ) {
+                    self.outcome_uncertain.store(true, AtomicOrdering::Release);
+                }
+                return Err(chimera_core_manager::CoreError::new(
+                    kind,
+                    format!("injected {kind:?} Service recovery error"),
+                    retryable,
+                )
+                .into());
+            }
+            Ok(())
+        }
+
+        async fn change_core(&self, _core: ClashCore) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        async fn status(&self) -> anyhow::Result<CoreStatusSnapshot> {
+            let run_type = *self.selected.lock().unwrap();
+            let (instance_id, state, state_changed_at) = match run_type {
+                RunType::Normal => {
+                    let (state, changed_at) = self.local_status.lock().unwrap().clone();
+                    ("local-core-instance".into(), state, changed_at)
+                }
+                RunType::Service if self.service_running.load(AtomicOrdering::Acquire) => (
+                    "9af54a67-fc31-4dcb-8422-26644c6277c8".into(),
+                    CoreState::Running,
+                    1,
+                ),
+                RunType::Service => (
+                    "9af54a67-fc31-4dcb-8422-26644c6277c8".into(),
+                    CoreState::Stopped(None),
+                    2,
+                ),
+                RunType::Elevated => (String::new(), CoreState::Stopped(None), 0),
+            };
+            Ok(CoreStatusSnapshot {
+                instance_id: (!instance_id.is_empty()).then_some(instance_id),
+                state,
+                state_changed_at,
+                run_type,
+            })
+        }
+
+        async fn select_execution_host(
+            &self,
+            host: crate::core::actor_v2::control_endpoint::ExecutionHost,
+        ) -> anyhow::Result<()> {
+            let run_type = match host {
+                crate::core::actor_v2::control_endpoint::ExecutionHost::Local => RunType::Normal,
+                crate::core::actor_v2::control_endpoint::ExecutionHost::Service => RunType::Service,
+            };
+            *self.selected.lock().unwrap() = run_type;
+            self.events.lock().unwrap().push(match run_type {
+                RunType::Normal => "select-local",
+                RunType::Service => "select-service",
+                RunType::Elevated => unreachable!(),
+            });
+            Ok(())
+        }
+
+        async fn active_runtime_receipt(
+            &self,
+        ) -> anyhow::Result<Option<Arc<crate::client::runtime::RuntimeApplyReceipt>>> {
+            let query = self.receipt_queries.fetch_add(1, AtomicOrdering::AcqRel);
+            if self.invalidate_receipt_after_first_query && query > 0 {
+                return Ok(None);
+            }
+            let status = self.status().await?;
+            if !matches!(status.state, CoreState::Running) {
+                return Ok(None);
+            }
+            Ok(match status.run_type {
+                RunType::Normal => self.local_receipt.lock().unwrap().clone(),
+                RunType::Service => self.service_receipt.lock().unwrap().clone(),
+                RunType::Elevated => None,
+            })
+        }
+
+        async fn observe_runtime_baseline(
+            &self,
+        ) -> anyhow::Result<crate::client::application_workflow::mutation::KnownRuntimeState>
+        {
+            let status = self.status().await?;
+            if matches!(status.state, CoreState::Stopped(_)) {
+                Ok(crate::client::application_workflow::mutation::KnownRuntimeState::Stopped)
+            } else {
+                Ok(crate::client::application_workflow::mutation::KnownRuntimeState::NeverApplied)
+            }
+        }
+
+        async fn retire_service_core(
+            &self,
+            _expected_owner: chimera_core_manager::CoreOwner,
+        ) -> anyhow::Result<()> {
+            self.events.lock().unwrap().push("service-core-retire");
+            self.service_running.store(false, AtomicOrdering::Release);
+            if let Some((kind, retryable)) = self.service_retire_error {
+                if matches!(
+                    kind,
+                    chimera_core_manager::CoreErrorKind::StopUnconfirmed
+                        | chimera_core_manager::CoreErrorKind::Quarantined
+                ) {
+                    self.outcome_uncertain.store(true, AtomicOrdering::Release);
+                }
+                return Err(chimera_core_manager::CoreError::new(
+                    kind,
+                    format!("injected {kind:?} Service stop error"),
+                    retryable,
+                )
+                .into());
+            }
+            Ok(())
+        }
+
+        fn outcome_uncertain(&self) -> bool {
+            self.outcome_uncertain.load(AtomicOrdering::Acquire)
+        }
+
+        fn recovery_notify(&self) -> Option<Arc<Notify>> {
+            None
+        }
+
+        async fn on_profile_change(&self, _break_when: bool) {}
+    }
+
+    #[async_trait]
+    impl ServiceLifecyclePort for MutableStartupServiceProbe {
+        async fn probe(&self) -> anyhow::Result<chimera_ipc::types::StatusInfo<'static>> {
+            self.events.lock().unwrap().push("service-probe");
+            let running = self.running.load(AtomicOrdering::Acquire);
+            let state = if running {
+                CoreState::Running
+            } else {
+                CoreState::Stopped(self.stopped_reason.clone())
+            };
+            let detail = if running {
+                chimera_ipc::api::status::CoreStateDetail::Running { epoch: 1, pid: 7 }
+            } else {
+                chimera_ipc::api::status::CoreStateDetail::Stopped {
+                    reason: self.stopped_reason.clone(),
+                }
+            };
+            Ok(chimera_ipc::types::StatusInfo {
+                name: std::borrow::Cow::Borrowed("chimera-service"),
+                version: std::borrow::Cow::Borrowed("1.11.1"),
+                status: chimera_ipc::types::ServiceStatus::Running,
+                server: Some(chimera_ipc::api::status::StatusResBody {
+                    version: std::borrow::Cow::Borrowed("1.11.1"),
+                    core_infos: chimera_ipc::api::status::CoreInfos {
+                        instance_id: Some("9af54a67-fc31-4dcb-8422-26644c6277c8".into()),
+                        r#type: None,
+                        state,
+                        state_changed_at: if running { 1 } else { 2 },
+                        config_path: None,
+                        controller: None,
+                        health: None,
+                        revision: Some(chimera_ipc::api::status::ConfigRevisionInfo {
+                            epoch: 1,
+                            generation: 3,
+                            source_hash: "89abcdef01234567".into(),
+                            effective_hash: "0123456789abcdef".into(),
+                        }),
+                        detail: Some(detail),
+                    },
+                    runtime_infos: chimera_ipc::api::status::RuntimeInfos {
+                        service_data_dir: std::borrow::Cow::Owned(Default::default()),
+                        service_config_dir: std::borrow::Cow::Owned(Default::default()),
+                        nyanpasu_config_dir: std::borrow::Cow::Owned(Default::default()),
+                        nyanpasu_data_dir: std::borrow::Cow::Owned(Default::default()),
+                    },
+                }),
+            })
+        }
+
+        fn runtime_owned(&self, _info: &chimera_ipc::types::StatusInfo<'_>) -> bool {
+            self.runtime_owned
+        }
+
+        async fn begin_transition(&self) -> anyhow::Result<Box<dyn ServiceTransitionLease>> {
+            Ok(Box::new(RecordingServiceTransition {
+                events: self.events.clone(),
+            }))
+        }
+    }
+
+    #[async_trait]
+    impl ServiceLifecyclePort for ForeignAfterRecoveryServiceProbe {
+        async fn probe(&self) -> anyhow::Result<chimera_ipc::types::StatusInfo<'static>> {
+            self.inner.probe().await
+        }
+
+        fn runtime_owned(&self, _info: &chimera_ipc::types::StatusInfo<'_>) -> bool {
+            self.inner.runtime_owned
+                && !self
+                    .inner
+                    .events
+                    .lock()
+                    .unwrap()
+                    .contains(&"service-core-recover")
+        }
+
+        async fn begin_transition(&self) -> anyhow::Result<Box<dyn ServiceTransitionLease>> {
+            self.inner.begin_transition().await
+        }
+    }
+
+    #[async_trait]
+    impl CoreLifecyclePort for StartupReceiptCore {
+        async fn reconcile(
+            &self,
+            _clash: ClashConfig,
+            _target_core: ClashCore,
+            _run_type: RunType,
+        ) -> anyhow::Result<()> {
+            self.events.lock().unwrap().push("rebuild");
+            *self.status.lock().unwrap() = (CoreState::Running, 3);
+            Ok(())
+        }
+
+        async fn stop(&self) -> anyhow::Result<()> {
+            self.events.lock().unwrap().push("stop");
+            if self.stop_confirms {
+                *self.status.lock().unwrap() = (CoreState::Stopped(None), 2);
+            }
+            Ok(())
+        }
+
+        async fn change_core(&self, _core: ClashCore) -> anyhow::Result<()> {
+            anyhow::bail!("startup receipt test does not select a core")
+        }
+
+        async fn status(&self) -> anyhow::Result<CoreStatusSnapshot> {
+            let (state, state_changed_at) = self.status.lock().unwrap().clone();
+            Ok(CoreStatusSnapshot {
+                instance_id: Some("local-core-instance".into()),
+                state,
+                state_changed_at,
+                run_type: RunType::Normal,
+            })
+        }
+
+        async fn active_runtime_receipt(
+            &self,
+        ) -> anyhow::Result<Option<Arc<crate::client::runtime::RuntimeApplyReceipt>>> {
+            let (state, _) = self.status.lock().unwrap().clone();
+            Ok(matches!(state, CoreState::Running)
+                .then(|| self.receipt.lock().unwrap().clone())
+                .flatten())
+        }
+
+        async fn observe_runtime_baseline(
+            &self,
+        ) -> anyhow::Result<crate::client::application_workflow::mutation::KnownRuntimeState>
+        {
+            let (state, _) = self.status.lock().unwrap().clone();
+            match state {
+                CoreState::Stopped(_) => {
+                    Ok(crate::client::application_workflow::mutation::KnownRuntimeState::Stopped)
+                }
+                CoreState::Running => Ok(
+                    crate::client::application_workflow::mutation::KnownRuntimeState::NeverApplied,
+                ),
+            }
+        }
+
+        fn recovery_notify(&self) -> Option<Arc<Notify>> {
+            None
+        }
+
+        async fn on_profile_change(&self, _break_when: bool) {}
+    }
+
+    #[async_trait]
+    impl CoreLifecyclePort for StartupDegradedServiceCore {
+        async fn reconcile(
+            &self,
+            _clash: ClashConfig,
+            _target_core: ClashCore,
+            _run_type: RunType,
+        ) -> anyhow::Result<()> {
+            let attempt = self.reconciles.fetch_add(1, AtomicOrdering::AcqRel);
+            if attempt == 0 {
+                self.events.lock().unwrap().push("rebuild-service-failed");
+                anyhow::bail!("injected Service reconciliation failure")
+            }
+            self.events.lock().unwrap().push("rebuild-local");
+            Ok(())
+        }
+
+        async fn retire_service_core(
+            &self,
+            _expected_owner: chimera_core_manager::CoreOwner,
+        ) -> anyhow::Result<()> {
+            self.events.lock().unwrap().push("service-core-retire");
+            self.stopped.store(true, AtomicOrdering::Release);
+            Ok(())
+        }
+
+        async fn reconcile_after_service_release(
+            &self,
+            _clash: ClashConfig,
+            _target_core: ClashCore,
+        ) -> anyhow::Result<()> {
+            self.events
+                .lock()
+                .unwrap()
+                .push("rebuild-after-service-release");
+            Ok(())
+        }
+
+        async fn stop(&self) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        async fn change_core(&self, _core: ClashCore) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        async fn status(&self) -> anyhow::Result<CoreStatusSnapshot> {
+            let stopped = self.stopped.load(AtomicOrdering::Acquire);
+            Ok(CoreStatusSnapshot {
+                instance_id: Some("service-core-instance".into()),
+                state: if stopped {
+                    CoreState::Stopped(None)
+                } else {
+                    CoreState::Running
+                },
+                state_changed_at: if stopped { 2 } else { 1 },
+                run_type: RunType::Service,
+            })
+        }
+
+        fn recovery_notify(&self) -> Option<Arc<Notify>> {
+            None
+        }
+
+        async fn on_profile_change(&self, _break_when: bool) {}
+    }
+
+    #[async_trait]
+    impl CoreLifecyclePort for StartupTransientCore {
+        async fn reconcile(
+            &self,
+            _clash: ClashConfig,
+            _target_core: ClashCore,
+            _run_type: RunType,
+        ) -> anyhow::Result<()> {
+            let attempt = self.reconciles.fetch_add(1, AtomicOrdering::AcqRel);
+            if attempt == 0 {
+                self.events
+                    .lock()
+                    .unwrap()
+                    .push("rebuild-transient-failure");
+                return Err(anyhow::Error::new(chimera_core_manager::CoreError::new(
+                    chimera_core_manager::CoreErrorKind::BackendUnavailable,
+                    "temporary backend outage",
+                    true,
+                )));
+            }
+            self.events.lock().unwrap().push("rebuild-recovered");
+            self.recovered.notify_one();
+            Ok(())
+        }
+
+        async fn stop(&self) -> anyhow::Result<()> {
+            self.stops.fetch_add(1, AtomicOrdering::AcqRel);
+            Ok(())
+        }
+
+        async fn change_core(&self, _core: ClashCore) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        async fn status(&self) -> anyhow::Result<CoreStatusSnapshot> {
+            let reconciles = self.reconciles.load(AtomicOrdering::Acquire);
+            let stopped = self.stops.load(AtomicOrdering::Acquire) > 0 && reconciles < 2;
+            Ok(CoreStatusSnapshot {
+                instance_id: Some("local-core-instance".into()),
+                state: if stopped {
+                    CoreState::Stopped(None)
+                } else {
+                    CoreState::Running
+                },
+                state_changed_at: if stopped { 2 } else { 1 },
+                run_type: RunType::Normal,
+            })
+        }
+
+        async fn observe_runtime_baseline(
+            &self,
+        ) -> anyhow::Result<crate::client::application_workflow::mutation::KnownRuntimeState>
+        {
+            let reconciles = self.reconciles.load(AtomicOrdering::Acquire);
+            let stopped = self.stops.load(AtomicOrdering::Acquire) > 0 && reconciles < 2;
+            Ok(if stopped {
+                crate::client::application_workflow::mutation::KnownRuntimeState::Stopped
+            } else {
+                crate::client::application_workflow::mutation::KnownRuntimeState::NeverApplied
+            })
+        }
+
+        fn recovery_notify(&self) -> Option<Arc<Notify>> {
+            None
+        }
+
+        fn outcome_uncertain(&self) -> bool {
+            self.outcome_uncertain
+        }
+
+        async fn on_profile_change(&self, _break_when: bool) {}
+    }
+
+    #[async_trait]
     impl ServiceLifecyclePort for RestartBudgetService {
         async fn probe(&self) -> anyhow::Result<chimera_ipc::types::StatusInfo<'static>> {
             self.events.lock().unwrap().push("service-probe");
@@ -2421,6 +3999,32 @@ mod tests {
             Ok(Box::new(RecordingServiceTransition {
                 events: self.events.clone(),
             }))
+        }
+    }
+
+    #[async_trait]
+    impl ServiceLifecyclePort for StartupRetryLeaseService {
+        async fn probe(&self) -> anyhow::Result<chimera_ipc::types::StatusInfo<'static>> {
+            self.inner.probe().await
+        }
+
+        fn restart_policy(&self) -> ServiceRestartPolicySnapshot {
+            self.inner.restart_policy()
+        }
+
+        async fn begin_transition(&self) -> anyhow::Result<Box<dyn ServiceTransitionLease>> {
+            let attempt = self
+                .transition_attempts
+                .fetch_add(1, AtomicOrdering::AcqRel);
+            if attempt == 1 {
+                self.inner
+                    .events
+                    .lock()
+                    .unwrap()
+                    .push("startup-retry-lease-failed");
+                anyhow::bail!("test Service lease failure");
+            }
+            self.inner.begin_transition().await
         }
     }
 
@@ -2706,7 +4310,11 @@ mod tests {
             Ok(CoreStatusSnapshot {
                 instance_id: None,
                 state: CoreState::Stopped(None),
-                state_changed_at: 0,
+                state_changed_at: if self.run_type == RunType::Service {
+                    1
+                } else {
+                    0
+                },
                 run_type: self.run_type,
             })
         }
@@ -2875,6 +4483,7 @@ mod tests {
             _profiles: Arc<chimera_config::profile::Profiles>,
             app: chimera_config::application::ChimeraAppConfig,
             _staged_content: std::collections::BTreeMap<String, String>,
+            _target: Option<String>,
         ) -> anyhow::Result<()> {
             self.observations.lock().unwrap().push((
                 app.enable_builtin_enhanced,
@@ -3663,7 +5272,7 @@ mod tests {
     #[tokio::test]
     async fn startup_reconcile_waits_for_lifecycle_completion() {
         let events = Arc::new(Mutex::new(Vec::new()));
-        let client = CoreLifecycleClient::spawn(
+        let client = spawn_startup_client(
             Arc::new(RecordingCore {
                 events: events.clone(),
                 stop_started: Arc::new(Notify::new()),
@@ -3671,21 +5280,1553 @@ mod tests {
                 recovery_notify: Arc::new(Notify::new()),
                 run_type: RunType::Normal,
             }),
-            ApplicationClient::legacy().unwrap(),
-            ClashConfigClient::legacy().unwrap(),
-            RuntimePaths::from_config_root(std::path::PathBuf::from("test-runtime-root")),
+            Arc::new(RecordingService {
+                events: events.clone(),
+            }),
         )
-        .await
-        .unwrap();
+        .await;
 
         let completed = client
             .startup_reconcile()
             .await
             .expect("startup reconcile should complete through the lifecycle actor");
         completed
-            .0
+            .result
             .expect("startup reconcile should return its terminal operation result");
+        assert_eq!(completed.report.outcome, StartupOutcome::Ready);
         assert!(events.lock().unwrap().contains(&"rebuild"));
+    }
+
+    #[tokio::test]
+    async fn startup_recovery_keeps_a_receipt_only_for_the_latest_committed_target() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let core = Arc::new(StartupReceiptCore {
+            events: events.clone(),
+            status: Mutex::new((CoreState::Running, 1)),
+            receipt: Mutex::new(None),
+            stop_confirms: true,
+        });
+        let application = ApplicationClient::legacy().unwrap();
+        let clash = ClashConfigClient::legacy().unwrap();
+        let service: Arc<dyn ServiceLifecyclePort> = Arc::new(RecordingService {
+            events: events.clone(),
+        });
+        let target = startup_target_for(
+            application.clone(),
+            clash.clone(),
+            core.clone(),
+            service.clone(),
+        )
+        .await;
+        *core.receipt.lock().unwrap() = Some(startup_test_receipt(Some(target)));
+        let client =
+            spawn_startup_client_with_application_and_clash(core, service, application, clash)
+                .await;
+
+        client
+            .recover_startup()
+            .await
+            .expect("matching recovery receipt should be accepted");
+
+        let events = events.lock().unwrap();
+        assert!(!events.contains(&"stop"), "events: {events:?}");
+        assert!(!events.contains(&"rebuild"), "events: {events:?}");
+        assert!(!client.status().uncertain);
+    }
+
+    #[tokio::test]
+    async fn initial_startup_retires_a_matching_running_receipt_before_reconcile() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let core = Arc::new(StartupReceiptCore {
+            events: events.clone(),
+            status: Mutex::new((CoreState::Running, 1)),
+            receipt: Mutex::new(None),
+            stop_confirms: true,
+        });
+        let application = ApplicationClient::legacy().unwrap();
+        let clash = ClashConfigClient::legacy().unwrap();
+        let service: Arc<dyn ServiceLifecyclePort> = Arc::new(RecordingService {
+            events: events.clone(),
+        });
+        let target = startup_target_for(
+            application.clone(),
+            clash.clone(),
+            core.clone(),
+            service.clone(),
+        )
+        .await;
+        *core.receipt.lock().unwrap() = Some(startup_test_receipt(Some(target)));
+        let client =
+            spawn_startup_client_with_application_and_clash(core, service, application, clash)
+                .await;
+
+        let completed = client
+            .startup_reconcile()
+            .await
+            .expect("initial startup should stop and rebuild the live target");
+        let events = events.lock().unwrap();
+        assert_eq!(completed.report.outcome, StartupOutcome::Ready);
+        let stop = events.iter().position(|event| *event == "stop").unwrap();
+        let rebuild = events.iter().position(|event| *event == "rebuild").unwrap();
+        assert!(stop < rebuild);
+    }
+
+    /// ST-LIFE-01; isolated lifecycle integration using mock Local/Service ports.
+    /// Given Service and Local both report a running Core, when startup resolves
+    /// to Local, Service release and a confirmed Local stop must precede apply.
+    /// This catches owner-plan branches that skip the shared S3/S4 path.
+    #[tokio::test]
+    async fn startup_retires_service_then_stops_running_local_owner_before_apply() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let service_running = Arc::new(AtomicBool::new(true));
+        let core = Arc::new(startup_owner_core(
+            events.clone(),
+            (CoreState::Running, 1),
+            service_running.clone(),
+        ));
+        let service = Arc::new(MutableStartupServiceProbe {
+            events: events.clone(),
+            running: service_running,
+            stopped_reason: None,
+            runtime_owned: true,
+        });
+        let client = spawn_startup_client(core, service).await;
+
+        let completed = client.startup_reconcile().await.unwrap();
+        assert_eq!(completed.report.outcome, StartupOutcome::Ready);
+
+        let events = events.lock().unwrap();
+        let retire_service = events
+            .iter()
+            .position(|event| *event == "service-core-retire")
+            .unwrap();
+        let stop_local = events
+            .iter()
+            .position(|event| *event == "stop-local")
+            .unwrap();
+        let apply_local = events
+            .iter()
+            .position(|event| *event == "rebuild-local")
+            .unwrap();
+        assert!(retire_service < stop_local && stop_local < apply_local);
+    }
+
+    /// ST-LIFE-02; isolated lifecycle integration with a matching Recovery receipt.
+    /// Given Service release leaves the same Local runtime and exact target,
+    /// recovery may keep that receipt; it must not stop or rebuild Local.
+    #[tokio::test]
+    async fn recovery_keeps_local_owner_after_service_retirement_only_with_matching_receipt() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let service_running = Arc::new(AtomicBool::new(true));
+        let core = Arc::new(startup_owner_core(
+            events.clone(),
+            (CoreState::Running, 1),
+            service_running.clone(),
+        ));
+        let service = Arc::new(MutableStartupServiceProbe {
+            events: events.clone(),
+            running: service_running,
+            stopped_reason: None,
+            runtime_owned: true,
+        });
+        let application = ApplicationClient::legacy().unwrap();
+        let clash = ClashConfigClient::legacy().unwrap();
+        let target = startup_target_for(
+            application.clone(),
+            clash.clone(),
+            core.clone(),
+            service.clone(),
+        )
+        .await;
+        *core.local_receipt.lock().unwrap() = Some(startup_test_receipt(Some(target)));
+        let client =
+            spawn_startup_client_with_application_and_clash(core, service, application, clash)
+                .await;
+
+        client.recover_startup().await.unwrap();
+        assert!(!client.status().uncertain);
+
+        let events = events.lock().unwrap();
+        assert!(events.contains(&"service-core-retire"));
+        assert!(!events.contains(&"stop-local"));
+        assert!(!events.contains(&"rebuild-local"));
+    }
+
+    /// ST-LIFE-03; isolated lifecycle integration using mock hosts.
+    /// Given startup adopts a ready Service while Local is running, it must
+    /// confirm Local stopped, select Service, retire any unreceipted Service
+    /// runtime, and only then apply. Event order is the regression oracle.
+    #[tokio::test]
+    async fn startup_adopts_service_then_stops_running_service_owner_before_apply() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let service_running = Arc::new(AtomicBool::new(true));
+        let core = Arc::new(startup_owner_core(
+            events.clone(),
+            (CoreState::Running, 1),
+            service_running.clone(),
+        ));
+        let service = Arc::new(MutableStartupServiceProbe {
+            events: events.clone(),
+            running: service_running,
+            stopped_reason: None,
+            runtime_owned: true,
+        });
+        let mut app = chimera_config::application::ChimeraAppConfig::default();
+        app.enable_service_mode = true;
+        let client = spawn_startup_client_with_application(
+            core,
+            service,
+            ApplicationClient::static_state(app),
+        )
+        .await;
+
+        let completed = client.startup_reconcile().await.unwrap();
+        assert_eq!(completed.report.outcome, StartupOutcome::Ready);
+
+        let events = events.lock().unwrap();
+        let stop_local = events
+            .iter()
+            .position(|event| *event == "stop-local")
+            .unwrap();
+        let select_service = events
+            .iter()
+            .position(|event| *event == "select-service")
+            .unwrap();
+        let retire_service = events
+            .iter()
+            .position(|event| *event == "service-core-retire")
+            .unwrap();
+        let apply_service = events
+            .iter()
+            .position(|event| *event == "rebuild-service")
+            .unwrap();
+        assert!(stop_local < select_service);
+        assert!(select_service < retire_service && retire_service < apply_service);
+    }
+
+    /// ST-LIFE-04; isolated lifecycle integration with a matching Service receipt.
+    /// Given recovery adopts the ready Service and its live receipt matches the
+    /// committed target, it keeps the owner without stop/rebuild side effects.
+    #[tokio::test]
+    async fn recovery_keeps_adopted_service_owner_only_with_matching_receipt() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let service_running = Arc::new(AtomicBool::new(true));
+        let core = Arc::new(startup_owner_core(
+            events.clone(),
+            (CoreState::Stopped(None), 0),
+            service_running.clone(),
+        ));
+        let service = Arc::new(MutableStartupServiceProbe {
+            events: events.clone(),
+            running: service_running,
+            stopped_reason: None,
+            runtime_owned: true,
+        });
+        let mut app = chimera_config::application::ChimeraAppConfig::default();
+        app.enable_service_mode = true;
+        let application = ApplicationClient::static_state(app);
+        let clash = ClashConfigClient::legacy().unwrap();
+        let target = startup_target_for(
+            application.clone(),
+            clash.clone(),
+            core.clone(),
+            service.clone(),
+        )
+        .await;
+        *core.service_receipt.lock().unwrap() = Some(startup_test_receipt_for(
+            Some(target),
+            crate::core::actor_v2::control_endpoint::ExecutionHost::Service,
+        ));
+        let client =
+            spawn_startup_client_with_application_and_clash(core, service, application, clash)
+                .await;
+
+        client.recover_startup().await.unwrap();
+        assert!(!client.status().uncertain);
+
+        let events = events.lock().unwrap();
+        assert!(events.contains(&"select-service"));
+        assert!(!events.contains(&"service-core-retire"));
+        assert!(!events.contains(&"rebuild-service"));
+    }
+
+    /// ST-LIFE-05; isolated receipt-adapter integration.
+    /// The coarse status remains Running with the same timestamp while the
+    /// adapter invalidates the rich receipt on re-read (the in-place Service
+    /// revision case); recovery must stop and rebuild instead of accepting it.
+    #[tokio::test]
+    async fn recovery_rechecks_rich_receipt_after_coarse_running_status() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let service_running = Arc::new(AtomicBool::new(false));
+        let mut core = startup_owner_core(events.clone(), (CoreState::Running, 1), service_running);
+        core.invalidate_receipt_after_first_query = true;
+        let core = Arc::new(core);
+        let application = ApplicationClient::legacy().unwrap();
+        let clash = ClashConfigClient::legacy().unwrap();
+        let target = startup_target_for(
+            application.clone(),
+            clash.clone(),
+            core.clone(),
+            Arc::new(RecordingService {
+                events: events.clone(),
+            }),
+        )
+        .await;
+        *core.local_receipt.lock().unwrap() = Some(startup_test_receipt(Some(target)));
+        let client = spawn_startup_client_with_application_and_clash(
+            core,
+            Arc::new(RecordingService {
+                events: events.clone(),
+            }),
+            application,
+            clash,
+        )
+        .await;
+
+        client.recover_startup().await.unwrap();
+        assert!(!client.status().uncertain);
+
+        let events = events.lock().unwrap();
+        let stop = events
+            .iter()
+            .position(|event| *event == "stop-local")
+            .unwrap();
+        let apply = events
+            .iter()
+            .position(|event| *event == "rebuild-local")
+            .unwrap();
+        assert!(stop < apply);
+    }
+
+    /// ST-LIFE-10; isolated lifecycle integration for an uncertain Service.
+    /// Given conditional stop returns StopUnconfirmed and the backend's later
+    /// projection is error-stopped, startup must isolate the owner without
+    /// trusting that projection; neither Local stop nor Local apply may run.
+    #[tokio::test]
+    async fn service_stop_unconfirmed_does_not_trust_error_stopped_projection() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let service_running = Arc::new(AtomicBool::new(true));
+        let mut core = startup_owner_core(
+            events.clone(),
+            (CoreState::Running, 1),
+            service_running.clone(),
+        );
+        core.service_retire_error =
+            Some((chimera_core_manager::CoreErrorKind::StopUnconfirmed, false));
+        let service = Arc::new(MutableStartupServiceProbe {
+            events: events.clone(),
+            running: service_running,
+            stopped_reason: Some("quarantined: stop unconfirmed".into()),
+            runtime_owned: true,
+        });
+        let workflow = CoreLifecycleWorkflow::new(
+            ApplicationClient::legacy().unwrap(),
+            ClashConfigClient::legacy().unwrap(),
+            None,
+            Arc::new(core),
+            Arc::new(chimera_os::core_install::FsBinaryInstaller::new(Arc::new(
+                chimera_os::elevation::RefuseElevation,
+            ))),
+            RuntimePaths::from_config_root(std::path::PathBuf::from("test-runtime-root")),
+            service.clone(),
+        );
+
+        let report = workflow
+            .startup_reconcile(
+                1,
+                Box::new(RecordingServiceTransition {
+                    events: events.clone(),
+                }),
+            )
+            .await;
+
+        assert!(matches!(
+            &report.outcome,
+            StartupOutcome::RecoveryRequired { .. }
+        ));
+        {
+            let events = events.lock().unwrap();
+            let retirement = events
+                .iter()
+                .position(|event| *event == "service-core-retire")
+                .unwrap();
+            assert!(
+                events[retirement + 1..]
+                    .iter()
+                    .all(|event| *event != "service-probe"),
+                "startup must not reinterpret the post-stop projection as proof"
+            );
+            assert!(!events.contains(&"stop-local"));
+            assert!(!events.contains(&"rebuild-local"));
+        }
+        let info = service.probe().await.unwrap();
+        assert!(matches!(
+            info.server
+                .as_ref()
+                .and_then(|server| server.core_infos.detail.as_ref()),
+            Some(chimera_ipc::api::status::CoreStateDetail::Stopped {
+                reason: Some(reason)
+            }) if reason.contains("quarantined")
+        ));
+    }
+
+    /// ST-LIFE-11; isolated lifecycle integration for deterministic Service stop failure.
+    /// A fresh Service Stopped probe cannot turn InvalidConfig into success;
+    /// startup blocks before touching the running Local owner.
+    #[tokio::test]
+    async fn deterministic_service_stop_error_with_stopped_probe_remains_blocked() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let service_running = Arc::new(AtomicBool::new(true));
+        let mut core = startup_owner_core(
+            events.clone(),
+            (CoreState::Running, 1),
+            service_running.clone(),
+        );
+        core.service_retire_error =
+            Some((chimera_core_manager::CoreErrorKind::InvalidConfig, false));
+        let service = Arc::new(MutableStartupServiceProbe {
+            events: events.clone(),
+            running: service_running,
+            stopped_reason: None,
+            runtime_owned: true,
+        });
+        let client = spawn_startup_client(Arc::new(core), service).await;
+
+        let completed = client.startup_reconcile().await.unwrap();
+
+        assert!(matches!(
+            completed.report.outcome,
+            StartupOutcome::ReadyDegraded {
+                health: crate::client::convergence::ConvergenceHealth::Blocked,
+                ..
+            }
+        ));
+        let events = events.lock().unwrap();
+        assert!(events.contains(&"service-core-retire"));
+        assert!(!events.contains(&"stop-local"));
+        assert!(!events.contains(&"rebuild-local"));
+    }
+
+    /// ST-LIFE-12; isolated lifecycle integration for Local stop error handling.
+    /// InvalidConfig remains a deterministic failure even when a fresh status
+    /// says Stopped; only NotStarted has the idempotent exception.
+    #[tokio::test]
+    async fn deterministic_local_stop_error_with_fresh_stopped_state_remains_blocked() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let mut core = startup_owner_core(
+            events.clone(),
+            (CoreState::Running, 1),
+            Arc::new(AtomicBool::new(false)),
+        );
+        core.stop_error = Some((chimera_core_manager::CoreErrorKind::InvalidConfig, false));
+        let client = spawn_startup_client(
+            Arc::new(core),
+            Arc::new(RecordingService {
+                events: events.clone(),
+            }),
+        )
+        .await;
+
+        let completed = client.startup_reconcile().await.unwrap();
+
+        assert!(matches!(
+            completed.report.outcome,
+            StartupOutcome::ReadyDegraded {
+                health: crate::client::convergence::ConvergenceHealth::Blocked,
+                ..
+            }
+        ));
+        let events = events.lock().unwrap();
+        assert!(events.contains(&"stop-local"));
+        assert!(!events.contains(&"rebuild-local"));
+    }
+
+    /// ST-LIFE-13; startup recovery for a Service manager across app restarts.
+    /// Given a stopped Service status carries a prior error reason, the manager
+    /// quarantine recovery must finish before a new Local Core is applied.
+    #[tokio::test]
+    async fn startup_recovers_error_stopped_service_before_local_apply() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let service_running = Arc::new(AtomicBool::new(false));
+        let core = Arc::new(startup_owner_core(
+            events.clone(),
+            (CoreState::Stopped(None), 0),
+            service_running.clone(),
+        ));
+        let service = Arc::new(MutableStartupServiceProbe {
+            events: events.clone(),
+            running: service_running,
+            stopped_reason: Some("service manager quarantine".into()),
+            runtime_owned: true,
+        });
+        let workflow = CoreLifecycleWorkflow::new(
+            ApplicationClient::legacy().unwrap(),
+            ClashConfigClient::legacy().unwrap(),
+            None,
+            core,
+            Arc::new(chimera_os::core_install::FsBinaryInstaller::new(Arc::new(
+                chimera_os::elevation::RefuseElevation,
+            ))),
+            RuntimePaths::from_config_root(std::path::PathBuf::from("test-runtime-root")),
+            service,
+        );
+
+        let report = workflow
+            .startup_reconcile(
+                1,
+                Box::new(RecordingServiceTransition {
+                    events: events.clone(),
+                }),
+            )
+            .await;
+
+        assert_eq!(report.outcome, StartupOutcome::Ready);
+        let events = events.lock().unwrap();
+        let recover = events
+            .iter()
+            .position(|event| *event == "service-core-recover")
+            .unwrap();
+        let apply = events
+            .iter()
+            .position(|event| *event == "rebuild-local")
+            .unwrap();
+        assert!(recover < apply);
+    }
+
+    /// ST-LIFE-15; startup must not recover another installation's Service manager.
+    /// A foreign stopped status with an error reason remains unproven because
+    /// manager recovery may terminate a quarantined process owned by that app.
+    #[tokio::test]
+    async fn foreign_error_stopped_service_is_not_recovered_or_replaced() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let service_running = Arc::new(AtomicBool::new(false));
+        let core = Arc::new(startup_owner_core(
+            events.clone(),
+            (CoreState::Stopped(None), 0),
+            service_running.clone(),
+        ));
+        let service = Arc::new(MutableStartupServiceProbe {
+            events: events.clone(),
+            running: service_running,
+            stopped_reason: Some("foreign service manager quarantine".into()),
+            runtime_owned: false,
+        });
+        let workflow = CoreLifecycleWorkflow::new(
+            ApplicationClient::legacy().unwrap(),
+            ClashConfigClient::legacy().unwrap(),
+            None,
+            core,
+            Arc::new(chimera_os::core_install::FsBinaryInstaller::new(Arc::new(
+                chimera_os::elevation::RefuseElevation,
+            ))),
+            RuntimePaths::from_config_root(std::path::PathBuf::from("test-runtime-root")),
+            service,
+        );
+
+        let report = workflow
+            .startup_reconcile(
+                1,
+                Box::new(RecordingServiceTransition {
+                    events: events.clone(),
+                }),
+            )
+            .await;
+
+        assert!(
+            matches!(
+                &report.outcome,
+                StartupOutcome::ReadyDegraded { reason, .. }
+                    if reason.contains("may still hold a Core")
+            ),
+            "foreign Service should keep the owner unproven: {:?}",
+            report.outcome
+        );
+        let events = events.lock().unwrap();
+        assert!(!events.contains(&"service-core-recover"));
+        assert!(!events.contains(&"service-core-retire"));
+        assert!(!events.contains(&"stop-local"));
+        assert!(!events.contains(&"rebuild-local"));
+    }
+
+    /// ST-LIFE-16; a Service replacement observed after recovery stays isolated.
+    /// The fresh probe must still identify the same Service generation and
+    /// this installation before startup treats the stopped reason as cleared.
+    #[tokio::test]
+    async fn service_owner_change_during_recovery_blocks_local_apply() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let service_running = Arc::new(AtomicBool::new(false));
+        let core = Arc::new(startup_owner_core(
+            events.clone(),
+            (CoreState::Stopped(None), 0),
+            service_running.clone(),
+        ));
+        let service = Arc::new(ForeignAfterRecoveryServiceProbe {
+            inner: MutableStartupServiceProbe {
+                events: events.clone(),
+                running: service_running,
+                stopped_reason: Some("service manager quarantine".into()),
+                runtime_owned: true,
+            },
+        });
+        let workflow = CoreLifecycleWorkflow::new(
+            ApplicationClient::legacy().unwrap(),
+            ClashConfigClient::legacy().unwrap(),
+            None,
+            core,
+            Arc::new(chimera_os::core_install::FsBinaryInstaller::new(Arc::new(
+                chimera_os::elevation::RefuseElevation,
+            ))),
+            RuntimePaths::from_config_root(std::path::PathBuf::from("test-runtime-root")),
+            service,
+        );
+
+        let report = workflow
+            .startup_reconcile(
+                1,
+                Box::new(RecordingServiceTransition {
+                    events: events.clone(),
+                }),
+            )
+            .await;
+
+        assert!(matches!(
+            report.outcome,
+            StartupOutcome::RecoveryRequired { .. }
+        ));
+        let events = events.lock().unwrap();
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| **event == "service-core-recover")
+                .count(),
+            1
+        );
+        assert!(!events.contains(&"service-core-retire"));
+        assert!(!events.contains(&"stop-local"));
+        assert!(!events.contains(&"rebuild-local"));
+    }
+
+    /// ST-LIFE-14; unresolved Service quarantine must fail closed.
+    /// If manager recovery cannot prove the quarantined process dead, startup
+    /// reports RecoveryRequired and does not apply a Local runtime.
+    #[tokio::test]
+    async fn unresolved_service_quarantine_prevents_local_apply() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let service_running = Arc::new(AtomicBool::new(false));
+        let mut core = startup_owner_core(
+            events.clone(),
+            (CoreState::Stopped(None), 0),
+            service_running.clone(),
+        );
+        core.service_recover_error =
+            Some((chimera_core_manager::CoreErrorKind::Quarantined, false));
+        let service = Arc::new(MutableStartupServiceProbe {
+            events: events.clone(),
+            running: service_running,
+            stopped_reason: Some("service manager quarantine".into()),
+            runtime_owned: true,
+        });
+        let workflow = CoreLifecycleWorkflow::new(
+            ApplicationClient::legacy().unwrap(),
+            ClashConfigClient::legacy().unwrap(),
+            None,
+            Arc::new(core),
+            Arc::new(chimera_os::core_install::FsBinaryInstaller::new(Arc::new(
+                chimera_os::elevation::RefuseElevation,
+            ))),
+            RuntimePaths::from_config_root(std::path::PathBuf::from("test-runtime-root")),
+            service,
+        );
+
+        let report = workflow
+            .startup_reconcile(
+                1,
+                Box::new(RecordingServiceTransition {
+                    events: events.clone(),
+                }),
+            )
+            .await;
+
+        assert!(matches!(
+            report.outcome,
+            StartupOutcome::RecoveryRequired { .. }
+        ));
+        let events = events.lock().unwrap();
+        assert!(events.contains(&"service-core-recover"));
+        assert!(!events.contains(&"rebuild-local"));
+    }
+
+    /// ST-LIFE-06; isolated lifecycle integration with a typed deterministic stop error.
+    /// Given the Local owner remains Running and reports InvalidConfig on stop,
+    /// startup blocks and never applies over the still-running owner.
+    #[tokio::test]
+    async fn deterministic_local_stop_failure_blocks_startup_retry() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let mut core = startup_owner_core(
+            events.clone(),
+            (CoreState::Running, 1),
+            Arc::new(AtomicBool::new(false)),
+        );
+        core.stop_confirms = false;
+        core.stop_error = Some((chimera_core_manager::CoreErrorKind::InvalidConfig, false));
+        let client = spawn_startup_client(
+            Arc::new(core),
+            Arc::new(RecordingService {
+                events: events.clone(),
+            }),
+        )
+        .await;
+
+        let completed = client.startup_reconcile().await.unwrap();
+        assert!(matches!(
+            completed.report.outcome,
+            StartupOutcome::ReadyDegraded {
+                health: crate::client::convergence::ConvergenceHealth::Blocked,
+                ..
+            }
+        ));
+        assert!(!events.lock().unwrap().contains(&"rebuild-local"));
+    }
+
+    /// ST-LIFE-07; isolated lifecycle integration with an uncertain stop result.
+    /// Given the stop outcome cannot be established, startup requires explicit
+    /// recovery and must not issue a second runtime mutation.
+    #[tokio::test]
+    async fn uncertain_local_stop_requires_explicit_recovery() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let mut core = startup_owner_core(
+            events.clone(),
+            (CoreState::Running, 1),
+            Arc::new(AtomicBool::new(false)),
+        );
+        core.stop_confirms = false;
+        core.stop_error = Some((chimera_core_manager::CoreErrorKind::StopUnconfirmed, false));
+        let client = spawn_startup_client(
+            Arc::new(core),
+            Arc::new(RecordingService {
+                events: events.clone(),
+            }),
+        )
+        .await;
+
+        let completed = client.startup_reconcile().await.unwrap();
+        assert!(matches!(
+            completed.report.outcome,
+            StartupOutcome::RecoveryRequired { .. }
+        ));
+        assert!(!events.lock().unwrap().contains(&"rebuild-local"));
+    }
+
+    /// ST-LIFE-08; isolated lifecycle integration where stop is accepted but
+    /// status still says Running. Startup waits for fresh owner evidence and
+    /// must not apply until a later retry can prove the stop.
+    #[tokio::test]
+    async fn accepted_local_stop_waits_while_owner_is_still_running() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let mut core = startup_owner_core(
+            events.clone(),
+            (CoreState::Running, 1),
+            Arc::new(AtomicBool::new(false)),
+        );
+        core.stop_confirms = false;
+        let client = spawn_startup_client(
+            Arc::new(core),
+            Arc::new(RecordingService {
+                events: events.clone(),
+            }),
+        )
+        .await;
+
+        let completed = client.startup_reconcile().await.unwrap();
+        assert!(matches!(
+            completed.report.outcome,
+            StartupOutcome::ReadyDegraded {
+                health: crate::client::convergence::ConvergenceHealth::WaitingDependency,
+                ..
+            }
+        ));
+        assert!(!events.lock().unwrap().contains(&"rebuild-local"));
+    }
+
+    /// ST-LIFE-09; isolated lifecycle integration for idempotent NotStarted.
+    /// Given stop returns NotStarted but a fresh status and runtime baseline
+    /// prove Stopped, startup accepts that evidence and applies afterwards.
+    #[tokio::test]
+    async fn not_started_stop_is_accepted_after_fresh_stopped_confirmation() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let mut core = startup_owner_core(
+            events.clone(),
+            (CoreState::Running, 1),
+            Arc::new(AtomicBool::new(false)),
+        );
+        core.stop_error = Some((chimera_core_manager::CoreErrorKind::NotStarted, false));
+        let client = spawn_startup_client(
+            Arc::new(core),
+            Arc::new(RecordingService {
+                events: events.clone(),
+            }),
+        )
+        .await;
+
+        let completed = client.startup_reconcile().await.unwrap();
+        assert_eq!(completed.report.outcome, StartupOutcome::Ready);
+        let events = events.lock().unwrap();
+        let stop = events
+            .iter()
+            .position(|event| *event == "stop-local")
+            .unwrap();
+        let apply = events
+            .iter()
+            .position(|event| *event == "rebuild-local")
+            .unwrap();
+        assert!(stop < apply);
+    }
+
+    #[tokio::test]
+    async fn recovery_retires_a_running_receipt_when_its_target_is_stale() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let client = spawn_startup_client(
+            Arc::new(StartupReceiptCore {
+                events: events.clone(),
+                status: Mutex::new((CoreState::Running, 1)),
+                receipt: Mutex::new(Some(startup_test_receipt(Some("older-target".into())))),
+                stop_confirms: true,
+            }),
+            Arc::new(RecordingService {
+                events: events.clone(),
+            }),
+        )
+        .await;
+
+        client
+            .recover_startup()
+            .await
+            .expect("stale recovery receipt should be retired and reapplied");
+
+        let events = events.lock().unwrap();
+        let stop = events.iter().position(|event| *event == "stop").unwrap();
+        let rebuild = events.iter().position(|event| *event == "rebuild").unwrap();
+        assert!(stop < rebuild);
+    }
+
+    #[tokio::test]
+    async fn startup_does_not_reconcile_when_a_local_stop_is_unconfirmed() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let client = spawn_startup_client(
+            Arc::new(StartupReceiptCore {
+                events: events.clone(),
+                status: Mutex::new((CoreState::Running, 1)),
+                receipt: Mutex::new(None),
+                stop_confirms: false,
+            }),
+            Arc::new(RecordingService {
+                events: events.clone(),
+            }),
+        )
+        .await;
+
+        let completed = client
+            .startup_reconcile()
+            .await
+            .expect("unconfirmed stop should return a startup report");
+
+        assert!(matches!(
+            completed.report.outcome,
+            StartupOutcome::ReadyDegraded {
+                health: crate::client::convergence::ConvergenceHealth::WaitingDependency,
+                ..
+            }
+        ));
+        let events = events.lock().unwrap();
+        assert!(events.contains(&"stop"));
+        assert!(!events.contains(&"rebuild"));
+    }
+
+    #[tokio::test]
+    async fn startup_retries_a_retryable_core_failure_through_the_lifecycle_actor() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let recovered = Arc::new(Notify::new());
+        let service = Arc::new(RestartBudgetService {
+            events: events.clone(),
+            attempts: AtomicU8::new(0),
+            exhausted: AtomicBool::new(false),
+        });
+        let client = spawn_startup_client(
+            Arc::new(StartupTransientCore {
+                events: events.clone(),
+                reconciles: AtomicU8::new(0),
+                stops: AtomicU8::new(0),
+                recovered: recovered.clone(),
+                outcome_uncertain: false,
+            }),
+            service,
+        )
+        .await;
+
+        let initial = client.startup_reconcile().await.unwrap();
+        assert!(matches!(
+            initial.report.outcome,
+            StartupOutcome::ReadyDegraded {
+                health: crate::client::convergence::ConvergenceHealth::RetryScheduled,
+                ..
+            }
+        ));
+        assert!(initial.result.is_err());
+        assert!(
+            events
+                .lock()
+                .unwrap()
+                .contains(&"rebuild-transient-failure")
+        );
+
+        tokio::time::timeout(Duration::from_secs(5), recovered.notified())
+            .await
+            .expect("actor should retry a transient startup failure");
+
+        let events = events.lock().unwrap();
+        assert!(events.contains(&"rebuild-recovered"));
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| **event == "rebuild-transient-failure")
+                .count(),
+            1
+        );
+        let cached = client.startup_reconcile().await.unwrap();
+        assert_eq!(cached.report.operation_id, initial.report.operation_id);
+        assert!(matches!(
+            cached.report.outcome,
+            StartupOutcome::ReadyDegraded {
+                health: crate::client::convergence::ConvergenceHealth::RetryScheduled,
+                ..
+            }
+        ));
+        assert!(!client.status().uncertain);
+    }
+
+    #[tokio::test]
+    async fn disconnected_service_mode_patch_refreshes_the_startup_retry_target() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let recovered = Arc::new(Notify::new());
+        let application = ApplicationClient::static_state(
+            chimera_config::application::ChimeraAppConfig::default(),
+        );
+        let client = spawn_startup_client_with_application(
+            Arc::new(StartupTransientCore {
+                events: events.clone(),
+                reconciles: AtomicU8::new(0),
+                stops: AtomicU8::new(0),
+                recovered: recovered.clone(),
+                outcome_uncertain: false,
+            }),
+            Arc::new(RestartBudgetService {
+                events: events.clone(),
+                attempts: AtomicU8::new(0),
+                exhausted: AtomicBool::new(false),
+            }),
+            application,
+        )
+        .await;
+
+        let initial = client.startup_reconcile().await.unwrap();
+        assert!(matches!(
+            initial.report.outcome,
+            StartupOutcome::ReadyDegraded {
+                health: crate::client::convergence::ConvergenceHealth::RetryScheduled,
+                ..
+            }
+        ));
+
+        client
+            .patch_application_config(ChimeraAppConfigPatch {
+                enable_service_mode: Some(true),
+                ..Default::default()
+            })
+            .await
+            .expect(
+                "disconnected Service Mode preference should be saved without runtime reconcile",
+            );
+
+        tokio::time::timeout(Duration::from_millis(800), recovered.notified())
+            .await
+            .expect("the changed committed target should retry immediately");
+        let events = events.lock().unwrap();
+        assert!(events.contains(&"rebuild-recovered"));
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| **event == "rebuild-transient-failure")
+                .count(),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn startup_retry_lease_failure_waits_for_dependency_without_spending_attempts() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let recovered = Arc::new(Notify::new());
+        let service = Arc::new(StartupRetryLeaseService {
+            inner: RestartBudgetService {
+                events: events.clone(),
+                attempts: AtomicU8::new(0),
+                exhausted: AtomicBool::new(false),
+            },
+            transition_attempts: AtomicU8::new(0),
+        });
+        let client = spawn_startup_client(
+            Arc::new(StartupTransientCore {
+                events: events.clone(),
+                reconciles: AtomicU8::new(0),
+                stops: AtomicU8::new(0),
+                recovered: recovered.clone(),
+                outcome_uncertain: false,
+            }),
+            service.clone(),
+        )
+        .await;
+
+        let initial = client.startup_reconcile().await.unwrap();
+        assert!(matches!(
+            initial.report.outcome,
+            StartupOutcome::ReadyDegraded {
+                health: crate::client::convergence::ConvergenceHealth::RetryScheduled,
+                ..
+            }
+        ));
+        tokio::time::timeout(Duration::from_secs(8), recovered.notified())
+            .await
+            .expect("startup retry should resume after the Service lease becomes available");
+
+        assert_eq!(service.transition_attempts.load(AtomicOrdering::Acquire), 3);
+        let events = events.lock().unwrap();
+        assert!(events.contains(&"startup-retry-lease-failed"));
+        assert!(events.contains(&"rebuild-recovered"));
+    }
+
+    #[tokio::test]
+    async fn preexisting_uncertain_runtime_blocks_startup_mutations() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let application = ApplicationClient::static_state(
+            chimera_config::application::ChimeraAppConfig::default(),
+        );
+        let client = spawn_startup_client_with_application(
+            Arc::new(StartupTransientCore {
+                events: events.clone(),
+                reconciles: AtomicU8::new(0),
+                stops: AtomicU8::new(0),
+                recovered: Arc::new(Notify::new()),
+                outcome_uncertain: true,
+            }),
+            Arc::new(RestartBudgetService {
+                events: events.clone(),
+                attempts: AtomicU8::new(0),
+                exhausted: AtomicBool::new(false),
+            }),
+            application.clone(),
+        )
+        .await;
+
+        let initial = client.startup_reconcile().await.unwrap();
+        assert!(matches!(
+            initial.report.outcome,
+            StartupOutcome::RecoveryRequired { .. }
+        ));
+        assert!(client.status().uncertain);
+        client
+            .patch_application_config(ChimeraAppConfigPatch {
+                enable_service_mode: Some(true),
+                ..Default::default()
+            })
+            .await
+            .expect(
+                "source-only Service Mode save must remain available after uncertain Core outcome",
+            );
+        assert!(application.get_typed().enable_service_mode);
+        assert!(client.status().uncertain);
+        tokio::time::sleep(Duration::from_millis(1_200)).await;
+
+        assert!(
+            !events
+                .lock()
+                .unwrap()
+                .contains(&"rebuild-transient-failure")
+        );
+        assert!(!events.lock().unwrap().contains(&"rebuild-recovered"));
+    }
+
+    #[tokio::test]
+    async fn startup_recovery_preserves_the_first_startup_report() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let recovered = Arc::new(Notify::new());
+        let service = Arc::new(RestartBudgetService {
+            events: events.clone(),
+            attempts: AtomicU8::new(0),
+            exhausted: AtomicBool::new(false),
+        });
+        let client = spawn_startup_client(
+            Arc::new(StartupTransientCore {
+                events: events.clone(),
+                reconciles: AtomicU8::new(0),
+                stops: AtomicU8::new(0),
+                recovered,
+                outcome_uncertain: false,
+            }),
+            service,
+        )
+        .await;
+
+        let initial = client.startup_reconcile().await.unwrap();
+        assert!(matches!(
+            initial.report.outcome,
+            StartupOutcome::ReadyDegraded {
+                health: crate::client::convergence::ConvergenceHealth::RetryScheduled,
+                ..
+            }
+        ));
+
+        client
+            .recover_startup()
+            .await
+            .expect("startup recovery should reconcile the current target");
+        assert!(events.lock().unwrap().contains(&"rebuild-recovered"));
+
+        let cached = client.startup_reconcile().await.unwrap();
+        assert_eq!(cached.report.operation_id, initial.report.operation_id);
+        assert_eq!(cached.report.outcome, initial.report.outcome);
+    }
+
+    #[tokio::test]
+    async fn changed_core_target_invalidates_the_old_startup_retry_timer() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let service = Arc::new(RestartBudgetService {
+            events: events.clone(),
+            attempts: AtomicU8::new(0),
+            exhausted: AtomicBool::new(false),
+        });
+        let client = spawn_startup_client(
+            Arc::new(StartupTransientCore {
+                events: events.clone(),
+                reconciles: AtomicU8::new(0),
+                stops: AtomicU8::new(0),
+                recovered: Arc::new(Notify::new()),
+                outcome_uncertain: false,
+            }),
+            service,
+        )
+        .await;
+
+        let initial = client.startup_reconcile().await.unwrap();
+        assert!(matches!(
+            initial.report.outcome,
+            StartupOutcome::ReadyDegraded {
+                health: crate::client::convergence::ConvergenceHealth::RetryScheduled,
+                ..
+            }
+        ));
+        client
+            .select_core(ClashCore::ClashRs)
+            .await
+            .expect("selecting a new target should reconcile and commit it");
+        tokio::time::sleep(Duration::from_millis(1_200)).await;
+
+        assert_eq!(
+            events
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|event| **event == "rebuild-transient-failure")
+                .count(),
+            1
+        );
+        assert!(!events.lock().unwrap().contains(&"rebuild-recovered"));
+    }
+
+    #[tokio::test]
+    async fn startup_reconcile_is_idempotent_and_returns_the_first_report() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let client = spawn_startup_client(
+            Arc::new(RecordingCore {
+                events: events.clone(),
+                stop_started: Arc::new(Notify::new()),
+                release_stop: Arc::new(Notify::new()),
+                recovery_notify: Arc::new(Notify::new()),
+                run_type: RunType::Normal,
+            }),
+            Arc::new(RecordingService {
+                events: events.clone(),
+            }),
+        )
+        .await;
+
+        let first = client.startup_reconcile().await.unwrap();
+        let second = client.startup_reconcile().await.unwrap();
+
+        assert_eq!(first.report.operation_id, second.report.operation_id);
+        assert_eq!(first.report.outcome, StartupOutcome::Ready);
+        assert_eq!(second.report.outcome, StartupOutcome::Ready);
+        assert_eq!(
+            events
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|event| **event == "rebuild")
+                .count(),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn startup_reconcile_refuses_local_start_when_service_owner_is_unreadable() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let application = ApplicationClient::static_state(
+            chimera_config::application::ChimeraAppConfig::default(),
+        );
+        let service: Arc<dyn ports::ServiceLifecyclePort> = Arc::new(UnreadableService {
+            events: events.clone(),
+        });
+        let client = spawn_startup_client_with_application(
+            Arc::new(RecordingCore {
+                events: events.clone(),
+                stop_started: Arc::new(Notify::new()),
+                release_stop: Arc::new(Notify::new()),
+                recovery_notify: Arc::new(Notify::new()),
+                run_type: RunType::Normal,
+            }),
+            service,
+            application.clone(),
+        )
+        .await;
+
+        let completed = client.startup_reconcile().await.unwrap();
+
+        assert!(completed.result.is_err());
+        assert!(matches!(
+            completed.report.outcome,
+            StartupOutcome::ReadyDegraded {
+                health: crate::client::convergence::ConvergenceHealth::WaitingDependency,
+                ..
+            }
+        ));
+        assert!(!events.lock().unwrap().contains(&"rebuild"));
+        assert!(events.lock().unwrap().contains(&"service-probe-failed"));
+        assert!(client.status().uncertain);
+        let mutation_error = client
+            .select_core(ClashCore::Mihomo)
+            .await
+            .expect_err("unproven startup owner must block core mutation");
+        assert!(
+            mutation_error
+                .to_string()
+                .contains("startup has not established")
+        );
+        let retry_error = client
+            .reconcile()
+            .await
+            .expect_err("normal reconcile must use a fresh startup owner check");
+        assert!(retry_error.to_string().contains("may still hold a Core"));
+        assert!(client.status().uncertain);
+        assert!(!events.lock().unwrap().contains(&"rebuild"));
+
+        client
+            .patch_application_config(ChimeraAppConfigPatch {
+                enable_service_mode: Some(true),
+                ..Default::default()
+            })
+            .await
+            .expect(
+                "source-only Service Mode save must remain available with owner evidence pending",
+            );
+        assert!(application.get_typed().enable_service_mode);
+        assert!(client.status().uncertain);
+        assert!(!events.lock().unwrap().contains(&"rebuild"));
+    }
+
+    #[tokio::test]
+    async fn ready_service_reconcile_failure_retires_owned_core_before_local_fallback() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let mut app = chimera_config::application::ChimeraAppConfig::default();
+        app.enable_service_mode = true;
+        let service = Arc::new(StartupFallbackServiceProbe {
+            inner: StartupServiceProbe {
+                events: events.clone(),
+                probes: AtomicU8::new(0),
+                confirms_stopped: false,
+                runtime_owned: true,
+            },
+        });
+        let client = spawn_startup_client_with_application(
+            Arc::new(StartupDegradedServiceCore {
+                events: events.clone(),
+                reconciles: AtomicU8::new(0),
+                stopped: AtomicBool::new(false),
+            }),
+            service,
+            ApplicationClient::static_state(app),
+        )
+        .await;
+
+        let completed = client.startup_reconcile().await.unwrap();
+        let events = events.lock().unwrap();
+        assert_eq!(completed.report.outcome, StartupOutcome::Ready);
+        assert_eq!(
+            completed.report.observation.as_ref().unwrap().desired,
+            crate::core::actor_v2::control_endpoint::ExecutionHost::Local
+        );
+        let failed_reconcile = events
+            .iter()
+            .position(|event| *event == "rebuild-service-failed")
+            .unwrap();
+        let retire = events
+            .iter()
+            .position(|event| *event == "service-core-retire")
+            .unwrap();
+        let fallback = events
+            .iter()
+            .position(|event| *event == "rebuild-after-service-release")
+            .unwrap();
+        let probes = events
+            .iter()
+            .enumerate()
+            .filter_map(|(index, event)| (*event == "service-probe").then_some(index))
+            .collect::<Vec<_>>();
+        assert!(probes.len() >= 3);
+        assert!(probes[0] < retire);
+        assert!(retire < probes[1]);
+        assert!(probes[1] < failed_reconcile);
+        assert!(failed_reconcile < probes[2]);
+        assert!(probes[2] < fallback);
+        assert!(!client.status().uncertain);
+    }
+
+    #[tokio::test]
+    async fn startup_retires_service_core_and_confirms_stop_before_local_reconcile() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let client = spawn_startup_client(
+            Arc::new(RetiringCore {
+                inner: RecordingCore {
+                    events: events.clone(),
+                    stop_started: Arc::new(Notify::new()),
+                    release_stop: Arc::new(Notify::new()),
+                    recovery_notify: Arc::new(Notify::new()),
+                    run_type: RunType::Normal,
+                },
+                selected: Mutex::new(RunType::Normal),
+            }),
+            Arc::new(StartupServiceProbe {
+                events: events.clone(),
+                probes: AtomicU8::new(0),
+                confirms_stopped: true,
+                runtime_owned: true,
+            }),
+        )
+        .await;
+
+        let completed = client.startup_reconcile().await.unwrap();
+        let events = events.lock().unwrap();
+
+        assert_eq!(completed.report.outcome, StartupOutcome::Ready);
+        let retire = events
+            .iter()
+            .position(|event| *event == "service-core-retire")
+            .unwrap();
+        let rebuild = events.iter().position(|event| *event == "rebuild").unwrap();
+        assert!(retire < rebuild);
+        // Service mutations also publish a completion-time status refresh, so
+        // assert the proof/retire/confirm/rebuild order instead of a fixed
+        // total probe count.
+        let service_probes = events
+            .iter()
+            .enumerate()
+            .filter_map(|(index, event)| (*event == "service-probe").then_some(index))
+            .collect::<Vec<_>>();
+        assert!(service_probes.iter().any(|index| *index < retire));
+        assert!(
+            service_probes
+                .iter()
+                .any(|index| *index > retire && *index < rebuild)
+        );
+    }
+
+    #[tokio::test]
+    async fn startup_hands_back_foreign_service_core_without_stopping_it() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let client = spawn_startup_client(
+            Arc::new(RetiringCore {
+                inner: RecordingCore {
+                    events: events.clone(),
+                    stop_started: Arc::new(Notify::new()),
+                    release_stop: Arc::new(Notify::new()),
+                    recovery_notify: Arc::new(Notify::new()),
+                    run_type: RunType::Service,
+                },
+                selected: Mutex::new(RunType::Service),
+            }),
+            Arc::new(StartupServiceProbe {
+                events: events.clone(),
+                probes: AtomicU8::new(0),
+                confirms_stopped: false,
+                runtime_owned: false,
+            }),
+        )
+        .await;
+
+        let completed = client.startup_reconcile().await.unwrap();
+        let events = events.lock().unwrap();
+
+        assert_eq!(completed.report.outcome, StartupOutcome::Ready);
+        let select_local = events
+            .iter()
+            .position(|event| *event == "select-local")
+            .unwrap();
+        let rebuild = events.iter().position(|event| *event == "rebuild").unwrap();
+        assert!(select_local < rebuild);
+        assert!(events.contains(&"rebuild"));
+        assert!(!events.contains(&"rebuild-after-service-release"));
+        assert!(!events.contains(&"service-core-retire"));
+    }
+
+    #[tokio::test]
+    async fn startup_does_not_mutate_or_handoff_unreadable_service_owner() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let client = spawn_startup_client(
+            Arc::new(RetiringCore {
+                inner: RecordingCore {
+                    events: events.clone(),
+                    stop_started: Arc::new(Notify::new()),
+                    release_stop: Arc::new(Notify::new()),
+                    recovery_notify: Arc::new(Notify::new()),
+                    run_type: RunType::Service,
+                },
+                selected: Mutex::new(RunType::Service),
+            }),
+            Arc::new(UnreadableService {
+                events: events.clone(),
+            }),
+        )
+        .await;
+
+        let completed = client.startup_reconcile().await.unwrap();
+        let events = events.lock().unwrap();
+
+        assert!(matches!(
+            completed.report.outcome,
+            StartupOutcome::RecoveryRequired { .. }
+        ));
+        assert!(!events.contains(&"service-core-retire"));
+        assert!(!events.contains(&"rebuild"));
+        assert!(!events.contains(&"rebuild-after-service-release"));
+    }
+
+    #[tokio::test]
+    async fn startup_holds_service_transition_before_entering_lifecycle_actor() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let service = Arc::new(StartupTransitionRaceService {
+            inner: StartupServiceProbe {
+                events: events.clone(),
+                probes: AtomicU8::new(0),
+                confirms_stopped: true,
+                runtime_owned: true,
+            },
+            transition_lock: Arc::new(tokio::sync::Mutex::new(())),
+            transition_attempts: Arc::new(AtomicUsize::new(0)),
+            probe_entered: Arc::new(Notify::new()),
+            release_probe: Arc::new(Notify::new()),
+        });
+        let client = spawn_startup_client(
+            Arc::new(RetiringCore {
+                inner: RecordingCore {
+                    events: events.clone(),
+                    stop_started: Arc::new(Notify::new()),
+                    release_stop: Arc::new(Notify::new()),
+                    recovery_notify: Arc::new(Notify::new()),
+                    run_type: RunType::Normal,
+                },
+                selected: Mutex::new(RunType::Normal),
+            }),
+            service.clone(),
+        )
+        .await;
+
+        let startup_client = client.clone();
+        let startup = tokio::spawn(async move { startup_client.startup_reconcile().await });
+        tokio::time::timeout(Duration::from_secs(1), service.probe_entered.notified())
+            .await
+            .expect("startup should reach its Service probe while holding the lease");
+
+        let service_client = client.clone();
+        let service_command =
+            tokio::spawn(async move { service_client.start_service(Duration::from_secs(1)).await });
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while service.transition_attempts.load(AtomicOrdering::Acquire) < 2 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("the queued Service command should contend for the transition lease");
+
+        service.release_probe.notify_one();
+        let startup = tokio::time::timeout(Duration::from_secs(2), startup)
+            .await
+            .expect("startup and the queued Service command must not deadlock")
+            .expect("startup task should not panic")
+            .expect("startup should reach a terminal report");
+        assert_eq!(startup.report.outcome, StartupOutcome::Ready);
+        tokio::time::timeout(Duration::from_secs(2), service_command)
+            .await
+            .expect("queued Service command should run after startup releases the lease")
+            .expect("Service task should not panic")
+            .expect("Service command should succeed");
+
+        let events = events.lock().unwrap();
+        let rebuild = events.iter().position(|event| *event == "rebuild").unwrap();
+        let service_start = events
+            .iter()
+            .position(|event| *event == "service-start")
+            .unwrap();
+        assert!(rebuild < service_start);
+    }
+
+    #[tokio::test]
+    async fn startup_does_not_start_local_when_service_stop_is_unconfirmed() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let client = spawn_startup_client(
+            Arc::new(RetiringCore {
+                inner: RecordingCore {
+                    events: events.clone(),
+                    stop_started: Arc::new(Notify::new()),
+                    release_stop: Arc::new(Notify::new()),
+                    recovery_notify: Arc::new(Notify::new()),
+                    run_type: RunType::Normal,
+                },
+                selected: Mutex::new(RunType::Normal),
+            }),
+            Arc::new(StartupServiceProbe {
+                events: events.clone(),
+                probes: AtomicU8::new(0),
+                confirms_stopped: false,
+                runtime_owned: true,
+            }),
+        )
+        .await;
+
+        let completed = client.startup_reconcile().await.unwrap();
+
+        assert!(matches!(
+            completed.report.outcome,
+            StartupOutcome::ReadyDegraded {
+                health: crate::client::convergence::ConvergenceHealth::WaitingDependency,
+                ..
+            }
+        ));
+        assert!(client.status().uncertain);
+        assert!(events.lock().unwrap().contains(&"service-core-retire"));
+        assert!(!events.lock().unwrap().contains(&"rebuild"));
+        assert!(
+            !events
+                .lock()
+                .unwrap()
+                .contains(&"rebuild-after-service-release")
+        );
     }
 
     #[tokio::test]
@@ -3693,7 +6834,7 @@ mod tests {
         let events = Arc::new(Mutex::new(Vec::new()));
         let stop_started = Arc::new(Notify::new());
         let release_stop = Arc::new(Notify::new());
-        let client = CoreLifecycleClient::spawn(
+        let client = spawn_startup_client(
             Arc::new(RecordingCore {
                 events: events.clone(),
                 stop_started: stop_started.clone(),
@@ -3701,12 +6842,11 @@ mod tests {
                 recovery_notify: Arc::new(Notify::new()),
                 run_type: RunType::Normal,
             }),
-            ApplicationClient::legacy().unwrap(),
-            ClashConfigClient::legacy().unwrap(),
-            RuntimePaths::from_config_root(std::path::PathBuf::from("test-runtime-root")),
+            Arc::new(RecordingService {
+                events: events.clone(),
+            }),
         )
-        .await
-        .unwrap();
+        .await;
 
         let stop_client = client.clone();
         let stop = tokio::spawn(async move { stop_client.stop_core().await });

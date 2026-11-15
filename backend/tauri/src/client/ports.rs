@@ -298,6 +298,7 @@ pub(crate) fn test_runtime_receipt(
             source_hash: String::new(),
             effective_hash: String::new(),
         },
+        target: None,
         ports,
         artifact: None,
     }

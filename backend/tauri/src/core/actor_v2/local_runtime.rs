@@ -230,6 +230,25 @@ impl LocalRuntimeHost {
         *self.run_type.read()
     }
 
+    /// Select the endpoint established by startup S2. This does not start,
+    /// stop, or reconcile a Core; callers must first prove the source host is
+    /// retired and then verify the destination owner before applying config.
+    pub(crate) fn select_execution_host(
+        &self,
+        host: super::control_endpoint::ExecutionHost,
+    ) -> anyhow::Result<()> {
+        let run_type = match host {
+            super::control_endpoint::ExecutionHost::Local => RunType::Normal,
+            super::control_endpoint::ExecutionHost::Service => RunType::Service,
+        };
+        let mut selected = self.run_type.write();
+        if *selected != run_type {
+            self.ports.invalidate();
+            *selected = run_type;
+        }
+        Ok(())
+    }
+
     pub(crate) fn local_endpoint(&self) -> super::control_endpoint::LocalEndpoint {
         super::control_endpoint::LocalEndpoint::new(self.control.clone())
     }
@@ -256,7 +275,7 @@ impl LocalRuntimeHost {
         target_core: ClashCore,
         endpoint: &dyn ControlEndpoint,
     ) -> anyhow::Result<()> {
-        self.reconcile_with_profile_source(clash, target_core, endpoint, None, None)
+        self.reconcile_with_profile_source(clash, target_core, endpoint, None, None, None)
             .await
             .map(|_| ())
     }
@@ -269,12 +288,14 @@ impl LocalRuntimeHost {
         profiles: Arc<chimera_config::profile::Profiles>,
         app: chimera_config::application::ChimeraAppConfig,
         staged_content: std::collections::BTreeMap<String, String>,
+        target: Option<String>,
     ) -> anyhow::Result<()> {
         self.reconcile_with_profile_source(
             clash,
             target_core,
             endpoint,
             Some((profiles, app, staged_content)),
+            target,
             None,
         )
         .await
@@ -289,6 +310,7 @@ impl LocalRuntimeHost {
         profiles: Arc<chimera_config::profile::Profiles>,
         app: chimera_config::application::ChimeraAppConfig,
         staged_content: std::collections::BTreeMap<String, String>,
+        target: Option<String>,
         operation_id: OperationId,
     ) -> anyhow::Result<(
         crate::client::application_workflow::mutation::AppliedCandidate,
@@ -299,6 +321,7 @@ impl LocalRuntimeHost {
             target_core,
             endpoint,
             Some((profiles, app, staged_content)),
+            target,
             Some(operation_id),
         )
         .await?
@@ -403,6 +426,7 @@ impl LocalRuntimeHost {
             chimera_config::application::ChimeraAppConfig,
             std::collections::BTreeMap<String, String>,
         )>,
+        target: Option<String>,
         profile_operation_id: Option<OperationId>,
     ) -> anyhow::Result<
         Option<(
@@ -647,6 +671,7 @@ impl LocalRuntimeHost {
             run_intent: crate::client::application_workflow::policy::CoreRunIntent::Running,
             local_ipc,
             applied_revision,
+            target,
             ports: candidate_ports,
             artifact: Some(snapshot.clone()),
         });
@@ -897,6 +922,7 @@ impl LocalRuntimeHost {
             run_intent: receipt.run_intent,
             local_ipc: receipt.local_ipc,
             applied_revision,
+            target: receipt.target.clone(),
             ports: receipt.ports.clone(),
             artifact: Some(snapshot.clone()),
         });
@@ -1527,6 +1553,7 @@ mod tests {
                 source_hash: "baseline-digest".into(),
                 effective_hash: "old-effective".into(),
             },
+            target: None,
             ports: Default::default(),
             artifact: Some(artifact),
         })
@@ -1656,6 +1683,7 @@ mod tests {
                 source_hash: "candidate-source".into(),
                 effective_hash: "candidate-effective".into(),
             },
+            target: None,
             ports: Default::default(),
             artifact: Some(product.clone()),
         });
