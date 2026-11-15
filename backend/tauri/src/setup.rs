@@ -15,6 +15,10 @@ use crate::{
     utils::path::PathResolver,
 };
 
+#[cfg(test)]
+#[path = "setup_tests.rs"]
+mod tests;
+
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 use crate::client::hotkey::{
     HotkeyArgs, HotkeyClient,
@@ -43,10 +47,11 @@ pub fn setup(
     paths: PathResolver,
     resolved_paths: chimera_paths::PathResolver,
     bundle_metadata: chimera_contracts::bundle_metadata::BundleMetadata,
+    startup_owners: &mut AppShutdown,
     startup_failure_capture: &parking_lot::Mutex<Option<crate::startup_failure::Report>>,
 ) -> anyhow::Result<()> {
-    let shutdown = tokio_util::sync::CancellationToken::new();
-    let tasks = tokio_util::task::TaskTracker::new();
+    let shutdown = startup_owners.shutdown.clone();
+    let tasks = startup_owners.tasks.clone();
     let system_proxy_source: Arc<dyn chimera_contracts::net::SystemProxySource> =
         Arc::new(chimera_os::system_proxy_source::OsSystemProxySource);
     let profile_service = Arc::new(
@@ -79,19 +84,7 @@ pub fn setup(
         Some(startup_failure_capture),
     )?;
 
-    crate::startup_failure::report_boundary_with_backup_and_capture(
-        crate::core::storage::setup(app, &paths),
-        crate::startup_failure::StartupStage::Storage,
-        &paths,
-        migrations.backup_info(),
-        Some(startup_failure_capture),
-    )?;
-
     let traffic_store = open_traffic_store(&paths);
-    app.manage(AppShutdown {
-        shutdown: shutdown.clone(),
-        tasks: tasks.clone(),
-    });
     let jobs = crate::startup_failure::report_boundary_with_backup_and_capture(
         tauri::async_runtime::block_on(crate::client::jobs::start(
             paths.jobs_path(),
@@ -134,6 +127,7 @@ pub fn setup(
         migrations.backup_info(),
         Some(startup_failure_capture),
     )?;
+    startup_owners.core = Some(local_control.clone());
     // Match ref/backend/tauri/src/setup.rs: inject the original resolver from
     // the process entry point. Never re-discover paths through Tauri globals.
     let service_binary =
@@ -150,6 +144,8 @@ pub fn setup(
         local_control,
         runtime_paths.clone(),
         service_process,
+        shutdown.child_token(),
+        &tasks,
     ));
     let core_facade_monitor = core_facade.clone();
     let core_bridge: Arc<dyn crate::client::core_lifecycle::CoreLifecyclePort> = Arc::new(
@@ -255,6 +251,14 @@ pub fn setup(
             system_proxy_source.clone(),
         ));
 
+    crate::startup_failure::report_boundary_with_backup_and_capture(
+        crate::core::storage::setup(app, &paths),
+        crate::startup_failure::StartupStage::Storage,
+        &paths,
+        migrations.backup_info(),
+        Some(startup_failure_capture),
+    )?;
+
     let client = crate::startup_failure::report_boundary_with_backup_and_capture(
         ChimeraClient::try_new_with_args(ClientSetupArgs {
             paths: paths.clone(),
@@ -274,8 +278,8 @@ pub fn setup(
             ))),
             traffic_store,
             jobs,
-            shutdown: app.state::<AppShutdown>().shutdown.child_token(),
-            tasks: app.state::<AppShutdown>().tasks.clone(),
+            shutdown: shutdown.child_token(),
+            tasks: tasks.clone(),
             ui_sink: Arc::new(TauriUiEventSink::new(app.handle().clone())),
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
             effects,
@@ -293,16 +297,74 @@ pub fn setup(
     )?;
     rust_i18n::set_locale(client.get_app_config()?.language.as_str());
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
-    tauri::async_runtime::spawn(hotkey_action_pump(hotkey_rx, client.clone()));
+    tasks.spawn(hotkey_action_pump(
+        hotkey_rx,
+        client.clone(),
+        shutdown.child_token(),
+    ));
     app.manage(client);
-    core_facade_monitor.start_service_api_monitor();
+    startup_owners.core = None;
+    core_facade_monitor.start_service_api_monitor(shutdown.child_token(), &tasks);
     Ok(())
 }
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub(crate) struct AppShutdown {
     pub(crate) shutdown: tokio_util::sync::CancellationToken,
     pub(crate) tasks: tokio_util::task::TaskTracker,
+    core: Option<chimera_core_manager::CoreControl>,
+}
+
+/// Keeps startup failures out of Tauri's setup error wrapper, then transfers
+/// partial owners to the normal event-loop shutdown path.
+pub(crate) fn run_setup(
+    mut owners: AppShutdown,
+    setup: impl FnOnce(&mut AppShutdown) -> anyhow::Result<()>,
+    report_failure: impl FnOnce(&anyhow::Error) -> crate::startup_failure::Report,
+    host: &impl StartupFailureHost,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if let Err(error) = setup(&mut owners) {
+        let report = report_failure(&error);
+        tracing::error!(
+            stage = ?report.failure.stage,
+            kind = ?report.failure.kind,
+            path = ?report.failure.path,
+            detail = %report.failure.detail,
+            "application startup failed"
+        );
+        owners.request_shutdown();
+        host.show(report);
+        host.retain(owners);
+        host.exit(1);
+    }
+    Ok(())
+}
+
+pub(crate) trait StartupFailureHost {
+    fn show(&self, report: crate::startup_failure::Report);
+    fn retain(&self, owners: AppShutdown);
+    fn exit(&self, code: i32);
+}
+
+pub(crate) struct TauriStartupFailureHost {
+    pub handle: tauri::AppHandle,
+}
+
+impl StartupFailureHost for TauriStartupFailureHost {
+    fn show(&self, report: crate::startup_failure::Report) {
+        crate::startup_failure::show_report(&report);
+    }
+
+    fn retain(&self, owners: AppShutdown) {
+        use tauri::Manager as _;
+        if self.handle.try_state::<AppShutdown>().is_none() {
+            self.handle.manage(owners);
+        }
+    }
+
+    fn exit(&self, code: i32) {
+        self.handle.exit(code);
+    }
 }
 
 impl AppShutdown {
@@ -313,6 +375,14 @@ impl AppShutdown {
 
     pub(crate) async fn wait_shutdown(&self) {
         self.tasks.wait().await;
+        if let Some(core) = &self.core {
+            if let Err(error) = core.shutdown().await {
+                tracing::error!(%error, "failed to shut down the partially initialized core host");
+            }
+            if core.until_closed().await == chimera_core_manager::ExecutorExit::Died {
+                tracing::error!("partially initialized core host executor exited unexpectedly");
+            }
+        }
     }
 }
 
@@ -341,8 +411,16 @@ fn open_traffic_store(paths: &PathResolver) -> Option<Arc<dyn TrafficStore>> {
 async fn hotkey_action_pump(
     mut actions: tokio::sync::mpsc::UnboundedReceiver<HotkeyAction>,
     client: ChimeraClient,
+    shutdown: tokio_util::sync::CancellationToken,
 ) {
-    while let Some(action) = actions.recv().await {
+    loop {
+        let action = tokio::select! {
+            _ = shutdown.cancelled() => break,
+            action = actions.recv() => match action {
+                Some(action) => action,
+                None => break,
+            },
+        };
         if let Err(error) = client.dispatch_hotkey_action(action).await {
             tracing::warn!(%error, %action, "hotkey action failed");
         }

@@ -300,6 +300,8 @@ impl ChimeraClient {
                     crate::adapters::elevation::InteractiveElevationConsent,
                 ))),
                 service,
+                shutdown.clone(),
+                &tasks,
             ))?;
         tauri::async_runtime::block_on(mutations.connect(core_lifecycle.clone()))?;
         let streams_shutdown = shutdown.child_token();
