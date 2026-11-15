@@ -413,7 +413,12 @@ pub fn register_web_storage_listener(
 
 fn open_storage(paths: &PathResolver) -> anyhow::Result<Storage> {
     let storage_path = paths.storage_path();
-    Storage::try_new(&storage_path).context("failed to open application storage")
+    Storage::try_new(&storage_path).with_context(|| {
+        format!(
+            "failed to open application storage at {}",
+            storage_path.display()
+        )
+    })
 }
 
 pub fn setup<R: tauri::Runtime, M: tauri::Manager<R>>(
@@ -443,6 +448,34 @@ mod tests {
         assert!(paths.storage_path().is_file());
         assert!(!config_dir.exists());
         assert_eq!(std::fs::read_dir(&data_dir).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn startup_storage_open_failure_is_reported_with_its_path() {
+        let temp = tempfile::tempdir().unwrap();
+        let data_dir = temp.path().join("isolated-data");
+        std::fs::create_dir_all(&data_dir).unwrap();
+        let paths = PathResolver::with_base_dirs(temp.path().join("isolated-config"), data_dir);
+        let storage_path = paths.storage_path();
+        std::fs::write(&storage_path, b"preserve this file").unwrap();
+
+        let error = crate::startup_failure::report_boundary(
+            open_storage(&paths),
+            crate::startup_failure::StartupStage::Storage,
+            &paths,
+        )
+        .err()
+        .expect("an invalid storage file must stop setup");
+        let failure = crate::startup_failure::StartupFailure::from_error(
+            error.as_ref(),
+            crate::startup_failure::StartupStage::Storage,
+            &paths,
+        );
+
+        assert_eq!(failure.kind, crate::startup_failure::FailureKind::Internal);
+        assert_eq!(failure.path, Some(storage_path.clone()));
+        assert!(failure.detail.contains(&storage_path.display().to_string()));
+        assert_eq!(std::fs::read(storage_path).unwrap(), b"preserve this file");
     }
 
     fn open(dir: &tempfile::TempDir) -> StorageInner {

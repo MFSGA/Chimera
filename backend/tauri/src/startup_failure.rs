@@ -48,6 +48,7 @@ pub(crate) enum StartupStage {
     Jobs,
     MigrationPrepare,
     MigrationRun,
+    Storage,
     CoreHost,
     TypedClient,
 }
@@ -114,7 +115,7 @@ impl StartupFailure {
             StartupStage::MigrationPrepare | StartupStage::MigrationRun => {
                 FailureKind::MigrationFailed
             }
-            StartupStage::CoreHost => FailureKind::Internal,
+            StartupStage::Storage | StartupStage::CoreHost => FailureKind::Internal,
             StartupStage::TypedClient => FailureKind::UserConfig,
         };
         let mut path = None;
@@ -239,6 +240,7 @@ impl StartupFailure {
         let path = path.or_else(|| {
             Some(match stage {
                 StartupStage::Jobs => paths.jobs_path(),
+                StartupStage::Storage => paths.storage_path(),
                 StartupStage::MigrationPrepare
                 | StartupStage::MigrationRun
                 | StartupStage::CoreHost
