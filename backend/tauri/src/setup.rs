@@ -184,12 +184,14 @@ pub fn setup(
     let service_commands: Arc<
         dyn chimera_core::actor_v2::service_command_port::ServiceCommandPort,
     > = Arc::new(
-        chimera_core::actor_v2::service_command_port::ServiceClientCommandPort::new(service_actor),
+        chimera_core::actor_v2::service_command_port::ServiceClientCommandPort::new(
+            service_actor.clone(),
+        ),
     );
     let core_facade = Arc::new(crate::core::actor_v2::CoreFacade::new_local_with_control(
         local_control,
         runtime_paths.clone(),
-        core_router,
+        core_router.clone(),
         service_commands,
         shutdown.child_token(),
         &tasks,
@@ -331,6 +333,8 @@ pub fn setup(
             app_update_events,
             changelog_http,
             bridges,
+            core_v2: core_router,
+            service_v2: service_actor,
             core: core_bridge,
             service: Arc::new(crate::client::core_lifecycle::LegacyServiceBridge::new(
                 core_facade,

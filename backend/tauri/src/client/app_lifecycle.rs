@@ -34,6 +34,21 @@ impl ChimeraClient {
             },
         };
 
+        // The ref actors, not LegacyCoreBridge, own the current host and
+        // Service phase. Surface those typed projections while the
+        // application-level startup report retains Chimera's extra details.
+        if let Some(status) = self.routed_core_status() {
+            tracing::debug!(
+                host = ?status.host,
+                generation = status.generation,
+                connectivity = ?status.connectivity,
+                "ref Core Actor startup projection"
+            );
+        }
+        if let Some(status) = self.service_actor_status() {
+            tracing::debug!(phase = ?status.phase, "ref Service Actor startup projection");
+        }
+
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
         self.publish_full_effects().await;
 
@@ -69,7 +84,22 @@ impl ChimeraClient {
         // stop has failed. Preserve the original stop uncertainty as the
         // error returned to the updater/exit boundary.
         let drained = self.inner.core.finish_shutdown().await;
+        // A compatibility adapter that claimed to finish shutdown but left
+        // CoreActor connected cannot be treated as an updater-safe stop.
+        // In tests constructed without ref actors this check is skipped.
+        let actor_closed = self.routed_core_status().map(|status| {
+            anyhow::ensure!(
+                matches!(
+                    status.connectivity,
+                    chimera_core::actor_v2::router::EndpointConnectivity::ShutDown
+                ),
+                "the ref Core Actor did not finish its shutdown"
+            );
+            Ok(())
+        });
         stopped?;
-        drained
+        drained?;
+        actor_closed.transpose()?;
+        Ok(())
     }
 }
