@@ -13,6 +13,7 @@ use tauri::{App, AppHandle, Emitter, Listener, Manager};
 use tracing::debug;
 
 use crate::{
+    client::application_workflow::startup::StartupOutcome,
     config::chimera::ClashCore,
     core::{handle, tray},
     log_err,
@@ -227,25 +228,46 @@ pub fn resolve_setup(app: &mut App) {
     // Service compatibility check is Chimera-specific, but it precedes the
     // same one-shot startup reconciliation boundary.
     let client = (*app.state::<crate::client::ChimeraClient>()).clone();
-    let startup_result = tracing::info_span!("startup_reconcile").in_scope(|| {
+    let report = tracing::info_span!("startup_reconcile").in_scope(|| {
         tauri::async_runtime::block_on(async {
             if let Err(error) = init::init_service(client.clone()).await {
                 tracing::warn!(%error, "Service startup preparation failed");
             }
             log_err!(crate::client::ports::resolve_random_mixed_port(&client).await);
-            client.init_core().await
+            client.startup_reconcile().await
         })
     });
-    match startup_result {
-        Ok(()) => {
+    if let Some(observation) = &report.observation {
+        tracing::info!(
+            operation_id = report.operation_id,
+            desired = ?observation.desired,
+            service = ?observation.service,
+            runtime = ?observation.runtime,
+            "startup reconciliation observation"
+        );
+    }
+    match &report.outcome {
+        StartupOutcome::Ready => {
             app.state::<AppStartupStatus>().finish(true);
-            tracing::info!("startup reconciliation ready");
+            tracing::info!(
+                operation_id = report.operation_id,
+                "startup reconciliation ready"
+            );
         }
-        Err(error) => {
+        outcome => {
             app.state::<AppStartupStatus>().finish(false);
-            tracing::warn!(%error, "startup reconciliation did not reach ready");
+            tracing::warn!(
+                operation_id = report.operation_id,
+                ?outcome,
+                "startup reconciliation did not reach ready"
+            );
         }
     }
+    // As in ref, a non-ready startup does not block background producers:
+    // any changes are serialized by the application workflow actor.
+    log_err!(tauri::async_runtime::block_on(
+        client.start_background_sources()
+    ));
 
     // As in ref's setup_proxies, refresh the proxy view after the startup
     // conclusion. The proxy owner retries if the core API is unavailable.

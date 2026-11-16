@@ -41,9 +41,9 @@ const COMPLETED_LIMIT: usize = 32;
 
 type OperationId = u64;
 
-struct CompletedLifecycleOperation {
-    result: anyhow::Result<()>,
-    report: StartupReport,
+pub(in crate::client) struct CompletedLifecycleOperation {
+    pub(in crate::client) result: anyhow::Result<()>,
+    pub(in crate::client) report: StartupReport,
 }
 
 fn completed_from_startup_report(report: StartupReport) -> CompletedLifecycleOperation {
@@ -1929,7 +1929,9 @@ impl CoreLifecycleClient {
         }
     }
 
-    async fn startup_reconcile(&self) -> anyhow::Result<CompletedLifecycleOperation> {
+    pub(in crate::client) async fn startup_reconcile(
+        &self,
+    ) -> anyhow::Result<CompletedLifecycleOperation> {
         self.startup_reconcile_with_timeout(None).await
     }
 
@@ -2505,57 +2507,6 @@ impl CoreLifecycleClient {
 }
 
 impl ChimeraClient {
-    pub(crate) async fn init_core(&self) -> anyhow::Result<()> {
-        // The producer gate is released only after a terminal lifecycle reply.
-        // An ambiguous transport error must leave it held until startup is retried.
-        let completed = self
-            .inner
-            .core_lifecycle
-            .startup_reconcile()
-            .await
-            .map_err(|error| {
-                anyhow::anyhow!(
-                    "startup reconciliation did not return a terminal reply; Profile background producers remain held: {error:#}"
-                )
-            })?;
-        let startup = match &completed.report.outcome {
-            StartupOutcome::Ready => completed.result,
-            outcome => {
-                let reason = outcome
-                    .failure_reason()
-                    .unwrap_or("startup did not reach a ready state");
-                tracing::warn!(
-                    operation_id = completed.report.operation_id,
-                    ?outcome,
-                    "startup reconcile did not reach the ready state"
-                );
-                Err(anyhow::anyhow!(
-                    "startup reconcile {} did not reach ready: {reason}",
-                    completed.report.operation_id
-                ))
-            }
-        };
-        let may_start_producers = !self.inner.core_lifecycle.status().uncertain;
-        let producers = match (may_start_producers, self.inner.typed_profiles.as_ref()) {
-            (true, Some(profiles)) => profiles.start_producers().await.map_err(anyhow::Error::new),
-            (false, Some(_)) => Ok(()),
-            (_, None) => Ok(()),
-        };
-
-        #[cfg(not(any(target_os = "android", target_os = "ios")))]
-        self.publish_full_effects().await;
-
-        match (startup, producers) {
-            (Err(startup), Err(producers)) => {
-                tracing::warn!(%producers, "profile producers could not be released after startup failure");
-                Err(startup)
-            }
-            (Err(startup), _) => Err(startup),
-            (_, Err(producers)) => Err(producers),
-            (Ok(()), Ok(_)) => Ok(()),
-        }
-    }
-
     pub(crate) async fn core_status(&self) -> anyhow::Result<CoreStatusSnapshot> {
         self.inner.core.status().await
     }
