@@ -14,6 +14,70 @@ import {
 const targetPath = '/main/profiles/profile';
 const profileName = `TDD Main Profile ${Date.now()}`;
 
+// The embedded Windows WebDriver can report isDisplayed=false for a flex child
+// that is plainly rendered (see the CI failure HTML and screenshot). Verify
+// the actual active Inspect route, nonzero layout and computed visibility.
+// This is a read-only UI check; no DOM interaction or snapshot state is faked.
+async function waitForRenderedInspectSlot(
+  slot: 'inspect-step-detail' | 'inspect-yaml-viewer' | 'inspect-empty',
+) {
+  let lastState: unknown = null;
+  try {
+    await browser.waitUntil(
+      async () => {
+        lastState = await browser.execute((requestedSlot) => {
+          const route = document.querySelector<HTMLElement>(
+            '[data-route-id="/(main)/main/profiles/inspect"][data-route-present="true"]',
+          );
+          const page = route?.querySelector<HTMLElement>(
+            '[data-slot="inspect-page"]',
+          );
+          const element = page?.querySelector<HTMLElement>(
+            `[data-slot="${requestedSlot}"]`,
+          );
+          if (!element) {
+            return {
+              rendered: false,
+              path: location.pathname,
+              activeRoute: Boolean(route),
+              inspectPage: Boolean(page),
+              slot: requestedSlot,
+            };
+          }
+          const bounds = element.getBoundingClientRect();
+          const style = getComputedStyle(element);
+          return {
+            rendered:
+              bounds.width > 0 &&
+              bounds.height > 0 &&
+              style.display !== 'none' &&
+              style.visibility !== 'hidden' &&
+              style.opacity !== '0',
+            path: location.pathname,
+            activeRoute: true,
+            slot: requestedSlot,
+            width: bounds.width,
+            height: bounds.height,
+            display: style.display,
+            visibility: style.visibility,
+            opacity: style.opacity,
+          };
+        }, slot);
+        return (lastState as { rendered: boolean }).rendered;
+      },
+      {
+        timeout: 15_000,
+        timeoutMsg: `The active Inspect ${slot} has no visible layout.`,
+      },
+    );
+  } catch (cause) {
+    throw new Error(
+      `The active Inspect ${slot} did not render: ${JSON.stringify(lastState)}.`,
+      { cause },
+    );
+  }
+}
+
 type ProfilesResponse = {
   current: string | null;
   items: Array<{ name: string; uid: string; type: 'config' | 'transform' }>;
@@ -90,8 +154,8 @@ describe('main profiles reference layout', () => {
     assert.ok(profileUid, 'The layout fixture profile was not persisted.');
   });
 
-  // Keep each contract on the All Profiles route. If one navigation
-  // assertion fails, later cases must not inherit its Inspect/transform route.
+  // Every case starts on the real Profiles route, even if an earlier
+  // assertion failed after navigating to Inspect or a transform.
   beforeEach(async () => {
     await openMainRoute(targetPath);
   });
@@ -246,40 +310,22 @@ describe('main profiles reference layout', () => {
     );
 
     if (snapshot) {
-      const details = await $('[data-slot="inspect-step-detail"]');
-      await details.waitForDisplayed({ timeout: 15_000 });
+      await waitForRenderedInspectSlot('inspect-step-detail');
       const outputTab = await $('[data-slot="inspect-tab-output"]');
-      // The final configuration step already opens on Output. Avoid asking
-      // WebDriver to click a selected tab that is already displaying its panel.
+      // Output is selected for the final generated step. Avoid a redundant
+      // click through the animated toolbar; use the shared pointer helper only
+      // if the visible tab is not already selected.
       if ((await outputTab.getAttribute('aria-selected')) !== 'true') {
         await clickElement(outputTab);
       }
-      await browser.waitUntil(
-        async () =>
-          browser.execute(() => {
-            const viewer = document.querySelector<HTMLElement>(
-              '[data-slot="inspect-yaml-viewer"]',
-            );
-            if (!viewer) return false;
-            const rect = viewer.getBoundingClientRect();
-            const style = getComputedStyle(viewer);
-            return (
-              rect.width > 0 &&
-              rect.height > 0 &&
-              style.display !== 'none' &&
-              style.visibility !== 'hidden' &&
-              viewer.querySelectorAll('[data-line]').length > 0
-            );
-          }),
-        {
-          timeout: 15_000,
-          timeoutMsg:
-            'The Inspect output YAML viewer did not render visible lines.',
-        },
+      assert.equal(await outputTab.getAttribute('aria-selected'), 'true');
+      await waitForRenderedInspectSlot('inspect-yaml-viewer');
+      const outputLine = await $(
+        '[data-slot="inspect-yaml-viewer"] [data-line]',
       );
+      await outputLine.waitForDisplayed({ timeout: 15_000 });
     } else {
-      const empty = await $('[data-slot="inspect-empty"]');
-      await empty.waitForDisplayed({ timeout: 15_000 });
+      await waitForRenderedInspectSlot('inspect-empty');
     }
 
     // Switching snapshots is a visible interaction, not a direct cache or
@@ -288,6 +334,9 @@ describe('main profiles reference layout', () => {
     const applied = await displayedElement(
       '[data-slot="inspect-view-applied"]',
     );
+    // The toggle is visibly enabled, but WebView2's element clickable check
+    // can reject its overlapping animated slider. Exercise the real W3C
+    // pointer path and verify the resulting selected state below.
     await clickElement(applied);
     await browser.waitUntil(
       async () => (await applied.getAttribute('data-state')) === 'on',
@@ -300,13 +349,9 @@ describe('main profiles reference layout', () => {
       'inspect_applied_runtime',
     );
     if (appliedSnapshot) {
-      await $('[data-slot="inspect-step-detail"]').waitForDisplayed({
-        timeout: 15_000,
-      });
+      await waitForRenderedInspectSlot('inspect-step-detail');
     } else {
-      await $('[data-slot="inspect-empty"]').waitForDisplayed({
-        timeout: 15_000,
-      });
+      await waitForRenderedInspectSlot('inspect-empty');
     }
     const latest = await displayedElement('[data-slot="inspect-view-latest"]');
     await clickElement(latest);
@@ -666,18 +711,21 @@ describe('main profiles reference layout', () => {
     }
   });
 
-  // Contract: every visible Profile type navigation item renders its icon
-  // inside the current material-shape wrapper and uses the shared color token.
-  // Assert the actual navigation DOM rather than stale attributes not emitted
-  // by NavigationListItem.
-  it('uses the reference profile type navigation icon compositions', async () => {
+  // Contract: the visible Profiles navigation renders the correct icon and
+  // material color for each type. Assert its actual structure and shared color
+  // token rather than obsolete test-only icon attributes.
+  it('renders the reference profile type icon compositions', async () => {
     const icons = await browser.execute(() => {
-      const readIcon = (selector: string, color: string) => {
-        const shape = document.querySelector<HTMLElement>(
-          `${selector} [data-slot="navigation-list-item-icon"] [data-slot="material-shape"]`,
+      const readIcon = (type: string, color: string) => {
+        const link = document.querySelector<HTMLElement>(
+          `[data-slot="profiles-navigation"] a[href="/main/profiles/${type}"]`,
+        );
+        const shape = link?.querySelector<HTMLElement>(
+          '[data-slot="navigation-list-item-icon"] [data-slot="material-shape"]',
         );
         return {
           hasPrimaryIcon: Boolean(shape?.querySelector('svg')),
+          hasMaterialShape: Boolean(shape),
           hasColorToken: Boolean(
             shape?.classList.contains(`bg-${color}-container`),
           ),
@@ -685,19 +733,10 @@ describe('main profiles reference layout', () => {
       };
 
       return {
-        profile: readIcon('[data-slot="profiles-all-nav-item"]', 'blue'),
-        javascript: readIcon(
-          '[data-slot="profiles-navigation"] a[href="/main/profiles/javascript"]',
-          'yellow',
-        ),
-        lua: readIcon(
-          '[data-slot="profiles-navigation"] a[href="/main/profiles/lua"]',
-          'cyan',
-        ),
-        merge: readIcon(
-          '[data-slot="profiles-navigation"] a[href="/main/profiles/merge"]',
-          'orange',
-        ),
+        profile: readIcon('profile', 'blue'),
+        javascript: readIcon('javascript', 'yellow'),
+        lua: readIcon('lua', 'cyan'),
+        merge: readIcon('merge', 'orange'),
       };
     });
 
@@ -706,6 +745,11 @@ describe('main profiles reference layout', () => {
         icon.hasPrimaryIcon,
         true,
         `${type} is missing its primary navigation icon.`,
+      );
+      assert.equal(
+        icon.hasMaterialShape,
+        true,
+        `${type} is missing its material shape.`,
       );
       assert.equal(
         icon.hasColorToken,
