@@ -1,6 +1,7 @@
 pub mod api;
 pub mod endpoint;
 pub mod intent;
+pub mod routed_endpoint;
 pub mod router;
 pub mod service_actor;
 pub mod service_command_port;
