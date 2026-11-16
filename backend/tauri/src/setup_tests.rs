@@ -140,7 +140,7 @@ fn partial_core_owner_shuts_down_after_tracked_tasks_drain() {
     // completion signal reports a clean exit; skipping core shutdown leaves it
     // pending and fails the test.
     let owners = StartupOwners {
-        core: Some(control.clone()),
+        legacy_core: Some(control.clone()),
         ..StartupOwners::default()
     };
 

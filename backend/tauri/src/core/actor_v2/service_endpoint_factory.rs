@@ -1,43 +1,33 @@
-//! IPC endpoint construction after the service version gate, following
-//! ref/backend/nyanpasu-core/src/actor_v2/service_endpoint_factory.rs.
+//! Tauri's IPC constructor for the core-owned, ref-style endpoint factory.
+//!
+//! The factory and its readiness contract live in `chimera-core`. Only the
+//! platform-specific `ServiceEndpoint` adaptation stays here.
 
 use std::sync::Arc;
 
-use chimera_core::actor_v2::{endpoint::EndpointHandle, service_router::ServiceEndpointFactory};
+pub use chimera_core::actor_v2::service_endpoint_factory::IpcServiceEndpointFactory;
+use chimera_ipc::client::shortcuts::Client;
 
 use super::service_endpoint::ServiceEndpoint;
 
-/// Constructs the application endpoint only after ServiceClient passes the
-/// daemon compatibility gate. The IPC handle is process-global in Chimera,
-/// unlike ref's owned nyanpasu_ipc::client::Client.
-pub struct IpcServiceEndpointFactory {
-    client: &'static chimera_ipc::client::shortcuts::Client<'static>,
+/// Supplies Chimera's process-global IPC client without creating an
+/// independent endpoint owner or probing the daemon during construction.
+pub fn ipc_service_endpoint_factory(client: &'static Client<'static>) -> IpcServiceEndpointFactory {
+    IpcServiceEndpointFactory::new(move || Arc::new(ServiceEndpoint::new(client)))
 }
 
-impl IpcServiceEndpointFactory {
-    pub fn new(client: &'static chimera_ipc::client::shortcuts::Client<'static>) -> Self {
-        Self { client }
-    }
-
-    pub fn service_default() -> Self {
-        Self::new(chimera_ipc::client::shortcuts::Client::service_default())
-    }
-}
-
-impl ServiceEndpointFactory for IpcServiceEndpointFactory {
-    fn endpoint(&self) -> EndpointHandle {
-        Arc::new(ServiceEndpoint::new(self.client))
-    }
+pub fn default_service_endpoint_factory() -> IpcServiceEndpointFactory {
+    ipc_service_endpoint_factory(Client::service_default())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chimera_core::actor_v2::endpoint::ExecutionHost;
+    use chimera_core::actor_v2::{endpoint::ExecutionHost, service_router::ServiceEndpointFactory};
 
     #[test]
     fn factory_builds_a_service_host_endpoint_without_contacting_the_daemon() {
-        let factory = IpcServiceEndpointFactory::service_default();
+        let factory = default_service_endpoint_factory();
         assert_eq!(factory.endpoint().host(), ExecutionHost::Service);
     }
 }
