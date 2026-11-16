@@ -170,6 +170,33 @@ enum Message {
     ReadStartupRetryScheduleForTest {
         reply: RpcReplyPort<Option<(String, tokio::time::Instant)>>,
     },
+    #[cfg(test)]
+    SeedUnresolvedApplicationAttemptForTest {
+        reply: RpcReplyPort<anyhow::Result<chimera_core_manager::OperationId>>,
+    },
+    #[cfg(test)]
+    SeedUnresolvedSourceDecisionForTest {
+        decision: chimera_core::state::DecisionHandle,
+        reply: RpcReplyPort<anyhow::Result<chimera_core_manager::OperationId>>,
+    },
+    #[cfg(test)]
+    SeedUnresolvedAttemptWithDeferredRetryForTest {
+        decision: chimera_core::state::DecisionHandle,
+        reply: RpcReplyPort<anyhow::Result<(chimera_core_manager::OperationId, String)>>,
+    },
+    #[cfg(test)]
+    SeedUnresolvedCommittedTargetForTest {
+        decision: chimera_core::state::DecisionHandle,
+        reply: RpcReplyPort<anyhow::Result<chimera_core_manager::OperationId>>,
+    },
+    #[cfg(test)]
+    ReadApplicationRecoveryStateForTest {
+        reply: RpcReplyPort<(
+            Option<(chimera_core_manager::OperationId, bool)>,
+            Option<(String, tokio::time::Instant)>,
+            Option<(u8, u32)>,
+        )>,
+    },
     DeferredRetry {
         digest: String,
     },
@@ -330,6 +357,21 @@ impl ApplicationWorkflowState {
         });
     }
 
+    fn reschedule_deferred_retry(
+        &mut self,
+        myself: &ActorRef<Message>,
+        digest: &str,
+        delay: Duration,
+    ) {
+        let next_attempt = self
+            .workflow
+            .as_mut()
+            .and_then(|workflow| workflow.reschedule_deferred_retry(digest, delay));
+        if let Some(next_attempt) = next_attempt {
+            self.schedule_deferred_retry(myself, digest.to_owned(), next_attempt);
+        }
+    }
+
     fn schedule_startup_retry(
         &self,
         myself: &ActorRef<Message>,
@@ -417,7 +459,7 @@ impl ApplicationWorkflowState {
         self.pending = allowed;
     }
 
-    fn reject_pending_for_unproven_startup_owner(&mut self) {
+    fn reject_pending_for_unproven_startup_owner(&mut self, myself: &ActorRef<Message>) {
         if !(self.startup_owner_unproven
             || self.startup_owner_unproven_shared.load(Ordering::Acquire))
             || self.shutting_down
@@ -436,10 +478,44 @@ impl ApplicationWorkflowState {
             {
                 allowed.push_back(request);
             } else {
+                if let Some(digest) = request.deferred_retry.as_deref() {
+                    self.reschedule_deferred_retry(myself, digest, Duration::from_secs(5));
+                }
                 self.reject(
                     request,
                     anyhow::anyhow!(
                         "startup has not established the Core owner; retry startup reconciliation before runtime mutations"
+                    ),
+                );
+            }
+        }
+        self.pending = allowed;
+    }
+
+    fn reject_pending_for_application_recovery(&mut self, myself: &ActorRef<Message>) {
+        let isolated = self
+            .workflow
+            .as_ref()
+            .is_some_and(ApplicationWorkflow::has_unresolved_attempt);
+        if !isolated || self.shutting_down {
+            return;
+        }
+        let mut allowed = VecDeque::new();
+        while let Some(request) = self.pending.pop_front() {
+            let can_recover = self
+                .workflow
+                .as_ref()
+                .is_some_and(|workflow| workflow.recovery_command_allowed(&request.command));
+            if can_recover || matches!(&request.command, Command::Shutdown) {
+                allowed.push_back(request);
+            } else {
+                if let Some(digest) = request.deferred_retry.as_deref() {
+                    self.reschedule_deferred_retry(myself, digest, Duration::from_secs(5));
+                }
+                self.reject(
+                    request,
+                    anyhow::anyhow!(
+                        "an application runtime attempt is unresolved; run its explicit recovery before another command"
                     ),
                 );
             }
@@ -495,7 +571,8 @@ impl ApplicationWorkflowState {
             return;
         }
         self.reject_pending_for_uncertain();
-        self.reject_pending_for_unproven_startup_owner();
+        self.reject_pending_for_unproven_startup_owner(myself);
+        self.reject_pending_for_application_recovery(myself);
 
         let request = if self.shutting_down {
             if self.shutdown_result.is_some() {
@@ -643,13 +720,12 @@ impl ApplicationWorkflowState {
                         .await
                     {
                         Ok(result) => (result, false, false),
-                        Err(_) => (
-                            Err(anyhow::anyhow!(
-                                "core lifecycle workflow panicked; execution state is uncertain"
-                            )),
-                            true,
-                            false,
-                        ),
+                        Err(_) => {
+                            let message =
+                                "core lifecycle workflow panicked; execution state is uncertain";
+                            workflow.mark_recovery_required(message.into()).await;
+                            (Err(anyhow::anyhow!(message)), true, false)
+                        }
                     }
                 }
             };
@@ -1185,6 +1261,63 @@ impl Actor for ApplicationWorkflowActor {
                     .and_then(ApplicationWorkflow::startup_retry_schedule);
                 let _ = reply.send(schedule);
             }
+            #[cfg(test)]
+            Message::SeedUnresolvedApplicationAttemptForTest { reply } => {
+                let result = state
+                    .workflow
+                    .as_mut()
+                    .map(ApplicationWorkflow::seed_unresolved_lifecycle_attempt_for_tests);
+                let _ = reply.send(
+                    result.ok_or_else(|| anyhow::anyhow!("application workflow is unavailable")),
+                );
+            }
+            #[cfg(test)]
+            Message::SeedUnresolvedSourceDecisionForTest { decision, reply } => {
+                let result = state
+                    .workflow
+                    .as_mut()
+                    .map(|workflow| workflow.seed_unresolved_source_decision_for_tests(decision));
+                let _ = reply.send(
+                    result.ok_or_else(|| anyhow::anyhow!("application workflow is unavailable")),
+                );
+            }
+            #[cfg(test)]
+            Message::SeedUnresolvedAttemptWithDeferredRetryForTest { decision, reply } => {
+                let result = state.workflow.as_mut().map(|workflow| {
+                    workflow.seed_unresolved_attempt_with_deferred_retry_for_tests(decision)
+                });
+                let result =
+                    result.ok_or_else(|| anyhow::anyhow!("application workflow is unavailable"));
+                if let Ok((_, digest)) = &result {
+                    let id = state.allocate_operation_id();
+                    state.pending.push_back(Request {
+                        command: Command::RetryDeferredProfiles {
+                            digest: digest.clone(),
+                        },
+                        response: Response { id, reply: None },
+                        deferred_retry: Some(digest.clone()),
+                    });
+                }
+                let _ = reply.send(result);
+            }
+            #[cfg(test)]
+            Message::SeedUnresolvedCommittedTargetForTest { decision, reply } => {
+                let result = state
+                    .workflow
+                    .as_mut()
+                    .map(|workflow| workflow.seed_unresolved_committed_target_for_tests(decision));
+                let _ = reply.send(
+                    result.ok_or_else(|| anyhow::anyhow!("application workflow is unavailable")),
+                );
+            }
+            #[cfg(test)]
+            Message::ReadApplicationRecoveryStateForTest { reply } => {
+                let state = state.workflow.as_ref().map_or(
+                    (None, None, None),
+                    ApplicationWorkflow::recovery_state_for_tests,
+                );
+                let _ = reply.send(state);
+            }
             Message::DeferredRetry { digest } => {
                 if state.uncertain || state.shutting_down {
                     if let Some(application_workflow) = state.workflow.as_mut() {
@@ -1205,6 +1338,14 @@ impl Actor for ApplicationWorkflowActor {
                         digest,
                         tokio::time::Instant::now() + DIRTY_WINDOW,
                     );
+                } else if state.active.is_some()
+                    || !state.pending.is_empty()
+                    || state
+                        .workflow
+                        .as_ref()
+                        .is_some_and(ApplicationWorkflow::has_unresolved_attempt)
+                {
+                    state.reschedule_deferred_retry(&myself, &digest, Duration::from_secs(5));
                 } else {
                     use crate::client::application_workflow::workflow::ProfileRuntime;
 
@@ -1652,6 +1793,115 @@ impl CoreLifecycleClient {
             CallResult::Timeout => anyhow::bail!("startup retry schedule query timed out"),
             CallResult::SenderError => {
                 anyhow::bail!("startup retry schedule query reply was dropped")
+            }
+        }
+    }
+
+    #[cfg(test)]
+    async fn seed_unresolved_application_attempt_for_tests(
+        &self,
+    ) -> anyhow::Result<chimera_core_manager::OperationId> {
+        let CoreLifecycleClientInner::Actor { actor_ref, .. } = self.0.as_ref() else {
+            anyhow::bail!("application attempt test requires the lifecycle actor");
+        };
+        match actor_ref
+            .call(
+                |reply| Message::SeedUnresolvedApplicationAttemptForTest { reply },
+                Some(CALL_WAIT),
+            )
+            .await?
+        {
+            CallResult::Success(result) => result,
+            CallResult::Timeout => anyhow::bail!("application attempt seeding timed out"),
+            CallResult::SenderError => anyhow::bail!("application attempt seed reply dropped"),
+        }
+    }
+
+    #[cfg(test)]
+    async fn seed_unresolved_source_decision_for_tests(
+        &self,
+        decision: chimera_core::state::DecisionHandle,
+    ) -> anyhow::Result<chimera_core_manager::OperationId> {
+        let CoreLifecycleClientInner::Actor { actor_ref, .. } = self.0.as_ref() else {
+            anyhow::bail!("source decision test requires the lifecycle actor");
+        };
+        match actor_ref
+            .call(
+                |reply| Message::SeedUnresolvedSourceDecisionForTest { decision, reply },
+                Some(CALL_WAIT),
+            )
+            .await?
+        {
+            CallResult::Success(result) => result,
+            CallResult::Timeout => anyhow::bail!("source decision seeding timed out"),
+            CallResult::SenderError => anyhow::bail!("source decision seed reply dropped"),
+        }
+    }
+
+    #[cfg(test)]
+    async fn seed_unresolved_attempt_with_deferred_retry_for_tests(
+        &self,
+        decision: chimera_core::state::DecisionHandle,
+    ) -> anyhow::Result<(chimera_core_manager::OperationId, String)> {
+        let CoreLifecycleClientInner::Actor { actor_ref, .. } = self.0.as_ref() else {
+            anyhow::bail!("deferred retry test requires the lifecycle actor");
+        };
+        match actor_ref
+            .call(
+                |reply| Message::SeedUnresolvedAttemptWithDeferredRetryForTest { decision, reply },
+                Some(CALL_WAIT),
+            )
+            .await?
+        {
+            CallResult::Success(result) => result,
+            CallResult::Timeout => anyhow::bail!("deferred retry test seeding timed out"),
+            CallResult::SenderError => anyhow::bail!("deferred retry seed reply dropped"),
+        }
+    }
+
+    #[cfg(test)]
+    async fn seed_unresolved_committed_target_for_tests(
+        &self,
+        decision: chimera_core::state::DecisionHandle,
+    ) -> anyhow::Result<chimera_core_manager::OperationId> {
+        let CoreLifecycleClientInner::Actor { actor_ref, .. } = self.0.as_ref() else {
+            anyhow::bail!("committed target test requires the lifecycle actor");
+        };
+        match actor_ref
+            .call(
+                |reply| Message::SeedUnresolvedCommittedTargetForTest { decision, reply },
+                Some(CALL_WAIT),
+            )
+            .await?
+        {
+            CallResult::Success(result) => result,
+            CallResult::Timeout => anyhow::bail!("committed target seeding timed out"),
+            CallResult::SenderError => anyhow::bail!("committed target seed reply dropped"),
+        }
+    }
+
+    #[cfg(test)]
+    async fn application_recovery_state_for_tests(
+        &self,
+    ) -> anyhow::Result<(
+        Option<(chimera_core_manager::OperationId, bool)>,
+        Option<(String, tokio::time::Instant)>,
+        Option<(u8, u32)>,
+    )> {
+        let CoreLifecycleClientInner::Actor { actor_ref, .. } = self.0.as_ref() else {
+            anyhow::bail!("application recovery test requires the lifecycle actor");
+        };
+        match actor_ref
+            .call(
+                |reply| Message::ReadApplicationRecoveryStateForTest { reply },
+                Some(CALL_WAIT),
+            )
+            .await?
+        {
+            CallResult::Success(state) => Ok(state),
+            CallResult::Timeout => anyhow::bail!("application recovery state query timed out"),
+            CallResult::SenderError => {
+                anyhow::bail!("application recovery state reply was dropped")
             }
         }
     }
@@ -2427,7 +2677,10 @@ mod tests {
     use camino::Utf8PathBuf;
     use chimera_config::application::ChimeraAppConfigPatch;
     use chimera_config::clash::config::ClashConfig;
-    use chimera_core::state::{PersistentStateManagerSetup, ReplaceIfVersionResult};
+    use chimera_core::state::{
+        PersistentStateManagerSetup, ReplaceIfVersionResult, StateAckSubscriber, StateChange,
+        StateDecision, SubscriberName,
+    };
     use chimera_ipc::api::status::CoreState;
     use tokio::sync::{Notify, oneshot};
     use tokio_util::{sync::CancellationToken, task::TaskTracker};
@@ -2724,7 +2977,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn profile_tcc_transaction_runs_through_the_production_actor() {
+    async fn explicit_reconcile_keeps_committed_profiles_active_after_deferred_retry_recovery() {
         let directory = tempfile::tempdir().expect("temporary Profiles directory");
         let path = Utf8PathBuf::from_path_buf(directory.path().join("profiles.yaml"))
             .expect("UTF-8 temporary Profiles path");
@@ -2744,17 +2997,21 @@ mod tests {
         let events = Arc::new(Mutex::new(Vec::new()));
         let core = Arc::new(ProfileTccCore {
             validations: AtomicUsize::new(0),
+            stops: AtomicUsize::new(0),
+            fail_next_reconcile: AtomicBool::new(false),
+            active_profiles: Mutex::new(None),
         });
-        let client = spawn_startup_client(
+        let client = spawn_startup_client_with_profiles(
             core.clone(),
             Arc::new(RecordingService {
                 events: events.clone(),
             }),
+            manager.snapshot_handle(),
         )
         .await;
         let mutations = crate::state::mutation::MutationCoordinator::pending();
         mutations
-            .connect(client)
+            .connect(client.clone())
             .await
             .expect("production ApplicationWorkflow should attach to Core Lifecycle");
         let operation_id = chimera_core_manager::OperationId::generate();
@@ -2765,12 +3022,19 @@ mod tests {
                 crate::client::application_workflow::policy::CommandClass::Save,
             )
             .expect("connected mutation coordinator should create a participant");
+        let decision_capture = Arc::new(Mutex::new(None));
 
         let result = manager
             .replace_if_version_with_participant(
                 version,
                 candidate.clone(),
-                participant,
+                {
+                    let decision_capture = decision_capture.clone();
+                    move |decision| {
+                        *decision_capture.lock().unwrap() = Some(decision.clone());
+                        participant(decision)
+                    }
+                },
                 || async { Ok(()) },
                 || async { Ok(()) },
             )
@@ -2789,6 +3053,98 @@ mod tests {
             crate::client::runtime::RuntimeCommitStatus::SavedInactive
         );
         assert!(degradations.is_empty());
+
+        let decision = decision_capture
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("source transaction must expose its decision to the participant");
+        let (unresolved_operation, digest) = client
+            .seed_unresolved_attempt_with_deferred_retry_for_tests(decision.clone())
+            .await
+            .expect("seed the actor's unresolved source decision and due retry");
+        let (attempt, deferred_retry, _) = client
+            .application_recovery_state_for_tests()
+            .await
+            .expect("read the actor's recovery state");
+        assert_eq!(attempt, Some((unresolved_operation, true)));
+        let (deferred_digest, next_attempt) =
+            deferred_retry.expect("rejected retry must be rescheduled");
+        assert_eq!(deferred_digest, digest);
+        assert!(
+            next_attempt > tokio::time::Instant::now(),
+            "a rejected retry must retain a future deadline without spending an attempt"
+        );
+        client
+            .reconcile()
+            .await
+            .expect("the normal reconcile API must recover a Profile source attempt");
+        assert_eq!(
+            client
+                .application_recovery_state_for_tests()
+                .await
+                .expect("read the recovered actor state")
+                .0,
+            None,
+            "the explicit Profile recovery must release the live attempt"
+        );
+        assert_eq!(
+            core.active_profiles
+                .lock()
+                .unwrap()
+                .as_ref()
+                .map(|profiles| profiles.valid.clone()),
+            Some(candidate.valid.clone()),
+            "recovery must leave the reconciled committed Profiles active"
+        );
+        assert_eq!(core.stops.load(AtomicOrdering::SeqCst), 0);
+
+        let committed_target = client
+            .seed_unresolved_committed_target_for_tests(decision)
+            .await
+            .expect("seed a committed deferred Profile retry with an uncertain result");
+        let (attempt, _, retry_budget) = client
+            .application_recovery_state_for_tests()
+            .await
+            .expect("read the committed target recovery state");
+        assert_eq!(attempt, Some((committed_target, true)));
+        assert_eq!(retry_budget, Some((2, 1)));
+        core.fail_next_reconcile
+            .store(true, AtomicOrdering::Release);
+        assert!(
+            client.reconcile().await.is_err(),
+            "a failed current-config reconcile must remain a failed recovery"
+        );
+        let (attempt, _, retry_budget) = client
+            .application_recovery_state_for_tests()
+            .await
+            .expect("read the still-isolated committed target state");
+        assert_eq!(attempt, Some((committed_target.clone(), true)));
+        assert_eq!(retry_budget, Some((2, 1)));
+        assert_eq!(core.stops.load(AtomicOrdering::SeqCst), 0);
+        client
+            .reconcile()
+            .await
+            .expect("reconcile should recover the current committed Profile target");
+        assert_eq!(
+            core.active_profiles
+                .lock()
+                .unwrap()
+                .as_ref()
+                .map(|profiles| profiles.valid.clone()),
+            Some(candidate.valid),
+            "committed-target recovery must not restore its old runtime baseline"
+        );
+        assert_eq!(core.stops.load(AtomicOrdering::SeqCst), 0);
+        assert_eq!(
+            client
+                .application_recovery_state_for_tests()
+                .await
+                .expect("read the settled committed target state"),
+            (None, None, None),
+            "successful reconciliation must settle the committed retry target"
+        );
+        client.shutdown().await.unwrap();
     }
 
     #[test]
@@ -2825,6 +3181,25 @@ mod tests {
 
     struct ProfileTccCore {
         validations: AtomicUsize,
+        stops: AtomicUsize,
+        fail_next_reconcile: AtomicBool,
+        active_profiles: Mutex<Option<chimera_config::profile::Profiles>>,
+    }
+
+    struct AckOnlyProfileChange;
+
+    #[async_trait]
+    impl StateAckSubscriber<chimera_config::profile::Profiles> for AckOnlyProfileChange {
+        fn name(&self) -> SubscriberName<'_> {
+            "pending-profile-source-decision-test".into()
+        }
+
+        async fn on_prepare(
+            &self,
+            _change: StateChange<chimera_config::profile::Profiles>,
+        ) -> chimera_core::state::Ack {
+            chimera_core::state::Ack::Ok
+        }
     }
 
     struct CoreUpdateRecordingCore {
@@ -3064,6 +3439,32 @@ mod tests {
             RuntimePaths::from_config_root(std::path::PathBuf::from("test-runtime-root")),
             installer,
             service,
+        )
+        .await
+        .unwrap()
+    }
+
+    async fn spawn_startup_client_with_profiles(
+        core: Arc<dyn CoreLifecyclePort>,
+        service: Arc<dyn ServiceLifecyclePort>,
+        profiles: chimera_core::state::StateSnapshot<chimera_config::profile::Profiles>,
+    ) -> CoreLifecycleClient {
+        let installer: Arc<dyn ports::BinaryInstaller> =
+            Arc::new(chimera_os::core_install::FsBinaryInstaller::new(Arc::new(
+                chimera_os::elevation::RefuseElevation,
+            )));
+        let shutdown = CancellationToken::new();
+        let tasks = TaskTracker::new();
+        CoreLifecycleClient::spawn_with_profiles(
+            core,
+            ApplicationClient::legacy().unwrap(),
+            ClashConfigClient::legacy().unwrap(),
+            Some(profiles),
+            RuntimePaths::from_config_root(std::path::PathBuf::from("test-runtime-root")),
+            installer,
+            service,
+            shutdown,
+            &tasks,
         )
         .await
         .unwrap()
@@ -4907,6 +5308,23 @@ mod tests {
             Ok(())
         }
 
+        async fn reconcile_profiles(
+            &self,
+            _clash: ClashConfig,
+            _target_core: ClashCore,
+            _run_type: RunType,
+            profiles: Arc<chimera_config::profile::Profiles>,
+            _app: chimera_config::application::ChimeraAppConfig,
+            _staged_content: std::collections::BTreeMap<String, String>,
+            _target: Option<String>,
+        ) -> anyhow::Result<()> {
+            if self.fail_next_reconcile.swap(false, AtomicOrdering::AcqRel) {
+                anyhow::bail!("injected current Profiles reconcile failure");
+            }
+            *self.active_profiles.lock().unwrap() = Some((*profiles).clone());
+            Ok(())
+        }
+
         async fn validate_profile_runtime(
             &self,
             _clash: ClashConfig,
@@ -4921,6 +5339,8 @@ mod tests {
         }
 
         async fn stop(&self) -> anyhow::Result<()> {
+            self.stops.fetch_add(1, AtomicOrdering::SeqCst);
+            *self.active_profiles.lock().unwrap() = None;
             Ok(())
         }
 
@@ -7068,6 +7488,308 @@ mod tests {
                 .contains(&"rebuild-transient-failure")
         );
         assert!(!events.lock().unwrap().contains(&"rebuild-recovered"));
+    }
+
+    #[tokio::test]
+    async fn unresolved_live_attempt_isolated_until_explicit_reconcile_recovery() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let application = ApplicationClient::static_state(
+            chimera_config::application::ChimeraAppConfig::default(),
+        );
+        let client = spawn_startup_client_with_application(
+            Arc::new(startup_owner_core(
+                events.clone(),
+                (CoreState::Running, 1),
+                Arc::new(AtomicBool::new(false)),
+            )),
+            Arc::new(RecordingService {
+                events: events.clone(),
+            }),
+            application.clone(),
+        )
+        .await;
+        client
+            .startup_reconcile()
+            .await
+            .expect("the test actor must establish the startup owner first");
+        let original_operation = client
+            .seed_unresolved_application_attempt_for_tests()
+            .await
+            .expect("the production actor should retain an unresolved attempt");
+
+        let error = client
+            .select_core(ClashCore::Mihomo)
+            .await
+            .expect_err("runtime mutations must be isolated while the attempt is unresolved");
+        assert!(error.to_string().contains("runtime attempt is unresolved"));
+        assert_eq!(
+            client
+                .application_recovery_state_for_tests()
+                .await
+                .unwrap()
+                .0,
+            Some((original_operation.clone(), true))
+        );
+
+        client
+            .patch_application_config(ChimeraAppConfigPatch {
+                enable_auto_launch: Some(true),
+                ..Default::default()
+            })
+            .await
+            .expect("source-only preferences remain writable during runtime recovery");
+        assert!(application.get_typed().enable_auto_launch);
+        assert_eq!(
+            client
+                .application_recovery_state_for_tests()
+                .await
+                .unwrap()
+                .0,
+            Some((original_operation, true)),
+            "a source-only patch must preserve the unresolved attempt that owns recovery"
+        );
+
+        client
+            .reconcile()
+            .await
+            .expect("the regular reconcile entry point should perform explicit recovery");
+        assert_eq!(
+            client
+                .application_recovery_state_for_tests()
+                .await
+                .unwrap()
+                .0,
+            None
+        );
+        assert!(events.lock().unwrap().contains(&"rebuild-local"));
+        client.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn reconcile_preserves_an_undecided_profile_source_attempt_until_commit() {
+        let directory = tempfile::tempdir().expect("temporary Profiles directory");
+        let path = Utf8PathBuf::from_path_buf(directory.path().join("profiles.yaml"))
+            .expect("UTF-8 temporary Profiles path");
+        let mut manager = PersistentStateManagerSetup::<
+            chimera_config::profile::Profiles,
+            crate::core::migration::modules::profiles::ProfilesFormat,
+        >::builder()
+        .config_path(path)
+        .assemble()
+        .from_state(chimera_config::profile::Profiles::default())
+        .await
+        .expect("Profiles state manager");
+        let before = manager.snapshot_handle().load();
+        let version = before.version;
+        let mut candidate = before.state.clone();
+        candidate.valid.push("pending-source-decision-test".into());
+        let profile_snapshot = manager.snapshot_handle();
+        let core = Arc::new(ProfileTccCore {
+            validations: AtomicUsize::new(0),
+            stops: AtomicUsize::new(0),
+            fail_next_reconcile: AtomicBool::new(false),
+            active_profiles: Mutex::new(None),
+        });
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let client = spawn_startup_client_with_profiles(
+            core.clone(),
+            Arc::new(RecordingService {
+                events: events.clone(),
+            }),
+            profile_snapshot.clone(),
+        )
+        .await;
+
+        let (decision_tx, decision_rx) = oneshot::channel();
+        let (local_write_started_tx, local_write_started_rx) = oneshot::channel();
+        let (continue_write_tx, continue_write_rx) = oneshot::channel();
+        let source_writer = tokio::spawn(async move {
+            manager
+                .replace_if_version_with_participant(
+                    version,
+                    candidate.clone(),
+                    move |decision| {
+                        decision_tx
+                            .send(decision.clone())
+                            .expect("the test must receive the source decision");
+                        Arc::new(AckOnlyProfileChange)
+                    },
+                    move || async move {
+                        let _ = local_write_started_tx.send(());
+                        continue_write_rx.await.map_err(|_| {
+                            anyhow::anyhow!("the test must release the source persistence write")
+                        })?;
+                        Ok(())
+                    },
+                    || async { Ok(()) },
+                )
+                .await
+        });
+        let decision = decision_rx
+            .await
+            .expect("source transaction publishes its read-only decision handle");
+        local_write_started_rx
+            .await
+            .expect("source persistence must be paused before its commit");
+        assert_eq!(decision.decision(), StateDecision::Undecided);
+
+        let unresolved_operation = client
+            .seed_unresolved_source_decision_for_tests(decision.clone())
+            .await
+            .expect("seed the actor with the live source decision");
+        let error = client
+            .reconcile()
+            .await
+            .expect_err("reconcile cannot settle an undecided source transaction");
+        assert!(error.to_string().contains("undecided"));
+        assert_eq!(
+            client
+                .application_recovery_state_for_tests()
+                .await
+                .expect("read the retained source attempt")
+                .0,
+            Some((unresolved_operation.clone(), true)),
+            "an undecided source transaction must retain its recovery owner"
+        );
+        assert_eq!(
+            core.active_profiles
+                .lock()
+                .unwrap()
+                .as_ref()
+                .map(|profiles| profiles.valid.clone()),
+            Some(before.state.valid.clone()),
+            "the first reconcile only sees the currently persisted Profiles"
+        );
+
+        continue_write_tx
+            .send(())
+            .expect("release source persistence after checking unresolved recovery");
+        assert!(matches!(
+            source_writer.await.expect("source persistence task"),
+            Ok(ReplaceIfVersionResult::Replaced)
+        ));
+        assert!(matches!(
+            decision.decision(),
+            StateDecision::Committed { .. }
+        ));
+        client
+            .reconcile()
+            .await
+            .expect("reconcile after commit applies and settles the committed Profiles");
+        assert_eq!(
+            core.active_profiles
+                .lock()
+                .unwrap()
+                .as_ref()
+                .map(|profiles| profiles.valid.clone()),
+            Some(profile_snapshot.load().state.valid.clone()),
+            "the next reconcile applies the now-committed Profiles"
+        );
+        assert_eq!(
+            client
+                .application_recovery_state_for_tests()
+                .await
+                .expect("read the settled source attempt")
+                .0,
+            None
+        );
+        client.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn reconcile_preserves_a_profile_source_attempt_after_resource_recovery_failure() {
+        let directory = tempfile::tempdir().expect("temporary Profiles directory");
+        let path = Utf8PathBuf::from_path_buf(directory.path().join("profiles.yaml"))
+            .expect("UTF-8 temporary Profiles path");
+        let mut manager = PersistentStateManagerSetup::<
+            chimera_config::profile::Profiles,
+            crate::core::migration::modules::profiles::ProfilesFormat,
+        >::builder()
+        .config_path(path)
+        .assemble()
+        .from_state(chimera_config::profile::Profiles::default())
+        .await
+        .expect("Profiles state manager");
+        let before = manager.snapshot_handle().load();
+        let version = before.version;
+        let mut candidate = before.state.clone();
+        candidate
+            .valid
+            .push("resource-recovery-failure-test".into());
+        let core = Arc::new(ProfileTccCore {
+            validations: AtomicUsize::new(0),
+            stops: AtomicUsize::new(0),
+            fail_next_reconcile: AtomicBool::new(false),
+            active_profiles: Mutex::new(None),
+        });
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let client = spawn_startup_client_with_profiles(
+            core.clone(),
+            Arc::new(RecordingService {
+                events: events.clone(),
+            }),
+            manager.snapshot_handle(),
+        )
+        .await;
+
+        let (decision_tx, decision_rx) = oneshot::channel();
+        let source_result = manager
+            .replace_if_version_with_participant(
+                version,
+                candidate,
+                move |decision| {
+                    decision_tx
+                        .send(decision.clone())
+                        .expect("the test must receive the source decision");
+                    Arc::new(AckOnlyProfileChange)
+                },
+                || async { Err(anyhow::anyhow!("injected Profile persistence failure")) },
+                || async {
+                    Err(anyhow::anyhow!(
+                        "injected Profile resource recovery failure"
+                    ))
+                },
+            )
+            .await;
+        assert!(source_result.is_err(), "the source transaction must fail");
+        let decision = decision_rx
+            .await
+            .expect("source transaction must publish its decision handle");
+        assert!(matches!(
+            decision.decision(),
+            StateDecision::Aborted {
+                resources: chimera_core::state::AbortResourceState::NeedsRecovery(_),
+            }
+        ));
+
+        let unresolved_operation = client
+            .seed_unresolved_source_decision_for_tests(decision)
+            .await
+            .expect("seed the actor with the source recovery obligation");
+        let error = client
+            .reconcile()
+            .await
+            .expect_err("runtime reconcile cannot settle a source resource-recovery failure");
+        assert!(error.to_string().contains("resource recovery"));
+        let (attempt, _, _) = client
+            .application_recovery_state_for_tests()
+            .await
+            .expect("read the retained source attempt");
+        assert_eq!(
+            attempt,
+            Some((unresolved_operation, true)),
+            "a terminal source recovery failure must retain its owner"
+        );
+        assert_eq!(
+            core.active_profiles
+                .lock()
+                .unwrap()
+                .as_ref()
+                .map(|profiles| profiles.valid.clone()),
+            Some(before.state.valid.clone()),
+            "reconcile applies the currently persisted Profiles without clearing the source obligation"
+        );
+        client.shutdown().await.unwrap();
     }
 
     #[tokio::test]
