@@ -11,11 +11,11 @@ use struct_patch::Patch;
 use tokio::sync::watch;
 
 use crate::client::application_workflow::startup::{
-    ServiceEvidence, StartupOwnerFailure, StartupRetryTarget, startup_stop_error_is_idempotent,
+    ServiceEvidence, StartupOwnerFailure, startup_stop_error_is_idempotent,
 };
 #[cfg(test)]
 use crate::client::application_workflow::startup::{
-    StartupOutcome, StartupReport, startup_failure_is_retryable,
+    StartupOutcome, StartupReport, StartupRetryTarget, startup_failure_is_retryable,
     startup_failure_waits_for_dependency, update_startup_retry_target,
 };
 #[cfg(test)]
@@ -441,10 +441,8 @@ impl CoreLifecycleWorkflow {
     pub(in crate::client) async fn execute(
         &self,
         command: Command,
-        startup_retry_target: &mut Option<StartupRetryTarget>,
+        #[cfg(test)] startup_retry_target: &mut Option<StartupRetryTarget>,
     ) -> anyhow::Result<()> {
-        #[cfg(not(test))]
-        let _ = startup_retry_target;
         #[cfg(test)]
         let refresh_startup_retry_identity =
             matches!(&command, Command::PatchApplicationConfig { .. });
