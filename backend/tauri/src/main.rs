@@ -1,5 +1,9 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+#[cfg(feature = "dhat-heap")]
+#[global_allocator]
+static ALLOC: dhat::Alloc = dhat::Alloc;
+
 fn main() -> std::process::ExitCode {
     #[cfg(windows)]
     if let Some(result) = chimera_utils::process::windows_shutdown_helper_entry() {

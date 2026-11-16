@@ -113,6 +113,9 @@ pub fn run() -> std::process::ExitCode {
             return std::process::ExitCode::FAILURE;
         }
     };
+    let mut profilers = utils::profiling::Profilers::default();
+    #[cfg(feature = "dhat-heap")]
+    profilers.start_heap(&paths);
     // Defer filesystem initialization until Tauri has initialized the
     // single-instance plugin. A losing secondary process must not write config.
 

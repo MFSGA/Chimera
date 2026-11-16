@@ -29,3 +29,5 @@ pub mod winreg;
 
 pub mod dialog;
 pub(crate) mod task;
+
+pub mod profiling;
