@@ -87,6 +87,10 @@
 | LESSON-20261115-003 | 2026-11-15 | Rust test authoring | 新共享启动状态测试模块首次漏掉本地 `Arc`/`Mutex`/`HashMap` imports，测试编译时发现；补充显式 imports 后目标测试通过 | Mitigated |
 | LESSON-20261115-005 | 2026-11-15 | Tauri startup / local runtime | CI run 43720593308 显示 Local runtime 监视器在同步 setup 线程调用 `TaskTracker::spawn` 并 panic；同步线程回归覆盖该入口 | Mitigated |
 | LESSON-20261115-006 | 2026-11-15 | Tauri startup / Windows E2E | PR #638 run 43724729524 证明只修 Local runtime 漏了 `setup.rs:300` 快捷键泵、facade monitor 与 Clash setup forwarders；同步 setup 中的 tracked task 必须统一走 Tauri runtime scheduler | Mitigated |
+| LESSON-20261116-002 | 2026-11-16 | Startup recovery / Actor admission | LiveAttempt 隔离误挡纯设置保存，放行后又会覆盖未解决尝试；保留 source-only patch 并由生产 actor 回归覆盖 | Mitigated |
+| LESSON-20261116-003 | 2026-11-16 | Startup recovery / Actor admission | unresolved attempt 拒绝 deferred retry 时必须恢复 deadline；source / lifecycle recovery 需要从正常 reconcile 入口可达，shutdown 不覆盖原 attempt | Mitigated |
+| LESSON-20261116-004 | 2026-11-16 | Startup recovery / committed target | 成功的 Reconcile 已应用当前 Profiles 后，恢复不能再写回旧 baseline；需让实际 actor 回归确认最终运行配置 | Mitigated |
+| LESSON-20261116-005 | 2026-11-16 | Development / test workflow | 新增 actor 回归后才补读测试规范；随后按 T01/T02 复核并明确真实 actor 边界 | Mitigated |
 
 ### LESSON-20261113-001/002：架构迁移要覆盖原生运行时与稀疏配置
 
@@ -1281,3 +1285,31 @@ backend/Cargo.toml -p chimera --lib core::clash::proxies::tests:: -- --nocapture
 - 可复现证据：新增 `client::core_lifecycle::tests::startup_adoption_falls_back_when_service_reconcile_fails`，起始状态为 Local stopped、Service ready，执行 AdoptService 后注入 Service reconcile 失败。修复前返回 `ReadyDegraded`（`startup Core reconciliation failed`），本地 host 没有完成 fallback。
 - 修复与验证：失败后重新读取 Core status，仅当当前 owner 可确认仍为 Service 且结果不确定标志未置位时，才走 `release_service_owner` 的 conditional owner fence、fresh Service probe 和 Local reconcile。修复后该回归 **1/1**、Core Lifecycle 集合 **83/83**、startup 规则集合 **8/8** 通过；`cargo check --tests --offline --locked`、Rustfmt、Markdown Prettier 和 `git diff --check` 通过。使用 fake Core/Service port；未运行真实 Service、TUN、桌面 E2E 或跨平台验证。
 - 防复发：每个 handoff 后若决定是否进行有副作用的 fallback，依据必须是交接完成后的新鲜 owner 证据，不能复用计划开始前的 owner 快照；给每个可改变 owner 的 plan 分支覆盖“交接后失败”路径。
+
+### LESSON-20261116-002：LiveAttempt 隔离必须保留纯设置写入和原尝试
+
+- 日期与时区：2026-11-16 US/Pacific。状态：Mitigated（完整 Client 首轮发现回归；修复后目标 actor 用例及完整 Client 集合通过）。
+- 证据与根因：初次运行 `cargo test --manifest-path backend/Cargo.toml -p chimera --tests --offline --locked client:: -- --test-threads=1` 时，389 项通过、`client::core_lifecycle::tests::preexisting_uncertain_runtime_blocks_startup_mutations` 失败。新增 LiveAttempt actor gate 虽阻止了运行时修改，也意外挡住 `reject_pending_for_uncertain` 既有放行的 source-only Service Mode patch；仅增加 gate 放行仍会让通用执行器创建新的 Lifecycle attempt 并覆盖原 unresolved attempt。
+- 修正与验证：actor gate 明确保留 `CacheStartupUnsettled` 和无需 runtime reconcile 的应用配置 patch；执行这种 patch 时保留原 unresolved attempt，不创建或结算 Lifecycle attempt。原生产 actor 回归 **1/1**，LiveAttempt 新增用例 **4/4**，最终完整 `client::` 集合 **392/392** 通过。
+- 防复发：加入新的 recovery admission gate 时，逐项沿用既有 actor gate 的例外，并验证被允许的 side effect 是否会替换当前 recovery owner。必须通过生产 actor 测试检查“运行时仍隔离、纯配置写入仍可用、原 unresolved attempt 仍保留”；只直接测试 gate predicate 不足以覆盖所有权回归。
+
+### LESSON-20261116-003：Actor 拒绝重试后要保留恢复入口和下一次 deadline
+
+- 日期与时区：2026-11-16 US/Pacific。状态：Mitigated（独立复核找到可达队列时序缺口；真实 ApplicationWorkflow actor 回归通过）。
+- 证据与根因：复核发现 deferred Profile timer 会先把 target 设为 Pending、清空 deadline，再进入 mailbox；若 source attempt 变为 unresolved，recovery gate 拒绝该命令会留下永不再调度的 Pending target。复核还确认 SourceDecision / Mutation 的显式 RecoverCore 只有内部通知入口，通用 CoreLifecycleClient reconcile 会被新 gate 拒绝。新增的 actor 回归又发现 shutdown 虽在 gate 中放行，却进入普通生命周期分支并触发“覆盖 unresolved attempt”的断言。第一次 retry 回归测试只注入 target、没有把 retry request 放进 actor queue，修正测试准备后才覆盖到真实拒绝路径。
+- 修正与验证：actor 在已有操作、排队操作或未解决 attempt 期间不启动 deferred retry；pending retry 被 recovery/startup-owner gate 拒绝时重新安排未来 deadline，不调用完成路径或扣减预算。匹配的 `Reconcile` 通过现有 `RecoverCore` + `recover_after_reconcile` 继续恢复；shutdown 允许排空但保留原 attempt。`explicit_reconcile_keeps_committed_profiles_active_after_deferred_retry_recovery` 验证真实 source 决策、pending retry 拒绝后 deadline 仍在未来；`unresolved_live_attempt_isolated_until_explicit_reconcile_recovery` 验证运行时命令隔离、纯设置 patch 保留原 attempt、常规 reconcile 清理 Lifecycle attempt。两项定向回归各 **1/1** 通过。
+- 防复发：异步 timer 触发的工作必须等 Actor admission 后再消耗重试状态；被隔离 gate 拒绝时要恢复调度，测试应把请求送进真实 mailbox。对每种 unresolved origin，沿用户可调用的 reconcile/recovery API 验证可达恢复；shutdown 既要被 gate 放行，也要在 workflow 执行层保留正在恢复的所有权状态。
+
+### LESSON-20261116-004：当前配置成功协调后不能再恢复旧运行时基线
+
+- 日期与时区：2026-11-16 US/Pacific。状态：Mitigated（独立复核发现；新增 actor 回归确认持久化 Profiles 仍是最终运行配置）。
+- 证据与根因：独立复核发现 CommittedTarget deferred Profile attempt 的普通 `Reconcile` 先将当前已提交 Profiles 应用到运行时，随后 `recover_previous` 却按旧 mutation baseline 回滚；actor 完成回调再清掉 retry target，运行时会与持久化 Profile 不一致且没有重试记录。
+- 修正与验证：区分“已成功协调当前配置”的恢复入口与 TCC 变更边界恢复。成功的 `RecoverCore` / unresolved `Reconcile` 只有在 source 决策达到 `Committed` 或 `Aborted { Restored }` 后才清除旧 live attempt 与 deferred target；`Undecided` 和 `Aborted { NeedsRecovery }` 保留恢复 owner。若新 mutation 边界遇到未解决的已提交目标，则要求先显式协调当前配置。实际 CoreLifecycle actor 测试注入持久化 Profiles snapshot，记录 Core 最终 active Profiles，并确认旧 `Stopped` baseline 没有触发 Stop；同时暂停持久化 owner，证明 source 决策仍未定时 reconcile 会失败并保留 attempt，source 提交后再次 reconcile 才应用新 Profiles；另通过注入 source 写入与资源恢复失败，确认 `Aborted { NeedsRecovery }` 在运行时 reconcile 后仍保留 attempt。`explicit_reconcile_keeps_committed_profiles_active_after_deferred_retry_recovery`、`reconcile_preserves_an_undecided_profile_source_attempt_until_commit` 与 `reconcile_preserves_a_profile_source_attempt_after_resource_recovery_failure` 定向回归各 **1/1** 通过。最终完整 `client::` 集合 **395/395** 通过，`cargo check --tests` 与 `cargo clippy --all-targets` 退出 0（包含仓库既有 warnings）。
+- 防复发：恢复前先明确当前运行时是 baseline、transaction candidate，还是刚成功应用的持久化目标；不能让后续 actor cleanup 掩盖错误回滚。测试应通过用户可达的 reconcile 入口同时检查 source snapshot 与实际运行目标，单看 live/deferred 状态清空不足以证明恢复正确。
+
+### LESSON-20261116-005：新增测试前先读项目测试规范
+
+- 日期与时区：2026-11-16 US/Pacific。状态：Mitigated（测试写入后发现流程顺序遗漏；已读规范并完成复核）。
+- 证据：Stage 4u 已先添加/改写 Core Lifecycle actor 回归并运行，之后才读取 `docs/testing/README.md`；这违反仓库要求在新增、修改或审查测试前先读规范。
+- 处理：随后按 T01/T02 检查测试契约与断言来源，测试通过实际 CoreLifecycle actor、持久化 Profiles snapshot 与 fake Core 观察最终 active Profiles；将测试名改为说明行为的 `explicit_reconcile_keeps_committed_profiles_active_after_deferred_retry_recovery`。测试**只证明 Rust actor/adapter fixture 边界**，不声称桌面 UI、冷启动或真实 Service 已覆盖。
+- 防复发：任务开始时先读取测试标准，再设计测试契约并编写用例；既有测试或之前的相似测试不能替代规范阅读。
