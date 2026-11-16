@@ -1273,3 +1273,11 @@ backend/Cargo.toml -p chimera --lib core::clash::proxies::tests:: -- --nocapture
 - 证据：启动重试先将 target 置为 Pending，再在 Actor 外异步申请 Service transition lease。期间 Actor 可以处理其他请求并暂时取走 ApplicationWorkflow；lease 失败回执若在此时到达，直接检查 `workflow: Option<_>` 会静默丢弃失败。target 此时没有 `next_attempt`，所以后续也不会触发 retry。该缺口由独立审查沿可达 Actor 时序确认。
 - 修正与验证：Actor 暂存 workflow 缺席期间的 lease failure；Completed 归还 workflow 后应用 dependency wait 并从当前 target 安排下一次尝试。新增 Actor 级 `startup_retry_lease_failure_is_drained_after_actor_operation_returns`，实际阻塞 lease 与 Core Stop 以强制该交错；Core Lifecycle 测试集合 **82/82** 通过，`cargo check --tests`、Rustfmt 与 `git diff --check` 通过。真实系统 Service lease 并发时序仍没有桌面/系统服务 E2E 证据。
 - 防复发：Actor 把独占状态借给长时间异步任务时，外部 admission / lease / probe 的失败结果不能依赖该状态当时仍在 Option 内；要将结果排队至 owner 归还后处理，并测试“任务 in-flight、Actor 处理其他消息、外部失败后恢复”的时序。
+
+### LESSON-20261116-001：Service 启动失败回退要检查交接后的 Core owner
+
+- 日期与时区：2026-11-16 US/Pacific。状态：Mitigated（独立复审发现；新增真实 ApplicationWorkflow Actor 路径回归，修复前失败、修复后通过）。
+- 基线与根因：父提交 `b282c47c576ec9d231766e6d2dae0ce42112fed0`；ref `59724e85c34abb6995c22d101c876cc06dc16576`。启动逻辑在 owner plan 之前保存 `initial_owner`，但 `AdoptService` 会把选中 host 从 Local 改为 Service。首次 Service reconcile 失败后的 fallback 错误地仍要求 `initial_owner == Service`，因此 Local→Service 接管会漏掉 Service 失败后回退；ref `application_workflow/startup.rs::reestablish` 按失败后的当前 host 判断。
+- 可复现证据：新增 `client::core_lifecycle::tests::startup_adoption_falls_back_when_service_reconcile_fails`，起始状态为 Local stopped、Service ready，执行 AdoptService 后注入 Service reconcile 失败。修复前返回 `ReadyDegraded`（`startup Core reconciliation failed`），本地 host 没有完成 fallback。
+- 修复与验证：失败后重新读取 Core status，仅当当前 owner 可确认仍为 Service 且结果不确定标志未置位时，才走 `release_service_owner` 的 conditional owner fence、fresh Service probe 和 Local reconcile。修复后该回归 **1/1**、Core Lifecycle 集合 **83/83**、startup 规则集合 **8/8** 通过；`cargo check --tests --offline --locked`、Rustfmt、Markdown Prettier 和 `git diff --check` 通过。使用 fake Core/Service port；未运行真实 Service、TUN、桌面 E2E 或跨平台验证。
+- 防复发：每个 handoff 后若决定是否进行有副作用的 fallback，依据必须是交接完成后的新鲜 owner 证据，不能复用计划开始前的 owner 快照；给每个可改变 owner 的 plan 分支覆盖“交接后失败”路径。
