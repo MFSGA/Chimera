@@ -3,6 +3,7 @@ pub mod endpoint;
 pub mod intent;
 pub mod router;
 pub mod service_actor;
+pub mod service_command_port;
 pub mod service_endpoint_factory;
 pub mod service_policy;
 pub mod service_process;

@@ -120,6 +120,8 @@ pub enum ServiceCommandKind {
     Uninstall,
     StartDaemon,
     StopDaemon,
+    /// Chimera service CLI exposes a single native restart command.
+    RestartDaemon,
     RecoverEndpoint,
 }
 
@@ -145,6 +147,10 @@ pub enum ServiceActorMessage {
         reply: RpcReplyPort<Result<(), CoreError>>,
     },
     StopDaemon {
+        reply: RpcReplyPort<Result<(), CoreError>>,
+    },
+    /// Chimera extension: one elevated restart, not a separate stop + start.
+    RestartDaemon {
         reply: RpcReplyPort<Result<(), CoreError>>,
     },
     /// Adopt-only counterpart to `EnsureReady`: one probe, and the endpoint
@@ -876,6 +882,25 @@ impl Actor for ServiceActor {
                 let _ = state.probe_and_publish().await;
                 let _ = reply.send(result);
             }
+            ServiceActorMessage::RestartDaemon { reply } => {
+                if let Some(refusal) = state.refuse_while_running().await {
+                    let _ = reply.send(Err(refusal));
+                    return Ok(());
+                }
+                state.publish(ServicePhase::Restarting, ServiceCompat::Unknown);
+                let result = state
+                    .tracked(ServiceCommandKind::RestartDaemon, |adapter| {
+                        Box::pin(async move { adapter.restart_daemon().await })
+                    })
+                    .await
+                    .map_err(|error| ServiceActorState::command_error("restart", error));
+                if result.is_ok() {
+                    state.exhausted = false;
+                    state.restart_attempts = 0;
+                }
+                let _ = state.probe_and_publish().await;
+                let _ = reply.send(result);
+            }
             ServiceActorMessage::Probe { reply } => {
                 let _ = state.probe_and_publish().await;
                 let _ = reply.send(state.status_tx.borrow().clone());
@@ -1066,7 +1091,7 @@ impl ServiceClient {
         command_timeout: std::time::Duration,
     ) -> Result<Self, ractor::SpawnErr> {
         let (status_tx, status_rx) = watch::channel(ServiceHostStatus {
-            name: std::borrow::Cow::Borrowed("nyanpasu-service"),
+            name: std::borrow::Cow::Borrowed("chimera-service"),
             version: std::borrow::Cow::Borrowed(""),
             status: ServiceStatus::NotInstalled,
             server: None,
@@ -1179,6 +1204,16 @@ impl ServiceClient {
     pub async fn stop_daemon(&self) -> Result<(), CoreError> {
         self.call(
             |reply| ServiceActorMessage::StopDaemon { reply },
+            self.command_and_probe_budget,
+        )
+        .await?
+    }
+
+    /// Chimera's native restart is a single bound Service Actor mailbox
+    /// command and an unconditional status probe, never a stop/start pair.
+    pub async fn restart_daemon(&self) -> Result<(), CoreError> {
+        self.call(
+            |reply| ServiceActorMessage::RestartDaemon { reply },
             self.command_and_probe_budget,
         )
         .await?
