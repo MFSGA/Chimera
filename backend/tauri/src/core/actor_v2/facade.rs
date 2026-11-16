@@ -5,7 +5,10 @@
 //! protocol. The legacy manager remains only as a compatibility path for
 //! facades constructed without the production `LocalRuntimeHost`.
 
-use chimera_core::actor_v2::{service_actor::ServiceCommandActor, service_process::ServiceCommand};
+use chimera_core::actor_v2::{
+    service_actor::ServiceCommandActor, service_command_port::ServiceCommandPort,
+    service_process::ServiceCommand,
+};
 
 use std::{
     collections::{HashMap, VecDeque},
@@ -68,7 +71,6 @@ use chimera_core::actor_v2::service_policy::{
     ServiceRestartDecision, ServiceRestartPolicySnapshot, service_restart_decision,
 };
 
-#[derive(Debug)]
 pub(crate) struct CoreFacade {
     manager: Arc<CoreManager>,
     local_runtime: Option<Arc<super::local_runtime::LocalRuntimeHost>>,
@@ -78,7 +80,20 @@ pub(crate) struct CoreFacade {
     local_operations: Arc<LocalOperationRegistry>,
     service_restart_attempts: Arc<AtomicU8>,
     service_restart_exhausted: Arc<AtomicBool>,
-    service_commands: Arc<ServiceCommandActor>,
+    service_commands: Arc<dyn ServiceCommandPort>,
+}
+
+impl std::fmt::Debug for CoreFacade {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("CoreFacade")
+            .field(
+                "service_unsettled",
+                &self.service_commands.has_unsettled_outcome(),
+            )
+            .field("outcome_uncertain", &self.outcome_uncertain())
+            .finish_non_exhaustive()
+    }
 }
 
 pub(crate) struct ServiceTransition {
@@ -86,7 +101,7 @@ pub(crate) struct ServiceTransition {
     outcome_uncertain: Arc<AtomicBool>,
     restart_attempts: Arc<AtomicU8>,
     restart_exhausted: Arc<AtomicBool>,
-    service_commands: Arc<ServiceCommandActor>,
+    service_commands: Arc<dyn ServiceCommandPort>,
 }
 
 struct MutationReplyGuard {
@@ -287,7 +302,7 @@ impl CoreFacade {
     pub(crate) fn new_local_with_control(
         control: chimera_core_manager::CoreControl,
         runtime_paths: crate::client::RuntimePaths,
-        service_process: Arc<dyn chimera_contracts::service::ServiceProcessControl>,
+        service_commands: Arc<dyn ServiceCommandPort>,
         shutdown: CancellationToken,
         tasks: &TaskTracker,
     ) -> Self {
@@ -307,7 +322,7 @@ impl CoreFacade {
             local_operations: Arc::new(LocalOperationRegistry::new()),
             service_restart_attempts: Arc::new(AtomicU8::new(0)),
             service_restart_exhausted: Arc::new(AtomicBool::new(false)),
-            service_commands: Arc::new(ServiceCommandActor::new(service_process)),
+            service_commands,
         }
     }
 

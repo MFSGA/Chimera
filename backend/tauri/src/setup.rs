@@ -139,10 +139,36 @@ pub fn setup(
     // Only the legacy IPC health-check notification remains a Tauri adapter.
     let service_process: Arc<dyn chimera_contracts::service::ServiceProcessControl> =
         Arc::new(crate::core::service::control::HealthMonitorStopAdapter::new(os_service_process));
+
+    // Ref-first production Service ownership: the ref ServiceActor is the
+    // only process-control executor. The legacy facade now delegates its
+    // transition API to this typed mailbox, not a second command actor.
+    let service_actor = crate::startup_failure::report_boundary_with_backup_and_capture(
+        tauri::async_runtime::block_on(
+            chimera_core::actor_v2::service_actor::ServiceClient::spawn(
+                service_process,
+                Arc::new(
+                    crate::core::actor_v2::service_endpoint_factory::default_service_endpoint_factory(),
+                ),
+                3,
+            ),
+        )
+        .context("failed to start ref Service Actor"),
+        crate::startup_failure::StartupStage::CoreHost,
+        &paths,
+        migrations.backup_info(),
+        Some(startup_failure_capture),
+    )?;
+    service_actor.drain_on_shutdown(&tasks, shutdown.child_token());
+    let service_commands: Arc<
+        dyn chimera_core::actor_v2::service_command_port::ServiceCommandPort,
+    > = Arc::new(
+        chimera_core::actor_v2::service_command_port::ServiceClientCommandPort::new(service_actor),
+    );
     let core_facade = Arc::new(crate::core::actor_v2::CoreFacade::new_local_with_control(
         local_control,
         runtime_paths.clone(),
-        service_process,
+        service_commands,
         shutdown.child_token(),
         &tasks,
     ));
