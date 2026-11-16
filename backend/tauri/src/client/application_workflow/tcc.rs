@@ -8,6 +8,7 @@ use chimera_core::state::{AbortResourceState, StateDecision};
 use chimera_core_manager::{CoreError, CoreErrorKind, OperationId};
 
 use super::{
+    attempt::{AttemptOrigin, AttemptStage, LiveAttempt},
     impact::{ActivationIntent, RuntimeImpact, classify_profiles},
     mutation::{
         ApplyFailure, CheckRecord, DomainChange, EvidenceGap, KnownRuntimeState,
@@ -18,7 +19,7 @@ use super::{
         BaselineAvailability, CommandClass, CommandPolicy, CoreRunIntent, FailureDisposition,
         TryCauseKind, TryFailureFacts, disposition, policy_for,
     },
-    workflow::{ApplicationWorkflow, ProfileRuntime},
+    workflow::{ApplicationWorkflow, ProfileRuntime, RecoveryContext},
 };
 use crate::client::runtime::{Degradation, DegradationPhase};
 
@@ -69,24 +70,59 @@ impl ApplicationWorkflow {
                 },
                 restored: None,
             }
-        } else if let Err(error) = self.recover_previous(core).await {
-            let context = self.mark_recovery_required(error.to_string()).await;
-            RuntimePrepareOutcome::RecoveryRequired(Box::new(context))
         } else {
-            self.prepare_candidate(
-                core,
-                &operation_id,
-                &previous,
-                &candidate,
-                request,
-                &mut policy,
-                &mut check,
-                &mut baseline,
-                &mut attempted_runtime,
-            )
-            .await
+            match self.recover_previous(core).await {
+                Err(error) => {
+                    let context = self
+                        .recovery_required
+                        .lock()
+                        .await
+                        .clone()
+                        .unwrap_or_else(|| RecoveryContext {
+                            operation_id: Some(operation_id),
+                            runtime_operation: None,
+                            domain: crate::client::application_workflow::mutation::ConfigDomain::Profiles,
+                            stage: MutationStage::TryingCritical,
+                            decision: Some(request.decision.clone()),
+                            baseline: None,
+                            target: None,
+                            error: error.to_string(),
+                        });
+                    RuntimePrepareOutcome::RecoveryRequired(Box::new(context))
+                }
+                Ok(()) => {
+                    self.live = Some(LiveAttempt::source_decision(
+                        operation_id,
+                        request.decision.clone(),
+                    ));
+                    self.advance_attempt(AttemptStage::Preparing);
+                    self.prepare_candidate(
+                        core,
+                        &operation_id,
+                        &previous,
+                        &candidate,
+                        request,
+                        &mut policy,
+                        &mut check,
+                        &mut baseline,
+                        &mut attempted_runtime,
+                    )
+                    .await
+                }
+            }
         };
+        if let RuntimePrepareOutcome::Applied(candidate) = &outcome
+            && let Some(attempt) = self
+                .live
+                .as_mut()
+                .filter(|attempt| attempt.operation_id == operation_id)
+        {
+            attempt.target = Some(candidate.receipt.clone());
+        }
         request.answer(outcome.ack());
+        if !matches!(&outcome, RuntimePrepareOutcome::RecoveryRequired(_)) {
+            self.advance_attempt(AttemptStage::AwaitDecision);
+        }
 
         let decision =
             match tokio::time::timeout(MUTATION_DECISION_TIMEOUT, request.decision.wait()).await {
@@ -122,68 +158,73 @@ impl ApplicationWorkflow {
         );
         let mut conclusion = MutationConclusion::Confirmed;
         let settlement = match decision {
-            DecisionOutcome::Committed => match &outcome {
-                RuntimePrepareOutcome::Applied(candidate) => {
-                    match core
-                        .confirm_profile_runtime(&operation_id, candidate.clone())
-                        .await
-                    {
-                        Ok(()) => {
-                            self.clear_startup_retry_target();
-                            if let Some(notifications) = &self.notifications {
-                                notifications
-                                    .runtime_bound(core.effect_port_binding().await, false);
+            DecisionOutcome::Committed => {
+                self.advance_attempt_for(&operation_id, AttemptStage::Confirming);
+                match &outcome {
+                    RuntimePrepareOutcome::Applied(candidate) => {
+                        match core
+                            .confirm_profile_runtime(&operation_id, candidate.clone())
+                            .await
+                        {
+                            Ok(()) => {
+                                self.clear_startup_retry_target();
+                                if let Some(notifications) = &self.notifications {
+                                    notifications
+                                        .runtime_bound(core.effect_port_binding().await, false);
+                                }
+                                Ok(())
                             }
-                            Ok(())
-                        }
-                        Err(error) => {
-                            let message = format!(
-                                "Profile source committed, but runtime confirmation failed: {error}"
-                            );
-                            let context = self
-                                .mark_recovery_with_attempt(
-                                    operation_id.clone(),
-                                    baseline.clone(),
-                                    request.decision.clone(),
-                                    Some(candidate.receipt.clone()),
-                                    MutationStage::Confirming,
-                                    message.clone(),
-                                )
-                                .await;
-                            outcome = RuntimePrepareOutcome::RecoveryRequired(Box::new(context));
-                            conclusion = MutationConclusion::RecoveryRequired;
-                            Err(message)
+                            Err(error) => {
+                                let message = format!(
+                                    "Profile source committed, but runtime confirmation failed: {error}"
+                                );
+                                let context = self
+                                    .mark_recovery_with_attempt(
+                                        operation_id.clone(),
+                                        baseline.clone(),
+                                        request.decision.clone(),
+                                        Some(candidate.receipt.clone()),
+                                        MutationStage::Confirming,
+                                        message.clone(),
+                                    )
+                                    .await;
+                                outcome =
+                                    RuntimePrepareOutcome::RecoveryRequired(Box::new(context));
+                                conclusion = MutationConclusion::RecoveryRequired;
+                                Err(message)
+                            }
                         }
                     }
+                    RuntimePrepareOutcome::Saved
+                    | RuntimePrepareOutcome::SavedInactive
+                    | RuntimePrepareOutcome::Deferred { .. } => Ok(()),
+                    RuntimePrepareOutcome::Rejected { cause, .. } => {
+                        let message = format!(
+                            "Profile source committed despite a rejected runtime preparation: {}",
+                            cause.message
+                        );
+                        let context = self
+                            .mark_recovery_with_attempt(
+                                operation_id.clone(),
+                                baseline.clone(),
+                                request.decision.clone(),
+                                None,
+                                MutationStage::Confirming,
+                                message.clone(),
+                            )
+                            .await;
+                        outcome = RuntimePrepareOutcome::RecoveryRequired(Box::new(context));
+                        conclusion = MutationConclusion::RecoveryRequired;
+                        Err(message)
+                    }
+                    RuntimePrepareOutcome::RecoveryRequired(context) => {
+                        conclusion = MutationConclusion::RecoveryRequired;
+                        Err(context.error.clone())
+                    }
                 }
-                RuntimePrepareOutcome::Saved
-                | RuntimePrepareOutcome::SavedInactive
-                | RuntimePrepareOutcome::Deferred { .. } => Ok(()),
-                RuntimePrepareOutcome::Rejected { cause, .. } => {
-                    let message = format!(
-                        "Profile source committed despite a rejected runtime preparation: {}",
-                        cause.message
-                    );
-                    let context = self
-                        .mark_recovery_with_attempt(
-                            operation_id.clone(),
-                            baseline.clone(),
-                            request.decision.clone(),
-                            None,
-                            MutationStage::Confirming,
-                            message.clone(),
-                        )
-                        .await;
-                    outcome = RuntimePrepareOutcome::RecoveryRequired(Box::new(context));
-                    conclusion = MutationConclusion::RecoveryRequired;
-                    Err(message)
-                }
-                RuntimePrepareOutcome::RecoveryRequired(context) => {
-                    conclusion = MutationConclusion::RecoveryRequired;
-                    Err(context.error.clone())
-                }
-            },
+            }
             DecisionOutcome::Aborted => {
+                self.advance_attempt_for(&operation_id, AttemptStage::Cancelling);
                 let target = match &outcome {
                     RuntimePrepareOutcome::Applied(candidate) => Some(candidate.receipt.clone()),
                     _ => None,
@@ -214,6 +255,7 @@ impl ApplicationWorkflow {
                 result
             }
             DecisionOutcome::Unresolved(message) => {
+                self.advance_attempt_for(&operation_id, AttemptStage::AwaitDecision);
                 let target = match &outcome {
                     RuntimePrepareOutcome::Applied(candidate) => Some(candidate.receipt.clone()),
                     _ => None,
@@ -329,11 +371,23 @@ impl ApplicationWorkflow {
         )
         .await;
         request.settle(settlement.clone());
+        if conclusion == MutationConclusion::RecoveryRequired {
+            let reason = self
+                .live
+                .as_ref()
+                .and_then(|attempt| attempt.unresolved.clone())
+                .or_else(|| settlement.as_ref().err().cloned())
+                .unwrap_or_else(|| "Profile runtime attempt requires recovery".into());
+            self.conclude_attempt(Some(reason));
+        } else {
+            self.conclude_attempt(None);
+        }
+        self.publish_recovery_context().await;
         (request_runtime_rebuild, settlement)
     }
 
     async fn prepare_candidate(
-        &self,
+        &mut self,
         core: &dyn ProfileRuntime,
         operation_id: &OperationId,
         previous: &Profiles,
@@ -428,8 +482,12 @@ impl ApplicationWorkflow {
             )
         };
         match &observed_baseline {
-            KnownRuntimeState::Applied(_) => *baseline = Some(observed_baseline),
+            KnownRuntimeState::Applied(_) => {
+                *baseline = Some(observed_baseline.clone());
+                self.record_attempt_baseline(&observed_baseline);
+            }
             KnownRuntimeState::Stopped => {
+                self.record_attempt_baseline(&observed_baseline);
                 *policy = policy_for(
                     request.class,
                     impact,
@@ -519,6 +577,7 @@ impl ApplicationWorkflow {
         };
 
         *attempted_runtime = true;
+        self.advance_attempt(AttemptStage::TryingCritical);
         match core.prepare_profile_runtime(inputs, operation_id).await {
             Ok((candidate, record)) => {
                 *check = record;
@@ -668,7 +727,7 @@ impl ApplicationWorkflow {
     }
 
     async fn cancel_mutation(
-        &self,
+        &mut self,
         core: &dyn ProfileRuntime,
         operation_id: &OperationId,
         attempted_runtime: bool,
@@ -726,93 +785,162 @@ impl ApplicationWorkflow {
         }
     }
 
-    async fn recover_previous(&mut self, core: &dyn ProfileRuntime) -> anyhow::Result<()> {
-        let Some(context) = self.recovery_required.lock().await.clone() else {
+    pub(in crate::client) async fn recover_previous(
+        &mut self,
+        core: &dyn ProfileRuntime,
+    ) -> anyhow::Result<()> {
+        self.recover_previous_inner(core, false).await
+    }
+
+    pub(in crate::client) async fn recover_after_reconcile(
+        &mut self,
+        core: &dyn ProfileRuntime,
+    ) -> anyhow::Result<()> {
+        self.recover_previous_inner(core, true).await
+    }
+
+    async fn recover_previous_inner(
+        &mut self,
+        core: &dyn ProfileRuntime,
+        current_target_reconciled: bool,
+    ) -> anyhow::Result<()> {
+        let Some(attempt) = self
+            .live
+            .as_ref()
+            .filter(|attempt| attempt.unresolved.is_some())
+            .cloned()
+        else {
             return Ok(());
         };
         anyhow::ensure!(
             !core.status().uncertain,
             "Profile runtime still needs recovery after {:?}: {}",
-            context.stage,
-            context.error
+            attempt.stage,
+            attempt.unresolved.as_deref().unwrap_or_default()
         );
-        match context
-            .decision
-            .as_ref()
-            .map(|decision| decision.decision())
-        {
-            Some(StateDecision::Committed { .. }) => {
-                if let Some(target) = context.target.clone() {
-                    core.restore_runtime_baseline(&KnownRuntimeState::Applied(target))
-                        .await
-                        .map_err(|error| {
+        if current_target_reconciled {
+            let source_decision = match &attempt.origin {
+                AttemptOrigin::SourceDecision { decision } => Some(decision),
+                AttemptOrigin::CommittedTarget(target) if target.is_mutation() => Some(
+                    &target
+                        .mutation
+                        .as_ref()
+                        .ok_or_else(|| {
                             anyhow::anyhow!(
-                                "Profile runtime target recovery for {:?} failed after {:?} ({}): {error}",
-                                context.domain,
-                                context.stage,
-                                context.error
+                                "committed Profile target has no source decision evidence"
                             )
-                        })?;
-                } else if self
-                    .deferred
-                    .as_ref()
-                    .is_some_and(|deferred| deferred.mutation.is_some())
-                {
-                    let baseline = context.baseline.as_ref().ok_or_else(|| {
-                        anyhow::anyhow!(
-                            "deferred Profile runtime recovery has no confirmed baseline: {}",
-                            context.error
-                        )
-                    })?;
-                    core.restore_runtime_baseline(baseline)
-                        .await
-                        .map_err(|error| {
-                            anyhow::anyhow!(
-                                "deferred Profile baseline recovery failed after {}: {error}",
-                                context.error
-                            )
-                        })?;
-                } else {
-                    anyhow::bail!(
-                        "committed Profile runtime recovery has no confirmed target: {}",
-                        context.error
-                    );
+                        })?
+                        .decision,
+                ),
+                AttemptOrigin::CommittedTarget(_) | AttemptOrigin::Lifecycle => None,
+            };
+            if let Some(decision) = source_decision
+                && let Err(error) = ensure_reconciled_source_decision(decision)
+            {
+                self.publish_recovery_context().await;
+                return Err(error);
+            }
+            core.discard_profile_runtime(&attempt.operation_id).await;
+            self.live = None;
+            self.deferred = None;
+            self.publish_recovery_context().await;
+            return Ok(());
+        }
+        anyhow::ensure!(
+            !matches!(
+                &attempt.origin,
+                AttemptOrigin::CommittedTarget(target) if target.is_mutation()
+            ),
+            "a committed Profile target requires explicit runtime reconciliation before recovery"
+        );
+        if matches!(&attempt.origin, AttemptOrigin::Lifecycle) {
+            self.live = None;
+            self.publish_recovery_context().await;
+            return Ok(());
+        }
+        self.advance_attempt(AttemptStage::Recovering);
+        let decision = match &attempt.origin {
+            AttemptOrigin::SourceDecision { decision } => Some(decision),
+            AttemptOrigin::CommittedTarget(target) => {
+                target.mutation.as_ref().map(|mutation| &mutation.decision)
+            }
+            AttemptOrigin::Lifecycle => None,
+        };
+        let decision = decision.map(|decision| decision.decision());
+        let recovery_error = attempt.unresolved.as_deref().unwrap_or_default();
+        let recovery = async {
+            match decision {
+                Some(StateDecision::Committed { .. }) => {
+                    if let Some(target) = attempt.target.clone() {
+                        core.restore_runtime_baseline(&KnownRuntimeState::Applied(target))
+                            .await
+                            .map_err(|error| {
+                                anyhow::anyhow!(
+                                    "Profile runtime target recovery for {:?} failed after {:?} ({}): {error}",
+                                    crate::client::application_workflow::mutation::ConfigDomain::Profiles,
+                                    attempt.stage,
+                                    recovery_error
+                                )
+                            })?;
+                    } else if let Some(baseline) = attempt.baseline.as_ref().or_else(|| {
+                        match &attempt.origin {
+                            AttemptOrigin::CommittedTarget(target) => {
+                                target.mutation.as_ref().map(|mutation| &mutation.baseline)
+                            }
+                            _ => None,
+                        }
+                    }) {
+                        core.restore_runtime_baseline(baseline)
+                            .await
+                            .map_err(|error| {
+                                anyhow::anyhow!(
+                                    "Profile runtime baseline recovery failed after {recovery_error}: {error}"
+                                )
+                            })?;
+                    } else {
+                        anyhow::bail!(
+                            "committed Profile runtime recovery has no confirmed target or baseline: {recovery_error}"
+                        );
+                    }
                 }
+                Some(StateDecision::Aborted {
+                    resources: AbortResourceState::Restored,
+                }) => {
+                    if let Some(baseline) = attempt.baseline.as_ref() {
+                        core.restore_runtime_baseline(baseline)
+                            .await
+                            .map_err(|error| {
+                                anyhow::anyhow!(
+                                    "Profile runtime baseline recovery failed after {recovery_error}: {error}"
+                                )
+                            })?;
+                    }
+                }
+                Some(StateDecision::Aborted {
+                    resources: AbortResourceState::NeedsRecovery(incident),
+                }) => anyhow::bail!(
+                    "Profile source transaction still needs recovery ({}): {}",
+                    incident.message,
+                    recovery_error
+                ),
+                Some(StateDecision::Undecided) | None => anyhow::bail!(
+                    "Profile runtime recovery direction is unresolved: {recovery_error}"
+                ),
             }
-            Some(StateDecision::Aborted {
-                resources: AbortResourceState::Restored,
-            }) => {
-                let baseline = context.baseline.as_ref().ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "aborted Profile runtime recovery has no confirmed baseline: {}",
-                        context.error
-                    )
-                })?;
-                core.restore_runtime_baseline(baseline)
-                    .await
-                    .map_err(|error| {
-                        anyhow::anyhow!(
-                            "Profile runtime baseline recovery failed after {}: {error}",
-                            context.error
-                        )
-                    })?;
-            }
-            Some(StateDecision::Aborted {
-                resources: AbortResourceState::NeedsRecovery(incident),
-            }) => anyhow::bail!(
-                "Profile source transaction still needs recovery ({}): {}",
-                incident.message,
-                context.error
-            ),
-            Some(StateDecision::Undecided) | None => anyhow::bail!(
-                "Profile runtime recovery direction is unresolved: {}",
-                context.error
-            ),
+            Ok::<(), anyhow::Error>(())
         }
-        if let Some(operation_id) = context.operation_id.as_ref() {
-            core.discard_profile_runtime(operation_id).await;
+        .await;
+        if let Err(error) = recovery {
+            let reason = format!("{error:#}");
+            self.conclude_attempt(Some(reason));
+            self.publish_recovery_context().await;
+            return Err(error);
         }
-        *self.recovery_required.lock().await = None;
+
+        core.discard_profile_runtime(&attempt.operation_id).await;
+        if let Some(target) = self.live.take().and_then(LiveAttempt::into_target) {
+            self.deferred = Some(*target);
+        }
         if let Some(deferred) = self
             .deferred
             .as_mut()
@@ -821,6 +949,7 @@ impl ApplicationWorkflow {
             deferred.health = crate::client::convergence::ConvergenceHealth::Blocked;
             deferred.next_attempt = None;
         }
+        self.publish_recovery_context().await;
         Ok(())
     }
 
@@ -829,6 +958,28 @@ impl ApplicationWorkflow {
             .lock()
             .await
             .insert(operation_id.clone(), receipt);
+    }
+}
+
+fn ensure_reconciled_source_decision(
+    decision: &chimera_core::state::DecisionHandle,
+) -> anyhow::Result<()> {
+    match decision.decision() {
+        StateDecision::Committed { .. }
+        | StateDecision::Aborted {
+            resources: AbortResourceState::Restored,
+        } => Ok(()),
+        StateDecision::Undecided => {
+            anyhow::bail!(
+                "Profile source transaction is undecided; reconcile again after it settles"
+            )
+        }
+        StateDecision::Aborted {
+            resources: AbortResourceState::NeedsRecovery(incident),
+        } => anyhow::bail!(
+            "Profile source transaction still requires resource recovery ({}); its recovery owner remains retained",
+            incident.message
+        ),
     }
 }
 
