@@ -51,6 +51,31 @@ mod bundle;
 
 rust_i18n::i18n!("./locales");
 
+#[cfg(feature = "deadlock-detection")]
+fn deadlock_detection() {
+    use parking_lot::deadlock;
+    use std::{thread, time::Duration};
+    use tracing::error;
+    thread::spawn(move || {
+        loop {
+            thread::sleep(Duration::from_secs(10));
+            let deadlocks = deadlock::check_deadlock();
+            if deadlocks.is_empty() {
+                continue;
+            }
+
+            error!("{} deadlocks detected", deadlocks.len());
+            for (i, threads) in deadlocks.iter().enumerate() {
+                error!("Deadlock #{}", i);
+                for t in threads {
+                    error!("Thread Id {:#?}", t.thread_id());
+                    error!("{:#?}", t.backtrace());
+                }
+            }
+        }
+    });
+}
+
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 #[tauri::command]
 #[specta::specta]
@@ -118,6 +143,8 @@ pub fn run() -> std::process::ExitCode {
     profilers.start_heap(&paths);
     // Defer filesystem initialization until Tauri has initialized the
     // single-instance plugin. A losing secondary process must not write config.
+    #[cfg(feature = "deadlock-detection")]
+    deadlock_detection();
 
     let mut context = tauri::generate_context!();
     let executable_dir = match paths.app_install_dir() {
