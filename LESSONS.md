@@ -1252,3 +1252,24 @@ backend/Cargo.toml -p chimera --lib core::clash::proxies::tests:: -- --nocapture
 - 证据：主仓库 push E2E run [43720593308](https://github.com/MFSGA/Chimera/actions/runs/43720593308) 的失败时附件 `tauri-e2e-diagnostics-43720593308/wdio-2026-11-15T13-51-04-234Z.log` 显示应用在 WebDriver 启动前退出，并在 `local_runtime.rs:192` panic `there is no reactor running`。附件只有后端日志，没有窗口截图或视频，因为 WebDriver 未就绪。新增的同步线程回归在修复前同样 panic。
 - 修正与验证：`LocalRuntimeHost::new_with_shutdown` 将状态监视任务改为 `TaskTracker::spawn_on(..., tauri::async_runtime::handle().inner())`；普通测试线程回归用 oneshot 保持任务在途，确认 tracker 的 `wait()` 在释放前保持 pending、释放后排空。修复后 LocalRuntime 测试 **7/7** 通过；远端 E2E 尚未在修复 SHA 上复验。
 - 防复发：从同步 Tauri setup 调用的构造函数不得裸用 `tokio::spawn` 或 `TaskTracker::spawn`；显式绑定 Tauri async runtime handle，并对普通线程入口运行回归。审核所有同步 setup 构造器的后台任务，而非只检查首次触发该类错误的调用点。
+
+### LESSON-20261115-006：启动状态假件必须实现被生产流程读取的权威证据
+
+- 日期与时区：2026-11-15 US/Pacific。状态：Mitigated（真实 actor 测试发现并修正测试替身，新增两项覆盖）。
+- 证据：在外置工作区对本轮迁移的生产 Actor 接线执行 `client::core_lifecycle::tests::application_workflow_connection_keeps_owner_and_runs_startup` 时，测试期望 `StartupOutcome::Ready`，实际为 `ReadyDegraded`。`ConfirmedStoppedCore` 提供 stopped 状态和非零 `state_changed_at`，却继承 `CoreLifecyclePort::observe_runtime_baseline` 的“不支持”默认错误；真实启动路径要求权威 baseline，故测试替身不符合所描述的 stopped owner。此前静态复核曾推断该调用不会发生，但实测否定了该推断。
+- 修正与验证：为该 mock 明确返回 `KnownRuntimeState::Stopped`；定向 actor 测试 **1/1**，Core Lifecycle 测试集合在后续 startup-report/cache 与 pending-connect 修改后 **79/79** 通过。另新增测试覆盖操作进行时延迟挂接/拒绝重复挂接，以及生产 `ApplicationWorkflowClient::begin_mutation` 路径上的 Profiles 持久化 TCC 事务。
+- 防复发：涉及 actor 装配、启动、权限或状态证据的静态结论，必须沿被测生产路径核对调用并实际运行可达性测试；测试替身要实现生产策略所需的权威证据端口，不以仅匹配表面状态快照代替。独立审查意见未运行测试时，记录为静态发现，不把它写成已验证的行为结论。
+
+### LESSON-20261115-007：延迟 Actor 连接必须检查请求接收端是否仍存活
+
+- 日期与时区：2026-11-15 US/Pacific。状态：Mitigated（独立审查发现潜在孤儿连接；增加 reply-channel 检查及取消回归，没有观察到生产故障）。
+- 证据与影响：`ConnectApplicationWorkflow` 在 Core lifecycle 操作执行期间会把 workflow 和 `RpcReplyPort` 暂存。`connect_application_workflow` 有有限等待；调用方超时或取消会丢弃接收端。若 Actor 完成时仍无条件 attach，就可能将已没有接收方的 workflow 标记为 `mutation_connected`，导致之后合法重试遭拒。review 确认的是可到达的生命周期缺口，不是已观察到的生产事故。
+- 修正与验证：Actor 完成时对 pending reply 调用依赖提供的 `RpcReplyPort::is_closed()`，在 reply 关闭或 shutdown 时拒绝并丢弃候选 workflow；仅在接收方仍有效时发送成功响应并于同一 handler 同步 attach。测试用登记回执确定首个连接已排队，再取消调用方；`cancelled_pending_application_workflow_does_not_poison_connection` **1/1**，完整 Core Lifecycle 集合 **79/79**。
+- 防复发：Actor mailbox 代为等待外部回执、事务确认或 connection 时，副作用前检查接收方/取消 token；shutdown 也必须消解挂起请求。并发测试需用明确的登记/ack 屏障确认请求已进入 Actor，再测试重复、取消和恢复，不能只依赖 `yield_now` 或不相关 mailbox barrier。
+
+### LESSON-20261115-008：Actor 暂借工作流时必须保留异步失败回执
+
+- 日期与时区：2026-11-15 US/Pacific。状态：Mitigated（在合并前由独立审查发现并修复；没有观察到生产故障）。
+- 证据：启动重试先将 target 置为 Pending，再在 Actor 外异步申请 Service transition lease。期间 Actor 可以处理其他请求并暂时取走 ApplicationWorkflow；lease 失败回执若在此时到达，直接检查 `workflow: Option<_>` 会静默丢弃失败。target 此时没有 `next_attempt`，所以后续也不会触发 retry。该缺口由独立审查沿可达 Actor 时序确认。
+- 修正与验证：Actor 暂存 workflow 缺席期间的 lease failure；Completed 归还 workflow 后应用 dependency wait 并从当前 target 安排下一次尝试。新增 Actor 级 `startup_retry_lease_failure_is_drained_after_actor_operation_returns`，实际阻塞 lease 与 Core Stop 以强制该交错；Core Lifecycle 测试集合 **82/82** 通过，`cargo check --tests`、Rustfmt 与 `git diff --check` 通过。真实系统 Service lease 并发时序仍没有桌面/系统服务 E2E 证据。
+- 防复发：Actor 把独占状态借给长时间异步任务时，外部 admission / lease / probe 的失败结果不能依赖该状态当时仍在 Option 内；要将结果排队至 owner 归还后处理，并测试“任务 in-flight、Actor 处理其他消息、外部失败后恢复”的时序。

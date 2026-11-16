@@ -10,17 +10,84 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 
+use crate::client::{
+    application_workflow::{mutation::RuntimeCheckFailure, policy::TryCauseKind},
+    convergence::{ConvergenceHealth, OutcomeClass, RetryBudget, next_wait},
+};
 use chimera_core::actor_v2::{
     endpoint::ExecutionHost, service_policy::ServicePhase, service_status::ServiceHostStatus,
 };
-use chimera_core_manager::{CoreOwner, Epoch, RevisionId};
+use chimera_core_manager::{CoreError, CoreErrorKind, CoreOwner, Epoch, RevisionId};
 use chimera_ipc::{
     api::status::{ConfigRevisionInfo, CoreState},
     types::ServiceStatus,
 };
-use parking_lot::{Mutex, MutexGuard};
 
-use crate::client::convergence::{ConvergenceHealth, OutcomeClass, RetryBudget, next_wait};
+pub(crate) fn startup_failure_is_retryable(error: &anyhow::Error) -> bool {
+    error.chain().any(|cause| {
+        cause
+            .downcast_ref::<CoreError>()
+            .is_some_and(|error| error.retryable)
+            || cause
+                .downcast_ref::<RuntimeCheckFailure>()
+                .is_some_and(|failure| failure.cause() == TryCauseKind::Transient)
+    })
+}
+
+pub(crate) fn startup_failure_waits_for_dependency(error: &anyhow::Error) -> bool {
+    error.chain().any(|cause| {
+        cause
+            .downcast_ref::<RuntimeCheckFailure>()
+            .is_some_and(|failure| {
+                matches!(
+                    failure.record(),
+                    super::mutation::CheckRecord::Unserviceable(_)
+                )
+            })
+    })
+}
+
+pub(crate) fn startup_stop_error_is_idempotent(error: &anyhow::Error) -> bool {
+    error.chain().any(|cause| {
+        cause
+            .downcast_ref::<CoreError>()
+            .is_some_and(|error| error.kind == Some(CoreErrorKind::NotStarted))
+    })
+}
+
+#[derive(Debug)]
+pub(crate) enum StartupOwnerFailure {
+    WaitingDependency(String),
+    Blocked(String),
+    RecoveryRequired(String),
+}
+
+impl StartupOwnerFailure {
+    pub(crate) fn outcome(self) -> StartupOutcome {
+        match self {
+            Self::WaitingDependency(reason) => StartupOutcome::ReadyDegraded {
+                health: ConvergenceHealth::WaitingDependency,
+                reason,
+            },
+            Self::Blocked(reason) => StartupOutcome::ReadyDegraded {
+                health: ConvergenceHealth::Blocked,
+                reason,
+            },
+            Self::RecoveryRequired(reason) => StartupOutcome::RecoveryRequired { reason },
+        }
+    }
+
+    pub(crate) fn stop_rejected(error: anyhow::Error, uncertain: bool) -> Self {
+        let reason = format!("the Core owner could not be stopped: {error:#}");
+        if uncertain {
+            Self::RecoveryRequired(reason)
+        } else if startup_failure_is_retryable(&error) {
+            Self::WaitingDependency(reason)
+        } else {
+            Self::Blocked(reason)
+        }
+    }
+}
 
 /// What StartupReconcile observed and how it concluded.
 #[derive(Debug, Clone)]
@@ -32,46 +99,36 @@ pub(crate) struct StartupReport {
     pub(crate) outcome: StartupOutcome,
 }
 
-/// Startup report, retry target, and owner uncertainty shared with the
-/// ApplicationWorkflow that owns Profile mutations. CoreLifecycleWorkflow
-/// currently uses this handle as its compatibility boundary while its
-/// startup orchestration is moved into the shared workflow.
-#[derive(Clone)]
+/// Startup state owned by ApplicationWorkflow. The owner signal is mirrored
+/// through an atomic only for the Service readiness observer outside the actor.
 pub(crate) struct StartupWorkflowState {
-    report: Arc<Mutex<Option<StartupReport>>>,
-    retry_target: Arc<Mutex<Option<StartupRetryTarget>>>,
+    retry_target: Option<StartupRetryTarget>,
     owner_unproven: Arc<AtomicBool>,
 }
 
 impl Default for StartupWorkflowState {
     fn default() -> Self {
         Self {
-            report: Arc::new(Mutex::new(None)),
-            retry_target: Arc::new(Mutex::new(None)),
+            retry_target: None,
             owner_unproven: Arc::new(AtomicBool::new(false)),
         }
     }
 }
 
 impl StartupWorkflowState {
-    pub(crate) fn report_handle(&self) -> Arc<Mutex<Option<StartupReport>>> {
-        self.report.clone()
+    pub(crate) fn with_owner_signal(owner_unproven: Arc<AtomicBool>) -> Self {
+        Self {
+            retry_target: None,
+            owner_unproven,
+        }
     }
 
-    pub(crate) fn retry_target_handle(&self) -> Arc<Mutex<Option<StartupRetryTarget>>> {
-        self.retry_target.clone()
+    pub(crate) fn retry_target(&self) -> Option<&StartupRetryTarget> {
+        self.retry_target.as_ref()
     }
 
-    pub(crate) fn lock_report(&self) -> MutexGuard<'_, Option<StartupReport>> {
-        self.report.lock()
-    }
-
-    pub(crate) fn lock_retry_target(&self) -> MutexGuard<'_, Option<StartupRetryTarget>> {
-        self.retry_target.lock()
-    }
-
-    pub(crate) fn owner_unproven_handle(&self) -> Arc<AtomicBool> {
-        self.owner_unproven.clone()
+    pub(crate) fn retry_target_mut(&mut self) -> &mut Option<StartupRetryTarget> {
+        &mut self.retry_target
     }
 
     pub(crate) fn owner_unproven(&self) -> bool {
@@ -80,10 +137,6 @@ impl StartupWorkflowState {
 
     pub(crate) fn mark_owner_unproven(&self) {
         self.owner_unproven.store(true, Ordering::Release);
-    }
-
-    pub(crate) fn mark_owner_proven(&self) {
-        self.owner_unproven.store(false, Ordering::Release);
     }
 }
 

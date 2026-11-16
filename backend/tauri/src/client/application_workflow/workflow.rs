@@ -1,4 +1,4 @@
-//! The tracked application workflow state for Profile mutations.
+//! The tracked application workflow state for startup and Profile mutations.
 
 use std::{collections::HashMap, sync::Arc};
 
@@ -7,8 +7,9 @@ use chimera_core::state::DecisionHandle;
 use chimera_core_manager::OperationId;
 use tokio::sync::Mutex;
 
-use crate::client::application_workflow::startup::StartupWorkflowState;
-use crate::client::core_lifecycle::{CoreLifecycleStatus, ports::CoreStatusSnapshot};
+use crate::client::core_lifecycle::{
+    Command as CoreCommand, CoreLifecycleStatus, CoreLifecycleWorkflow, ports::CoreStatusSnapshot,
+};
 
 use super::{
     inputs::RuntimeInputs,
@@ -16,6 +17,7 @@ use super::{
         AppliedCandidate, CheckRecord, ConfigDomain, DeferredTarget, KnownRuntimeState,
         MutationReceipt, MutationStage,
     },
+    startup::{StartupOutcome, StartupReport, StartupWorkflowState},
 };
 use crate::client::runtime::RuntimeApplyReceipt;
 
@@ -74,7 +76,12 @@ pub(in crate::client) struct ApplicationWorkflow {
     pub(super) recovery_required: Arc<Mutex<Option<RecoveryContext>>>,
     pub(super) notifications: Option<Arc<dyn crate::client::effects::ports::CommitNotifications>>,
     pub(super) deferred: Option<DeferredTarget>,
-    pub(super) startup: StartupWorkflowState,
+    startup_report: Option<StartupReport>,
+    startup: StartupWorkflowState,
+    /// Startup and Profile mutations share the application workflow actor;
+    /// CoreLifecycleWorkflow adapts its existing runtime and Service ports.
+    lifecycle: Option<Arc<CoreLifecycleWorkflow>>,
+    mutation_connected: bool,
 }
 
 impl ApplicationWorkflow {
@@ -88,12 +95,236 @@ impl ApplicationWorkflow {
             recovery_required,
             notifications,
             deferred: None,
+            startup_report: None,
             startup: StartupWorkflowState::default(),
+            lifecycle: None,
+            mutation_connected: false,
         }
     }
 
-    pub(in crate::client) fn connect_startup_state(&mut self, startup: StartupWorkflowState) {
-        self.startup = startup;
+    pub(in crate::client) fn with_lifecycle(lifecycle: CoreLifecycleWorkflow) -> Self {
+        let startup =
+            StartupWorkflowState::with_owner_signal(lifecycle.startup_owner_unproven_handle());
+        Self {
+            lifecycle: Some(Arc::new(lifecycle)),
+            startup,
+            ..Self::new(
+                Arc::new(Mutex::new(HashMap::new())),
+                Arc::new(Mutex::new(None)),
+                None,
+            )
+        }
+    }
+
+    pub(in crate::client) fn lifecycle(&self) -> &CoreLifecycleWorkflow {
+        self.lifecycle
+            .as_deref()
+            .expect("actor-owned application workflow has a lifecycle adapter")
+    }
+
+    pub(in crate::client) fn mutation_connected(&self) -> bool {
+        self.mutation_connected
+    }
+
+    pub(in crate::client) fn startup_owner_unproven(&self) -> bool {
+        self.startup.owner_unproven()
+    }
+
+    pub(in crate::client) fn clear_startup_retry_target(&mut self) {
+        *self.startup.retry_target_mut() = None;
+    }
+
+    #[cfg(test)]
+    pub(crate) fn for_startup_retry_tests() -> Self {
+        Self::new(
+            Arc::new(Mutex::new(HashMap::new())),
+            Arc::new(Mutex::new(None)),
+            None,
+        )
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_startup_retry_target_for_tests(
+        &mut self,
+        target: super::startup::StartupRetryTarget,
+    ) {
+        *self.startup.retry_target_mut() = Some(target);
+    }
+
+    pub(in crate::client) fn startup_report(&self) -> Option<StartupReport> {
+        self.startup_report.clone()
+    }
+
+    pub(in crate::client) fn startup_retry_schedule(
+        &self,
+    ) -> Option<(String, tokio::time::Instant)> {
+        self.startup.retry_target().and_then(|target| {
+            target
+                .next_attempt
+                .map(|deadline| (target.identity.clone(), deadline))
+        })
+    }
+
+    pub(in crate::client) fn startup_retry_due(&self, identity: &str) -> bool {
+        self.startup.retry_target().is_some_and(|target| {
+            target.identity == identity
+                && target
+                    .next_attempt
+                    .is_some_and(|deadline| deadline <= tokio::time::Instant::now())
+                && target.budget.remaining > 0
+        })
+    }
+
+    pub(in crate::client) fn begin_startup_retry(&mut self, identity: &str) -> bool {
+        self.startup
+            .retry_target_mut()
+            .as_mut()
+            .is_some_and(|target| {
+                target.identity == identity && target.begin(tokio::time::Instant::now())
+            })
+    }
+
+    pub(in crate::client) fn defer_startup_retry(&mut self, identity: &str, reason: String) {
+        if let Some(target) = self
+            .startup
+            .retry_target_mut()
+            .as_mut()
+            .filter(|target| target.identity == identity)
+        {
+            target.schedule_dependency(reason);
+        }
+    }
+
+    pub(in crate::client) fn attach_mutation_workflow(
+        &mut self,
+        workflow: ApplicationWorkflow,
+    ) -> anyhow::Result<()> {
+        self.validate_mutation_connection(&workflow)?;
+        self.outcomes = workflow.outcomes;
+        self.recovery_required = workflow.recovery_required;
+        self.notifications = workflow.notifications;
+        self.deferred = workflow.deferred;
+        self.mutation_connected = true;
+        Ok(())
+    }
+
+    pub(in crate::client) fn validate_mutation_connection(
+        &self,
+        _workflow: &ApplicationWorkflow,
+    ) -> anyhow::Result<()> {
+        if self.lifecycle.is_none() {
+            anyhow::bail!("application workflow has no lifecycle adapter")
+        }
+        if self.mutation_connected {
+            anyhow::bail!("application workflow is already connected")
+        }
+        Ok(())
+    }
+
+    pub(in crate::client) async fn execute_lifecycle(
+        &mut self,
+        command: CoreCommand,
+    ) -> anyhow::Result<()> {
+        match command {
+            CoreCommand::StartupReconcile {
+                operation_id,
+                transition,
+            } => {
+                if let Some(report) = &self.startup_report {
+                    return startup_report_result(report);
+                }
+                let lifecycle = self
+                    .lifecycle
+                    .as_ref()
+                    .cloned()
+                    .expect("actor-owned application workflow has a lifecycle adapter");
+                let report = lifecycle
+                    .startup_reconcile(operation_id, transition, self.startup.retry_target_mut())
+                    .await;
+                self.startup_report = Some(report.clone());
+                startup_report_result(&report)
+            }
+            CoreCommand::RecoverStartup {
+                operation_id,
+                transition,
+            } => {
+                let lifecycle = self
+                    .lifecycle
+                    .as_ref()
+                    .cloned()
+                    .expect("actor-owned application workflow has a lifecycle adapter");
+                let report = lifecycle
+                    .recover_startup(operation_id, transition, self.startup.retry_target_mut())
+                    .await;
+                if self.startup_report.is_none() {
+                    self.startup_report = Some(report.clone());
+                }
+                startup_report_result(&report)
+            }
+            CoreCommand::RetryStartup {
+                operation_id,
+                identity,
+                transition,
+            } => {
+                let lifecycle = self
+                    .lifecycle
+                    .as_ref()
+                    .cloned()
+                    .expect("actor-owned application workflow has a lifecycle adapter");
+                let report = lifecycle
+                    .retry_startup(
+                        operation_id,
+                        identity,
+                        transition,
+                        self.startup.retry_target_mut(),
+                    )
+                    .await;
+                startup_report_result(&report)
+            }
+            CoreCommand::CacheStartupUnsettled {
+                operation_id,
+                reason,
+            } => {
+                if self.startup_report.is_none() {
+                    self.startup.mark_owner_unproven();
+                    self.startup_report = Some(StartupReport {
+                        operation_id,
+                        observation: None,
+                        outcome: StartupOutcome::Unsettled {
+                            reason: reason.clone(),
+                        },
+                    });
+                    if let Some(notifications) = &self.notifications {
+                        let ports = self.lifecycle().effect_port_binding().await;
+                        notifications.publish_full(ports);
+                    }
+                }
+                anyhow::bail!(reason)
+            }
+            command => {
+                let lifecycle = self
+                    .lifecycle
+                    .as_ref()
+                    .cloned()
+                    .expect("actor-owned application workflow has a lifecycle adapter");
+                lifecycle
+                    .execute(command, self.startup.retry_target_mut())
+                    .await
+            }
+        }
+    }
+
+    pub(in crate::client) async fn run_profile_mutation(
+        &mut self,
+        request: &mut super::mutation::MutationRequest,
+    ) -> (bool, Result<(), String>) {
+        let Some(lifecycle) = self.lifecycle.as_ref().cloned() else {
+            return (
+                false,
+                Err("application workflow has no lifecycle adapter".into()),
+            );
+        };
+        self.run_mutation(request, lifecycle.as_ref()).await
     }
 
     pub(in crate::client) fn deferred_retry(&self) -> Option<(String, tokio::time::Instant)> {
@@ -268,5 +499,12 @@ impl ApplicationWorkflow {
         };
         *self.recovery_required.lock().await = Some(context.clone());
         context
+    }
+}
+
+fn startup_report_result(report: &StartupReport) -> anyhow::Result<()> {
+    match report.outcome.failure_reason() {
+        Some(reason) => Err(anyhow::anyhow!(reason.to_owned())),
+        None => Ok(()),
     }
 }
