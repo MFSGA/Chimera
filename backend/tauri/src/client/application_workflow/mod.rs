@@ -11,6 +11,7 @@ use mutation::MutationRequest;
 use workflow::ApplicationWorkflow;
 pub(crate) use workflow::RecoveryContext;
 
+pub(crate) mod attempt;
 pub(crate) mod impact;
 pub(in crate::client) mod inputs;
 pub(crate) mod mutation;

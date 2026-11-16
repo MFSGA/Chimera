@@ -13,6 +13,7 @@ use std::sync::{
 use crate::client::convergence::{OutcomeClass, RetryBudget, next_wait};
 use crate::client::{
     application_workflow::{
+        attempt::{AttemptOrigin, AttemptStage, LiveAttempt},
         mutation::{DeferredTarget, ReestablishCause, RuntimeCheckFailure, TargetOrigin},
         policy::TryCauseKind,
     },
@@ -1710,6 +1711,73 @@ impl ApplicationWorkflow {
         }
     }
 
+    fn begin_reestablish_attempt(&mut self, cause: ReestablishCause) {
+        if let Some(attempt) = &mut self.live {
+            if let Some(target) = attempt.target_mut() {
+                target.origin = TargetOrigin::Reestablish(cause);
+                attempt.stage = if cause == ReestablishCause::Recovery {
+                    AttemptStage::Recovering
+                } else {
+                    AttemptStage::Preparing
+                };
+                attempt.unresolved = None;
+                return;
+            }
+            debug_assert!(false, "an unresolved attempt is never replaced");
+            return;
+        }
+
+        let mut target = self.deferred.take().unwrap_or_else(|| {
+            DeferredTarget::reestablish(OperationId::generate(), String::new(), cause)
+        });
+        target.origin = TargetOrigin::Reestablish(cause);
+        let operation_id = target.operation_id;
+        self.live = Some(LiveAttempt::committed_target(operation_id, target));
+    }
+
+    async fn update_reestablish_attempt(
+        &mut self,
+        lifecycle: &CoreLifecycleWorkflow,
+        report: StartupReport,
+        automatic: bool,
+        cause: ReestablishCause,
+    ) -> StartupReport {
+        let target = self
+            .live
+            .as_ref()
+            .and_then(|attempt| match &attempt.origin {
+                AttemptOrigin::CommittedTarget(target) => Some(target.as_ref().clone()),
+                AttemptOrigin::SourceDecision { .. } | AttemptOrigin::Lifecycle => None,
+            })
+            .expect("startup reestablishment runs on its committed target");
+        let mut deferred = Some(target);
+        let report =
+            update_reestablish_target(lifecycle, report, automatic, cause, &mut deferred).await;
+        if let Some(target) = deferred
+            && let Some(live_target) = self.live.as_mut().and_then(LiveAttempt::target_mut)
+        {
+            *live_target = target;
+        }
+
+        match &report.outcome {
+            StartupOutcome::Ready => {
+                self.live = None;
+                self.deferred = None;
+            }
+            StartupOutcome::RecoveryRequired { reason } | StartupOutcome::Unsettled { reason } => {
+                if let Some(attempt) = &mut self.live {
+                    attempt.unresolved = Some(reason.clone());
+                }
+                self.deferred = None;
+                self.publish_recovery_context().await;
+            }
+            StartupOutcome::ReadyDegraded { .. } => {
+                self.conclude_attempt(None);
+            }
+        }
+        report
+    }
+
     pub(in crate::client) async fn startup_reconcile(
         &mut self,
         operation_id: u64,
@@ -1719,16 +1787,15 @@ impl ApplicationWorkflow {
             return report.clone();
         }
         self.startup.mark_owner_unproven();
+        self.begin_reestablish_attempt(ReestablishCause::Startup);
+        if let Some(attempt) = &mut self.live {
+            attempt.stage = AttemptStage::TryingCritical;
+        }
         let lifecycle = self.lifecycle_handle();
         let report = self.startup_reconcile_once(operation_id, false).await;
-        let report = update_reestablish_target(
-            &lifecycle,
-            report,
-            false,
-            ReestablishCause::Startup,
-            &mut self.deferred,
-        )
-        .await;
+        let report = self
+            .update_reestablish_attempt(&lifecycle, report, false, ReestablishCause::Startup)
+            .await;
         self.startup_report = Some(report.clone());
         report
     }
@@ -1739,16 +1806,15 @@ impl ApplicationWorkflow {
         _transition: Box<dyn ServiceTransitionLease>,
     ) -> StartupReport {
         self.startup.mark_owner_unproven();
+        self.begin_reestablish_attempt(ReestablishCause::Recovery);
+        if let Some(attempt) = &mut self.live {
+            attempt.stage = AttemptStage::Recovering;
+        }
         let lifecycle = self.lifecycle_handle();
         let report = self.startup_reconcile_once(operation_id, true).await;
-        let report = update_reestablish_target(
-            &lifecycle,
-            report,
-            false,
-            ReestablishCause::Recovery,
-            &mut self.deferred,
-        )
-        .await;
+        let report = self
+            .update_reestablish_attempt(&lifecycle, report, false, ReestablishCause::Recovery)
+            .await;
         if self.startup_report.is_none() {
             self.startup_report = Some(report.clone());
         }
@@ -1779,11 +1845,16 @@ impl ApplicationWorkflow {
         let allow_receipt_reuse = target.allows_receipt_reuse();
 
         self.startup.mark_owner_unproven();
+        self.begin_reestablish_attempt(cause);
+        if let Some(attempt) = &mut self.live {
+            attempt.stage = AttemptStage::TryingCritical;
+        }
         let lifecycle = self.lifecycle_handle();
         let report = self
             .startup_reconcile_once(operation_id, allow_receipt_reuse)
             .await;
-        update_reestablish_target(&lifecycle, report, true, cause, &mut self.deferred).await
+        self.update_reestablish_attempt(&lifecycle, report, true, cause)
+            .await
     }
 
     pub(super) async fn refresh_startup_retry_target_after_reconcile(
