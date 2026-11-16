@@ -2984,6 +2984,7 @@ mod tests {
         events: Arc<Mutex<Vec<&'static str>>>,
         reconciles: AtomicU8,
         stopped: AtomicBool,
+        selected: Mutex<RunType>,
     }
 
     struct StartupTransientCore {
@@ -4338,6 +4339,8 @@ mod tests {
                 .lock()
                 .unwrap()
                 .push("rebuild-after-service-release");
+            *self.selected.lock().unwrap() = RunType::Normal;
+            self.stopped.store(false, AtomicOrdering::Release);
             Ok(())
         }
 
@@ -4349,18 +4352,41 @@ mod tests {
             Ok(())
         }
 
+        async fn select_execution_host(
+            &self,
+            host: crate::core::actor_v2::control_endpoint::ExecutionHost,
+        ) -> anyhow::Result<()> {
+            *self.selected.lock().unwrap() = match host {
+                crate::core::actor_v2::control_endpoint::ExecutionHost::Local => RunType::Normal,
+                crate::core::actor_v2::control_endpoint::ExecutionHost::Service => RunType::Service,
+            };
+            self.events.lock().unwrap().push(match host {
+                crate::core::actor_v2::control_endpoint::ExecutionHost::Local => "select-local",
+                crate::core::actor_v2::control_endpoint::ExecutionHost::Service => "select-service",
+            });
+            Ok(())
+        }
+
         async fn status(&self) -> anyhow::Result<CoreStatusSnapshot> {
             let stopped = self.stopped.load(AtomicOrdering::Acquire);
+            let run_type = *self.selected.lock().unwrap();
             Ok(CoreStatusSnapshot {
-                instance_id: Some("service-core-instance".into()),
+                instance_id: (run_type == RunType::Service).then(|| "service-core-instance".into()),
                 state: if stopped {
                     CoreState::Stopped(None)
                 } else {
                     CoreState::Running
                 },
                 state_changed_at: if stopped { 2 } else { 1 },
-                run_type: RunType::Service,
+                run_type,
             })
+        }
+
+        async fn observe_runtime_baseline(
+            &self,
+        ) -> anyhow::Result<crate::client::application_workflow::mutation::KnownRuntimeState>
+        {
+            Ok(crate::client::application_workflow::mutation::KnownRuntimeState::Stopped)
         }
 
         fn recovery_notify(&self) -> Option<Arc<Notify>> {
@@ -7296,6 +7322,7 @@ mod tests {
                 events: events.clone(),
                 reconciles: AtomicU8::new(0),
                 stopped: AtomicBool::new(false),
+                selected: Mutex::new(RunType::Service),
             }),
             service,
             ApplicationClient::static_state(app),
@@ -7333,6 +7360,57 @@ mod tests {
         assert!(failed_reconcile < probes[2]);
         assert!(probes[2] < fallback);
         assert!(!client.status().uncertain);
+    }
+
+    #[tokio::test]
+    async fn startup_adoption_falls_back_when_service_reconcile_fails() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let mut app = chimera_config::application::ChimeraAppConfig::default();
+        app.enable_service_mode = true;
+        let service = Arc::new(StartupFallbackServiceProbe {
+            inner: StartupServiceProbe {
+                events: events.clone(),
+                probes: AtomicU8::new(0),
+                confirms_stopped: false,
+                runtime_owned: true,
+            },
+        });
+        let core = Arc::new(StartupDegradedServiceCore {
+            events: events.clone(),
+            reconciles: AtomicU8::new(0),
+            stopped: AtomicBool::new(true),
+            selected: Mutex::new(RunType::Normal),
+        });
+        let client = spawn_startup_client_with_application(
+            core.clone(),
+            service,
+            ApplicationClient::static_state(app),
+        )
+        .await;
+
+        let completed = client.startup_reconcile().await.unwrap();
+        assert_eq!(completed.report.outcome, StartupOutcome::Ready);
+        assert_eq!(
+            completed.report.observation.as_ref().unwrap().desired,
+            crate::core::actor_v2::control_endpoint::ExecutionHost::Local
+        );
+        assert_eq!(core.status().await.unwrap().run_type, RunType::Normal);
+
+        let events = events.lock().unwrap();
+        let select_service = events
+            .iter()
+            .position(|event| *event == "select-service")
+            .unwrap();
+        let failed_reconcile = events
+            .iter()
+            .position(|event| *event == "rebuild-service-failed")
+            .unwrap();
+        let fallback = events
+            .iter()
+            .position(|event| *event == "rebuild-after-service-release")
+            .unwrap();
+        assert!(select_service < failed_reconcile);
+        assert!(failed_reconcile < fallback);
     }
 
     #[tokio::test]

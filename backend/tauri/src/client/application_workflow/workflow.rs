@@ -158,6 +158,13 @@ impl ApplicationWorkflow {
         *self.startup.retry_target_mut() = Some(target);
     }
 
+    #[cfg(test)]
+    pub(crate) fn startup_retry_target_for_tests(
+        &self,
+    ) -> Option<super::startup::StartupRetryTarget> {
+        self.startup.retry_target().cloned()
+    }
+
     pub(in crate::client) fn startup_report(&self) -> Option<StartupReport> {
         self.startup_report.clone()
     }
