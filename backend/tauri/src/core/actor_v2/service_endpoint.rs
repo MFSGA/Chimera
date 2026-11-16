@@ -389,6 +389,40 @@ mod tests {
         assert_eq!(config, "mode: rule\n");
     }
 
+    /// The fallback half of ref's alpha-routing test belongs to the Service
+    /// wire adapter: a missing explicit CoreType must use CoreKind's base
+    /// identity, without rewriting an explicitly supplied alpha type.
+    #[test]
+    fn reconcile_wire_without_core_type_uses_base_kind() {
+        let submission = CoreSubmission {
+            expected_owner: None,
+            envelope: CoreCommandEnvelope {
+                operation_id: chimera_core_manager::OperationId::generate(),
+                command: CoreCommand::Reconcile(Box::new(ReconcileRequest {
+                    core: CoreSpec {
+                        kind: CoreKind::Mihomo,
+                        binary_path: Utf8PathBuf::from("mihomo-alpha"),
+                        version: None,
+                        features: vec![],
+                    },
+                    config: ConfigInput::inline(b"proxies: []".to_vec()),
+                    options: InstanceOptions::default(),
+                    expected_applied: None,
+                })),
+            },
+            core_type: None,
+        };
+
+        let wire = wire_submit_request(&submission).expect("wire fallback must resolve");
+        let CoreCommandInfo::Reconcile { core_type, .. } = wire.command else {
+            panic!("expected reconcile wire command");
+        };
+        assert_eq!(
+            core_type.into_owned(),
+            chimera_utils::core::CoreType::Clash(chimera_utils::core::ClashCoreType::Mihomo)
+        );
+    }
+
     #[test]
     fn stop_if_owner_wire_keeps_process_and_revision_fence() {
         let owner = CoreOwner::from_parts(

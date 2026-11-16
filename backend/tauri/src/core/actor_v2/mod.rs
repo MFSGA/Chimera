@@ -13,6 +13,7 @@ pub mod intent;
 pub mod local_host;
 mod local_runtime;
 pub mod service_endpoint;
+pub mod service_endpoint_factory;
 
 pub(crate) use endpoint::CoreStatusSnapshot;
 pub(crate) use facade::CoreFacade;
