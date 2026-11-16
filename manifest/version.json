@@ -2,7 +2,7 @@
   "manifest_version": 1,
   "latest": {
     "mihomo": "v1.19.34",
-    "mihomo_alpha": "alpha-184857c",
+    "mihomo_alpha": "alpha-3c0d10a",
     "clash_rs": "v0.10.12",
     "chimera_client": "v0.29.1",
     "chimera_client_alpha": "0.29.1-alpha+sha.dadb991",
@@ -95,5 +95,5 @@
       "linux-armv7hf": "clash-rs-armv7-unknown-linux-gnueabihf"
     }
   },
-  "updated_at": "2026-11-15T01:51:18.970Z"
+  "updated_at": "2026-11-16T01:59:16.769Z"
 }
