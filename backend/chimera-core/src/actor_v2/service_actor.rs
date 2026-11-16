@@ -4,6 +4,10 @@
 //! application workflow still owns host handoff and the ServiceHostStatus watch;
 //! those responsibilities must move into the complete ServiceActor separately.
 
+// Ref's ServiceClient is available at its canonical path while Chimera's
+// ServiceCommandActor remains for the staged Tauri composition transition.
+pub use super::service_router::ServiceClient;
+
 use std::{
     sync::{
         Arc,
