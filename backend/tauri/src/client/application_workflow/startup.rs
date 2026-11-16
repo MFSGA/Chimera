@@ -13,6 +13,7 @@ use std::sync::{
 use crate::client::{
     application_workflow::{mutation::RuntimeCheckFailure, policy::TryCauseKind},
     convergence::{ConvergenceHealth, OutcomeClass, RetryBudget, next_wait},
+    core_lifecycle::{CoreLifecycleWorkflow, ServiceTransitionLease},
 };
 use chimera_core::actor_v2::{
     endpoint::ExecutionHost, service_policy::ServicePhase, service_status::ServiceHostStatus,
@@ -22,6 +23,8 @@ use chimera_ipc::{
     api::status::{ConfigRevisionInfo, CoreState},
     types::ServiceStatus,
 };
+
+use super::workflow::ApplicationWorkflow;
 
 pub(crate) fn startup_failure_is_retryable(error: &anyhow::Error) -> bool {
     error.chain().any(|cause| {
@@ -881,4 +884,280 @@ mod tests {
         };
         assert!(zero_epoch.expected_owner().is_err());
     }
+}
+
+impl ApplicationWorkflow {
+    pub(in crate::client) async fn startup_reconcile(
+        &mut self,
+        operation_id: u64,
+        transition: Box<dyn ServiceTransitionLease>,
+    ) -> StartupReport {
+        if let Some(report) = &self.startup_report {
+            return report.clone();
+        }
+        self.startup.mark_owner_unproven();
+        let lifecycle = self.lifecycle_handle();
+        let report = lifecycle
+            .startup_reconcile_once(operation_id, transition, false)
+            .await;
+        let report = update_startup_retry_target(
+            &lifecycle,
+            report,
+            false,
+            false,
+            self.startup.retry_target_mut(),
+        )
+        .await;
+        self.startup_report = Some(report.clone());
+        report
+    }
+
+    pub(in crate::client) async fn recover_startup(
+        &mut self,
+        operation_id: u64,
+        transition: Box<dyn ServiceTransitionLease>,
+    ) -> StartupReport {
+        self.startup.mark_owner_unproven();
+        let lifecycle = self.lifecycle_handle();
+        let report = lifecycle
+            .startup_reconcile_once(operation_id, transition, true)
+            .await;
+        let report = update_startup_retry_target(
+            &lifecycle,
+            report,
+            false,
+            true,
+            self.startup.retry_target_mut(),
+        )
+        .await;
+        if self.startup_report.is_none() {
+            self.startup_report = Some(report.clone());
+        }
+        report
+    }
+
+    pub(in crate::client) async fn retry_startup(
+        &mut self,
+        operation_id: u64,
+        identity: String,
+        transition: Box<dyn ServiceTransitionLease>,
+    ) -> StartupReport {
+        let allow_receipt_reuse = self.startup.retry_target().and_then(|target| {
+            (target.identity == identity && target.health == ConvergenceHealth::Pending)
+                .then_some(target.allow_receipt_reuse)
+        });
+        let Some(allow_receipt_reuse) = allow_receipt_reuse else {
+            return StartupReport {
+                operation_id,
+                observation: None,
+                outcome: StartupOutcome::Ready,
+            };
+        };
+
+        self.startup.mark_owner_unproven();
+        let lifecycle = self.lifecycle_handle();
+        let report = lifecycle
+            .startup_reconcile_once(operation_id, transition, allow_receipt_reuse)
+            .await;
+        update_startup_retry_target(
+            &lifecycle,
+            report,
+            true,
+            allow_receipt_reuse,
+            self.startup.retry_target_mut(),
+        )
+        .await
+    }
+
+    pub(super) async fn refresh_startup_retry_target_after_reconcile(
+        &mut self,
+        lifecycle: &CoreLifecycleWorkflow,
+        result: &anyhow::Result<()>,
+    ) {
+        let retry_target = self.startup.retry_target_mut();
+        if retry_target.is_none() {
+            return;
+        }
+        if result.is_ok() {
+            *retry_target = None;
+            return;
+        }
+
+        let identity = match lifecycle.startup_target_identity().await {
+            Ok(identity) => Some(identity),
+            Err(_) => lifecycle.unresolved_startup_target_identity().await,
+        };
+        if let Some(identity) = identity {
+            if retry_target
+                .as_ref()
+                .is_none_or(|target| target.identity != identity)
+            {
+                let allow_receipt_reuse = retry_target
+                    .as_ref()
+                    .is_some_and(|target| target.allow_receipt_reuse);
+                *retry_target = Some(StartupRetryTarget::new(identity, allow_receipt_reuse));
+            }
+        }
+
+        let error = result
+            .as_ref()
+            .expect_err("failed reconciliation has an error");
+        let outcome = if lifecycle.outcome_uncertain() {
+            StartupOutcome::RecoveryRequired {
+                reason: format!("runtime target reconciliation is uncertain: {error:#}"),
+            }
+        } else if startup_failure_waits_for_dependency(error) {
+            StartupOutcome::ReadyDegraded {
+                health: ConvergenceHealth::WaitingDependency,
+                reason: format!(
+                    "runtime target reconciliation is waiting for a dependency: {error:#}"
+                ),
+            }
+        } else if startup_failure_is_retryable(error) {
+            StartupOutcome::ReadyDegraded {
+                health: ConvergenceHealth::RetryScheduled,
+                reason: format!("runtime target reconciliation failed transiently: {error:#}"),
+            }
+        } else {
+            StartupOutcome::ReadyDegraded {
+                health: ConvergenceHealth::Blocked,
+                reason: format!("runtime target reconciliation failed: {error:#}"),
+            }
+        };
+        let report = StartupReport {
+            operation_id: 0,
+            observation: None,
+            outcome,
+        };
+        let allow_receipt_reuse = retry_target
+            .as_ref()
+            .is_some_and(|target| target.allow_receipt_reuse);
+        update_startup_retry_target(lifecycle, report, false, allow_receipt_reuse, retry_target)
+            .await;
+    }
+
+    pub(super) async fn reschedule_startup_retry_after_committed_config_patch(
+        &mut self,
+        lifecycle: &CoreLifecycleWorkflow,
+    ) {
+        let retry_target = self.startup.retry_target_mut();
+        let Some(identity_before) = retry_target.as_ref().map(|target| target.identity.clone())
+        else {
+            return;
+        };
+
+        let identity = match lifecycle.startup_target_identity().await {
+            Ok(identity) => identity,
+            Err(_) => match lifecycle.unresolved_startup_target_identity().await {
+                Some(identity) => identity,
+                None => return,
+            },
+        };
+        let Some(target) = retry_target.as_mut() else {
+            return;
+        };
+        if target.identity != identity_before
+            || target.health == ConvergenceHealth::RecoveryRequired
+        {
+            return;
+        }
+
+        if target.identity != identity {
+            let allow_receipt_reuse = target.allow_receipt_reuse;
+            *target = StartupRetryTarget::new(identity, allow_receipt_reuse);
+        } else if target.budget.remaining == 0 {
+            return;
+        }
+        target.health = ConvergenceHealth::RetryScheduled;
+        target.next_attempt = Some(tokio::time::Instant::now());
+    }
+}
+
+pub(in crate::client) async fn update_startup_retry_target(
+    lifecycle: &CoreLifecycleWorkflow,
+    mut report: StartupReport,
+    automatic: bool,
+    allow_receipt_reuse: bool,
+    retry_target: &mut Option<StartupRetryTarget>,
+) -> StartupReport {
+    match &report.outcome {
+        StartupOutcome::Ready => {
+            *retry_target = None;
+            return report;
+        }
+        StartupOutcome::RecoveryRequired { .. } | StartupOutcome::Unsettled { .. } => {
+            if let Some(target) = retry_target.as_mut() {
+                target.health = ConvergenceHealth::RecoveryRequired;
+                target.next_attempt = None;
+            }
+            return report;
+        }
+        StartupOutcome::ReadyDegraded { .. } => {}
+    }
+
+    let identity = match lifecycle.startup_target_identity().await {
+        Ok(identity) => identity,
+        Err(error) => {
+            let reason = format!(
+                "{}; committed runtime target identity is unavailable: {error:#}",
+                report
+                    .outcome
+                    .failure_reason()
+                    .unwrap_or("startup did not converge")
+            );
+            if let Some(identity) = lifecycle.unresolved_startup_target_identity().await {
+                if retry_target
+                    .as_ref()
+                    .is_none_or(|target| target.identity != identity)
+                {
+                    *retry_target = Some(StartupRetryTarget::new(identity, allow_receipt_reuse));
+                }
+                if let Some(target) = retry_target.as_mut() {
+                    report.outcome = target.schedule_dependency(reason);
+                    return report;
+                }
+            }
+            report.outcome = StartupOutcome::ReadyDegraded {
+                health: ConvergenceHealth::Blocked,
+                reason,
+            };
+            return report;
+        }
+    };
+    if retry_target
+        .as_ref()
+        .is_none_or(|target| target.identity != identity)
+    {
+        *retry_target = Some(StartupRetryTarget::new(identity, allow_receipt_reuse));
+    }
+    let target = retry_target
+        .as_mut()
+        .expect("startup retry target was initialized");
+    target.allow_receipt_reuse = allow_receipt_reuse;
+    let reason = report
+        .outcome
+        .failure_reason()
+        .unwrap_or("startup did not converge")
+        .to_owned();
+    report.outcome = match report.outcome {
+        StartupOutcome::ReadyDegraded {
+            health: ConvergenceHealth::WaitingDependency | ConvergenceHealth::RecoveryRequired,
+            ..
+        } => target.schedule_dependency(reason),
+        StartupOutcome::ReadyDegraded {
+            health: ConvergenceHealth::RetryScheduled,
+            ..
+        } => target.schedule_application(reason, automatic),
+        StartupOutcome::ReadyDegraded {
+            health: ConvergenceHealth::Blocked,
+            ..
+        }
+        | StartupOutcome::ReadyDegraded { .. } => target.block(reason),
+        StartupOutcome::Ready
+        | StartupOutcome::RecoveryRequired { .. }
+        | StartupOutcome::Unsettled { .. } => {
+            unreachable!("handled above")
+        }
+    };
+    report
 }

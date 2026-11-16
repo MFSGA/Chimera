@@ -10,6 +10,8 @@ use chimera_ipc::api::status::CoreState;
 use struct_patch::Patch;
 use tokio::sync::watch;
 
+#[cfg(test)]
+use crate::client::application_workflow::startup::update_startup_retry_target;
 use crate::client::application_workflow::startup::{
     OwnerPlan, RuntimeEvidence, ServiceEvidence, StartupObservation, StartupOutcome,
     StartupOwnerFailure, StartupReport, StartupRetryTarget, effective_host, plan_owner,
@@ -385,7 +387,7 @@ impl CoreLifecycleWorkflow {
         }
     }
 
-    pub(super) fn outcome_uncertain(&self) -> bool {
+    pub(in crate::client) fn outcome_uncertain(&self) -> bool {
         self.core.outcome_uncertain()
     }
 
@@ -400,8 +402,12 @@ impl CoreLifecycleWorkflow {
         command: Command,
         startup_retry_target: &mut Option<StartupRetryTarget>,
     ) -> anyhow::Result<()> {
+        #[cfg(not(test))]
+        let _ = startup_retry_target;
+        #[cfg(test)]
         let refresh_startup_retry_identity =
             matches!(&command, Command::PatchApplicationConfig { .. });
+        #[cfg(test)]
         let refresh_startup_target = match &command {
             Command::Reconcile
             | Command::RecoverCore
@@ -422,6 +428,7 @@ impl CoreLifecycleWorkflow {
                 anyhow::bail!("Profile mutations must run through ApplicationWorkflowActor")
             }
             Command::RecoverCore | Command::Reconcile => self.reconcile().await,
+            #[cfg(test)]
             Command::StartupReconcile {
                 operation_id,
                 transition,
@@ -434,6 +441,7 @@ impl CoreLifecycleWorkflow {
                     None => Ok(()),
                 }
             }
+            #[cfg(test)]
             Command::RecoverStartup {
                 operation_id,
                 transition,
@@ -446,6 +454,7 @@ impl CoreLifecycleWorkflow {
                     None => Ok(()),
                 }
             }
+            #[cfg(test)]
             Command::RetryStartup {
                 operation_id,
                 identity,
@@ -458,6 +467,12 @@ impl CoreLifecycleWorkflow {
                     Some(reason) => Err(anyhow::anyhow!(reason.to_owned())),
                     None => Ok(()),
                 }
+            }
+            #[cfg(not(test))]
+            Command::StartupReconcile { .. }
+            | Command::RecoverStartup { .. }
+            | Command::RetryStartup { .. } => {
+                anyhow::bail!("startup commands must be handled by ApplicationWorkflow")
             }
             Command::CacheStartupUnsettled { .. } => {
                 anyhow::bail!("an unsettled startup report must be cached by ApplicationWorkflow")
@@ -526,12 +541,15 @@ impl CoreLifecycleWorkflow {
                 self.service.report_endpoint_down(transition.as_mut()).await
             }
         };
-        if refresh_startup_target {
-            self.refresh_startup_retry_target_after_reconcile(startup_retry_target, &result)
-                .await;
-        } else if refresh_startup_retry_identity && result.is_ok() {
-            self.reschedule_startup_retry_after_committed_config_patch(startup_retry_target)
-                .await;
+        #[cfg(test)]
+        {
+            if refresh_startup_target {
+                self.refresh_startup_retry_target_after_reconcile(startup_retry_target, &result)
+                    .await;
+            } else if refresh_startup_retry_identity && result.is_ok() {
+                self.reschedule_startup_retry_after_committed_config_patch(startup_retry_target)
+                    .await;
+            }
         }
         result
     }
@@ -539,6 +557,7 @@ impl CoreLifecycleWorkflow {
     /// A source-only application patch can still change the committed startup
     /// target. Ref's `confirm_saved_inactive` wakes an open reestablish target
     /// for a save and opens a fresh retry budget only when its identity moves.
+    #[cfg(test)]
     async fn reschedule_startup_retry_after_committed_config_patch(
         &self,
         startup_retry_target: &mut Option<StartupRetryTarget>,
@@ -576,6 +595,7 @@ impl CoreLifecycleWorkflow {
         target.next_attempt = Some(tokio::time::Instant::now());
     }
 
+    #[cfg(test)]
     async fn refresh_startup_retry_target_after_reconcile(
         &self,
         startup_retry_target: &mut Option<StartupRetryTarget>,
@@ -640,8 +660,14 @@ impl CoreLifecycleWorkflow {
         let allow_receipt_reuse = startup_retry_target
             .as_ref()
             .is_some_and(|target| target.allow_receipt_reuse);
-        self.update_startup_retry_target(report, false, allow_receipt_reuse, startup_retry_target)
-            .await;
+        update_startup_retry_target(
+            self,
+            report,
+            false,
+            allow_receipt_reuse,
+            startup_retry_target,
+        )
+        .await;
     }
 
     async fn uninstall_service(
@@ -755,6 +781,7 @@ impl CoreLifecycleWorkflow {
 
     /// Runs the reference StartupReconcile owner decision once. Repeated
     /// requests return the first report and do not probe or mutate again.
+    #[cfg(test)]
     pub(in crate::client) async fn startup_reconcile(
         &self,
         operation_id: u64,
@@ -765,14 +792,14 @@ impl CoreLifecycleWorkflow {
         let report = self
             .startup_reconcile_once(operation_id, transition, false)
             .await;
-        let report = self
-            .update_startup_retry_target(report, false, false, startup_retry_target)
-            .await;
+        let report =
+            update_startup_retry_target(self, report, false, false, startup_retry_target).await;
         #[cfg(test)]
         self.cache_startup_report_for_tests(&report);
         report
     }
 
+    #[cfg(test)]
     pub(in crate::client) async fn recover_startup(
         &self,
         operation_id: u64,
@@ -783,14 +810,14 @@ impl CoreLifecycleWorkflow {
         let report = self
             .startup_reconcile_once(operation_id, transition, true)
             .await;
-        let report = self
-            .update_startup_retry_target(report, false, true, startup_retry_target)
-            .await;
+        let report =
+            update_startup_retry_target(self, report, false, true, startup_retry_target).await;
         #[cfg(test)]
         self.cache_startup_report_for_tests(&report);
         report
     }
 
+    #[cfg(test)]
     pub(in crate::client) async fn retry_startup(
         &self,
         operation_id: u64,
@@ -816,8 +843,14 @@ impl CoreLifecycleWorkflow {
         let report = self
             .startup_reconcile_once(operation_id, transition, allow_receipt_reuse)
             .await;
-        self.update_startup_retry_target(report, true, allow_receipt_reuse, startup_retry_target)
-            .await
+        update_startup_retry_target(
+            self,
+            report,
+            true,
+            allow_receipt_reuse,
+            startup_retry_target,
+        )
+        .await
     }
 
     async fn recovery_receipt_matches(
@@ -1084,7 +1117,7 @@ impl CoreLifecycleWorkflow {
         )))
     }
 
-    async fn startup_reconcile_once(
+    pub(in crate::client) async fn startup_reconcile_once(
         &self,
         operation_id: u64,
         _transition: Box<dyn ServiceTransitionLease>,
@@ -1784,97 +1817,6 @@ impl CoreLifecycleWorkflow {
         Ok((target, app, clash, profiles, staged_content))
     }
 
-    async fn update_startup_retry_target(
-        &self,
-        mut report: StartupReport,
-        automatic: bool,
-        allow_receipt_reuse: bool,
-        retry_target: &mut Option<StartupRetryTarget>,
-    ) -> StartupReport {
-        match &report.outcome {
-            StartupOutcome::Ready => {
-                *retry_target = None;
-                return report;
-            }
-            StartupOutcome::RecoveryRequired { .. } | StartupOutcome::Unsettled { .. } => {
-                if let Some(target) = retry_target.as_mut() {
-                    target.health = crate::client::convergence::ConvergenceHealth::RecoveryRequired;
-                    target.next_attempt = None;
-                }
-                return report;
-            }
-            StartupOutcome::ReadyDegraded { .. } => {}
-        }
-
-        let identity = match self.startup_target_identity().await {
-            Ok(identity) => identity,
-            Err(error) => {
-                let reason = format!(
-                    "{}; committed runtime target identity is unavailable: {error:#}",
-                    report
-                        .outcome
-                        .failure_reason()
-                        .unwrap_or("startup did not converge")
-                );
-                if let Some(identity) = self.unresolved_startup_target_identity().await {
-                    if retry_target
-                        .as_ref()
-                        .is_none_or(|target| target.identity != identity)
-                    {
-                        *retry_target =
-                            Some(StartupRetryTarget::new(identity, allow_receipt_reuse));
-                    }
-                    if let Some(target) = retry_target.as_mut() {
-                        report.outcome = target.schedule_dependency(reason);
-                        return report;
-                    }
-                }
-                report.outcome = StartupOutcome::ReadyDegraded {
-                    health: crate::client::convergence::ConvergenceHealth::Blocked,
-                    reason,
-                };
-                return report;
-            }
-        };
-        if retry_target
-            .as_ref()
-            .is_none_or(|target| target.identity != identity)
-        {
-            *retry_target = Some(StartupRetryTarget::new(identity, allow_receipt_reuse));
-        }
-        let target = retry_target
-            .as_mut()
-            .expect("startup retry target was initialized");
-        target.allow_receipt_reuse = allow_receipt_reuse;
-        let reason = report
-            .outcome
-            .failure_reason()
-            .unwrap_or("startup did not converge")
-            .to_owned();
-        let outcome = match report.outcome {
-            StartupOutcome::ReadyDegraded {
-                health:
-                    crate::client::convergence::ConvergenceHealth::WaitingDependency
-                    | crate::client::convergence::ConvergenceHealth::RecoveryRequired,
-                ..
-            } => target.schedule_dependency(reason),
-            StartupOutcome::ReadyDegraded {
-                health: crate::client::convergence::ConvergenceHealth::RetryScheduled,
-                ..
-            } => target.schedule_application(reason, automatic),
-            StartupOutcome::ReadyDegraded {
-                health: crate::client::convergence::ConvergenceHealth::Blocked,
-                ..
-            } => target.block(reason),
-            StartupOutcome::ReadyDegraded { .. } => target.block(reason),
-            StartupOutcome::Ready
-            | StartupOutcome::RecoveryRequired { .. }
-            | StartupOutcome::Unsettled { .. } => unreachable!("handled above"),
-        };
-        report.outcome = outcome;
-        report
-    }
-
     async fn capture_profile_inputs_for(
         &self,
         app: ChimeraAppConfig,
@@ -1893,7 +1835,7 @@ impl CoreLifecycleWorkflow {
         })
     }
 
-    pub(super) async fn startup_target_identity(&self) -> anyhow::Result<String> {
+    pub(in crate::client) async fn startup_target_identity(&self) -> anyhow::Result<String> {
         if let Some(profiles) = &self.profiles {
             let profiles = Arc::new(profiles.load().state.clone());
             let inputs = self
@@ -1909,7 +1851,7 @@ impl CoreLifecycleWorkflow {
         self.startup_source_identity(None)
     }
 
-    async fn unresolved_startup_target_identity(&self) -> Option<String> {
+    pub(in crate::client) async fn unresolved_startup_target_identity(&self) -> Option<String> {
         let profiles = self
             .profiles
             .as_ref()
