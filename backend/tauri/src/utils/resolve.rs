@@ -216,6 +216,9 @@ where
 
 /// handle something when start app
 pub fn resolve_setup(app: &mut App, paths: &PathResolver) {
+    #[cfg(target_os = "macos")]
+    app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+
     handle::Handle::global().init(app.app_handle().clone());
     debug!("todo init handle for widget not tray");
     crate::consts::setup_app_handle(app.app_handle().clone());
