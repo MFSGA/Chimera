@@ -147,18 +147,163 @@ pub(crate) struct RetryableCause {
 
 pub(crate) const DEFERRED_RETRY_BUDGET: u8 = 3;
 
+/// Where a committed runtime target came from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TargetOrigin {
+    Mutation,
+    Reestablish(ReestablishCause),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ReestablishCause {
+    Startup,
+    Recovery,
+    ExplicitStart,
+    ServiceReadiness,
+}
+
+/// Chimera's Profile TCC keeps the source decision and rollback baseline with
+/// a mutation target until the runtime has settled. Ref's shared target does
+/// not need this transaction-only evidence.
+#[derive(Debug, Clone)]
+pub(crate) struct MutationDeferredContext {
+    pub(crate) digest: String,
+    pub(crate) baseline: KnownRuntimeState,
+    pub(crate) domain: ConfigDomain,
+    pub(crate) decision: DecisionHandle,
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct DeferredTarget {
     pub(crate) operation_id: OperationId,
-    pub(crate) digest: String,
-    pub(crate) baseline: KnownRuntimeState,
+    pub(crate) origin: TargetOrigin,
+    pub(crate) identity: String,
     pub(crate) cause: RetryableCause,
     pub(crate) attempts_remaining: u8,
     pub(crate) attempts: u32,
+    pub(crate) waits: u8,
     pub(crate) health: crate::client::convergence::ConvergenceHealth,
     pub(crate) next_attempt: Option<tokio::time::Instant>,
-    pub(crate) domain: ConfigDomain,
-    pub(crate) decision: DecisionHandle,
+    pub(crate) mutation: Option<MutationDeferredContext>,
+}
+
+impl DeferredTarget {
+    pub(crate) fn reestablish(
+        operation_id: OperationId,
+        identity: String,
+        cause: ReestablishCause,
+    ) -> Self {
+        Self {
+            operation_id,
+            origin: TargetOrigin::Reestablish(cause),
+            identity,
+            cause: RetryableCause {
+                stage: MutationStage::Preparing,
+                message: "the runtime is being re-established".into(),
+            },
+            attempts_remaining: crate::client::convergence::RETRY_DELAYS.len() as u8,
+            attempts: 0,
+            waits: 0,
+            health: crate::client::convergence::ConvergenceHealth::Pending,
+            next_attempt: None,
+            mutation: None,
+        }
+    }
+
+    pub(crate) fn is_reestablish(&self) -> bool {
+        matches!(self.origin, TargetOrigin::Reestablish(_))
+    }
+
+    pub(crate) fn is_mutation(&self) -> bool {
+        self.origin == TargetOrigin::Mutation
+            && self
+                .mutation
+                .as_ref()
+                .is_some_and(|mutation| mutation.digest == self.identity)
+    }
+
+    pub(crate) fn allows_receipt_reuse(&self) -> bool {
+        self.origin == TargetOrigin::Reestablish(ReestablishCause::Recovery)
+    }
+
+    pub(crate) fn begin(&mut self, identity: &str, now: tokio::time::Instant) -> bool {
+        if !self.is_reestablish()
+            || self.identity != identity
+            || self.attempts_remaining == 0
+            || !matches!(
+                self.health,
+                crate::client::convergence::ConvergenceHealth::RetryScheduled
+                    | crate::client::convergence::ConvergenceHealth::WaitingDependency
+            )
+            || self.next_attempt.is_none_or(|deadline| deadline > now)
+        {
+            return false;
+        }
+        self.next_attempt = None;
+        self.health = crate::client::convergence::ConvergenceHealth::Pending;
+        true
+    }
+
+    pub(crate) fn schedule_application(
+        &mut self,
+        reason: String,
+        automatic: bool,
+    ) -> crate::client::convergence::ConvergenceHealth {
+        self.waits = 0;
+        self.cause.message = reason;
+        let mut budget = crate::client::convergence::RetryBudget {
+            remaining: self.attempts_remaining,
+            attempts: self.attempts,
+        };
+        let delay = if automatic {
+            budget.record_automatic_attempt()
+        } else {
+            budget.next_delay()
+        };
+        self.attempts_remaining = budget.remaining;
+        self.attempts = budget.attempts;
+        if let Some(delay) = delay {
+            self.health = crate::client::convergence::ConvergenceHealth::RetryScheduled;
+            self.next_attempt = Some(tokio::time::Instant::now() + delay);
+        } else {
+            self.health = crate::client::convergence::ConvergenceHealth::Blocked;
+            self.next_attempt = None;
+        }
+        self.health
+    }
+
+    pub(crate) fn schedule_dependency(
+        &mut self,
+        reason: String,
+    ) -> crate::client::convergence::ConvergenceHealth {
+        if self.attempts_remaining == 0 {
+            self.cause.message = format!(
+                "{reason}; automatic retries are spent, so retry explicitly once the dependency is available"
+            );
+            self.health = crate::client::convergence::ConvergenceHealth::Blocked;
+            self.next_attempt = None;
+            return self.health;
+        }
+        self.cause.message = reason;
+        let (delay, waits) = crate::client::convergence::next_wait(
+            self.waits,
+            crate::client::convergence::OutcomeClass::Dependency,
+        );
+        self.waits = waits;
+        self.health = crate::client::convergence::ConvergenceHealth::WaitingDependency;
+        self.next_attempt = Some(tokio::time::Instant::now() + delay);
+        self.health
+    }
+
+    pub(crate) fn block(
+        &mut self,
+        reason: String,
+    ) -> crate::client::convergence::ConvergenceHealth {
+        self.cause.message = reason;
+        self.health = crate::client::convergence::ConvergenceHealth::Blocked;
+        self.next_attempt = None;
+        self.health
+    }
 }
 
 /// A core-confirmed Profile candidate held until the source transaction
@@ -431,5 +576,49 @@ mod tests {
             CheckRecord::Unserviceable("could not stage Profile config for checking".into())
         );
         assert_eq!(failure.cause(), TryCauseKind::Transient);
+    }
+
+    #[test]
+    fn reestablish_target_spends_one_attempt_and_begins_only_when_due() {
+        let mut target = DeferredTarget::reestablish(
+            chimera_core_manager::OperationId::generate(),
+            "committed-runtime".into(),
+            ReestablishCause::Startup,
+        );
+        let now = tokio::time::Instant::now();
+
+        assert_eq!(
+            target.schedule_application("transient runtime error".into(), true),
+            crate::client::convergence::ConvergenceHealth::RetryScheduled
+        );
+        assert_eq!(target.attempts, 1);
+        assert_eq!(target.attempts_remaining, DEFERRED_RETRY_BUDGET - 1);
+        assert!(!target.begin("committed-runtime", now));
+
+        let due = target.next_attempt.unwrap() + std::time::Duration::from_millis(1);
+        assert!(target.begin("committed-runtime", due));
+        assert_eq!(
+            target.health,
+            crate::client::convergence::ConvergenceHealth::Pending
+        );
+        assert!(target.next_attempt.is_none());
+    }
+
+    #[test]
+    fn reestablish_dependency_waits_keep_the_retry_budget() {
+        let mut target = DeferredTarget::reestablish(
+            chimera_core_manager::OperationId::generate(),
+            "committed-runtime".into(),
+            ReestablishCause::Recovery,
+        );
+
+        assert_eq!(
+            target.schedule_dependency("service is not ready".into()),
+            crate::client::convergence::ConvergenceHealth::WaitingDependency
+        );
+        assert_eq!(target.attempts, 0);
+        assert_eq!(target.attempts_remaining, DEFERRED_RETRY_BUDGET);
+        assert_eq!(target.waits, 1);
+        assert!(target.allows_receipt_reuse());
     }
 }

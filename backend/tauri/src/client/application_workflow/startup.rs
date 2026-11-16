@@ -9,15 +9,20 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 
+#[cfg(test)]
+use crate::client::convergence::{OutcomeClass, RetryBudget, next_wait};
 use crate::client::{
-    application_workflow::{mutation::RuntimeCheckFailure, policy::TryCauseKind},
-    convergence::{ConvergenceHealth, OutcomeClass, RetryBudget, next_wait},
+    application_workflow::{
+        mutation::{DeferredTarget, ReestablishCause, RuntimeCheckFailure, TargetOrigin},
+        policy::TryCauseKind,
+    },
+    convergence::ConvergenceHealth,
     core_lifecycle::{CoreLifecycleWorkflow, ServiceTransitionLease, ports::CoreStatusSnapshot},
 };
 use chimera_core::actor_v2::{
     endpoint::ExecutionHost, service_policy::ServicePhase, service_status::ServiceHostStatus,
 };
-use chimera_core_manager::{CoreError, CoreErrorKind, CoreOwner, Epoch, RevisionId};
+use chimera_core_manager::{CoreError, CoreErrorKind, CoreOwner, Epoch, OperationId, RevisionId};
 use chimera_ipc::{
     api::status::{ConfigRevisionInfo, CoreState},
     types::ServiceStatus,
@@ -127,6 +132,7 @@ pub(crate) struct StartupReport {
 /// Startup state owned by ApplicationWorkflow. The owner signal is mirrored
 /// through an atomic only for the Service readiness observer outside the actor.
 pub(crate) struct StartupWorkflowState {
+    #[cfg(test)]
     retry_target: Option<StartupRetryTarget>,
     owner_unproven: Arc<AtomicBool>,
 }
@@ -134,6 +140,7 @@ pub(crate) struct StartupWorkflowState {
 impl Default for StartupWorkflowState {
     fn default() -> Self {
         Self {
+            #[cfg(test)]
             retry_target: None,
             owner_unproven: Arc::new(AtomicBool::new(false)),
         }
@@ -143,15 +150,18 @@ impl Default for StartupWorkflowState {
 impl StartupWorkflowState {
     pub(crate) fn with_owner_signal(owner_unproven: Arc<AtomicBool>) -> Self {
         Self {
+            #[cfg(test)]
             retry_target: None,
             owner_unproven,
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn retry_target(&self) -> Option<&StartupRetryTarget> {
         self.retry_target.as_ref()
     }
 
+    #[cfg(test)]
     pub(crate) fn retry_target_mut(&mut self) -> &mut Option<StartupRetryTarget> {
         &mut self.retry_target
     }
@@ -184,9 +194,9 @@ pub(crate) enum StartupOutcome {
     Unsettled { reason: String },
 }
 
-/// Chimera keeps startup retry state inside CoreLifecycleWorkflow while the
-/// pinned ref keeps it on the shared ApplicationWorkflow reestablish target.
-/// Its fields and schedule follow ref's DeferredTarget contract.
+/// Compatibility state used only by the test-only Direct CoreLifecycle adapter.
+/// Production startup retries use ApplicationWorkflow's shared DeferredTarget.
+#[cfg(test)]
 #[derive(Debug, Clone)]
 pub(crate) struct StartupRetryTarget {
     pub(crate) identity: String,
@@ -200,6 +210,7 @@ pub(crate) struct StartupRetryTarget {
     pub(crate) next_attempt: Option<tokio::time::Instant>,
 }
 
+#[cfg(test)]
 impl StartupRetryTarget {
     pub(crate) fn new(identity: String, allow_receipt_reuse: bool) -> Self {
         Self {
@@ -300,6 +311,55 @@ impl StartupRetryTarget {
         self.next_attempt = None;
         self.health = ConvergenceHealth::Pending;
         true
+    }
+}
+
+#[cfg(test)]
+impl From<StartupRetryTarget> for DeferredTarget {
+    fn from(target: StartupRetryTarget) -> Self {
+        let cause = if target.allow_receipt_reuse {
+            ReestablishCause::Recovery
+        } else {
+            ReestablishCause::Startup
+        };
+        Self {
+            operation_id: OperationId::generate(),
+            origin: TargetOrigin::Reestablish(cause),
+            identity: target.identity,
+            cause: crate::client::application_workflow::mutation::RetryableCause {
+                stage: crate::client::application_workflow::mutation::MutationStage::Preparing,
+                message: target.cause,
+            },
+            attempts_remaining: target.budget.remaining,
+            attempts: target.budget.attempts,
+            waits: target.waits,
+            health: target.health,
+            next_attempt: target.next_attempt,
+            mutation: None,
+        }
+    }
+}
+
+#[cfg(test)]
+impl TryFrom<DeferredTarget> for StartupRetryTarget {
+    type Error = ();
+
+    fn try_from(target: DeferredTarget) -> Result<Self, Self::Error> {
+        let TargetOrigin::Reestablish(cause) = target.origin else {
+            return Err(());
+        };
+        Ok(Self {
+            identity: target.identity,
+            allow_receipt_reuse: cause == ReestablishCause::Recovery,
+            cause: target.cause.message,
+            budget: RetryBudget {
+                remaining: target.attempts_remaining,
+                attempts: target.attempts,
+            },
+            waits: target.waits,
+            health: target.health,
+            next_attempt: target.next_attempt,
+        })
     }
 }
 
@@ -1661,12 +1721,12 @@ impl ApplicationWorkflow {
         self.startup.mark_owner_unproven();
         let lifecycle = self.lifecycle_handle();
         let report = self.startup_reconcile_once(operation_id, false).await;
-        let report = update_startup_retry_target(
+        let report = update_reestablish_target(
             &lifecycle,
             report,
             false,
-            false,
-            self.startup.retry_target_mut(),
+            ReestablishCause::Startup,
+            &mut self.deferred,
         )
         .await;
         self.startup_report = Some(report.clone());
@@ -1681,12 +1741,12 @@ impl ApplicationWorkflow {
         self.startup.mark_owner_unproven();
         let lifecycle = self.lifecycle_handle();
         let report = self.startup_reconcile_once(operation_id, true).await;
-        let report = update_startup_retry_target(
+        let report = update_reestablish_target(
             &lifecycle,
             report,
             false,
-            true,
-            self.startup.retry_target_mut(),
+            ReestablishCause::Recovery,
+            &mut self.deferred,
         )
         .await;
         if self.startup_report.is_none() {
@@ -1701,31 +1761,29 @@ impl ApplicationWorkflow {
         identity: String,
         _transition: Box<dyn ServiceTransitionLease>,
     ) -> StartupReport {
-        let allow_receipt_reuse = self.startup.retry_target().and_then(|target| {
-            (target.identity == identity && target.health == ConvergenceHealth::Pending)
-                .then_some(target.allow_receipt_reuse)
+        let target = self.deferred.as_ref().filter(|target| {
+            target.is_reestablish()
+                && target.identity == identity
+                && target.health == ConvergenceHealth::Pending
         });
-        let Some(allow_receipt_reuse) = allow_receipt_reuse else {
+        let Some(target) = target else {
             return StartupReport {
                 operation_id,
                 observation: None,
                 outcome: StartupOutcome::Ready,
             };
         };
+        let TargetOrigin::Reestablish(cause) = target.origin else {
+            unreachable!("filtered reestablish target")
+        };
+        let allow_receipt_reuse = target.allows_receipt_reuse();
 
         self.startup.mark_owner_unproven();
         let lifecycle = self.lifecycle_handle();
         let report = self
             .startup_reconcile_once(operation_id, allow_receipt_reuse)
             .await;
-        update_startup_retry_target(
-            &lifecycle,
-            report,
-            true,
-            allow_receipt_reuse,
-            self.startup.retry_target_mut(),
-        )
-        .await
+        update_reestablish_target(&lifecycle, report, true, cause, &mut self.deferred).await
     }
 
     pub(super) async fn refresh_startup_retry_target_after_reconcile(
@@ -1733,30 +1791,21 @@ impl ApplicationWorkflow {
         lifecycle: &CoreLifecycleWorkflow,
         result: &anyhow::Result<()>,
     ) {
-        let retry_target = self.startup.retry_target_mut();
-        if retry_target.is_none() {
+        let Some(target) = self
+            .deferred
+            .as_ref()
+            .filter(|target| target.is_reestablish())
+        else {
             return;
-        }
-        if result.is_ok() {
-            *retry_target = None;
-            return;
-        }
-
-        let identity = match lifecycle.startup_target_identity().await {
-            Ok(identity) => Some(identity),
-            Err(_) => lifecycle.unresolved_startup_target_identity().await,
         };
-        if let Some(identity) = identity {
-            if retry_target
-                .as_ref()
-                .is_none_or(|target| target.identity != identity)
-            {
-                let allow_receipt_reuse = retry_target
-                    .as_ref()
-                    .is_some_and(|target| target.allow_receipt_reuse);
-                *retry_target = Some(StartupRetryTarget::new(identity, allow_receipt_reuse));
-            }
+        if result.is_ok() {
+            self.clear_startup_retry_target();
+            return;
         }
+        let cause = match target.origin {
+            TargetOrigin::Reestablish(cause) => cause,
+            TargetOrigin::Mutation => unreachable!("filtered reestablish target"),
+        };
 
         let error = result
             .as_ref()
@@ -1788,23 +1837,27 @@ impl ApplicationWorkflow {
             observation: None,
             outcome,
         };
-        let allow_receipt_reuse = retry_target
-            .as_ref()
-            .is_some_and(|target| target.allow_receipt_reuse);
-        update_startup_retry_target(lifecycle, report, false, allow_receipt_reuse, retry_target)
-            .await;
+        update_reestablish_target(lifecycle, report, false, cause, &mut self.deferred).await;
     }
 
     pub(super) async fn reschedule_startup_retry_after_committed_config_patch(
         &mut self,
         lifecycle: &CoreLifecycleWorkflow,
     ) {
-        let retry_target = self.startup.retry_target_mut();
-        let Some(identity_before) = retry_target.as_ref().map(|target| target.identity.clone())
+        let Some(target) = self
+            .deferred
+            .as_ref()
+            .filter(|target| target.is_reestablish())
         else {
             return;
         };
-
+        if target.health == ConvergenceHealth::RecoveryRequired {
+            return;
+        }
+        let cause = match target.origin {
+            TargetOrigin::Reestablish(cause) => cause,
+            TargetOrigin::Mutation => unreachable!("filtered reestablish target"),
+        };
         let identity = match lifecycle.startup_target_identity().await {
             Ok(identity) => identity,
             Err(_) => match lifecycle.unresolved_startup_target_identity().await {
@@ -1812,19 +1865,14 @@ impl ApplicationWorkflow {
                 None => return,
             },
         };
-        let Some(target) = retry_target.as_mut() else {
-            return;
-        };
-        if target.identity != identity_before
-            || target.health == ConvergenceHealth::RecoveryRequired
-        {
-            return;
-        }
-
+        let target = self
+            .deferred
+            .as_mut()
+            .filter(|target| target.is_reestablish())
+            .expect("reestablish target remains attached to the workflow");
         if target.identity != identity {
-            let allow_receipt_reuse = target.allow_receipt_reuse;
-            *target = StartupRetryTarget::new(identity, allow_receipt_reuse);
-        } else if target.budget.remaining == 0 {
+            *target = DeferredTarget::reestablish(OperationId::generate(), identity, cause);
+        } else if target.attempts_remaining == 0 {
             return;
         }
         target.health = ConvergenceHealth::RetryScheduled;
@@ -1832,6 +1880,111 @@ impl ApplicationWorkflow {
     }
 }
 
+async fn update_reestablish_target(
+    lifecycle: &CoreLifecycleWorkflow,
+    mut report: StartupReport,
+    automatic: bool,
+    cause: ReestablishCause,
+    deferred: &mut Option<DeferredTarget>,
+) -> StartupReport {
+    match &report.outcome {
+        StartupOutcome::Ready => {
+            *deferred = None;
+            return report;
+        }
+        StartupOutcome::RecoveryRequired { .. } | StartupOutcome::Unsettled { .. } => {
+            if let Some(target) = deferred.as_mut() {
+                target.health = ConvergenceHealth::RecoveryRequired;
+                target.next_attempt = None;
+            }
+            return report;
+        }
+        StartupOutcome::ReadyDegraded { .. } => {}
+    }
+
+    let identity = match lifecycle.startup_target_identity().await {
+        Ok(identity) => identity,
+        Err(error) => {
+            let reason = format!(
+                "{}; committed runtime target identity is unavailable: {error:#}",
+                report
+                    .outcome
+                    .failure_reason()
+                    .unwrap_or("startup did not converge")
+            );
+            if let Some(identity) = lifecycle.unresolved_startup_target_identity().await {
+                if deferred
+                    .as_ref()
+                    .is_none_or(|target| target.identity != identity)
+                {
+                    *deferred = Some(DeferredTarget::reestablish(
+                        OperationId::generate(),
+                        identity,
+                        cause,
+                    ));
+                }
+                if let Some(target) = deferred.as_mut() {
+                    target.origin = TargetOrigin::Reestablish(cause);
+                    let health = target.schedule_dependency(reason);
+                    report.outcome = StartupOutcome::ReadyDegraded {
+                        health,
+                        reason: target.cause.message.clone(),
+                    };
+                    return report;
+                }
+            }
+            if let Some(target) = deferred.as_mut().filter(|target| target.is_reestablish()) {
+                target.block(reason.clone());
+            }
+            report.outcome = StartupOutcome::ReadyDegraded {
+                health: ConvergenceHealth::Blocked,
+                reason,
+            };
+            return report;
+        }
+    };
+
+    if deferred
+        .as_ref()
+        .is_none_or(|target| target.identity != identity)
+    {
+        *deferred = Some(DeferredTarget::reestablish(
+            OperationId::generate(),
+            identity,
+            cause,
+        ));
+    }
+    let target = deferred
+        .as_mut()
+        .expect("reestablish target was initialized");
+    target.origin = TargetOrigin::Reestablish(cause);
+    let reason = report
+        .outcome
+        .failure_reason()
+        .unwrap_or("startup did not converge")
+        .to_owned();
+    let health = match report.outcome {
+        StartupOutcome::ReadyDegraded {
+            health: ConvergenceHealth::WaitingDependency | ConvergenceHealth::RecoveryRequired,
+            ..
+        } => target.schedule_dependency(reason.clone()),
+        StartupOutcome::ReadyDegraded {
+            health: ConvergenceHealth::RetryScheduled,
+            ..
+        } => target.schedule_application(reason.clone(), automatic),
+        StartupOutcome::ReadyDegraded { .. } => target.block(reason.clone()),
+        StartupOutcome::Ready
+        | StartupOutcome::RecoveryRequired { .. }
+        | StartupOutcome::Unsettled { .. } => unreachable!("handled above"),
+    };
+    report.outcome = StartupOutcome::ReadyDegraded {
+        health,
+        reason: target.cause.message.clone(),
+    };
+    report
+}
+
+#[cfg(test)]
 pub(in crate::client) async fn update_startup_retry_target(
     lifecycle: &CoreLifecycleWorkflow,
     mut report: StartupReport,
