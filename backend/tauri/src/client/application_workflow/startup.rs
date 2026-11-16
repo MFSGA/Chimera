@@ -1,9 +1,8 @@
-//! StartupReconcile's report and owner decision table, migrated from ref.
+//! StartupReconcile and owner reestablishment orchestration for ApplicationWorkflow.
 //!
-//! The CoreLifecycle actor remains Chimera's compatibility boundary for the
-//! current Service/Core adapters. Startup-specific evidence and owner choices
-//! live here so setup cannot silently use the ordinary reconcile path when
-//! another host may still own a core.
+//! CoreLifecycleWorkflow supplies typed Core/Service adapter operations.
+//! Startup evidence and owner decisions live here so setup cannot silently use
+//! ordinary reconciliation when another host may still own a core.
 
 use std::sync::{
     Arc,
@@ -13,7 +12,7 @@ use std::sync::{
 use crate::client::{
     application_workflow::{mutation::RuntimeCheckFailure, policy::TryCauseKind},
     convergence::{ConvergenceHealth, OutcomeClass, RetryBudget, next_wait},
-    core_lifecycle::{CoreLifecycleWorkflow, ServiceTransitionLease},
+    core_lifecycle::{CoreLifecycleWorkflow, ServiceTransitionLease, ports::CoreStatusSnapshot},
 };
 use chimera_core::actor_v2::{
     endpoint::ExecutionHost, service_policy::ServicePhase, service_status::ServiceHostStatus,
@@ -56,6 +55,29 @@ pub(crate) fn startup_stop_error_is_idempotent(error: &anyhow::Error) -> bool {
             .downcast_ref::<CoreError>()
             .is_some_and(|error| error.kind == Some(CoreErrorKind::NotStarted))
     })
+}
+
+fn host_for_run_type(
+    run_type: crate::core::RunType,
+) -> crate::core::actor_v2::control_endpoint::ExecutionHost {
+    use crate::core::{RunType, actor_v2::control_endpoint::ExecutionHost};
+
+    match run_type {
+        RunType::Service => ExecutionHost::Service,
+        RunType::Normal | RunType::Elevated => ExecutionHost::Local,
+    }
+}
+
+fn runtime_evidence(status: &CoreStatusSnapshot) -> RuntimeEvidence {
+    use crate::core::actor_v2::control_endpoint::ExecutionHost;
+
+    let host = host_for_run_type(status.run_type);
+    RuntimeEvidence {
+        host,
+        state: (host != ExecutionHost::Service || status.state_changed_at > 0)
+            .then(|| status.state.clone()),
+        state_changed_at: status.state_changed_at,
+    }
 }
 
 #[derive(Debug)]
@@ -140,6 +162,10 @@ impl StartupWorkflowState {
 
     pub(crate) fn mark_owner_unproven(&self) {
         self.owner_unproven.store(true, Ordering::Release);
+    }
+
+    pub(crate) fn mark_owner_proven(&self) {
+        self.owner_unproven.store(false, Ordering::Release);
     }
 }
 
@@ -887,19 +913,754 @@ mod tests {
 }
 
 impl ApplicationWorkflow {
+    async fn startup_reconcile_once(
+        &mut self,
+        operation_id: u64,
+        allow_receipt_reuse: bool,
+    ) -> StartupReport {
+        use crate::core::actor_v2::control_endpoint::ExecutionHost;
+
+        let lifecycle = self.lifecycle_handle();
+        self.startup.mark_owner_unproven();
+        let app = lifecycle.startup_application_config();
+        let current = match lifecycle.startup_core_status().await {
+            Ok(current) => current,
+            Err(error) => {
+                return StartupReport {
+                    operation_id,
+                    observation: None,
+                    outcome: StartupOutcome::ReadyDegraded {
+                        health: crate::client::convergence::ConvergenceHealth::WaitingDependency,
+                        reason: format!("the current Core owner could not be read: {error:#}"),
+                    },
+                };
+            }
+        };
+        let initial_owner = host_for_run_type(current.run_type);
+        let runtime = Some(runtime_evidence(&current));
+
+        if lifecycle.outcome_uncertain() {
+            return StartupReport {
+                operation_id,
+                observation: Some(StartupObservation {
+                    desired: effective_host(app.enable_service_mode, None, initial_owner),
+                    service: None,
+                    runtime,
+                }),
+                outcome: StartupOutcome::RecoveryRequired {
+                    reason: "a previous Core mutation has an uncertain outcome; startup will not issue another mutation".into(),
+                },
+            };
+        }
+
+        if !lifecycle.startup_service_command_settled().await {
+            return StartupReport {
+                operation_id,
+                observation: Some(StartupObservation {
+                    desired: effective_host(app.enable_service_mode, None, initial_owner),
+                    service: None,
+                    runtime,
+                }),
+                outcome: StartupOutcome::ReadyDegraded {
+                    health: crate::client::convergence::ConvergenceHealth::WaitingDependency,
+                    reason: "a Service command started earlier is still running".into(),
+                },
+            };
+        }
+
+        let (service, service_ready_generation) = lifecycle.service_evidence().await;
+        let (service, service_ready_generation) = match lifecycle
+            .recover_service_error_stop(service.clone(), service_ready_generation)
+            .await
+        {
+            Ok(recovered) => recovered,
+            Err(failure) => {
+                return self.startup_owner_failure_report(
+                    operation_id,
+                    StartupObservation {
+                        desired: effective_host(
+                            app.enable_service_mode,
+                            service.phase().readiness(),
+                            initial_owner,
+                        ),
+                        service: Some(service),
+                        runtime,
+                    },
+                    failure,
+                );
+            }
+        };
+        let current = match lifecycle.startup_core_status().await {
+            Ok(current) => current,
+            Err(error) => {
+                return StartupReport {
+                    operation_id,
+                    observation: Some(StartupObservation {
+                        desired: effective_host(
+                            app.enable_service_mode,
+                            service.phase().readiness(),
+                            initial_owner,
+                        ),
+                        service: Some(service),
+                        runtime: None,
+                    }),
+                    outcome: StartupOutcome::ReadyDegraded {
+                        health: crate::client::convergence::ConvergenceHealth::WaitingDependency,
+                        reason: format!("the Core owner could not be refreshed: {error:#}"),
+                    },
+                };
+            }
+        };
+        let initial_owner = host_for_run_type(current.run_type);
+        let runtime = Some(runtime_evidence(&current));
+        let failed_generation = lifecycle.startup_failed_generation();
+        let service_readiness =
+            if failed_generation != 0 && failed_generation == service_ready_generation {
+                Some(false)
+            } else {
+                service.phase().readiness()
+            };
+        let desired = if matches!(service, ServiceEvidence::ForeignCore { .. }) {
+            ExecutionHost::Local
+        } else {
+            effective_host(app.enable_service_mode, service_readiness, initial_owner)
+        };
+
+        // The legacy Core status projection uses timestamp zero when the
+        // selected Service endpoint could not answer. Do not read its
+        // synthetic Stopped state as a proof that the owner is idle.
+        if initial_owner == ExecutionHost::Service
+            && runtime.as_ref().is_some_and(|r| r.state.is_none())
+        {
+            return StartupReport {
+                operation_id,
+                observation: Some(StartupObservation {
+                    desired,
+                    service: Some(service),
+                    runtime,
+                }),
+                outcome: StartupOutcome::ReadyDegraded {
+                    health: crate::client::convergence::ConvergenceHealth::WaitingDependency,
+                    reason: "the Service host did not publish a current Core state".into(),
+                },
+            };
+        }
+
+        let plan = plan_owner(desired, initial_owner, &service);
+        let mut current = current;
+        let mut service = service;
+        match plan {
+            OwnerPlan::WaitForService { phase } => {
+                return StartupReport {
+                    operation_id,
+                    observation: Some(StartupObservation {
+                        desired,
+                        service: Some(service),
+                        runtime,
+                    }),
+                    outcome: StartupOutcome::ReadyDegraded {
+                        health: crate::client::convergence::ConvergenceHealth::WaitingDependency,
+                        reason: format!(
+                            "the Service host is {phase:?}; startup waits for readiness"
+                        ),
+                    },
+                };
+            }
+            OwnerPlan::Unproven { phase } => {
+                return StartupReport {
+                    operation_id,
+                    observation: Some(StartupObservation {
+                        desired,
+                        service: Some(service),
+                        runtime,
+                    }),
+                    outcome: StartupOutcome::ReadyDegraded {
+                        health: crate::client::convergence::ConvergenceHealth::RecoveryRequired,
+                        reason: format!(
+                            "the Service host ({phase:?}) may still hold a Core, so startup did not start another host"
+                        ),
+                    },
+                };
+            }
+            OwnerPlan::RetireServiceThenLocal => {
+                service = match lifecycle
+                    .retire_service_startup_owner(&service, false)
+                    .await
+                {
+                    Ok(service) => service,
+                    Err(failure) => {
+                        return self.startup_owner_failure_report(
+                            operation_id,
+                            StartupObservation {
+                                desired,
+                                service: Some(service),
+                                runtime,
+                            },
+                            failure,
+                        );
+                    }
+                };
+                current = match lifecycle.startup_core_status().await {
+                    Ok(current) => current,
+                    Err(error) => {
+                        return StartupReport {
+                            operation_id,
+                            observation: Some(StartupObservation {
+                                desired,
+                                service: Some(service),
+                                runtime: None,
+                            }),
+                            outcome: StartupOutcome::ReadyDegraded {
+                                health:
+                                    crate::client::convergence::ConvergenceHealth::WaitingDependency,
+                                reason: format!(
+                                    "the Local Core owner could not be refreshed after Service retirement: {error:#}"
+                                ),
+                            },
+                        };
+                    }
+                };
+            }
+            OwnerPlan::HandBackToLocal => {
+                match &service {
+                    ServiceEvidence::CoreRunning { .. } => {
+                        service = match lifecycle
+                            .retire_service_startup_owner(&service, false)
+                            .await
+                        {
+                            Ok(service) => service,
+                            Err(failure) => {
+                                return self.startup_owner_failure_report(
+                                    operation_id,
+                                    StartupObservation {
+                                        desired,
+                                        service: Some(service),
+                                        runtime,
+                                    },
+                                    failure,
+                                );
+                            }
+                        };
+                    }
+                    ServiceEvidence::Absent { .. }
+                    | ServiceEvidence::CoreStopped { .. }
+                    | ServiceEvidence::ForeignCore { .. } => {}
+                    ServiceEvidence::CoreStoppedWithReason { .. }
+                    | ServiceEvidence::Unreadable { .. } => {
+                        return StartupReport {
+                            operation_id,
+                            observation: Some(StartupObservation {
+                                desired,
+                                service: Some(service),
+                                runtime,
+                            }),
+                            outcome: StartupOutcome::RecoveryRequired {
+                                reason: "the Service Core owner is unreadable; startup will not stop Service or start Local".into(),
+                            },
+                        };
+                    }
+                }
+                if let Err(error) = lifecycle
+                    .startup_select_execution_host(ExecutionHost::Local)
+                    .await
+                {
+                    return self
+                        .startup_failure(
+                            &lifecycle,
+                            operation_id,
+                            StartupObservation {
+                                desired,
+                                service: Some(service),
+                                runtime,
+                            },
+                            error,
+                        )
+                        .await;
+                }
+                current = match lifecycle.startup_core_status().await {
+                    Ok(current) => current,
+                    Err(error) => {
+                        return StartupReport {
+                            operation_id,
+                            observation: Some(StartupObservation {
+                                desired,
+                                service: Some(service),
+                                runtime: None,
+                            }),
+                            outcome: StartupOutcome::ReadyDegraded {
+                                health:
+                                    crate::client::convergence::ConvergenceHealth::WaitingDependency,
+                                reason: format!(
+                                    "the Local Core owner could not be read after handback: {error:#}"
+                                ),
+                            },
+                        };
+                    }
+                };
+            }
+            OwnerPlan::Owned => {
+                if initial_owner == ExecutionHost::Service
+                    && matches!(
+                        &service,
+                        ServiceEvidence::Unreadable { .. } | ServiceEvidence::ForeignCore { .. }
+                    )
+                {
+                    return StartupReport {
+                        operation_id,
+                        observation: Some(StartupObservation {
+                            desired,
+                            service: Some(service),
+                            runtime,
+                        }),
+                        outcome: StartupOutcome::RecoveryRequired {
+                            reason: "the current Service Core owner is not verified; startup did not submit a Service mutation".into(),
+                        },
+                    };
+                }
+                if initial_owner == ExecutionHost::Service {
+                    let state_matches_service = matches!(
+                        (
+                            &service,
+                            runtime.as_ref().and_then(|runtime| runtime.state.as_ref())
+                        ),
+                        (
+                            ServiceEvidence::CoreRunning { .. },
+                            Some(CoreState::Running)
+                        ) | (
+                            ServiceEvidence::CoreStopped { .. },
+                            Some(CoreState::Stopped(_))
+                        )
+                    );
+                    if !state_matches_service {
+                        return StartupReport {
+                            operation_id,
+                            observation: Some(StartupObservation {
+                                desired,
+                                service: Some(service),
+                                runtime,
+                            }),
+                            outcome: StartupOutcome::ReadyDegraded {
+                                health: crate::client::convergence::ConvergenceHealth::WaitingDependency,
+                                reason: "the Service probe and Core status do not describe the same settled owner state".into(),
+                            },
+                        };
+                    }
+                }
+            }
+            OwnerPlan::AdoptService => {
+                if matches!(
+                    &service,
+                    ServiceEvidence::ForeignCore { .. } | ServiceEvidence::Unreadable { .. }
+                ) {
+                    return StartupReport {
+                        operation_id,
+                        observation: Some(StartupObservation {
+                            desired,
+                            service: Some(service),
+                            runtime,
+                        }),
+                        outcome: StartupOutcome::RecoveryRequired {
+                            reason:
+                                "the Service Core owner is not verified; startup did not adopt it"
+                                    .into(),
+                        },
+                    };
+                }
+                if matches!(current.state, CoreState::Running) {
+                    if let Err(failure) = lifecycle.confirm_local_owner_stopped(&current).await {
+                        return self.startup_owner_failure_report(
+                            operation_id,
+                            StartupObservation {
+                                desired,
+                                service: Some(service),
+                                runtime,
+                            },
+                            failure,
+                        );
+                    }
+                } else if current.state_changed_at > 0
+                    && let Err(reason) = lifecycle.confirm_local_stopped_baseline(&current).await
+                {
+                    return StartupReport {
+                        operation_id,
+                        observation: Some(StartupObservation {
+                            desired,
+                            service: Some(service),
+                            runtime,
+                        }),
+                        outcome: StartupOutcome::ReadyDegraded {
+                            health:
+                                crate::client::convergence::ConvergenceHealth::WaitingDependency,
+                            reason,
+                        },
+                    };
+                }
+                if let Err(error) = lifecycle
+                    .startup_select_execution_host(ExecutionHost::Service)
+                    .await
+                {
+                    return self
+                        .startup_failure(
+                            &lifecycle,
+                            operation_id,
+                            StartupObservation {
+                                desired,
+                                service: Some(service),
+                                runtime,
+                            },
+                            error,
+                        )
+                        .await;
+                }
+                current = match lifecycle.startup_core_status().await {
+                    Ok(current) => current,
+                    Err(error) => {
+                        return StartupReport {
+                            operation_id,
+                            observation: Some(StartupObservation {
+                                desired,
+                                service: Some(service),
+                                runtime: None,
+                            }),
+                            outcome: StartupOutcome::ReadyDegraded {
+                                health:
+                                    crate::client::convergence::ConvergenceHealth::WaitingDependency,
+                                reason: format!(
+                                    "the Service Core owner could not be read after adoption: {error:#}"
+                                ),
+                            },
+                        };
+                    }
+                };
+                let (fresh_service, _) = lifecycle.service_evidence().await;
+                service = fresh_service;
+                if matches!(
+                    &service,
+                    ServiceEvidence::ForeignCore { .. } | ServiceEvidence::Unreadable { .. }
+                ) {
+                    return StartupReport {
+                        operation_id,
+                        observation: Some(StartupObservation {
+                            desired,
+                            service: Some(service),
+                            runtime: Some(runtime_evidence(&current)),
+                        }),
+                        outcome: StartupOutcome::RecoveryRequired {
+                            reason: "the adopted Service Core owner changed or is not verified"
+                                .into(),
+                        },
+                    };
+                }
+            }
+        };
+
+        let owner = host_for_run_type(current.run_type);
+        let runtime = Some(runtime_evidence(&current));
+        if owner != desired {
+            return StartupReport {
+                operation_id,
+                observation: Some(StartupObservation {
+                    desired,
+                    service: Some(service),
+                    runtime,
+                }),
+                outcome: StartupOutcome::RecoveryRequired {
+                    reason: format!(
+                        "startup handoff selected {owner:?}, but the committed target requires {desired:?}"
+                    ),
+                },
+            };
+        }
+        if owner == ExecutionHost::Service {
+            let state_matches_service = matches!(
+                (
+                    &service,
+                    runtime.as_ref().and_then(|runtime| runtime.state.as_ref())
+                ),
+                (
+                    ServiceEvidence::CoreRunning { .. },
+                    Some(CoreState::Running)
+                ) | (
+                    ServiceEvidence::CoreStopped { .. },
+                    Some(CoreState::Stopped(_))
+                )
+            );
+            if !state_matches_service {
+                return StartupReport {
+                    operation_id,
+                    observation: Some(StartupObservation {
+                        desired,
+                        service: Some(service),
+                        runtime,
+                    }),
+                    outcome: StartupOutcome::ReadyDegraded {
+                        health: crate::client::convergence::ConvergenceHealth::WaitingDependency,
+                        reason: "the Service probe and selected Core status do not describe the same settled owner state".into(),
+                    },
+                };
+            }
+        }
+
+        // Every settled owner plan now enters the same S3 receipt/retirement
+        // checks before the committed target is applied in S4.
+        let is_running = runtime
+            .as_ref()
+            .is_some_and(|runtime| matches!(runtime.state.as_ref(), Some(CoreState::Running)));
+        if is_running {
+            match lifecycle
+                .recovery_receipt_matches(&current, desired, allow_receipt_reuse)
+                .await
+            {
+                Ok(true) => {
+                    self.startup.mark_owner_proven();
+                    return StartupReport {
+                        operation_id,
+                        observation: Some(StartupObservation {
+                            desired,
+                            service: Some(service),
+                            runtime,
+                        }),
+                        outcome: StartupOutcome::Ready,
+                    };
+                }
+                Ok(false) => {}
+                Err(reason) => {
+                    return StartupReport {
+                        operation_id,
+                        observation: Some(StartupObservation {
+                            desired,
+                            service: Some(service),
+                            runtime,
+                        }),
+                        outcome: StartupOutcome::ReadyDegraded {
+                            health:
+                                crate::client::convergence::ConvergenceHealth::WaitingDependency,
+                            reason,
+                        },
+                    };
+                }
+            }
+
+            let retired = if desired == ExecutionHost::Service {
+                match lifecycle.retire_service_startup_owner(&service, true).await {
+                    Ok(fresh_service) => {
+                        service = fresh_service;
+                        Ok(())
+                    }
+                    Err(failure) => Err(failure),
+                }
+            } else {
+                lifecycle.confirm_local_owner_stopped(&current).await
+            };
+            if let Err(failure) = retired {
+                return self.startup_owner_failure_report(
+                    operation_id,
+                    StartupObservation {
+                        desired,
+                        service: Some(service),
+                        runtime,
+                    },
+                    failure,
+                );
+            }
+        } else if desired == ExecutionHost::Local
+            && runtime.as_ref().is_some_and(|runtime| {
+                runtime.state_changed_at > 0
+                    && matches!(runtime.state.as_ref(), Some(CoreState::Stopped(_)))
+            })
+            && let Err(reason) = lifecycle.confirm_local_stopped_baseline(&current).await
+        {
+            return StartupReport {
+                operation_id,
+                observation: Some(StartupObservation {
+                    desired,
+                    service: Some(service),
+                    runtime,
+                }),
+                outcome: StartupOutcome::ReadyDegraded {
+                    health: crate::client::convergence::ConvergenceHealth::WaitingDependency,
+                    reason,
+                },
+            };
+        }
+
+        self.startup.mark_owner_proven();
+        let mut result = lifecycle
+            .startup_reconcile_application(
+                lifecycle.startup_application_config(),
+                desired == ExecutionHost::Service,
+            )
+            .await;
+
+        if desired == ExecutionHost::Service && result.is_err() && !lifecycle.outcome_uncertain() {
+            let failed_owner = lifecycle
+                .startup_core_status()
+                .await
+                .ok()
+                .map(|current| host_for_run_type(current.run_type));
+            if failed_owner == Some(ExecutionHost::Service) {
+                lifecycle.set_startup_failed_generation(service_ready_generation);
+                match lifecycle.release_service_owner().await {
+                    Ok(fresh_service) => {
+                        self.startup.mark_owner_proven();
+                        result = lifecycle
+                            .startup_reconcile_application_after_service_release(
+                                lifecycle.startup_application_config(),
+                            )
+                            .await;
+                        return self.finish_startup_report(
+                            &lifecycle,
+                            operation_id,
+                            StartupObservation {
+                                desired: ExecutionHost::Local,
+                                service: Some(fresh_service),
+                                runtime,
+                            },
+                            result,
+                        );
+                    }
+                    Err(reason) => {
+                        self.startup.mark_owner_unproven();
+                        return StartupReport {
+                            operation_id,
+                            observation: Some(StartupObservation {
+                                desired,
+                                service: Some(service),
+                                runtime,
+                            }),
+                            outcome: StartupOutcome::ReadyDegraded {
+                                health:
+                                    crate::client::convergence::ConvergenceHealth::WaitingDependency,
+                                reason: format!(
+                                    "Service was ready but its Core did not reconcile, and Local fallback could not prove release: {reason}"
+                                ),
+                            },
+                        };
+                    }
+                }
+            }
+        }
+
+        self.finish_startup_report(
+            &lifecycle,
+            operation_id,
+            StartupObservation {
+                desired,
+                service: Some(service),
+                runtime,
+            },
+            result,
+        )
+    }
+
+    fn finish_startup_report(
+        &self,
+        lifecycle: &CoreLifecycleWorkflow,
+        operation_id: u64,
+        observation: StartupObservation,
+        result: anyhow::Result<()>,
+    ) -> StartupReport {
+        let outcome = match result {
+            Ok(()) => StartupOutcome::Ready,
+            Err(error) if lifecycle.outcome_uncertain() => {
+                self.startup.mark_owner_unproven();
+                StartupOutcome::RecoveryRequired {
+                    reason: format!(
+                        "startup Core reconciliation has an uncertain outcome: {error:#}"
+                    ),
+                }
+            }
+            Err(error) if startup_failure_waits_for_dependency(&error) => {
+                StartupOutcome::ReadyDegraded {
+                    health: crate::client::convergence::ConvergenceHealth::WaitingDependency,
+                    reason: format!(
+                        "startup Core reconciliation is waiting for a dependency: {error:#}"
+                    ),
+                }
+            }
+            Err(error) if startup_failure_is_retryable(&error) => StartupOutcome::ReadyDegraded {
+                health: crate::client::convergence::ConvergenceHealth::RetryScheduled,
+                reason: format!("startup Core reconciliation failed transiently: {error:#}"),
+            },
+            Err(error) => StartupOutcome::ReadyDegraded {
+                health: crate::client::convergence::ConvergenceHealth::Blocked,
+                reason: format!("startup Core reconciliation failed: {error:#}"),
+            },
+        };
+        if outcome == StartupOutcome::Ready
+            && (observation.desired
+                == crate::core::actor_v2::control_endpoint::ExecutionHost::Service
+                || !lifecycle.startup_application_config().enable_service_mode)
+        {
+            lifecycle.set_startup_failed_generation(0);
+        }
+        StartupReport {
+            operation_id,
+            observation: Some(observation),
+            outcome,
+        }
+    }
+
+    async fn startup_failure(
+        &self,
+        lifecycle: &CoreLifecycleWorkflow,
+        operation_id: u64,
+        observation: StartupObservation,
+        error: anyhow::Error,
+    ) -> StartupReport {
+        self.startup.mark_owner_unproven();
+        let outcome = if lifecycle.outcome_uncertain() {
+            StartupOutcome::RecoveryRequired {
+                reason: format!("startup owner transition has an uncertain outcome: {error:#}"),
+            }
+        } else if startup_failure_waits_for_dependency(&error) {
+            StartupOutcome::ReadyDegraded {
+                health: crate::client::convergence::ConvergenceHealth::WaitingDependency,
+                reason: format!("startup owner transition is waiting for a dependency: {error:#}"),
+            }
+        } else if startup_failure_is_retryable(&error) {
+            StartupOutcome::ReadyDegraded {
+                health: crate::client::convergence::ConvergenceHealth::RetryScheduled,
+                reason: format!("startup owner transition failed transiently: {error:#}"),
+            }
+        } else {
+            StartupOutcome::ReadyDegraded {
+                health: crate::client::convergence::ConvergenceHealth::Blocked,
+                reason: format!("startup owner transition failed: {error:#}"),
+            }
+        };
+        StartupReport {
+            operation_id,
+            observation: Some(observation),
+            outcome,
+        }
+    }
+
+    fn startup_owner_failure_report(
+        &self,
+        operation_id: u64,
+        observation: StartupObservation,
+        failure: StartupOwnerFailure,
+    ) -> StartupReport {
+        self.startup.mark_owner_unproven();
+        StartupReport {
+            operation_id,
+            observation: Some(observation),
+            outcome: failure.outcome(),
+        }
+    }
+
     pub(in crate::client) async fn startup_reconcile(
         &mut self,
         operation_id: u64,
-        transition: Box<dyn ServiceTransitionLease>,
+        _transition: Box<dyn ServiceTransitionLease>,
     ) -> StartupReport {
         if let Some(report) = &self.startup_report {
             return report.clone();
         }
         self.startup.mark_owner_unproven();
         let lifecycle = self.lifecycle_handle();
-        let report = lifecycle
-            .startup_reconcile_once(operation_id, transition, false)
-            .await;
+        let report = self.startup_reconcile_once(operation_id, false).await;
         let report = update_startup_retry_target(
             &lifecycle,
             report,
@@ -915,13 +1676,11 @@ impl ApplicationWorkflow {
     pub(in crate::client) async fn recover_startup(
         &mut self,
         operation_id: u64,
-        transition: Box<dyn ServiceTransitionLease>,
+        _transition: Box<dyn ServiceTransitionLease>,
     ) -> StartupReport {
         self.startup.mark_owner_unproven();
         let lifecycle = self.lifecycle_handle();
-        let report = lifecycle
-            .startup_reconcile_once(operation_id, transition, true)
-            .await;
+        let report = self.startup_reconcile_once(operation_id, true).await;
         let report = update_startup_retry_target(
             &lifecycle,
             report,
@@ -940,7 +1699,7 @@ impl ApplicationWorkflow {
         &mut self,
         operation_id: u64,
         identity: String,
-        transition: Box<dyn ServiceTransitionLease>,
+        _transition: Box<dyn ServiceTransitionLease>,
     ) -> StartupReport {
         let allow_receipt_reuse = self.startup.retry_target().and_then(|target| {
             (target.identity == identity && target.health == ConvergenceHealth::Pending)
@@ -956,8 +1715,8 @@ impl ApplicationWorkflow {
 
         self.startup.mark_owner_unproven();
         let lifecycle = self.lifecycle_handle();
-        let report = lifecycle
-            .startup_reconcile_once(operation_id, transition, allow_receipt_reuse)
+        let report = self
+            .startup_reconcile_once(operation_id, allow_receipt_reuse)
             .await;
         update_startup_retry_target(
             &lifecycle,
