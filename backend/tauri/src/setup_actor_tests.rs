@@ -95,6 +95,45 @@ impl ServiceProcessControl for OfflineService {
     }
 }
 
+#[test]
+fn synchronous_tauri_setup_registers_service_drain_on_the_runtime() {
+    // E2E regression: the real Tauri setup callback runs on the main thread.
+    // Calling ServiceClient::drain_on_shutdown here without entering Tokio
+    // previously panicked and exited the desktop app with code 101.
+    assert!(
+        tokio::runtime::Handle::try_current().is_err(),
+        "this test must start outside a Tokio reactor"
+    );
+
+    let offline = Arc::new(OfflineService::default());
+    let factory = Arc::new(IpcServiceEndpointFactory::new(|| -> EndpointHandle {
+        panic!("an uninstalled daemon must not create a Core endpoint")
+    }));
+    let service = tauri::async_runtime::block_on(async {
+        chimera_core::actor_v2::service_actor::ServiceClient::spawn(offline, factory, 3)
+            .await
+            .expect("service actor must start on Tauri's runtime")
+    });
+    let tasks = tokio_util::task::TaskTracker::new();
+    let shutdown = tokio_util::sync::CancellationToken::new();
+
+    // This is exactly how the synchronous production setup registers the
+    // shutdown watcher; registration itself must never require a reactor on
+    // the calling thread.
+    super::register_service_drain_on_tauri_runtime(&service, &tasks, shutdown.clone());
+    shutdown.cancel();
+    tasks.close();
+    tauri::async_runtime::block_on(async {
+        tokio::time::timeout(Duration::from_secs(5), tasks.wait())
+            .await
+            .expect("registered ServiceActor shutdown watcher must drain");
+        assert!(
+            service.probe().await.is_err(),
+            "ServiceActor must be closed"
+        );
+    });
+}
+
 #[tokio::test]
 async fn actor_owners_follow_ref_spawn_order_and_drain_on_failed_setup() {
     let mut owners = super::StartupOwners::default();

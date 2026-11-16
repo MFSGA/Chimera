@@ -175,7 +175,12 @@ pub fn setup(
         migrations.backup_info(),
         Some(startup_failure_capture),
     )?;
-    service_actor.drain_on_shutdown(&tasks, shutdown.child_token());
+    // Tauri calls setup on its synchronous main thread. The ref
+    // ServiceClient::drain_on_shutdown uses TaskTracker::spawn and therefore
+    // requires an entered Tokio runtime, just like ServiceClient::spawn.
+    // Register it inside Tauri's runtime instead of panicking during GUI
+    // startup ("there is no reactor running").
+    register_service_drain_on_tauri_runtime(&service_actor, &tasks, shutdown.child_token());
     let service_commands: Arc<
         dyn chimera_core::actor_v2::service_command_port::ServiceCommandPort,
     > = Arc::new(
@@ -379,6 +384,19 @@ pub(crate) struct StartupOwners {
     // Temporary compatibility owner for the current LegacyCoreBridge path.
     // A composition must choose exactly one core owner, never both.
     legacy_core: Option<chimera_core_manager::CoreControl>,
+}
+
+/// Register the ref ServiceActor's shutdown watcher from Tauri's synchronous
+/// setup callback. Keep the actor's upstream TaskTracker semantics intact
+/// while entering the application's async runtime for the spawn.
+fn register_service_drain_on_tauri_runtime(
+    service: &chimera_core::actor_v2::service_actor::ServiceClient,
+    tasks: &tokio_util::task::TaskTracker,
+    shutdown: tokio_util::sync::CancellationToken,
+) {
+    tauri::async_runtime::block_on(async {
+        service.drain_on_shutdown(tasks, shutdown);
+    });
 }
 
 /// The ref composition path: Core Actor is born first, then the Service
