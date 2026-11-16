@@ -195,3 +195,49 @@ async fn routed_bootstrap_refuses_a_legacy_core_owner_without_probing_service() 
         chimera_core_manager::ExecutorExit::Clean
     );
 }
+
+#[tokio::test]
+async fn partial_production_core_drains_router_then_local_executor() {
+    use chimera_core_manager::{ControlOptions, CoreControl, CoreManager, ManagerOptions};
+
+    let directory = tempfile::tempdir().unwrap();
+    let runtime_dir = camino::Utf8PathBuf::from_path_buf(directory.path().join("runtime"))
+        .expect("runtime directory is UTF-8");
+    let manager = CoreManager::builder(ManagerOptions {
+        runtime_dir: Some(runtime_dir.clone()),
+        log_sink_enabled: false,
+        ..ManagerOptions::default()
+    })
+    .build()
+    .await
+    .unwrap();
+    let control = CoreControl::spawn(
+        manager,
+        ControlOptions::new(runtime_dir.join("staging"), runtime_dir.join("working")),
+    );
+    let router = chimera_core::actor_v2::CoreClient::spawn(Arc::new(
+        crate::core::actor_v2::control_endpoint::LocalEndpoint::new(control.clone()),
+    ))
+    .await
+    .unwrap();
+    let owners = super::StartupOwners {
+        core: Some(router.clone()),
+        core_executor: Some(control.clone()),
+        ..super::StartupOwners::default()
+    };
+
+    owners.request_shutdown();
+    tokio::time::timeout(Duration::from_secs(5), owners.wait_shutdown())
+        .await
+        .expect("both ref Core Actor and local executor must drain");
+
+    assert!(
+        router.connected_endpoint().await.is_err(),
+        "the Core Actor mailbox must close after partial startup cleanup"
+    );
+    assert_eq!(
+        control.until_closed().await,
+        chimera_core_manager::ExecutorExit::Clean,
+        "CoreControl executor must not leak after router termination"
+    );
+}

@@ -1002,14 +1002,18 @@ impl LocalRuntimeHost {
         let mut operation = match endpoint.submit(submission).await {
             Ok(operation) => operation,
             Err(error) => {
-                if endpoint.host() == ExecutionHost::Service
-                    && (error.retryable
-                        || error.kind.is_some_and(|kind| {
-                            matches!(
-                                kind,
-                                CoreErrorKind::BackendUnavailable | CoreErrorKind::Internal
-                            )
-                        }))
+                // An accepted local or Service submit can outlive its
+                // waiting caller. The ref CoreActor serializes admission but
+                // the envelope id is not retained by this application-layer
+                // transaction after an error. Never automatically generate
+                // another id and risk duplicate application.
+                if error.retryable
+                    || error.kind.is_some_and(|kind| {
+                        matches!(
+                            kind,
+                            CoreErrorKind::BackendUnavailable | CoreErrorKind::Internal
+                        )
+                    })
                 {
                     self.ports.invalidate();
                     self.outcome_uncertain.store(true, Ordering::Release);

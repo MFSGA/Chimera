@@ -127,6 +127,22 @@ pub fn setup(
         Some(startup_failure_capture),
     )?;
     startup_owners.legacy_core = Some(local_control.clone());
+    // Match ref: the Core router is spawned over the local endpoint before
+    // the Service actor. A failure while spawning retains the legacy executor
+    // for the partial-startup cleanup path.
+    let core_router = crate::startup_failure::report_boundary_with_backup_and_capture(
+        tauri::async_runtime::block_on(chimera_core::actor_v2::CoreClient::spawn(Arc::new(
+            crate::core::actor_v2::control_endpoint::LocalEndpoint::new(local_control.clone()),
+        )))
+        .context("failed to spawn ref Core Actor"),
+        crate::startup_failure::StartupStage::CoreHost,
+        &paths,
+        migrations.backup_info(),
+        Some(startup_failure_capture),
+    )?;
+    startup_owners.legacy_core = None;
+    startup_owners.core = Some(core_router.clone());
+    startup_owners.core_executor = Some(local_control.clone());
     // Match ref/backend/tauri/src/setup.rs: inject the original resolver from
     // the process entry point. Never re-discover paths through Tauri globals.
     let service_binary =
@@ -168,6 +184,7 @@ pub fn setup(
     let core_facade = Arc::new(crate::core::actor_v2::CoreFacade::new_local_with_control(
         local_control,
         runtime_paths.clone(),
+        core_router,
         service_commands,
         shutdown.child_token(),
         &tasks,
@@ -343,7 +360,8 @@ pub fn setup(
         hotkey_action_pump(hotkey_rx, client.clone(), shutdown.child_token()),
     );
     app.manage(client);
-    startup_owners.legacy_core = None;
+    startup_owners.core = None;
+    startup_owners.core_executor = None;
     core_facade_monitor.start_service_api_monitor(shutdown.child_token(), &tasks);
     Ok(())
 }
@@ -355,6 +373,9 @@ pub(crate) struct StartupOwners {
     // Same partial-construction ownership as ref: the new Core Actor is
     // retained here until the composed Client has accepted it.
     core: Option<chimera_core::actor_v2::CoreClient>,
+    // The routed actor proves the core stopped; the separate CoreControl
+    // executor still needs to be drained after the actor terminates.
+    core_executor: Option<chimera_core_manager::CoreControl>,
     // Temporary compatibility owner for the current LegacyCoreBridge path.
     // A composition must choose exactly one core owner, never both.
     legacy_core: Option<chimera_core_manager::CoreControl>,
@@ -380,7 +401,7 @@ pub(crate) async fn start_runtime_owners(
     chimera_core::actor_v2::service_actor::ServiceClient,
 )> {
     anyhow::ensure!(
-        owners.core.is_none() && owners.legacy_core.is_none(),
+        owners.core.is_none() && owners.legacy_core.is_none() && owners.core_executor.is_none(),
         "runtime owners cannot be spawned while another Core owner is active"
     );
     let core = chimera_core::actor_v2::CoreClient::spawn(local)
@@ -471,7 +492,17 @@ impl StartupOwners {
         }
         if let Some(core) = &self.core {
             core.finish_shutdown().await;
-        } else if let Some(core) = &self.legacy_core {
+        }
+        if let Some(executor) = &self.core_executor {
+            if let Err(error) = executor.shutdown().await {
+                tracing::error!(%error, "failed to stop the routed CoreControl executor");
+            }
+            if executor.until_closed().await == chimera_core_manager::ExecutorExit::Died {
+                tracing::error!("routed CoreControl executor exited unexpectedly");
+            }
+        } else if self.core.is_none()
+            && let Some(core) = &self.legacy_core
+        {
             if let Err(error) = core.shutdown().await {
                 tracing::error!(%error, "failed to shut down the partially initialized core host");
             }

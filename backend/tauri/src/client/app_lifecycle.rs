@@ -64,6 +64,12 @@ impl ChimeraClient {
     /// not install a new binary if core shutdown is unconfirmed.
     pub(crate) async fn wait_shutdown(&self) -> anyhow::Result<()> {
         self.inner.tasks.wait().await;
-        self.shutdown_core().await
+        let stopped = self.shutdown_core().await;
+        // Always drain the router and local executor, even when ordinary
+        // stop has failed. Preserve the original stop uncertainty as the
+        // error returned to the updater/exit boundary.
+        let drained = self.inner.core.finish_shutdown().await;
+        stopped?;
+        drained
     }
 }
