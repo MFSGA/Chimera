@@ -1310,6 +1310,31 @@ impl CoreFacade {
         })
     }
 
+    pub(crate) async fn try_begin_service_transition(&self) -> anyhow::Result<ServiceTransition> {
+        let guard = crate::core::service::HOST_TRANSITION_LOCK
+            .try_lock()
+            .map_err(|_| anyhow::anyhow!("another Service host transition is in progress"))?;
+        if self.service_commands.has_outstanding()
+            && !self.service_commands.try_reap_finished().await
+        {
+            anyhow::bail!(
+                "a previous elevated Service command is still running or awaiting recovery"
+            );
+        }
+        if self.outcome_uncertain() {
+            anyhow::bail!(
+                "previous lower core-host mutation has an uncertain outcome; restart the application before further mutations"
+            );
+        }
+        Ok(ServiceTransition {
+            _guard: guard,
+            outcome_uncertain: self.outcome_uncertain.clone(),
+            restart_attempts: self.service_restart_attempts.clone(),
+            restart_exhausted: self.service_restart_exhausted.clone(),
+            service_commands: self.service_commands.clone(),
+        })
+    }
+
     pub(crate) async fn service_command_settled(&self) -> bool {
         self.service_commands.command_settled().await
     }
@@ -1777,6 +1802,8 @@ mod tests {
         }
     }
 
+    /// Contract: a cancelled helper that later exits is reaped by the
+    /// transition try-path itself, without an external command-settled poll.
     #[tokio::test]
     async fn facade_refuses_new_service_transition_until_cancelled_helper_settles() {
         // A caller can abandon an elevated OS command without cancelling it.
@@ -1806,18 +1833,55 @@ mod tests {
             facade.begin_service_transition().await.is_err(),
             "the facade must not admit another elevated command while one remains running"
         );
+        assert!(
+            tokio::time::timeout(
+                Duration::from_millis(20),
+                facade.try_begin_service_transition(),
+            )
+            .await
+            .expect("nonblocking admission must not wait for an outstanding helper")
+            .is_err(),
+            "the actor-owned recovery path must refuse an outstanding helper without reaping it"
+        );
         assert_eq!(process.starts.load(Ordering::Acquire), 1);
 
         process.release.notify_one();
-        tokio::time::timeout(Duration::from_secs(2), async {
-            while !facade.service_commands.command_settled().await {
+        let transition = tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                if let Ok(transition) = facade.try_begin_service_transition().await {
+                    break transition;
+                }
                 tokio::task::yield_now().await;
             }
         })
         .await
-        .expect("the retained OS helper did not finish");
+        .expect("the try path did not reap the retained OS helper after it finished");
+        drop(transition);
         assert!(!facade.outcome_uncertain());
         let _transition = facade.begin_service_transition().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn facade_nonblocking_service_transition_refuses_a_busy_host_lease() {
+        let facade = CoreFacade::new_local();
+        let transition = facade.begin_service_transition().await.unwrap();
+
+        let result = tokio::time::timeout(
+            Duration::from_millis(20),
+            facade.try_begin_service_transition(),
+        )
+        .await
+        .expect("nonblocking lease admission must not wait behind an active transition");
+        assert!(result.is_err());
+        drop(transition);
+
+        let _transition = tokio::time::timeout(
+            Duration::from_secs(1),
+            facade.try_begin_service_transition(),
+        )
+        .await
+        .expect("the nonblocking lease should become available after release")
+        .expect("a settled, certain Service host should admit the lease");
     }
 
     #[tokio::test]

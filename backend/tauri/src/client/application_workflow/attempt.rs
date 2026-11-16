@@ -10,10 +10,10 @@ use chimera_core::state::DecisionHandle;
 use chimera_core_manager::OperationId;
 
 use super::{
-    mutation::{DeferredTarget, KnownRuntimeState, MutationStage},
+    mutation::{AppliedCandidate, DeferredTarget, KnownRuntimeState, MutationStage},
     workflow::ApplicationWorkflow,
 };
-use crate::client::runtime::RuntimeApplyReceipt;
+use crate::client::runtime::{RuntimeApplyReceipt, RuntimeSnapshot};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum AttemptStage {
@@ -44,8 +44,10 @@ pub(crate) struct LiveAttempt {
     pub(crate) stage: AttemptStage,
     pub(crate) baseline: Option<KnownRuntimeState>,
     /// The receipt the current recovery path can restore. The full candidate
-    /// remains on the TCC stack until a later slice moves confirmation too.
+    /// remains available when a prepare failed after the runtime accepted it.
     pub(crate) target: Option<Arc<RuntimeApplyReceipt>>,
+    /// The applied Try and the remaining work its source commit owes.
+    pub(crate) verdict: Option<AppliedVerdict>,
     pub(crate) unresolved: Option<String>,
 }
 
@@ -54,6 +56,50 @@ pub(crate) enum AttemptOrigin {
     SourceDecision { decision: DecisionHandle },
     CommittedTarget(Box<DeferredTarget>),
     Lifecycle,
+}
+
+/// An applied Profile Try, with the effects its source commit still owes.
+///
+/// The replaced flag is retained for Chimera's runtime adapter, which uses the
+/// full candidate when promoting the staged product.
+#[derive(Debug, Clone)]
+pub(crate) struct AppliedVerdict {
+    pub(crate) receipt: Arc<RuntimeApplyReceipt>,
+    pub(crate) product: Arc<RuntimeSnapshot>,
+    pub(crate) releases_service: bool,
+    pub(crate) replaced: bool,
+}
+
+impl AppliedVerdict {
+    pub(crate) fn new(candidate: &AppliedCandidate, releases_service: bool) -> Self {
+        Self {
+            receipt: candidate.receipt.clone(),
+            product: candidate.product.clone(),
+            releases_service,
+            replaced: candidate.replaced,
+        }
+    }
+
+    pub(crate) fn candidate(&self) -> AppliedCandidate {
+        AppliedCandidate {
+            replaced: self.replaced,
+            receipt: self.receipt.clone(),
+            product: self.product.clone(),
+        }
+    }
+
+    pub(crate) fn with_runtime(
+        &self,
+        receipt: Arc<RuntimeApplyReceipt>,
+        product: Arc<RuntimeSnapshot>,
+    ) -> Self {
+        Self {
+            receipt,
+            product,
+            releases_service: self.releases_service,
+            replaced: self.replaced,
+        }
+    }
 }
 
 impl LiveAttempt {
@@ -86,6 +132,7 @@ impl LiveAttempt {
             stage: AttemptStage::Preparing,
             baseline: None,
             target: None,
+            verdict: None,
             unresolved: None,
         }
     }
@@ -118,6 +165,20 @@ impl ApplicationWorkflow {
     pub(crate) fn record_attempt_baseline(&mut self, baseline: &KnownRuntimeState) {
         if let Some(attempt) = &mut self.live {
             attempt.baseline = Some(baseline.clone());
+        }
+    }
+
+    pub(crate) fn record_attempt_verdict(
+        &mut self,
+        operation_id: &OperationId,
+        verdict: AppliedVerdict,
+    ) {
+        if let Some(attempt) = self
+            .live
+            .as_mut()
+            .filter(|attempt| &attempt.operation_id == operation_id)
+        {
+            attempt.verdict = Some(verdict);
         }
     }
 

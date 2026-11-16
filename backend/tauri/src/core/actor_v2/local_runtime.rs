@@ -714,12 +714,41 @@ impl LocalRuntimeHost {
         operation_id: &OperationId,
         candidate: crate::client::application_workflow::mutation::AppliedCandidate,
     ) -> anyhow::Result<()> {
-        let candidate_file = self
+        anyhow::ensure!(
+            candidate.product.revision == candidate.receipt.revision
+                && candidate.product.target_core == candidate.receipt.target_core
+                && chimera_core_manager::payload_digest(candidate.product.product_bytes())
+                    == candidate.receipt.config_digest,
+            "committed Profile product does not match its confirmed runtime receipt"
+        );
+        let confirmed = self
+            .lifecycle
+            .accepted_confirmed_receipt()
+            .context("the prepared Profile runtime receipt is no longer confirmed")?;
+        anyhow::ensure!(
+            confirmed.revision == candidate.receipt.revision
+                && confirmed.config_digest == candidate.receipt.config_digest
+                && confirmed.target_core == candidate.receipt.target_core
+                && confirmed.host == candidate.receipt.host,
+            "the confirmed runtime no longer matches the committed Profile candidate"
+        );
+
+        let candidate_file = match self
             .pending_profile_candidates
             .lock()
             .await
             .remove(operation_id)
-            .context("held Profile runtime candidate is unavailable at Confirm")?;
+        {
+            Some(candidate_file) => candidate_file,
+            None => {
+                // A prior Confirm may have consumed its staged file before
+                // interruption. Recreate the same verified product so replay
+                // can safely finish promotion and snapshot publication.
+                self.runtime_paths
+                    .create_candidate(candidate.product.product_bytes())
+                    .await?
+            }
+        };
         self.publish_profile_candidate(candidate_file, candidate.receipt, candidate.product)
             .await
     }
@@ -1622,8 +1651,10 @@ mod tests {
         host.shutdown().await.unwrap();
     }
 
+    /// Contract: replay after Confirm consumed its staged file must recreate
+    /// and publish the same product; discard still removes an unconfirmed file.
     #[tokio::test]
-    async fn held_profile_candidate_is_published_only_by_confirm_and_discard_cleans_it() {
+    async fn held_profile_candidate_confirmation_replays_idempotently_and_discard_cleans_it() {
         let root = tempfile::TempDir::new().unwrap();
         let paths = crate::utils::path::PathResolver::with_base_dirs(
             root.path().join("config"),
@@ -1688,6 +1719,9 @@ mod tests {
             ports: Default::default(),
             artifact: Some(product.clone()),
         });
+        // Prepare publishes the Core-confirmed receipt before the source
+        // transaction reaches Confirm.
+        host.lifecycle.publish_confirmed(receipt.clone());
 
         host.confirm_profile_runtime(
             &operation_id,
@@ -1708,6 +1742,23 @@ mod tests {
         assert_eq!(
             host.confirmed_runtime_receipt().unwrap().config_digest,
             receipt.config_digest
+        );
+        assert!(host.lifecycle.snapshot().applied.is_some());
+
+        host.confirm_profile_runtime(
+            &operation_id,
+            crate::client::application_workflow::mutation::AppliedCandidate {
+                replaced: true,
+                receipt: receipt.clone(),
+                product: product.clone(),
+            },
+        )
+        .await
+        .expect("replayed confirmation should recreate the consumed candidate");
+        assert_eq!(
+            tokio::fs::read(runtime_paths.product()).await.unwrap(),
+            config_bytes,
+            "replay must keep the committed product bytes"
         );
         assert!(host.lifecycle.snapshot().applied.is_some());
 

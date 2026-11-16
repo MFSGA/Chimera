@@ -1313,3 +1313,17 @@ backend/Cargo.toml -p chimera --lib core::clash::proxies::tests:: -- --nocapture
 - 证据：Stage 4u 已先添加/改写 Core Lifecycle actor 回归并运行，之后才读取 `docs/testing/README.md`；这违反仓库要求在新增、修改或审查测试前先读规范。
 - 处理：随后按 T01/T02 检查测试契约与断言来源，测试通过实际 CoreLifecycle actor、持久化 Profiles snapshot 与 fake Core 观察最终 active Profiles；将测试名改为说明行为的 `explicit_reconcile_keeps_committed_profiles_active_after_deferred_retry_recovery`。测试**只证明 Rust actor/adapter fixture 边界**，不声称桌面 UI、冷启动或真实 Service 已覆盖。
 - 防复发：任务开始时先读取测试标准，再设计测试契约并编写用例；既有测试或之前的相似测试不能替代规范阅读。
+
+### LESSON-20261116-006：首次编译后再记录目标测试结果
+
+- 日期与时区：2026-11-16 US/Pacific。状态：Mitigated（首次定向编译失败，补齐导入后完整相关验证通过）。
+- 证据与根因：新增 AppliedVerdict 确认/恢复 helper 后，首次运行 `cargo test --manifest-path backend/Cargo.toml -p chimera --lib --offline --locked client::application_workflow::tcc::tests::failed_profile_confirmation_replays_the_committed_candidate_before_next_mutation -- --test-threads=1` 在编译阶段报告三个 `.context(...)` 调用不可用，原因是 `tcc.rs` 遗漏 `anyhow::Context` trait 导入；测试断言尚未执行。
+- 修正与验证：补充 `anyhow::Context` 导入，重新运行 TCC 集合 **13/13**、LocalRuntime replay **1/1**、完整 `client::` 集合 **396/396**、`cargo check --tests` 和 `cargo clippy --all-targets`，均退出 0。
+- 防复发：新增扩展结果类型的异步 helper 时，先执行对应目标测试的实际编译与断言；编译阶段错误必须单独标记，不能记作测试断言失败或通过。依赖扩展方法时检查 trait 导入。
+
+### LESSON-20261116-007：CoreLifecycle actor 内不能等待已排队的 host lease
+
+- 日期与时区：2026-11-16 US/Pacific。状态：Mitigated（独立复核确认存在并发缺口；改为非等待式 admission 并增加回归，没有观察到生产事故）。
+- 证据与根因：Stage 4v 首版在 Profile TCC 的 CoreLifecycle actor 命令内直接停止旧 Service owner；`CoreFacade::retire_service_core` 的调用约定要求持有 `HOST_TRANSITION_LOCK`，但 ProfileMutation 没有预先取得 lease。Service/health transition 可能先持有该锁并排队等待同一 actor，若 TCC 在 actor 内等待锁，会形成环形等待；单纯的 fresh probe 与 owner token 不能代替 host-transition 序列化。该缺口由独立静态复核确认，未有真实并发事故证据。
+- 修正与验证：TCC 改走 `ProfileRuntime::try_release_service_owner`，经 `ServiceLifecyclePort::try_begin_transition` 到 `CoreFacade::try_begin_service_transition` 用 `HOST_TRANSITION_LOCK.try_lock()` 非等待式获取 lease；若 Service helper 已结束，则 `ServiceCommandActor::try_reap_finished` 用 `Mutex::try_lock` 检查并只 join 已完成的 helper，不等待 Service actor 或额外运行 probe；若 helper 仍运行则保留 verdict 并报告可恢复失败。这样后续 TCC retry 无需依赖另一条 Service command 才能清除 stale `outstanding` 标志；启动路径继续使用进入 actor 前已取得的普通 lease。`timed_out_helper_refuses_overlapping_mutation_and_false_stop_proof` **1/1** 证明完成 helper 回收不额外 probe，完整 facade 集合 **12/12** 证明释放 helper 后 try-path 能自行重试成功；完整 `client::` 集合 **396/396**，TCC **13/13**，LocalRuntime replay **1/1**，`cargo check --tests` 和 `cargo clippy --all-targets` 均通过。
+- 防复发：CoreLifecycle actor 执行期间若需跨 Service/Local host transition，必须沿统一 lock/mailbox 顺序传入已有 lease；若无法预先取得，只能使用明确非等待式 try-acquire 并保留可恢复状态，不能在 actor 内等待一个可能由排队 actor 请求持有的 lease。测试应同时证明 lock busy 时快速失败和释放后可取得，不以单独 owner fence 代替 host-transition lease。

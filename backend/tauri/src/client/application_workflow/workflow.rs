@@ -65,6 +65,9 @@ pub(crate) trait ProfileRuntime: Send + Sync + 'static {
         operation_id: &OperationId,
         candidate: AppliedCandidate,
     ) -> anyhow::Result<()>;
+    async fn try_release_service_owner(&self) -> Result<(), String> {
+        Ok(())
+    }
     async fn discard_profile_runtime(&self, operation_id: &OperationId);
     async fn reconcile_profiles(
         &self,

@@ -3,12 +3,13 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use anyhow::Context;
 use chimera_config::profile::Profiles;
 use chimera_core::state::{AbortResourceState, StateDecision};
 use chimera_core_manager::{CoreError, CoreErrorKind, OperationId};
 
 use super::{
-    attempt::{AttemptOrigin, AttemptStage, LiveAttempt},
+    attempt::{AppliedVerdict, AttemptOrigin, AttemptStage, LiveAttempt},
     impact::{ActivationIntent, RuntimeImpact, classify_profiles},
     mutation::{
         ApplyFailure, CheckRecord, DomainChange, EvidenceGap, KnownRuntimeState,
@@ -111,13 +112,23 @@ impl ApplicationWorkflow {
                 }
             }
         };
-        if let RuntimePrepareOutcome::Applied(candidate) = &outcome
-            && let Some(attempt) = self
+        if let RuntimePrepareOutcome::Applied(candidate) = &outcome {
+            let releases_service = matches!(
+                &baseline,
+                Some(KnownRuntimeState::Applied(receipt))
+                    if receipt.host
+                        == crate::core::actor_v2::control_endpoint::ExecutionHost::Service
+            ) && candidate.receipt.host
+                == crate::core::actor_v2::control_endpoint::ExecutionHost::Local;
+            let verdict = AppliedVerdict::new(candidate, releases_service);
+            if let Some(attempt) = self
                 .live
                 .as_mut()
                 .filter(|attempt| attempt.operation_id == operation_id)
-        {
-            attempt.target = Some(candidate.receipt.clone());
+            {
+                attempt.target = Some(candidate.receipt.clone());
+            }
+            self.record_attempt_verdict(&operation_id, verdict);
         }
         request.answer(outcome.ack());
         if !matches!(&outcome, RuntimePrepareOutcome::RecoveryRequired(_)) {
@@ -161,29 +172,25 @@ impl ApplicationWorkflow {
             DecisionOutcome::Committed => {
                 self.advance_attempt_for(&operation_id, AttemptStage::Confirming);
                 match &outcome {
-                    RuntimePrepareOutcome::Applied(candidate) => {
-                        match core
-                            .confirm_profile_runtime(&operation_id, candidate.clone())
-                            .await
-                        {
-                            Ok(()) => {
-                                self.clear_startup_retry_target();
-                                if let Some(notifications) = &self.notifications {
-                                    notifications
-                                        .runtime_bound(core.effect_port_binding().await, false);
-                                }
-                                Ok(())
-                            }
+                    RuntimePrepareOutcome::Applied(_) => {
+                        let verdict = self
+                            .live
+                            .as_ref()
+                            .filter(|attempt| attempt.operation_id == operation_id)
+                            .and_then(|attempt| attempt.verdict.clone())
+                            .expect("an applied Try records its verdict before ACK");
+                        match self.finish_applied(core, &operation_id, &verdict).await {
+                            Ok(()) => Ok(()),
                             Err(error) => {
                                 let message = format!(
-                                    "Profile source committed, but runtime confirmation failed: {error}"
+                                    "Profile source committed, but finalizing the applied runtime failed: {error:#}"
                                 );
                                 let context = self
                                     .mark_recovery_with_attempt(
                                         operation_id.clone(),
                                         baseline.clone(),
                                         request.decision.clone(),
-                                        Some(candidate.receipt.clone()),
+                                        Some(verdict.receipt.clone()),
                                         MutationStage::Confirming,
                                         message.clone(),
                                     )
@@ -840,6 +847,39 @@ impl ApplicationWorkflow {
                 self.publish_recovery_context().await;
                 return Err(error);
             }
+            let release_service = source_decision.is_some_and(|decision| {
+                matches!(decision.decision(), StateDecision::Committed { .. })
+            }) && attempt
+                .verdict
+                .as_ref()
+                .is_some_and(|verdict| verdict.releases_service);
+            if release_service {
+                let current = match core.observe_runtime_baseline().await {
+                    Ok(current) => current,
+                    Err(error) => {
+                        let message = format!(
+                            "could not verify the current runtime before releasing Service: {error:#}"
+                        );
+                        self.conclude_attempt(Some(message.clone()));
+                        self.publish_recovery_context().await;
+                        return Err(anyhow::anyhow!(message));
+                    }
+                };
+                if matches!(
+                    current,
+                    KnownRuntimeState::Applied(ref receipt)
+                        if receipt.host
+                            == crate::core::actor_v2::control_endpoint::ExecutionHost::Local
+                ) && let Err(reason) = core.try_release_service_owner().await
+                {
+                    let message = format!(
+                        "Service owner release after current Profile reconciliation failed: {reason}"
+                    );
+                    self.conclude_attempt(Some(message.clone()));
+                    self.publish_recovery_context().await;
+                    return Err(anyhow::anyhow!(message));
+                }
+            }
             core.discard_profile_runtime(&attempt.operation_id).await;
             self.live = None;
             self.deferred = None;
@@ -871,7 +911,17 @@ impl ApplicationWorkflow {
         let recovery = async {
             match decision {
                 Some(StateDecision::Committed { .. }) => {
-                    if let Some(target) = attempt.target.clone() {
+                    if let Some(verdict) = attempt.verdict.as_ref() {
+                        self.recover_applied(core, &attempt.operation_id, verdict)
+                            .await
+                            .map_err(|error| {
+                                anyhow::anyhow!(
+                                    "committed Profile runtime confirmation recovery failed after {:?} ({}): {error:#}",
+                                    attempt.stage,
+                                    recovery_error
+                                )
+                            })?;
+                    } else if let Some(target) = attempt.target.clone() {
                         core.restore_runtime_baseline(&KnownRuntimeState::Applied(target))
                             .await
                             .map_err(|error| {
@@ -951,6 +1001,74 @@ impl ApplicationWorkflow {
         }
         self.publish_recovery_context().await;
         Ok(())
+    }
+
+    async fn finish_applied(
+        &mut self,
+        core: &dyn ProfileRuntime,
+        operation_id: &OperationId,
+        applied: &AppliedVerdict,
+    ) -> anyhow::Result<()> {
+        core.confirm_profile_runtime(operation_id, applied.candidate())
+            .await
+            .context("could not publish the committed Profile runtime product")?;
+        self.deferred = None;
+        self.clear_startup_retry_target();
+        if let Some(notifications) = &self.notifications {
+            notifications.runtime_bound(core.effect_port_binding().await, false);
+        }
+        if applied.releases_service {
+            core.try_release_service_owner()
+                .await
+                .map_err(anyhow::Error::msg)
+                .context("could not confirm release of the previous Service owner")?;
+        }
+        Ok(())
+    }
+
+    async fn recover_applied(
+        &mut self,
+        core: &dyn ProfileRuntime,
+        operation_id: &OperationId,
+        applied: &AppliedVerdict,
+    ) -> anyhow::Result<()> {
+        let expected = KnownRuntimeState::Applied(applied.receipt.clone());
+        let current = core.observe_runtime_baseline().await?;
+        let (receipt, product) = if runtime_state_matches(&expected, &current) {
+            let KnownRuntimeState::Applied(receipt) = current else {
+                unreachable!("an applied runtime target matched an applied baseline")
+            };
+            if receipt.revision == applied.receipt.revision {
+                (applied.receipt.clone(), applied.product.clone())
+            } else {
+                let product = receipt.artifact.clone().ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "the current runtime receipt has no product for the committed Profile target"
+                    )
+                })?;
+                (receipt, product)
+            }
+        } else {
+            core.restore_runtime_baseline(&expected)
+                .await
+                .context("could not restore the committed Profile runtime target")?;
+            let restored = core.observe_runtime_baseline().await?;
+            anyhow::ensure!(
+                runtime_state_matches(&expected, &restored),
+                "the restored runtime does not match the committed Profile target"
+            );
+            let KnownRuntimeState::Applied(receipt) = restored else {
+                anyhow::bail!("the restored Profile runtime has no applied receipt");
+            };
+            let product = receipt.artifact.clone().ok_or_else(|| {
+                anyhow::anyhow!(
+                    "the restored runtime receipt has no product for the committed Profile target"
+                )
+            })?;
+            (receipt, product)
+        };
+        let applied = applied.with_runtime(receipt, product);
+        self.finish_applied(core, operation_id, &applied).await
     }
 
     async fn set_outcome(&self, operation_id: &OperationId, receipt: MutationReceipt) {
@@ -1064,7 +1182,7 @@ mod tests {
     struct TestProfileRuntime {
         applied: Mutex<Vec<Profiles>>,
         restored: Mutex<Vec<KnownRuntimeState>>,
-        confirmed: Mutex<Vec<(OperationId, Arc<RuntimeApplyReceipt>)>>,
+        confirmed: Mutex<Vec<(OperationId, super::super::mutation::AppliedCandidate)>>,
         discarded: Mutex<Vec<OperationId>>,
         baseline: StdMutex<KnownRuntimeState>,
         block_first: AtomicBool,
@@ -1073,9 +1191,11 @@ mod tests {
         fail_confirm: AtomicBool,
         fail_validation: AtomicBool,
         fail_restore: AtomicBool,
+        fail_service_release: AtomicBool,
         status_uncertain: AtomicBool,
         validations: AtomicUsize,
         rebuilds: AtomicUsize,
+        service_releases: AtomicUsize,
         started: StdMutex<Option<oneshot::Sender<()>>>,
         release: StdMutex<Option<oneshot::Receiver<()>>>,
     }
@@ -1094,9 +1214,11 @@ mod tests {
                 fail_confirm: AtomicBool::new(false),
                 fail_validation: AtomicBool::new(false),
                 fail_restore: AtomicBool::new(false),
+                fail_service_release: AtomicBool::new(false),
                 status_uncertain: AtomicBool::new(false),
                 validations: AtomicUsize::new(0),
                 rebuilds: AtomicUsize::new(0),
+                service_releases: AtomicUsize::new(0),
                 started: StdMutex::new(None),
                 release: StdMutex::new(None),
             }
@@ -1115,9 +1237,11 @@ mod tests {
                 fail_confirm: AtomicBool::new(false),
                 fail_validation: AtomicBool::new(false),
                 fail_restore: AtomicBool::new(false),
+                fail_service_release: AtomicBool::new(false),
                 status_uncertain: AtomicBool::new(false),
                 validations: AtomicUsize::new(0),
                 rebuilds: AtomicUsize::new(0),
+                service_releases: AtomicUsize::new(0),
                 started: StdMutex::new(Some(started)),
                 release: StdMutex::new(Some(release)),
             }
@@ -1154,9 +1278,11 @@ mod tests {
                 fail_confirm: AtomicBool::new(false),
                 fail_validation: AtomicBool::new(false),
                 fail_restore: AtomicBool::new(false),
+                fail_service_release: AtomicBool::new(false),
                 status_uncertain: AtomicBool::new(false),
                 validations: AtomicUsize::new(0),
                 rebuilds: AtomicUsize::new(0),
+                service_releases: AtomicUsize::new(0),
                 started: StdMutex::new(None),
                 release: StdMutex::new(None),
             }
@@ -1175,12 +1301,25 @@ mod tests {
                 fail_confirm: AtomicBool::new(false),
                 fail_validation: AtomicBool::new(false),
                 fail_restore: AtomicBool::new(true),
+                fail_service_release: AtomicBool::new(false),
                 status_uncertain: AtomicBool::new(false),
                 validations: AtomicUsize::new(0),
                 rebuilds: AtomicUsize::new(0),
+                service_releases: AtomicUsize::new(0),
                 started: StdMutex::new(None),
                 release: StdMutex::new(None),
             }
+        }
+
+        fn service_baseline_fails_release() -> Self {
+            let runtime = Self::new();
+            *runtime
+                .baseline
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) =
+                KnownRuntimeState::Applied(service_runtime_receipt());
+            runtime.fail_service_release.store(true, Ordering::Release);
+            runtime
         }
     }
 
@@ -1305,8 +1444,17 @@ mod tests {
             self.confirmed
                 .lock()
                 .await
-                .push((operation_id.clone(), candidate.receipt));
+                .push((operation_id.clone(), candidate));
             Ok(())
+        }
+
+        async fn try_release_service_owner(&self) -> std::result::Result<(), String> {
+            self.service_releases.fetch_add(1, Ordering::SeqCst);
+            if self.fail_service_release.swap(false, Ordering::AcqRel) {
+                Err("injected Service owner release failure".into())
+            } else {
+                Ok(())
+            }
         }
 
         async fn discard_profile_runtime(&self, operation_id: &OperationId) {
@@ -1460,6 +1608,12 @@ mod tests {
 
     fn test_runtime_receipt() -> Arc<RuntimeApplyReceipt> {
         runtime_receipt("mode: rule\n")
+    }
+
+    fn service_runtime_receipt() -> Arc<RuntimeApplyReceipt> {
+        let mut receipt = (*test_runtime_receipt()).clone();
+        receipt.host = ExecutionHost::Service;
+        Arc::new(receipt)
     }
 
     fn candidate_runtime_receipt() -> Arc<RuntimeApplyReceipt> {
@@ -1637,8 +1791,11 @@ mod tests {
         );
     }
 
+    /// Contract: a committed Try whose first Confirm fails keeps its receipt
+    /// and product on the live attempt. The next mutation must replay that
+    /// candidate before starting, without reapplying the Core target.
     #[tokio::test]
-    async fn failed_confirm_recovers_the_committed_runtime_target_before_next_mutation() {
+    async fn failed_profile_confirmation_replays_the_committed_candidate_before_next_mutation() {
         let (mut manager, _directory) = profile_manager().await;
         let first_candidate = candidate_profiles();
         let runtime = Arc::new(TestProfileRuntime::fail_confirm());
@@ -1720,14 +1877,118 @@ mod tests {
             manager.snapshot_handle().load().state.valid,
             second_candidate.valid
         );
-        let restored = runtime.restored.lock().await;
-        assert_eq!(restored.len(), 1);
-        let KnownRuntimeState::Applied(receipt) = &restored[0] else {
-            panic!("committed runtime target should be restored");
-        };
+        let confirmed = runtime.confirmed.lock().await;
+        assert_eq!(confirmed.len(), 2);
+        assert_eq!(confirmed[0].0, first_operation_id);
+        assert_eq!(confirmed[1].0, second_operation_id);
         assert_eq!(
-            receipt.config_digest,
+            confirmed[0].1.receipt.config_digest,
             candidate_runtime_receipt().config_digest
+        );
+        assert_eq!(
+            confirmed[0].1.product.product_bytes(),
+            candidate_runtime_receipt()
+                .artifact
+                .as_ref()
+                .unwrap()
+                .product_bytes()
+        );
+        assert!(
+            runtime.restored.lock().await.is_empty(),
+            "a settled confirmed target should replay its saved product without reapplying the Core"
+        );
+    }
+
+    /// Contract: a Service-to-Local Try commits and publishes its product,
+    /// then an injected owner-release failure leaves recovery responsible for
+    /// retrying both the same verdict and the owner fence before later work.
+    #[tokio::test]
+    async fn service_release_failure_retains_the_committed_profile_verdict_for_replay() {
+        let (mut manager, _directory) = profile_manager().await;
+        let first_candidate = candidate_profiles();
+        let runtime = Arc::new(TestProfileRuntime::service_baseline_fails_release());
+        let (workflow, outcomes, recovery_required) = workflow(runtime.clone()).await;
+        let first_operation_id = OperationId::generate();
+        let first_version = manager.snapshot_handle().load().version;
+
+        let _ = manager
+            .replace_if_version_with_participant(
+                first_version,
+                first_candidate.clone(),
+                {
+                    let workflow = workflow.clone();
+                    move |decision| {
+                        participant(
+                            first_operation_id,
+                            decision,
+                            workflow,
+                            Duration::from_secs(1),
+                        )
+                    }
+                },
+                || async { Ok(()) },
+                || async { Ok(()) },
+            )
+            .await;
+
+        assert_eq!(
+            outcomes
+                .lock()
+                .await
+                .get(&first_operation_id)
+                .map(MutationReceipt::runtime_status),
+            Some(RuntimeCommitStatus::RecoveryRequired)
+        );
+        assert_eq!(runtime.service_releases.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            runtime
+                .confirmed
+                .lock()
+                .await
+                .iter()
+                .filter(|(operation_id, _)| operation_id == &first_operation_id)
+                .count(),
+            1,
+            "the committed candidate must be published before Service release is attempted"
+        );
+
+        let mut second_candidate = first_candidate.clone();
+        second_candidate.valid.push("second-runtime-field".into());
+        let second_operation_id = OperationId::generate();
+        let second_version = manager.snapshot_handle().load().version;
+        manager
+            .replace_if_version_with_participant(
+                second_version,
+                second_candidate,
+                {
+                    let workflow = workflow.clone();
+                    move |decision| {
+                        participant(
+                            second_operation_id,
+                            decision,
+                            workflow,
+                            Duration::from_secs(1),
+                        )
+                    }
+                },
+                || async { Ok(()) },
+                || async { Ok(()) },
+            )
+            .await
+            .expect("recovery should retry the Service release before the next mutation");
+
+        assert!(recovery_required.lock().await.is_none());
+        assert_eq!(runtime.service_releases.load(Ordering::SeqCst), 2);
+        assert_eq!(
+            runtime
+                .confirmed
+                .lock()
+                .await
+                .iter()
+                .filter(|(operation_id, _)| operation_id == &first_operation_id)
+                .count(),
+            2,
+            "recovery must replay the same product before retrying the owner fence"
         );
     }
 

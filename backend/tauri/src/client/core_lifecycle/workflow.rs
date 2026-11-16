@@ -1265,6 +1265,15 @@ impl CoreLifecycleWorkflow {
         }
     }
 
+    pub(in crate::client) async fn try_release_service_owner(
+        &self,
+    ) -> Result<ServiceEvidence, String> {
+        let _transition = self.service.try_begin_transition().await.map_err(|error| {
+            format!("could not acquire the Service transition lease: {error:#}")
+        })?;
+        self.release_service_owner().await
+    }
+
     pub(in crate::client) async fn service_evidence(&self) -> (ServiceEvidence, u64) {
         let Ok(info) = self.service.probe().await else {
             let generation = self
@@ -1790,6 +1799,12 @@ impl ProfileRuntime for CoreLifecycleWorkflow {
             .confirm_profile_runtime(operation_id.clone(), candidate)
             .await?;
         Ok(())
+    }
+
+    async fn try_release_service_owner(&self) -> std::result::Result<(), String> {
+        CoreLifecycleWorkflow::try_release_service_owner(self)
+            .await
+            .map(|_| ())
     }
 
     async fn discard_profile_runtime(&self, operation_id: &chimera_core_manager::OperationId) {

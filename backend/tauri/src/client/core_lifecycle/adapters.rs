@@ -45,6 +45,12 @@ impl ServiceLifecyclePort for LegacyServiceBridge {
             inner: self.facade.begin_service_transition().await?,
         }))
     }
+
+    async fn try_begin_transition(&self) -> anyhow::Result<Box<dyn ServiceTransitionLease>> {
+        Ok(Box::new(LegacyServiceTransition {
+            inner: self.facade.try_begin_service_transition().await?,
+        }))
+    }
 }
 
 #[async_trait]

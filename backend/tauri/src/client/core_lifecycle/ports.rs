@@ -97,6 +97,12 @@ pub(crate) trait ServiceLifecyclePort: Send + Sync + 'static {
         }
     }
     async fn begin_transition(&self) -> anyhow::Result<Box<dyn ServiceTransitionLease>>;
+    /// Try to acquire the host transition lease without waiting. This is for
+    /// work running inside the serialized CoreLifecycle actor: waiting here
+    /// could deadlock behind a transition caller queued on that same actor.
+    async fn try_begin_transition(&self) -> anyhow::Result<Box<dyn ServiceTransitionLease>> {
+        anyhow::bail!("this Service adapter does not support nonblocking transitions")
+    }
 }
 
 /// Narrow boundary around the running core's `/configs` API.
