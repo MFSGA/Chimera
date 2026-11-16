@@ -138,7 +138,13 @@ impl ApplicationWorkflow {
     }
 
     pub(in crate::client) fn clear_startup_retry_target(&mut self) {
-        *self.startup.retry_target_mut() = None;
+        if self
+            .deferred
+            .as_ref()
+            .is_some_and(DeferredTarget::is_reestablish)
+        {
+            self.deferred = None;
+        }
     }
 
     #[cfg(test)]
@@ -155,14 +161,19 @@ impl ApplicationWorkflow {
         &mut self,
         target: super::startup::StartupRetryTarget,
     ) {
-        *self.startup.retry_target_mut() = Some(target);
+        self.deferred = Some(target.into());
     }
 
     #[cfg(test)]
     pub(crate) fn startup_retry_target_for_tests(
         &self,
     ) -> Option<super::startup::StartupRetryTarget> {
-        self.startup.retry_target().cloned()
+        self.deferred
+            .as_ref()
+            .filter(|target| target.is_reestablish())
+            .cloned()
+            .map(TryInto::try_into)
+            .and_then(Result::ok)
     }
 
     pub(in crate::client) fn startup_report(&self) -> Option<StartupReport> {
@@ -172,38 +183,38 @@ impl ApplicationWorkflow {
     pub(in crate::client) fn startup_retry_schedule(
         &self,
     ) -> Option<(String, tokio::time::Instant)> {
-        self.startup.retry_target().and_then(|target| {
-            target
-                .next_attempt
-                .map(|deadline| (target.identity.clone(), deadline))
-        })
+        self.deferred
+            .as_ref()
+            .filter(|target| target.is_reestablish())
+            .and_then(|target| {
+                target
+                    .next_attempt
+                    .map(|deadline| (target.identity.clone(), deadline))
+            })
     }
 
     pub(in crate::client) fn startup_retry_due(&self, identity: &str) -> bool {
-        self.startup.retry_target().is_some_and(|target| {
-            target.identity == identity
+        self.deferred.as_ref().is_some_and(|target| {
+            target.is_reestablish()
+                && target.identity == identity
                 && target
                     .next_attempt
                     .is_some_and(|deadline| deadline <= tokio::time::Instant::now())
-                && target.budget.remaining > 0
+                && target.attempts_remaining > 0
         })
     }
 
     pub(in crate::client) fn begin_startup_retry(&mut self, identity: &str) -> bool {
-        self.startup
-            .retry_target_mut()
+        self.deferred
             .as_mut()
-            .is_some_and(|target| {
-                target.identity == identity && target.begin(tokio::time::Instant::now())
-            })
+            .is_some_and(|target| target.begin(identity, tokio::time::Instant::now()))
     }
 
     pub(in crate::client) fn defer_startup_retry(&mut self, identity: &str, reason: String) {
         if let Some(target) = self
-            .startup
-            .retry_target_mut()
+            .deferred
             .as_mut()
-            .filter(|target| target.identity == identity)
+            .filter(|target| target.is_reestablish() && target.identity == identity)
         {
             target.schedule_dependency(reason);
         }
@@ -217,20 +228,25 @@ impl ApplicationWorkflow {
         self.outcomes = workflow.outcomes;
         self.recovery_required = workflow.recovery_required;
         self.notifications = workflow.notifications;
-        self.deferred = workflow.deferred;
+        if workflow.deferred.is_some() {
+            self.deferred = workflow.deferred;
+        }
         self.mutation_connected = true;
         Ok(())
     }
 
     pub(in crate::client) fn validate_mutation_connection(
         &self,
-        _workflow: &ApplicationWorkflow,
+        workflow: &ApplicationWorkflow,
     ) -> anyhow::Result<()> {
         if self.lifecycle.is_none() {
             anyhow::bail!("application workflow has no lifecycle adapter")
         }
         if self.mutation_connected {
             anyhow::bail!("application workflow is already connected")
+        }
+        if self.deferred.is_some() && workflow.deferred.is_some() {
+            anyhow::bail!("startup and Profile workflows both have an outstanding deferred target")
         }
         Ok(())
     }
@@ -299,10 +315,15 @@ impl ApplicationWorkflow {
                         application_patch_requires_reconcile(patch, *service_connected),
                     _ => false,
                 };
-                let mut no_startup_retry_target = None;
-                let result = lifecycle
-                    .execute(command, &mut no_startup_retry_target)
-                    .await;
+                #[cfg(test)]
+                let result = {
+                    let mut no_startup_retry_target = None;
+                    lifecycle
+                        .execute(command, &mut no_startup_retry_target)
+                        .await
+                };
+                #[cfg(not(test))]
+                let result = lifecycle.execute(command).await;
                 if refresh_startup_target {
                     self.refresh_startup_retry_target_after_reconcile(&lifecycle, &result)
                         .await;
@@ -330,9 +351,13 @@ impl ApplicationWorkflow {
 
     pub(in crate::client) fn deferred_retry(&self) -> Option<(String, tokio::time::Instant)> {
         self.deferred.as_ref().and_then(|deferred| {
-            deferred
-                .next_attempt
-                .map(|next_attempt| (deferred.digest.clone(), next_attempt))
+            (deferred.is_mutation())
+                .then(|| {
+                    deferred
+                        .next_attempt
+                        .map(|next_attempt| (deferred.identity.clone(), next_attempt))
+                })
+                .flatten()
         })
     }
 
@@ -349,7 +374,8 @@ impl ApplicationWorkflow {
         let Some(deferred) = &mut self.deferred else {
             return false;
         };
-        if deferred.digest != digest
+        if !deferred.is_mutation()
+            || deferred.identity != digest
             || deferred.attempts_remaining == 0
             || deferred.health != crate::client::convergence::ConvergenceHealth::RetryScheduled
             || deferred
@@ -373,7 +399,7 @@ impl ApplicationWorkflow {
         error: Option<String>,
     ) -> Option<tokio::time::Instant> {
         let deferred = self.deferred.as_mut()?;
-        if deferred.digest != digest {
+        if !deferred.is_mutation() || deferred.identity != digest {
             return None;
         }
         if succeeded {
@@ -386,13 +412,17 @@ impl ApplicationWorkflow {
         if uncertain {
             deferred.health = crate::client::convergence::ConvergenceHealth::RecoveryRequired;
             deferred.next_attempt = None;
+            let mutation = deferred
+                .mutation
+                .as_ref()
+                .expect("mutation deferred target carries its transaction context");
             let context = RecoveryContext {
                 operation_id: Some(deferred.operation_id.clone()),
                 runtime_operation: None,
-                domain: deferred.domain,
+                domain: mutation.domain,
                 stage: MutationStage::TryingCritical,
-                decision: Some(deferred.decision.clone()),
-                baseline: Some(deferred.baseline.clone()),
+                decision: Some(mutation.decision.clone()),
+                baseline: Some(mutation.baseline.clone()),
                 target: None,
                 error: error.unwrap_or_else(|| {
                     "deferred Profile runtime retry has an uncertain outcome".into()
@@ -437,7 +467,10 @@ impl ApplicationWorkflow {
         delay: std::time::Duration,
     ) -> Option<tokio::time::Instant> {
         let deferred = self.deferred.as_mut()?;
-        if deferred.digest != digest || deferred.attempts_remaining == 0 {
+        if !deferred.is_mutation()
+            || deferred.identity != digest
+            || deferred.attempts_remaining == 0
+        {
             return None;
         }
         let next_attempt = tokio::time::Instant::now() + delay;
@@ -450,7 +483,7 @@ impl ApplicationWorkflow {
         if let Some(deferred) = self
             .deferred
             .as_mut()
-            .filter(|deferred| deferred.digest == digest)
+            .filter(|deferred| deferred.is_mutation() && deferred.identity == digest)
         {
             deferred.health = crate::client::convergence::ConvergenceHealth::WaitingDependency;
             deferred.next_attempt = None;

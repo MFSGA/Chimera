@@ -246,7 +246,7 @@ impl ApplicationWorkflow {
                     let previous = self
                         .deferred
                         .take()
-                        .filter(|previous| previous.digest == *digest);
+                        .filter(|previous| previous.identity == *digest);
                     let attempts_remaining = previous
                         .as_ref()
                         .map_or(super::mutation::DEFERRED_RETRY_BUDGET, |previous| {
@@ -260,20 +260,24 @@ impl ApplicationWorkflow {
                     });
                     self.deferred = Some(super::mutation::DeferredTarget {
                         operation_id: operation_id.clone(),
-                        digest: digest.clone(),
-                        baseline: baseline.clone(),
+                        origin: super::mutation::TargetOrigin::Mutation,
+                        identity: digest.clone(),
                         cause: cause.clone(),
                         attempts_remaining,
                         attempts: previous.as_ref().map_or(0, |previous| previous.attempts),
+                        waits: previous.as_ref().map_or(0, |previous| previous.waits),
                         health: if attempts_remaining > 0 {
                             crate::client::convergence::ConvergenceHealth::RetryScheduled
                         } else {
                             crate::client::convergence::ConvergenceHealth::Blocked
                         },
                         next_attempt,
-                        domain:
-                            crate::client::application_workflow::mutation::ConfigDomain::Profiles,
-                        decision: request.decision.clone(),
+                        mutation: Some(super::mutation::MutationDeferredContext {
+                            digest: digest.clone(),
+                            baseline: baseline.clone(),
+                            domain: crate::client::application_workflow::mutation::ConfigDomain::Profiles,
+                            decision: request.decision.clone(),
+                        }),
                     });
                 }
                 RuntimePrepareOutcome::Saved
@@ -749,7 +753,11 @@ impl ApplicationWorkflow {
                                 context.error
                             )
                         })?;
-                } else if self.deferred.is_some() {
+                } else if self
+                    .deferred
+                    .as_ref()
+                    .is_some_and(|deferred| deferred.mutation.is_some())
+                {
                     let baseline = context.baseline.as_ref().ok_or_else(|| {
                         anyhow::anyhow!(
                             "deferred Profile runtime recovery has no confirmed baseline: {}",
@@ -805,7 +813,11 @@ impl ApplicationWorkflow {
             core.discard_profile_runtime(operation_id).await;
         }
         *self.recovery_required.lock().await = None;
-        if let Some(deferred) = &mut self.deferred {
+        if let Some(deferred) = self
+            .deferred
+            .as_mut()
+            .filter(|deferred| deferred.is_mutation())
+        {
             deferred.health = crate::client::convergence::ConvergenceHealth::Blocked;
             deferred.next_attempt = None;
         }
