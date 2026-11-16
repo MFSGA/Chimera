@@ -129,6 +129,7 @@ impl ApplicationWorkflow {
                         .await
                     {
                         Ok(()) => {
+                            self.clear_startup_retry_target();
                             if let Some(notifications) = &self.notifications {
                                 notifications
                                     .runtime_bound(core.effect_port_binding().await, false);

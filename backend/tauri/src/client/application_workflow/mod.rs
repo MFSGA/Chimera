@@ -39,11 +39,38 @@ impl ApplicationWorkflowClient {
         recovery_required: Arc<Mutex<Option<workflow::RecoveryContext>>>,
         notifications: Option<Arc<dyn crate::client::effects::ports::CommitNotifications>>,
     ) -> anyhow::Result<Self> {
-        core.connect_application_workflow(ApplicationWorkflow::new(
+        Self::spawn_inner(core, outcomes, recovery_required, notifications, None).await
+    }
+
+    #[cfg(test)]
+    pub(super) async fn spawn_with_registration(
+        core: CoreLifecycleClient,
+        outcomes: Arc<Mutex<HashMap<OperationId, mutation::MutationReceipt>>>,
+        recovery_required: Arc<Mutex<Option<workflow::RecoveryContext>>>,
+        notifications: Option<Arc<dyn crate::client::effects::ports::CommitNotifications>>,
+        registered: tokio::sync::oneshot::Sender<()>,
+    ) -> anyhow::Result<Self> {
+        Self::spawn_inner(
+            core,
             outcomes,
             recovery_required,
             notifications,
-        ))
+            Some(registered),
+        )
+        .await
+    }
+
+    async fn spawn_inner(
+        core: CoreLifecycleClient,
+        outcomes: Arc<Mutex<HashMap<OperationId, mutation::MutationReceipt>>>,
+        recovery_required: Arc<Mutex<Option<workflow::RecoveryContext>>>,
+        notifications: Option<Arc<dyn crate::client::effects::ports::CommitNotifications>>,
+        registered: Option<tokio::sync::oneshot::Sender<()>>,
+    ) -> anyhow::Result<Self> {
+        core.connect_application_workflow_with_registration(
+            ApplicationWorkflow::new(outcomes, recovery_required, notifications),
+            registered,
+        )
         .await?;
         Ok(Self(ApplicationWorkflowClientInner::CoreLifecycle(core)))
     }
@@ -153,46 +180,3 @@ impl ractor::Actor for TestApplicationWorkflowActor {
 
 #[cfg(test)]
 use futures_util::FutureExt;
-
-#[cfg(test)]
-mod startup_state_tests {
-    use std::{collections::HashMap, sync::Arc};
-
-    use tokio::sync::Mutex;
-
-    use super::{
-        startup::{StartupOutcome, StartupReport, StartupWorkflowState},
-        workflow::ApplicationWorkflow,
-    };
-
-    #[test]
-    fn application_workflow_uses_the_lifecycle_startup_state() {
-        let mut workflow = ApplicationWorkflow::new(
-            Arc::new(Mutex::new(HashMap::new())),
-            Arc::new(Mutex::new(None)),
-            None,
-        );
-        let startup = StartupWorkflowState::default();
-        workflow.connect_startup_state(startup.clone());
-
-        *startup.report_handle().lock() = Some(StartupReport {
-            operation_id: 7,
-            observation: None,
-            outcome: StartupOutcome::Unsettled {
-                reason: "test report".into(),
-            },
-        });
-        startup.mark_owner_unproven();
-
-        assert_eq!(
-            workflow
-                .startup
-                .report_handle()
-                .lock()
-                .as_ref()
-                .map(|report| report.operation_id),
-            Some(7)
-        );
-        assert!(workflow.startup.owner_unproven());
-    }
-}

@@ -22,15 +22,17 @@ use futures_util::FutureExt;
 use ractor::{Actor, ActorProcessingErr, ActorRef, RpcReplyPort, rpc::CallResult};
 use tokio_util::{sync::CancellationToken, task::TaskTracker};
 
+#[cfg(test)]
+use super::application_workflow::startup::StartupWorkflowState;
 use super::{
     ChimeraClient,
     application::ApplicationClient,
-    application_workflow::startup::{StartupOutcome, StartupReport, StartupWorkflowState},
+    application_workflow::startup::{StartupOutcome, StartupReport},
     application_workflow::workflow::ApplicationWorkflow,
     clash_config::ClashConfigClient,
     runtime::RuntimePaths,
 };
-use workflow::{Command, CoreLifecycleWorkflow};
+pub(in crate::client) use workflow::{Command, CoreLifecycleWorkflow};
 
 const CALL_WAIT: Duration = Duration::from_secs(180);
 const DIRTY_WINDOW: Duration = Duration::from_millis(500);
@@ -64,24 +66,6 @@ fn is_source_only_application_patch(command: &Command) -> bool {
                 *service_connected,
             )
     )
-}
-
-fn cache_unsettled_startup_report(
-    startup_state: &StartupWorkflowState,
-    operation_id: OperationId,
-    reason: String,
-) -> CompletedLifecycleOperation {
-    startup_state.mark_owner_unproven();
-    let proposed = StartupReport {
-        operation_id,
-        observation: None,
-        outcome: StartupOutcome::Unsettled { reason },
-    };
-    let report = {
-        let mut cached = startup_state.lock_report();
-        cached.get_or_insert(proposed).clone()
-    };
-    completed_from_startup_report(report)
 }
 
 #[derive(Debug, Clone, Default, serde::Serialize, specta::Type)]
@@ -136,11 +120,12 @@ enum Message {
     ConnectApplicationWorkflow {
         workflow: ApplicationWorkflow,
         reply: RpcReplyPort<anyhow::Result<()>>,
+        registered: Option<tokio::sync::oneshot::Sender<()>>,
     },
     Request(Request),
     Completed {
         id: OperationId,
-        workflow: CoreLifecycleWorkflow,
+        workflow: ApplicationWorkflow,
         result: anyhow::Result<()>,
         workflow_panicked: bool,
         lower_outcome_uncertain: bool,
@@ -150,10 +135,8 @@ enum Message {
         retry_reconcile_on_failure: bool,
         recover: bool,
         shutdown: bool,
-        application_workflow: Option<ApplicationWorkflow>,
         request_runtime_rebuild: bool,
         deferred_retry: Option<String>,
-        startup_retry: Option<(String, tokio::time::Instant)>,
         reconciled: bool,
     },
     #[cfg(test)]
@@ -175,19 +158,36 @@ enum Message {
     StartupRetryLeaseFailed {
         identity: String,
         reason: String,
+        #[cfg(test)]
+        observer: Option<tokio::sync::oneshot::Sender<()>>,
+    },
+    #[cfg(test)]
+    ArmStartupRetryLeaseFailureObserver {
+        observer: tokio::sync::oneshot::Sender<()>,
+        reply: RpcReplyPort<anyhow::Result<()>>,
+    },
+    #[cfg(test)]
+    ReadStartupRetryScheduleForTest {
+        reply: RpcReplyPort<Option<(String, tokio::time::Instant)>>,
     },
     DeferredRetry {
         digest: String,
+    },
+    ReadStartupReport {
+        reply: RpcReplyPort<Option<StartupReport>>,
     },
 }
 
 struct ApplicationWorkflowActor;
 
 struct ApplicationWorkflowState {
-    workflow: Option<CoreLifecycleWorkflow>,
-    application_workflow: Option<ApplicationWorkflow>,
+    workflow: Option<ApplicationWorkflow>,
+    pending_mutation_connection: Option<(ApplicationWorkflow, RpcReplyPort<anyhow::Result<()>>)>,
     active: Option<ActiveOperation>,
     pending: VecDeque<Request>,
+    pending_startup_retry_lease_failures: VecDeque<(String, String)>,
+    #[cfg(test)]
+    startup_retry_lease_failure_observer: Option<tokio::sync::oneshot::Sender<()>>,
     next_id: Arc<AtomicU64>,
     status: Arc<parking_lot::Mutex<CoreLifecycleStatus>>,
     service_status: ServiceHostWatch,
@@ -202,8 +202,33 @@ struct ApplicationWorkflowState {
     dirty_tick_scheduled: bool,
 }
 
+fn record_startup_retry_lease_failure(
+    workflow: Option<&mut ApplicationWorkflow>,
+    pending: &mut VecDeque<(String, String)>,
+    identity: String,
+    reason: String,
+) {
+    if let Some(workflow) = workflow {
+        workflow.defer_startup_retry(&identity, reason);
+    } else {
+        pending.push_back((identity, reason));
+    }
+}
+
+fn apply_pending_startup_retry_lease_failures(
+    workflow: Option<&mut ApplicationWorkflow>,
+    pending: &mut VecDeque<(String, String)>,
+) {
+    let Some(workflow) = workflow else {
+        return;
+    };
+    while let Some((identity, reason)) = pending.pop_front() {
+        workflow.defer_startup_retry(&identity, reason);
+    }
+}
+
 struct ApplicationWorkflowArgs {
-    workflow: CoreLifecycleWorkflow,
+    workflow: ApplicationWorkflow,
     next_id: Arc<AtomicU64>,
     status: Arc<parking_lot::Mutex<CoreLifecycleStatus>>,
     service_status: ServiceHostWatch,
@@ -261,8 +286,9 @@ impl ApplicationWorkflowState {
             .workflow
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("core lifecycle workflow is busy"))?;
-        let policy = workflow.service_restart_policy();
-        match workflow.probe_service().await {
+        let lifecycle = workflow.lifecycle();
+        let policy = lifecycle.service_restart_policy();
+        match lifecycle.probe_service().await {
             Ok(info) => {
                 let runtime_owned = crate::core::service::is_service_runtime_owned(&info);
                 Ok(self
@@ -378,7 +404,9 @@ impl ApplicationWorkflowState {
         self.dirty = false;
         let mut allowed = VecDeque::new();
         while let Some(request) = self.pending.pop_front() {
-            if is_source_only_application_patch(&request.command) {
+            if matches!(&request.command, Command::CacheStartupUnsettled { .. })
+                || is_source_only_application_patch(&request.command)
+            {
                 allowed.push_back(request);
             } else {
                 self.reject(request, anyhow::anyhow!(
@@ -403,6 +431,7 @@ impl ApplicationWorkflowState {
                 Command::StartupReconcile { .. }
                     | Command::RecoverStartup { .. }
                     | Command::RetryStartup { .. }
+                    | Command::CacheStartupUnsettled { .. }
             ) || is_source_only_application_patch(&request.command)
             {
                 allowed.push_back(request);
@@ -489,7 +518,7 @@ impl ApplicationWorkflowState {
             return;
         };
 
-        let Some(workflow) = self.workflow.take() else {
+        let Some(mut workflow) = self.workflow.take() else {
             tracing::error!("core lifecycle workflow missing without an active operation");
             self.reject(
                 request,
@@ -500,22 +529,15 @@ impl ApplicationWorkflowState {
         };
 
         let profile_mutation = matches!(&request.command, Command::ProfileMutation(_));
-        let application_workflow = if profile_mutation {
-            match self.application_workflow.take() {
-                Some(workflow) => Some(workflow),
-                None => {
-                    self.workflow = Some(workflow);
-                    self.reject(
-                        request,
-                        anyhow::anyhow!("application workflow is not connected"),
-                    );
-                    self.publish();
-                    return;
-                }
-            }
-        } else {
-            None
-        };
+        if profile_mutation && !workflow.mutation_connected() {
+            self.workflow = Some(workflow);
+            self.reject(
+                request,
+                anyhow::anyhow!("application workflow is not connected"),
+            );
+            self.publish();
+            return;
+        }
 
         let id = request.response.id;
         let shutdown = matches!(&request.command, Command::Shutdown);
@@ -583,68 +605,54 @@ impl ApplicationWorkflowState {
         let command = request.command;
         let actor = myself.clone();
         let task = tokio::spawn(async move {
-            let (result, workflow_panicked, request_runtime_rebuild, application_workflow) =
-                match command {
-                    Command::ProfileMutation(mut mutation) => {
-                        let mut application_workflow = application_workflow
-                            .expect("Profile mutation takes the application workflow");
-                        let run = AssertUnwindSafe(
-                            application_workflow.run_mutation(&mut mutation, &workflow),
-                        )
+            let (result, workflow_panicked, request_runtime_rebuild) = match command {
+                Command::ProfileMutation(mut mutation) => {
+                    let run = AssertUnwindSafe(workflow.run_profile_mutation(&mut mutation))
                         .catch_unwind()
                         .await;
-                        match run {
-                            Ok((request_runtime_rebuild, settlement)) => (
-                                settlement.map_err(anyhow::Error::msg),
-                                false,
-                                request_runtime_rebuild,
-                                Some(application_workflow),
-                            ),
-                            Err(_) => {
-                                let message = format!(
-                                    "application workflow operation {} panicked; runtime outcome requires recovery",
-                                    mutation.operation_id
-                                );
-                                application_workflow
-                                    .mark_recovery_required(message.clone())
-                                    .await;
-                                mutation.answer(
-                                    crate::client::application_workflow::mutation::TryAck::Failed(
-                                        message.clone(),
-                                    ),
-                                );
-                                let _ = tokio::time::timeout(
+                    match run {
+                        Ok((request_runtime_rebuild, settlement)) => (
+                            settlement.map_err(anyhow::Error::msg),
+                            false,
+                            request_runtime_rebuild,
+                        ),
+                        Err(_) => {
+                            let message = format!(
+                                "application workflow operation {} panicked; runtime outcome requires recovery",
+                                mutation.operation_id
+                            );
+                            workflow.mark_recovery_required(message.clone()).await;
+                            mutation.answer(
+                                crate::client::application_workflow::mutation::TryAck::Failed(
+                                    message.clone(),
+                                ),
+                            );
+                            let _ = tokio::time::timeout(
                                 crate::client::application_workflow::tcc::MUTATION_DECISION_TIMEOUT,
                                 mutation.decision.wait(),
                             )
                             .await;
-                                mutation.settle(Err(message.clone()));
-                                (
-                                    Err(anyhow::anyhow!(message)),
-                                    true,
-                                    false,
-                                    Some(application_workflow),
-                                )
-                            }
+                            mutation.settle(Err(message.clone()));
+                            (Err(anyhow::anyhow!(message)), true, false)
                         }
                     }
-                    command => {
-                        match AssertUnwindSafe(workflow.execute(command))
-                            .catch_unwind()
-                            .await
-                        {
-                            Ok(result) => (result, false, false, None),
-                            Err(_) => (
-                                Err(anyhow::anyhow!(
-                                    "core lifecycle workflow panicked; execution state is uncertain"
-                                )),
-                                true,
-                                false,
-                                None,
-                            ),
-                        }
+                }
+                command => {
+                    match AssertUnwindSafe(workflow.execute_lifecycle(command))
+                        .catch_unwind()
+                        .await
+                    {
+                        Ok(result) => (result, false, false),
+                        Err(_) => (
+                            Err(anyhow::anyhow!(
+                                "core lifecycle workflow panicked; execution state is uncertain"
+                            )),
+                            true,
+                            false,
+                        ),
                     }
-                };
+                }
+            };
             if let Some(progress) = progress {
                 let error = result.as_ref().err().map(ToString::to_string);
                 if std::panic::catch_unwind(AssertUnwindSafe(|| {
@@ -655,13 +663,13 @@ impl ApplicationWorkflowState {
                     tracing::error!("binary installation progress observer panicked");
                 }
             }
-            let lower_outcome_uncertain = workflow.outcome_uncertain();
+            let lifecycle = workflow.lifecycle();
+            let lower_outcome_uncertain = lifecycle.outcome_uncertain();
             let startup_owner_unproven = workflow.startup_owner_unproven();
-            let startup_retry = workflow.startup_retry_schedule();
-            let service_restart_policy = workflow.service_restart_policy();
+            let service_restart_policy = lifecycle.service_restart_policy();
             let service_probe = if service_mutation && !workflow_panicked {
                 Some(
-                    match AssertUnwindSafe(workflow.probe_service())
+                    match AssertUnwindSafe(lifecycle.probe_service())
                         .catch_unwind()
                         .await
                     {
@@ -686,10 +694,8 @@ impl ApplicationWorkflowState {
                     retry_reconcile_on_failure,
                     recover,
                     shutdown,
-                    application_workflow,
                     request_runtime_rebuild,
                     deferred_retry,
-                    startup_retry,
                     reconciled,
                 })
                 .is_err()
@@ -722,9 +728,12 @@ impl Actor for ApplicationWorkflowActor {
     ) -> Result<Self::State, ActorProcessingErr> {
         Ok(ApplicationWorkflowState {
             workflow: Some(args.workflow),
-            application_workflow: None,
+            pending_mutation_connection: None,
             active: None,
             pending: VecDeque::new(),
+            pending_startup_retry_lease_failures: VecDeque::new(),
+            #[cfg(test)]
+            startup_retry_lease_failure_observer: None,
             next_id: args.next_id,
             status: args.status,
             service_status: args.service_status,
@@ -747,16 +756,49 @@ impl Actor for ApplicationWorkflowActor {
         state: &mut Self::State,
     ) -> Result<(), ActorProcessingErr> {
         match message {
-            Message::ConnectApplicationWorkflow { workflow, reply } => {
-                let result = if state.application_workflow.is_some() {
-                    Err(anyhow::anyhow!("application workflow is already connected"))
-                } else if state.shutting_down {
+            Message::ConnectApplicationWorkflow {
+                workflow: incoming,
+                reply,
+                registered,
+            } => {
+                let validation = if state.shutting_down {
                     Err(anyhow::anyhow!("core lifecycle is shutting down"))
+                } else if state.pending_mutation_connection.is_some()
+                    || state
+                        .workflow
+                        .as_ref()
+                        .is_some_and(ApplicationWorkflow::mutation_connected)
+                {
+                    Err(anyhow::anyhow!("application workflow is already connected"))
+                } else if state.workflow.is_none() && !reply.is_closed() {
+                    state.pending_mutation_connection = Some((incoming, reply));
+                    if let Some(registered) = registered {
+                        let _ = registered.send(());
+                    }
+                    return Ok(());
+                } else if let Some(workflow) = state.workflow.as_ref() {
+                    workflow.validate_mutation_connection(&incoming)
                 } else {
-                    state.application_workflow = Some(workflow);
-                    Ok(())
+                    Err(anyhow::anyhow!("core lifecycle workflow is unavailable"))
                 };
-                let _ = reply.send(result);
+                if let Some(registered) = registered {
+                    let _ = registered.send(());
+                }
+                match validation {
+                    Ok(()) => {
+                        if reply.send(Ok(())).is_ok() {
+                            state
+                                .workflow
+                                .as_mut()
+                                .expect("validated workflow remains available")
+                                .attach_mutation_workflow(incoming)
+                                .expect("validated application workflow connection attaches");
+                        }
+                    }
+                    Err(error) => {
+                        let _ = reply.send(Err(error));
+                    }
+                }
             }
             Message::Request(mut request) => {
                 let service_connected = crate::core::service::ipc::get_ipc_state().is_connected();
@@ -786,7 +828,10 @@ impl Actor for ApplicationWorkflowActor {
                     }
                 } else if state.shutting_down {
                     state.reject(request, anyhow::anyhow!("core lifecycle is shutting down"));
-                } else if state.uncertain && !source_only_application_patch {
+                } else if state.uncertain
+                    && !source_only_application_patch
+                    && !matches!(&request.command, Command::CacheStartupUnsettled { .. })
+                {
                     state.reject(
                         request,
                         anyhow::anyhow!(
@@ -800,6 +845,7 @@ impl Actor for ApplicationWorkflowActor {
                         Command::StartupReconcile { .. }
                             | Command::RecoverStartup { .. }
                             | Command::RetryStartup { .. }
+                            | Command::CacheStartupUnsettled { .. }
                     )
                     && !source_only_application_patch
                 {
@@ -827,16 +873,14 @@ impl Actor for ApplicationWorkflowActor {
                 retry_reconcile_on_failure,
                 recover,
                 shutdown,
-                application_workflow,
                 request_runtime_rebuild,
                 deferred_retry,
-                startup_retry,
                 reconciled,
             } => {
                 if state.active.as_ref().map(|operation| operation.response.id) == Some(id) {
                     let refresh_runtime_binding = reconciled || service_probe.is_some() || shutdown;
                     let runtime_binding = if refresh_runtime_binding {
-                        Some(workflow.effect_port_binding().await)
+                        Some(workflow.lifecycle().effect_port_binding().await)
                     } else {
                         None
                     };
@@ -851,15 +895,52 @@ impl Actor for ApplicationWorkflowActor {
                     state
                         .startup_owner_unproven_shared
                         .store(startup_owner_unproven, Ordering::Release);
-                    if application_workflow.is_some() {
-                        state.application_workflow = application_workflow;
+                    if let Some((incoming, reply)) = state.pending_mutation_connection.take() {
+                        let validation = if state.shutting_down {
+                            Err(anyhow::anyhow!("core lifecycle is shutting down"))
+                        } else if reply.is_closed() {
+                            Err(anyhow::anyhow!(
+                                "application workflow connection was cancelled before attachment"
+                            ))
+                        } else {
+                            state
+                                .workflow
+                                .as_ref()
+                                .expect("completed workflow was restored")
+                                .validate_mutation_connection(&incoming)
+                        };
+                        match validation {
+                            Ok(()) => {
+                                if reply.send(Ok(())).is_ok() {
+                                    state
+                                        .workflow
+                                        .as_mut()
+                                        .expect("completed workflow was restored")
+                                        .attach_mutation_workflow(incoming)
+                                        .expect(
+                                            "validated application workflow connection attaches",
+                                        );
+                                }
+                            }
+                            Err(error) => {
+                                let _ = reply.send(Err(error));
+                            }
+                        }
                     }
                     if let Some(ports) = runtime_binding
-                        && let Some(application_workflow) = state.application_workflow.as_ref()
+                        && let Some(application_workflow) = state.workflow.as_ref()
                     {
                         application_workflow.runtime_bound(ports);
                     }
-                    if let Some((identity, next_attempt)) = startup_retry {
+                    apply_pending_startup_retry_lease_failures(
+                        state.workflow.as_mut(),
+                        &mut state.pending_startup_retry_lease_failures,
+                    );
+                    if let Some((identity, next_attempt)) = state
+                        .workflow
+                        .as_ref()
+                        .and_then(ApplicationWorkflow::startup_retry_schedule)
+                    {
                         state.schedule_startup_retry(&myself, identity, next_attempt);
                     }
                     state.uncertain |= workflow_panicked || lower_outcome_uncertain;
@@ -900,7 +981,7 @@ impl Actor for ApplicationWorkflowActor {
                     }
 
                     if let Some(digest) = deferred_retry {
-                        if let Some(application_workflow) = state.application_workflow.as_mut() {
+                        if let Some(application_workflow) = state.workflow.as_mut() {
                             if let Some(next_attempt) = application_workflow
                                 .finish_deferred_retry(
                                     &digest,
@@ -916,7 +997,7 @@ impl Actor for ApplicationWorkflowActor {
                             }
                         }
                     } else if reconciled && !failed {
-                        if let Some(application_workflow) = state.application_workflow.as_mut() {
+                        if let Some(application_workflow) = state.workflow.as_mut() {
                             application_workflow.runtime_reconciled();
                         }
                     }
@@ -930,7 +1011,7 @@ impl Actor for ApplicationWorkflowActor {
                     }
                     if request_runtime_rebuild && !state.shutting_down {
                         let deferred = state
-                            .application_workflow
+                            .workflow
                             .as_ref()
                             .and_then(ApplicationWorkflow::deferred_retry);
                         if let Some((digest, next_attempt)) = deferred {
@@ -954,6 +1035,13 @@ impl Actor for ApplicationWorkflowActor {
             #[cfg(test)]
             Message::ProbeService { reply } => {
                 let _ = reply.send(state.refresh_service_status().await);
+            }
+            Message::ReadStartupReport { reply } => {
+                let report = state
+                    .workflow
+                    .as_ref()
+                    .and_then(ApplicationWorkflow::startup_report);
+                let _ = reply.send(report);
             }
             Message::ObserveService { info } => {
                 state.publish_service_status(info);
@@ -1008,7 +1096,7 @@ impl Actor for ApplicationWorkflowActor {
                             tokio::time::Instant::now() + DIRTY_WINDOW,
                         );
                     } else {
-                        let should_retry = state.workflow.as_ref().is_some_and(|workflow| {
+                        let should_retry = state.workflow.as_mut().is_some_and(|workflow| {
                             workflow.startup_retry_due(&identity)
                                 && workflow.begin_startup_retry(&identity)
                         });
@@ -1016,6 +1104,8 @@ impl Actor for ApplicationWorkflowActor {
                             let service = state.service.clone();
                             let actor = myself.clone();
                             let operation_id = state.allocate_operation_id();
+                            #[cfg(test)]
+                            let observer = state.startup_retry_lease_failure_observer.take();
                             tokio::spawn(async move {
                                 match service.begin_transition().await {
                                     Ok(transition) => {
@@ -1042,6 +1132,8 @@ impl Actor for ApplicationWorkflowActor {
                                         let _ = actor.cast(Message::StartupRetryLeaseFailed {
                                             identity,
                                             reason: format!("could not acquire the Service transition lease: {error:#}"),
+                                            #[cfg(test)]
+                                            observer,
                                         });
                                     }
                                 }
@@ -1050,17 +1142,52 @@ impl Actor for ApplicationWorkflowActor {
                     }
                 }
             }
-            Message::StartupRetryLeaseFailed { identity, reason } => {
-                if let Some(workflow) = state.workflow.as_ref() {
-                    workflow.defer_startup_retry(&identity, reason);
-                    if let Some((identity, next_attempt)) = workflow.startup_retry_schedule() {
-                        state.schedule_startup_retry(&myself, identity, next_attempt);
-                    }
+            Message::StartupRetryLeaseFailed {
+                identity,
+                reason,
+                #[cfg(test)]
+                observer,
+            } => {
+                record_startup_retry_lease_failure(
+                    state.workflow.as_mut(),
+                    &mut state.pending_startup_retry_lease_failures,
+                    identity,
+                    reason,
+                );
+                if let Some((identity, next_attempt)) = state
+                    .workflow
+                    .as_ref()
+                    .and_then(ApplicationWorkflow::startup_retry_schedule)
+                {
+                    state.schedule_startup_retry(&myself, identity, next_attempt);
                 }
+                #[cfg(test)]
+                if let Some(observer) = observer {
+                    let _ = observer.send(());
+                }
+            }
+            #[cfg(test)]
+            Message::ArmStartupRetryLeaseFailureObserver { observer, reply } => {
+                if state.startup_retry_lease_failure_observer.is_some() {
+                    let _ = reply.send(Err(anyhow::anyhow!(
+                        "a startup retry lease failure observer is already armed"
+                    )));
+                } else {
+                    state.startup_retry_lease_failure_observer = Some(observer);
+                    let _ = reply.send(Ok(()));
+                }
+            }
+            #[cfg(test)]
+            Message::ReadStartupRetryScheduleForTest { reply } => {
+                let schedule = state
+                    .workflow
+                    .as_ref()
+                    .and_then(ApplicationWorkflow::startup_retry_schedule);
+                let _ = reply.send(schedule);
             }
             Message::DeferredRetry { digest } => {
                 if state.uncertain || state.shutting_down {
-                    if let Some(application_workflow) = state.application_workflow.as_mut() {
+                    if let Some(application_workflow) = state.workflow.as_mut() {
                         application_workflow
                             .finish_deferred_retry(
                                 &digest,
@@ -1072,7 +1199,7 @@ impl Actor for ApplicationWorkflowActor {
                             )
                             .await;
                     }
-                } else if state.application_workflow.is_none() {
+                } else if state.workflow.is_none() {
                     state.schedule_deferred_retry(
                         &myself,
                         digest,
@@ -1082,7 +1209,7 @@ impl Actor for ApplicationWorkflowActor {
                     use crate::client::application_workflow::workflow::ProfileRuntime;
 
                     let core_status = match state.workflow.as_ref() {
-                        Some(workflow) => workflow.core_status().await.ok(),
+                        Some(workflow) => workflow.lifecycle().core_status().await.ok(),
                         None => None,
                     };
                     match core_status {
@@ -1093,34 +1220,28 @@ impl Actor for ApplicationWorkflowActor {
                             ) =>
                         {
                             let should_retry = state
-                                .application_workflow
+                                .workflow
                                 .as_mut()
                                 .is_some_and(|workflow| workflow.begin_deferred_retry(&digest));
                             if should_retry && !state.push_deferred_retry(digest.clone()) {
-                                let next_attempt =
-                                    state.application_workflow.as_mut().and_then(|workflow| {
-                                        workflow.reschedule_deferred_retry(
-                                            &digest,
-                                            Duration::from_secs(1),
-                                        )
-                                    });
+                                let next_attempt = state.workflow.as_mut().and_then(|workflow| {
+                                    workflow
+                                        .reschedule_deferred_retry(&digest, Duration::from_secs(1))
+                                });
                                 if let Some(next_attempt) = next_attempt {
                                     state.schedule_deferred_retry(&myself, digest, next_attempt);
                                 }
                             }
                         }
                         Some(_) => {
-                            if let Some(application_workflow) = state.application_workflow.as_mut()
-                            {
+                            if let Some(application_workflow) = state.workflow.as_mut() {
                                 application_workflow.wait_for_deferred_dependency(&digest);
                             }
                         }
                         None => {
-                            let next_attempt =
-                                state.application_workflow.as_mut().and_then(|workflow| {
-                                    workflow
-                                        .reschedule_deferred_retry(&digest, Duration::from_secs(5))
-                                });
+                            let next_attempt = state.workflow.as_mut().and_then(|workflow| {
+                                workflow.reschedule_deferred_retry(&digest, Duration::from_secs(5))
+                            });
                             if let Some(next_attempt) = next_attempt {
                                 state.schedule_deferred_retry(&myself, digest, next_attempt);
                             }
@@ -1142,7 +1263,7 @@ enum CoreLifecycleClientInner {
         service_status: tokio::sync::watch::Receiver<ServiceHostStatus>,
         service: Arc<dyn ports::ServiceLifecyclePort>,
         core: Arc<dyn CoreLifecyclePort>,
-        startup_state: StartupWorkflowState,
+        startup_owner_unproven: Arc<AtomicBool>,
         service_failed_generation: Arc<AtomicU64>,
         startup_recovery_pending: Arc<AtomicBool>,
     },
@@ -1152,7 +1273,7 @@ enum CoreLifecycleClientInner {
         service_status: tokio::sync::watch::Receiver<ServiceHostStatus>,
         service: Arc<dyn ports::ServiceLifecyclePort>,
         core: Arc<dyn CoreLifecyclePort>,
-        startup_state: StartupWorkflowState,
+        startup_state: tokio::sync::Mutex<StartupWorkflowState>,
     },
 }
 
@@ -1234,7 +1355,7 @@ impl CoreLifecycleClient {
         let recovery_notify = core.recovery_notify();
         let service_status = ServiceHostWatch::new();
         let service_status_rx = service_status.subscribe();
-        let workflow = CoreLifecycleWorkflow::new(
+        let lifecycle = CoreLifecycleWorkflow::new(
             application,
             clash,
             profiles,
@@ -1244,10 +1365,11 @@ impl CoreLifecycleClient {
             service.clone(),
         )
         .with_service_status(service_status_rx.clone());
-        let startup_state = workflow.startup_state_handle();
-        let startup_owner_unproven = startup_state.owner_unproven_handle();
+        let startup_owner_unproven = lifecycle.startup_owner_unproven_handle();
+        #[cfg(not(test))]
         let startup_owner_unproven_signal = startup_owner_unproven.clone();
-        let service_failed_generation = workflow.service_failed_generation_handle();
+        let service_failed_generation = lifecycle.service_failed_generation_handle();
+        let workflow = ApplicationWorkflow::with_lifecycle(lifecycle);
         let startup_recovery_pending = Arc::new(AtomicBool::new(false));
         let status = Arc::new(parking_lot::Mutex::new(CoreLifecycleStatus::default()));
         let next_id = Arc::new(AtomicU64::new(1));
@@ -1287,7 +1409,7 @@ impl CoreLifecycleClient {
             service_status: service_status_rx.clone(),
             service,
             core,
-            startup_state,
+            startup_owner_unproven,
             service_failed_generation,
             startup_recovery_pending,
         }));
@@ -1348,30 +1470,39 @@ impl CoreLifecycleClient {
             runtime_paths,
             service.clone(),
         );
-        let startup_state = workflow.startup_state_handle();
+        let startup_state =
+            StartupWorkflowState::with_owner_signal(workflow.startup_owner_unproven_handle());
         Self(Arc::new(CoreLifecycleClientInner::Direct {
             workflow: tokio::sync::Mutex::new(workflow),
             service_status: service_status_rx,
             service,
             core,
-            startup_state,
+            startup_state: tokio::sync::Mutex::new(startup_state),
         }))
     }
 
     pub(crate) async fn connect_application_workflow(
         &self,
-        mut workflow: ApplicationWorkflow,
+        workflow: ApplicationWorkflow,
+    ) -> anyhow::Result<()> {
+        self.connect_application_workflow_with_registration(workflow, None)
+            .await
+    }
+
+    pub(in crate::client) async fn connect_application_workflow_with_registration(
+        &self,
+        workflow: ApplicationWorkflow,
+        registered: Option<tokio::sync::oneshot::Sender<()>>,
     ) -> anyhow::Result<()> {
         match self.0.as_ref() {
-            CoreLifecycleClientInner::Actor {
-                actor_ref,
-                startup_state,
-                ..
-            } => {
-                workflow.connect_startup_state(startup_state.clone());
+            CoreLifecycleClientInner::Actor { actor_ref, .. } => {
                 match actor_ref
                     .call(
-                        |reply| Message::ConnectApplicationWorkflow { workflow, reply },
+                        |reply| Message::ConnectApplicationWorkflow {
+                            workflow,
+                            reply,
+                            registered,
+                        },
                         Some(CALL_WAIT),
                     )
                     .await?
@@ -1489,14 +1620,91 @@ impl CoreLifecycleClient {
                 }
             }
             #[cfg(test)]
-            CoreLifecycleClientInner::Direct { workflow, .. } => {
-                workflow.lock().await.execute(command).await
+            CoreLifecycleClientInner::Direct {
+                workflow,
+                startup_state,
+                ..
+            } => {
+                let workflow = workflow.lock().await;
+                let mut startup_state = startup_state.lock().await;
+                workflow
+                    .execute(command, startup_state.retry_target_mut())
+                    .await
+            }
+        }
+    }
+
+    #[cfg(test)]
+    async fn startup_retry_schedule_for_tests(
+        &self,
+    ) -> anyhow::Result<Option<(String, tokio::time::Instant)>> {
+        let CoreLifecycleClientInner::Actor { actor_ref, .. } = self.0.as_ref() else {
+            anyhow::bail!("startup retry schedule test requires the lifecycle actor");
+        };
+        match actor_ref
+            .call(
+                |reply| Message::ReadStartupRetryScheduleForTest { reply },
+                Some(CALL_WAIT),
+            )
+            .await?
+        {
+            CallResult::Success(schedule) => Ok(schedule),
+            CallResult::Timeout => anyhow::bail!("startup retry schedule query timed out"),
+            CallResult::SenderError => {
+                anyhow::bail!("startup retry schedule query reply was dropped")
+            }
+        }
+    }
+
+    #[cfg(test)]
+    async fn observe_next_startup_retry_lease_failure(
+        &self,
+    ) -> anyhow::Result<tokio::sync::oneshot::Receiver<()>> {
+        let CoreLifecycleClientInner::Actor { actor_ref, .. } = self.0.as_ref() else {
+            anyhow::bail!("startup retry observer requires the lifecycle actor");
+        };
+        let (observer, observed) = tokio::sync::oneshot::channel();
+        match actor_ref
+            .call(
+                |reply| Message::ArmStartupRetryLeaseFailureObserver { observer, reply },
+                Some(CALL_WAIT),
+            )
+            .await?
+        {
+            CallResult::Success(result) => result.map(|()| observed),
+            CallResult::Timeout => anyhow::bail!("startup retry observer arm timed out"),
+            CallResult::SenderError => {
+                anyhow::bail!("startup retry observer reply was dropped")
             }
         }
     }
 
     async fn startup_reconcile(&self) -> anyhow::Result<CompletedLifecycleOperation> {
         self.startup_reconcile_with_timeout(None).await
+    }
+
+    async fn cached_startup_report(&self) -> anyhow::Result<Option<StartupReport>> {
+        match self.0.as_ref() {
+            CoreLifecycleClientInner::Actor { actor_ref, .. } => {
+                match actor_ref
+                    .call(
+                        |reply| Message::ReadStartupReport { reply },
+                        Some(CALL_WAIT),
+                    )
+                    .await?
+                {
+                    CallResult::Success(report) => Ok(report),
+                    CallResult::Timeout => anyhow::bail!("startup report query timed out"),
+                    CallResult::SenderError => {
+                        anyhow::bail!("startup report query reply was dropped")
+                    }
+                }
+            }
+            #[cfg(test)]
+            CoreLifecycleClientInner::Direct { workflow, .. } => {
+                Ok(workflow.lock().await.startup_report())
+            }
+        }
     }
 
     async fn startup_reconcile_with_timeout(
@@ -1508,32 +1716,49 @@ impl CoreLifecycleClient {
                 actor_ref,
                 next_id,
                 service,
-                startup_state,
-                status,
                 ..
             } => {
-                let startup_report = startup_state.report_handle();
-                let startup_owner_unproven = startup_state.owner_unproven_handle();
-                if let Some(report) = startup_report.lock().clone() {
+                if let Some(report) = self.cached_startup_report().await? {
                     return Ok(completed_from_startup_report(report));
                 }
                 let id = next_id.fetch_add(1, Ordering::Relaxed);
                 let transition = match service.begin_transition().await {
                     Ok(transition) => transition,
                     Err(error) => {
-                        let completed = cache_unsettled_startup_report(
-                            startup_state,
-                            id,
-                            format!("could not acquire the Service transition lease: {error:#}"),
-                        );
-                        status.lock().uncertain = true;
-                        return Ok(completed);
+                        let reason =
+                            format!("could not acquire the Service transition lease: {error:#}");
+                        let cache_id = next_id.fetch_add(1, Ordering::Relaxed);
+                        let _ = actor_ref
+                            .call(
+                                |reply| {
+                                    Message::Request(Request {
+                                        command: Command::CacheStartupUnsettled {
+                                            operation_id: id,
+                                            reason,
+                                        },
+                                        response: Response {
+                                            id: cache_id,
+                                            reply: Some(reply),
+                                        },
+                                        deferred_retry: None,
+                                    })
+                                },
+                                timeout,
+                            )
+                            .await?;
+                        return self
+                            .cached_startup_report()
+                            .await?
+                            .map(completed_from_startup_report)
+                            .ok_or_else(|| {
+                                anyhow::anyhow!("startup failure report was not cached")
+                            });
                     }
                 };
-                if let Some(report) = startup_report.lock().clone() {
+                if let Some(report) = self.cached_startup_report().await? {
                     return Ok(completed_from_startup_report(report));
                 }
-                match actor_ref
+                let result = match actor_ref
                     .call(
                         |reply| {
                             Message::Request(Request {
@@ -1552,31 +1777,7 @@ impl CoreLifecycleClient {
                     )
                     .await
                 {
-                    Ok(CallResult::Success(result)) => {
-                        let cached_report = startup_report.lock().clone();
-                        let report = match cached_report {
-                            Some(report) => report,
-                            None => {
-                                let reason = result
-                                    .as_ref()
-                                    .err()
-                                    .map(ToString::to_string)
-                                    .unwrap_or_else(|| {
-                                        "startup lifecycle completed without a report".into()
-                                    });
-                                startup_owner_unproven.store(true, Ordering::Release);
-                                status.lock().uncertain = true;
-                                let report = StartupReport {
-                                    operation_id: id,
-                                    observation: None,
-                                    outcome: StartupOutcome::Unsettled { reason },
-                                };
-                                *startup_report.lock() = Some(report.clone());
-                                report
-                            }
-                        };
-                        Ok(CompletedLifecycleOperation { result, report })
-                    }
+                    Ok(CallResult::Success(result)) => result,
                     Ok(CallResult::Timeout) => anyhow::bail!(
                         "startup core lifecycle operation {id} timed out; it may still be queued or running"
                     ),
@@ -1584,7 +1785,42 @@ impl CoreLifecycleClient {
                         "startup core lifecycle actor reply dropped for operation {id}; outcome is unknown"
                     ),
                     Err(error) => Err(error.into()),
-                }
+                };
+                let report = match self.cached_startup_report().await? {
+                    Some(report) => report,
+                    None => {
+                        let reason = result
+                            .as_ref()
+                            .err()
+                            .map(ToString::to_string)
+                            .unwrap_or_else(|| {
+                                "startup lifecycle completed without a report".into()
+                            });
+                        let cache_id = next_id.fetch_add(1, Ordering::Relaxed);
+                        let _ = actor_ref
+                            .call(
+                                |reply| {
+                                    Message::Request(Request {
+                                        command: Command::CacheStartupUnsettled {
+                                            operation_id: id,
+                                            reason,
+                                        },
+                                        response: Response {
+                                            id: cache_id,
+                                            reply: Some(reply),
+                                        },
+                                        deferred_retry: None,
+                                    })
+                                },
+                                Some(CALL_WAIT),
+                            )
+                            .await?;
+                        self.cached_startup_report().await?.ok_or_else(|| {
+                            anyhow::anyhow!("startup failure report was not cached")
+                        })?
+                    }
+                };
+                Ok(CompletedLifecycleOperation { result, report })
             }
             #[cfg(test)]
             CoreLifecycleClientInner::Direct {
@@ -1593,32 +1829,40 @@ impl CoreLifecycleClient {
                 startup_state,
                 ..
             } => {
-                let startup_report = startup_state.report_handle();
-                if let Some(report) = startup_report.lock().clone() {
+                if let Some(report) = workflow.lock().await.startup_report() {
                     return Ok(completed_from_startup_report(report));
                 }
                 let transition = match service.begin_transition().await {
                     Ok(transition) => transition,
                     Err(error) => {
-                        return Ok(cache_unsettled_startup_report(
-                            startup_state,
-                            1,
-                            format!("could not acquire the Service transition lease: {error:#}"),
-                        ));
+                        let reason =
+                            format!("could not acquire the Service transition lease: {error:#}");
+                        let workflow = workflow.lock().await;
+                        startup_state.lock().await.mark_owner_unproven();
+                        let report = StartupReport {
+                            operation_id: 1,
+                            observation: None,
+                            outcome: StartupOutcome::Unsettled { reason },
+                        };
+                        workflow.cache_startup_report_for_tests(&report);
+                        return Ok(completed_from_startup_report(report));
                     }
                 };
-                if let Some(report) = startup_report.lock().clone() {
+                if let Some(report) = workflow.lock().await.startup_report() {
                     return Ok(completed_from_startup_report(report));
                 }
+                let workflow = workflow.lock().await;
+                let mut startup_state = startup_state.lock().await;
                 let result = workflow
-                    .lock()
-                    .await
-                    .execute(Command::StartupReconcile {
-                        operation_id: 1,
-                        transition,
-                    })
+                    .execute(
+                        Command::StartupReconcile {
+                            operation_id: 1,
+                            transition,
+                        },
+                        startup_state.retry_target_mut(),
+                    )
                     .await;
-                let report = match startup_report.lock().clone() {
+                let report = match workflow.startup_report() {
                     Some(report) => report,
                     None => {
                         let reason = result
@@ -1628,7 +1872,14 @@ impl CoreLifecycleClient {
                             .unwrap_or_else(|| {
                                 "direct startup lifecycle completed without a report".into()
                             });
-                        return Ok(cache_unsettled_startup_report(startup_state, 1, reason));
+                        startup_state.mark_owner_unproven();
+                        let report = StartupReport {
+                            operation_id: 1,
+                            observation: None,
+                            outcome: StartupOutcome::Unsettled { reason },
+                        };
+                        workflow.cache_startup_report_for_tests(&report);
+                        report
                     }
                 };
                 Ok(CompletedLifecycleOperation { result, report })
@@ -1639,14 +1890,14 @@ impl CoreLifecycleClient {
     fn startup_recovery_needed(&self) -> bool {
         match self.0.as_ref() {
             CoreLifecycleClientInner::Actor {
-                startup_state,
+                startup_owner_unproven,
                 service_failed_generation,
                 service_status,
                 core,
                 ..
             } => {
                 !core.outcome_uncertain()
-                    && (startup_state.owner_unproven() || {
+                    && (startup_owner_unproven.load(Ordering::Acquire) || {
                         let failed_generation = service_failed_generation.load(Ordering::Acquire);
                         let status = service_status.borrow();
                         failed_generation != 0
@@ -1893,17 +2144,19 @@ impl CoreLifecycleClient {
                 ..
             } => {
                 let transition = service.begin_transition().await?;
-                let operation_id = startup_state
-                    .lock_report()
-                    .as_ref()
+                let workflow = workflow.lock().await;
+                let mut startup_state = startup_state.lock().await;
+                let operation_id = workflow
+                    .startup_report()
                     .map_or(1, |report| report.operation_id.saturating_add(1));
                 workflow
-                    .lock()
-                    .await
-                    .execute(Command::RecoverStartup {
-                        operation_id,
-                        transition,
-                    })
+                    .execute(
+                        Command::RecoverStartup {
+                            operation_id,
+                            transition,
+                        },
+                        startup_state.retry_target_mut(),
+                    )
                     .await
             }
         }
@@ -2171,8 +2424,10 @@ mod tests {
     };
 
     use async_trait::async_trait;
+    use camino::Utf8PathBuf;
     use chimera_config::application::ChimeraAppConfigPatch;
     use chimera_config::clash::config::ClashConfig;
+    use chimera_core::state::{PersistentStateManagerSetup, ReplaceIfVersionResult};
     use chimera_ipc::api::status::CoreState;
     use tokio::sync::{Notify, oneshot};
     use tokio_util::{sync::CancellationToken, task::TaskTracker};
@@ -2299,7 +2554,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn application_workflow_client_connects_shared_startup_state() {
+    async fn application_workflow_connection_keeps_owner_and_runs_startup() {
         let events = Arc::new(Mutex::new(Vec::new()));
         let client = spawn_startup_client(
             Arc::new(ConfirmedStoppedCore {
@@ -2311,16 +2566,10 @@ mod tests {
             }),
         )
         .await;
-        let startup = match client.0.as_ref() {
-            CoreLifecycleClientInner::Actor { startup_state, .. } => startup_state.clone(),
-            #[cfg(test)]
-            CoreLifecycleClientInner::Direct { .. } => panic!("test client uses the actor"),
-        };
-        let report = startup.report_handle();
-        let references_before_connect = Arc::strong_count(&report);
+        assert!(client.cached_startup_report().await.unwrap().is_none());
 
         let _connected = crate::client::application_workflow::ApplicationWorkflowClient::spawn(
-            client,
+            client.clone(),
             Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new())),
             Arc::new(tokio::sync::Mutex::new(None)),
             None,
@@ -2328,11 +2577,218 @@ mod tests {
         .await
         .expect("the production ApplicationWorkflow connection should succeed");
 
-        assert_eq!(
-            Arc::strong_count(&report),
-            references_before_connect + 1,
-            "the actor-held ApplicationWorkflow must retain the lifecycle report handle"
+        assert!(client.cached_startup_report().await.unwrap().is_none());
+
+        let completed = client
+            .startup_reconcile()
+            .await
+            .expect("startup should execute through the connected application workflow");
+        assert_eq!(completed.report.outcome, StartupOutcome::Ready);
+        assert!(
+            events.lock().unwrap().contains(&"rebuild"),
+            "startup must reach the core adapter through the connected workflow"
         );
+        let cached = client
+            .cached_startup_report()
+            .await
+            .expect("the production actor should answer the report query")
+            .expect("the connected ApplicationWorkflow should own the startup report");
+        assert_eq!(cached.operation_id, completed.report.operation_id);
+        assert_eq!(cached.outcome, completed.report.outcome);
+    }
+
+    #[tokio::test]
+    async fn application_workflow_connection_waits_for_active_operation_and_rejects_duplicates() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let core = Arc::new(RecordingCore {
+            events: events.clone(),
+            stop_started: Arc::new(Notify::new()),
+            release_stop: Arc::new(Notify::new()),
+            recovery_notify: Arc::new(Notify::new()),
+            run_type: RunType::Normal,
+        });
+        let client = spawn_startup_client(
+            core.clone(),
+            Arc::new(RecordingService {
+                events: events.clone(),
+            }),
+        )
+        .await;
+
+        let stop_client = client.clone();
+        let stop = tokio::spawn(async move { stop_client.stop_core().await });
+        core.stop_started.notified().await;
+
+        let connect_client = client.clone();
+        let (registered, pending) = oneshot::channel();
+        let connect = tokio::spawn(async move {
+            crate::client::application_workflow::ApplicationWorkflowClient::spawn_with_registration(
+                connect_client,
+                Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new())),
+                Arc::new(tokio::sync::Mutex::new(None)),
+                None,
+                registered,
+            )
+            .await
+        });
+        pending
+            .await
+            .expect("the actor should acknowledge that it registered the first connection");
+
+        let duplicate = crate::client::application_workflow::ApplicationWorkflowClient::spawn(
+            client.clone(),
+            Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new())),
+            Arc::new(tokio::sync::Mutex::new(None)),
+            None,
+        )
+        .await;
+        assert!(
+            duplicate.is_err(),
+            "a second mutation workflow must be rejected while the first connection is pending"
+        );
+
+        core.release_stop.notify_one();
+        stop.await
+            .expect("StopCore task should complete")
+            .expect("StopCore should succeed");
+        connect
+            .await
+            .expect("connection task should complete")
+            .expect("the pending mutation workflow should attach after completion");
+        assert_eq!(
+            events.lock().unwrap().as_slice(),
+            ["stop-start", "stop-end"]
+        );
+    }
+
+    #[tokio::test]
+    async fn cancelled_pending_application_workflow_does_not_poison_connection() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let core = Arc::new(RecordingCore {
+            events: events.clone(),
+            stop_started: Arc::new(Notify::new()),
+            release_stop: Arc::new(Notify::new()),
+            recovery_notify: Arc::new(Notify::new()),
+            run_type: RunType::Normal,
+        });
+        let client = spawn_startup_client(
+            core.clone(),
+            Arc::new(RecordingService {
+                events: events.clone(),
+            }),
+        )
+        .await;
+
+        let stop_client = client.clone();
+        let stop = tokio::spawn(async move { stop_client.stop_core().await });
+        core.stop_started.notified().await;
+
+        let connect_client = client.clone();
+        let (registered, pending) = oneshot::channel();
+        let connect = tokio::spawn(async move {
+            crate::client::application_workflow::ApplicationWorkflowClient::spawn_with_registration(
+                connect_client,
+                Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new())),
+                Arc::new(tokio::sync::Mutex::new(None)),
+                None,
+                registered,
+            )
+            .await
+        });
+        pending
+            .await
+            .expect("the actor should confirm that it stored the pending connection");
+        connect.abort();
+        assert!(
+            connect.await.is_err(),
+            "cancel the waiting connection caller"
+        );
+
+        core.release_stop.notify_one();
+        stop.await
+            .expect("StopCore task should complete")
+            .expect("StopCore should succeed");
+
+        crate::client::application_workflow::ApplicationWorkflowClient::spawn(
+            client,
+            Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new())),
+            Arc::new(tokio::sync::Mutex::new(None)),
+            None,
+        )
+        .await
+        .expect("a cancelled pending connection must leave the actor connectable");
+        assert_eq!(
+            events.lock().unwrap().as_slice(),
+            ["stop-start", "stop-end"]
+        );
+    }
+
+    #[tokio::test]
+    async fn profile_tcc_transaction_runs_through_the_production_actor() {
+        let directory = tempfile::tempdir().expect("temporary Profiles directory");
+        let path = Utf8PathBuf::from_path_buf(directory.path().join("profiles.yaml"))
+            .expect("UTF-8 temporary Profiles path");
+        let mut manager = PersistentStateManagerSetup::<
+            chimera_config::profile::Profiles,
+            crate::core::migration::modules::profiles::ProfilesFormat,
+        >::builder()
+        .config_path(path)
+        .assemble()
+        .from_state(chimera_config::profile::Profiles::default())
+        .await
+        .expect("Profiles state manager");
+        let before = manager.snapshot_handle().load();
+        let version = before.version;
+        let mut candidate = before.state.clone();
+        candidate.valid.push("production-actor-tcc-test".into());
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let core = Arc::new(ProfileTccCore {
+            validations: AtomicUsize::new(0),
+        });
+        let client = spawn_startup_client(
+            core.clone(),
+            Arc::new(RecordingService {
+                events: events.clone(),
+            }),
+        )
+        .await;
+        let mutations = crate::state::mutation::MutationCoordinator::pending();
+        mutations
+            .connect(client)
+            .await
+            .expect("production ApplicationWorkflow should attach to Core Lifecycle");
+        let operation_id = chimera_core_manager::OperationId::generate();
+        let participant = mutations
+            .participant(
+                operation_id.clone(),
+                crate::client::application_workflow::impact::MutationHints::default(),
+                crate::client::application_workflow::policy::CommandClass::Save,
+            )
+            .expect("connected mutation coordinator should create a participant");
+
+        let result = manager
+            .replace_if_version_with_participant(
+                version,
+                candidate.clone(),
+                participant,
+                || async { Ok(()) },
+                || async { Ok(()) },
+            )
+            .await
+            .expect("Profile source transaction");
+        assert!(matches!(result, ReplaceIfVersionResult::Replaced));
+        let committed = manager.snapshot_handle().load();
+        assert_eq!(committed.state.valid, candidate.valid);
+        assert_eq!(core.validations.load(AtomicOrdering::SeqCst), 1);
+
+        let (receipt, degradations) = mutations
+            .finish(operation_id, "profiles", *committed.version.as_ref())
+            .await;
+        assert_eq!(
+            receipt.runtime,
+            crate::client::runtime::RuntimeCommitStatus::SavedInactive
+        );
+        assert!(degradations.is_empty());
     }
 
     #[test]
@@ -2365,6 +2821,10 @@ mod tests {
     struct ConfirmedStoppedCore {
         events: Arc<Mutex<Vec<&'static str>>>,
         run_type: RunType,
+    }
+
+    struct ProfileTccCore {
+        validations: AtomicUsize,
     }
 
     struct CoreUpdateRecordingCore {
@@ -2426,6 +2886,10 @@ mod tests {
 
     struct RecordingService {
         events: Arc<Mutex<Vec<&'static str>>>,
+    }
+
+    struct TransitionUnavailableService {
+        inner: RecordingService,
     }
 
     struct UnreadableService {
@@ -2492,6 +2956,7 @@ mod tests {
     struct StartupRetryLeaseService {
         inner: RestartBudgetService,
         transition_attempts: AtomicU8,
+        retry_lease_gate: Option<(Arc<Notify>, Arc<Notify>)>,
     }
 
     struct RecordingServiceTransition {
@@ -2527,6 +2992,7 @@ mod tests {
         stops: AtomicU8,
         recovered: Arc<Notify>,
         outcome_uncertain: bool,
+        stop_gate: Option<(Arc<Notify>, Arc<Notify>)>,
     }
 
     struct StartupReceiptCore {
@@ -3215,6 +3681,22 @@ mod tests {
             Ok(Box::new(RecordingServiceTransition {
                 events: self.events.clone(),
             }))
+        }
+    }
+
+    #[async_trait]
+    impl ServiceLifecyclePort for TransitionUnavailableService {
+        async fn probe(&self) -> anyhow::Result<chimera_ipc::types::StatusInfo<'static>> {
+            self.inner.probe().await
+        }
+
+        async fn begin_transition(&self) -> anyhow::Result<Box<dyn ServiceTransitionLease>> {
+            self.inner
+                .events
+                .lock()
+                .unwrap()
+                .push("service-begin-failed");
+            anyhow::bail!("test Service transition lease is unavailable")
         }
     }
 
@@ -3914,7 +4396,13 @@ mod tests {
         }
 
         async fn stop(&self) -> anyhow::Result<()> {
-            self.stops.fetch_add(1, AtomicOrdering::AcqRel);
+            let attempt = self.stops.fetch_add(1, AtomicOrdering::AcqRel);
+            if attempt == 1
+                && let Some((started, release)) = &self.stop_gate
+            {
+                started.notify_one();
+                release.notified().await;
+            }
             Ok(())
         }
 
@@ -4022,6 +4510,10 @@ mod tests {
                     .lock()
                     .unwrap()
                     .push("startup-retry-lease-failed");
+                if let Some((started, release)) = &self.retry_lease_gate {
+                    started.notify_one();
+                    release.notified().await;
+                }
                 anyhow::bail!("test Service lease failure");
             }
             self.inner.begin_transition().await
@@ -4319,6 +4811,13 @@ mod tests {
             })
         }
 
+        async fn observe_runtime_baseline(
+            &self,
+        ) -> anyhow::Result<crate::client::application_workflow::mutation::KnownRuntimeState>
+        {
+            Ok(crate::client::application_workflow::mutation::KnownRuntimeState::Stopped)
+        }
+
         fn recovery_notify(&self) -> Option<Arc<Notify>> {
             Some(self.recovery_notify.clone())
         }
@@ -4355,6 +4854,68 @@ mod tests {
                 state_changed_at: 1,
                 run_type: self.run_type,
             })
+        }
+
+        async fn observe_runtime_baseline(
+            &self,
+        ) -> anyhow::Result<crate::client::application_workflow::mutation::KnownRuntimeState>
+        {
+            Ok(crate::client::application_workflow::mutation::KnownRuntimeState::Stopped)
+        }
+
+        fn recovery_notify(&self) -> Option<Arc<Notify>> {
+            None
+        }
+
+        async fn on_profile_change(&self, _break_when: bool) {}
+    }
+
+    #[async_trait]
+    impl CoreLifecyclePort for ProfileTccCore {
+        async fn reconcile(
+            &self,
+            _clash: ClashConfig,
+            _target_core: ClashCore,
+            _run_type: RunType,
+        ) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        async fn validate_profile_runtime(
+            &self,
+            _clash: ClashConfig,
+            _target_core: ClashCore,
+            _run_type: RunType,
+            _profiles: Arc<chimera_config::profile::Profiles>,
+            _app: chimera_config::application::ChimeraAppConfig,
+            _staged_content: std::collections::BTreeMap<String, String>,
+        ) -> anyhow::Result<crate::client::application_workflow::mutation::CheckRecord> {
+            self.validations.fetch_add(1, AtomicOrdering::SeqCst);
+            Ok(crate::client::application_workflow::mutation::CheckRecord::Passed)
+        }
+
+        async fn stop(&self) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        async fn change_core(&self, _core: ClashCore) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        async fn status(&self) -> anyhow::Result<CoreStatusSnapshot> {
+            Ok(CoreStatusSnapshot {
+                instance_id: None,
+                state: CoreState::Stopped(None),
+                state_changed_at: 1,
+                run_type: RunType::Normal,
+            })
+        }
+
+        async fn observe_runtime_baseline(
+            &self,
+        ) -> anyhow::Result<crate::client::application_workflow::mutation::KnownRuntimeState>
+        {
+            Ok(crate::client::application_workflow::mutation::KnownRuntimeState::Stopped)
         }
 
         fn recovery_notify(&self) -> Option<Arc<Notify>> {
@@ -5630,6 +6191,7 @@ mod tests {
             RuntimePaths::from_config_root(std::path::PathBuf::from("test-runtime-root")),
             service.clone(),
         );
+        let mut startup_state = StartupWorkflowState::default();
 
         let report = workflow
             .startup_reconcile(
@@ -5637,6 +6199,7 @@ mod tests {
                 Box::new(RecordingServiceTransition {
                     events: events.clone(),
                 }),
+                startup_state.retry_target_mut(),
             )
             .await;
 
@@ -5770,6 +6333,7 @@ mod tests {
             RuntimePaths::from_config_root(std::path::PathBuf::from("test-runtime-root")),
             service,
         );
+        let mut startup_state = StartupWorkflowState::default();
 
         let report = workflow
             .startup_reconcile(
@@ -5777,6 +6341,7 @@ mod tests {
                 Box::new(RecordingServiceTransition {
                     events: events.clone(),
                 }),
+                startup_state.retry_target_mut(),
             )
             .await;
 
@@ -5822,6 +6387,7 @@ mod tests {
             RuntimePaths::from_config_root(std::path::PathBuf::from("test-runtime-root")),
             service,
         );
+        let mut startup_state = StartupWorkflowState::default();
 
         let report = workflow
             .startup_reconcile(
@@ -5829,6 +6395,7 @@ mod tests {
                 Box::new(RecordingServiceTransition {
                     events: events.clone(),
                 }),
+                startup_state.retry_target_mut(),
             )
             .await;
 
@@ -5879,6 +6446,7 @@ mod tests {
             RuntimePaths::from_config_root(std::path::PathBuf::from("test-runtime-root")),
             service,
         );
+        let mut startup_state = StartupWorkflowState::default();
 
         let report = workflow
             .startup_reconcile(
@@ -5886,6 +6454,7 @@ mod tests {
                 Box::new(RecordingServiceTransition {
                     events: events.clone(),
                 }),
+                startup_state.retry_target_mut(),
             )
             .await;
 
@@ -5937,6 +6506,7 @@ mod tests {
             RuntimePaths::from_config_root(std::path::PathBuf::from("test-runtime-root")),
             service,
         );
+        let mut startup_state = StartupWorkflowState::default();
 
         let report = workflow
             .startup_reconcile(
@@ -5944,6 +6514,7 @@ mod tests {
                 Box::new(RecordingServiceTransition {
                     events: events.clone(),
                 }),
+                startup_state.retry_target_mut(),
             )
             .await;
 
@@ -6158,6 +6729,7 @@ mod tests {
                 stops: AtomicU8::new(0),
                 recovered: recovered.clone(),
                 outcome_uncertain: false,
+                stop_gate: None,
             }),
             service,
         )
@@ -6218,6 +6790,7 @@ mod tests {
                 stops: AtomicU8::new(0),
                 recovered: recovered.clone(),
                 outcome_uncertain: false,
+                stop_gate: None,
             }),
             Arc::new(RestartBudgetService {
                 events: events.clone(),
@@ -6262,6 +6835,120 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn startup_retry_lease_failure_is_drained_after_actor_operation_returns() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let recovered = Arc::new(Notify::new());
+        let retry_lease_started = Arc::new(Notify::new());
+        let release_retry_lease = Arc::new(Notify::new());
+        let stop_started = Arc::new(Notify::new());
+        let release_stop = Arc::new(Notify::new());
+        let service = Arc::new(StartupRetryLeaseService {
+            inner: RestartBudgetService {
+                events: events.clone(),
+                attempts: AtomicU8::new(0),
+                exhausted: AtomicBool::new(false),
+            },
+            transition_attempts: AtomicU8::new(0),
+            retry_lease_gate: Some((retry_lease_started.clone(), release_retry_lease.clone())),
+        });
+        let client = spawn_startup_client(
+            Arc::new(StartupTransientCore {
+                events: events.clone(),
+                reconciles: AtomicU8::new(0),
+                stops: AtomicU8::new(0),
+                recovered,
+                outcome_uncertain: false,
+                stop_gate: Some((stop_started.clone(), release_stop.clone())),
+            }),
+            service,
+        )
+        .await;
+
+        let initial = client.startup_reconcile().await.unwrap();
+        assert!(matches!(
+            initial.report.outcome,
+            StartupOutcome::ReadyDegraded {
+                health: crate::client::convergence::ConvergenceHealth::RetryScheduled,
+                ..
+            }
+        ));
+        let (identity, next_attempt) = client
+            .startup_retry_schedule_for_tests()
+            .await
+            .unwrap()
+            .expect("startup failure should schedule a retry");
+        assert!(next_attempt > tokio::time::Instant::now());
+        let lease_failure_observed = client
+            .observe_next_startup_retry_lease_failure()
+            .await
+            .unwrap();
+
+        tokio::time::timeout(Duration::from_secs(8), retry_lease_started.notified())
+            .await
+            .expect("the retry should begin acquiring its Service lease");
+
+        let stopping_client = client.clone();
+        let stop = tokio::spawn(async move { stopping_client.stop_core().await });
+        tokio::time::timeout(Duration::from_secs(1), stop_started.notified())
+            .await
+            .expect("the unrelated stop should take and hold ApplicationWorkflow");
+
+        release_retry_lease.notify_one();
+        tokio::time::timeout(Duration::from_secs(1), lease_failure_observed)
+            .await
+            .expect("the lease failure should be handled while the workflow is busy")
+            .expect("the actor should acknowledge the handled lease failure");
+        assert!(!stop.is_finished());
+
+        release_stop.notify_one();
+        stop.await
+            .expect("the stop request task should complete")
+            .expect("the stop operation should succeed");
+
+        let (rescheduled_identity, rescheduled_at) = client
+            .startup_retry_schedule_for_tests()
+            .await
+            .unwrap()
+            .expect("the completed actor operation should restore and reschedule the retry");
+        assert_eq!(rescheduled_identity, identity);
+        assert!(rescheduled_at > tokio::time::Instant::now());
+        client.shutdown().await.unwrap();
+    }
+
+    #[test]
+    fn startup_retry_lease_failure_is_retained_until_application_workflow_returns() {
+        let now = tokio::time::Instant::now();
+        let mut target = super::super::application_workflow::startup::StartupRetryTarget::new(
+            "retry-target".into(),
+            false,
+        );
+        target.schedule_dependency_at(now - Duration::from_secs(10), "initial retry".into());
+        assert!(target.begin(now));
+
+        let mut workflow = ApplicationWorkflow::for_startup_retry_tests();
+        workflow.set_startup_retry_target_for_tests(target);
+        let mut pending = VecDeque::new();
+
+        record_startup_retry_lease_failure(
+            None,
+            &mut pending,
+            "retry-target".into(),
+            "Service transition lease is unavailable".into(),
+        );
+        assert_eq!(pending.len(), 1);
+        assert!(workflow.startup_retry_schedule().is_none());
+
+        apply_pending_startup_retry_lease_failures(Some(&mut workflow), &mut pending);
+        let (identity, next_attempt) = workflow
+            .startup_retry_schedule()
+            .expect("restoring the workflow must reschedule its deferred retry");
+        assert_eq!(identity, "retry-target");
+        assert!(next_attempt > tokio::time::Instant::now());
+        assert!(pending.is_empty());
+        assert!(!workflow.startup_retry_due("retry-target"));
+    }
+
+    #[tokio::test]
     async fn startup_retry_lease_failure_waits_for_dependency_without_spending_attempts() {
         let events = Arc::new(Mutex::new(Vec::new()));
         let recovered = Arc::new(Notify::new());
@@ -6272,6 +6959,7 @@ mod tests {
                 exhausted: AtomicBool::new(false),
             },
             transition_attempts: AtomicU8::new(0),
+            retry_lease_gate: None,
         });
         let client = spawn_startup_client(
             Arc::new(StartupTransientCore {
@@ -6280,6 +6968,7 @@ mod tests {
                 stops: AtomicU8::new(0),
                 recovered: recovered.clone(),
                 outcome_uncertain: false,
+                stop_gate: None,
             }),
             service.clone(),
         )
@@ -6316,6 +7005,7 @@ mod tests {
                 stops: AtomicU8::new(0),
                 recovered: Arc::new(Notify::new()),
                 outcome_uncertain: true,
+                stop_gate: None,
             }),
             Arc::new(RestartBudgetService {
                 events: events.clone(),
@@ -6370,6 +7060,7 @@ mod tests {
                 stops: AtomicU8::new(0),
                 recovered,
                 outcome_uncertain: false,
+                stop_gate: None,
             }),
             service,
         )
@@ -6410,6 +7101,7 @@ mod tests {
                 stops: AtomicU8::new(0),
                 recovered: Arc::new(Notify::new()),
                 outcome_uncertain: false,
+                stop_gate: None,
             }),
             service,
         )
@@ -6473,6 +7165,51 @@ mod tests {
                 .count(),
             1
         );
+    }
+
+    #[tokio::test]
+    async fn startup_lease_failure_caches_an_unsettled_report_and_is_idempotent() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let client = spawn_startup_client(
+            Arc::new(RecordingCore {
+                events: events.clone(),
+                stop_started: Arc::new(Notify::new()),
+                release_stop: Arc::new(Notify::new()),
+                recovery_notify: Arc::new(Notify::new()),
+                run_type: RunType::Normal,
+            }),
+            Arc::new(TransitionUnavailableService {
+                inner: RecordingService {
+                    events: events.clone(),
+                },
+            }),
+        )
+        .await;
+
+        let first = client.startup_reconcile().await.unwrap();
+        let second = client.startup_reconcile().await.unwrap();
+
+        assert_eq!(first.report.operation_id, second.report.operation_id);
+        assert_eq!(
+            first.report.outcome,
+            StartupOutcome::Unsettled {
+                reason: "could not acquire the Service transition lease: test Service transition lease is unavailable".into(),
+            }
+        );
+        assert_eq!(second.report.outcome, first.report.outcome);
+        assert!(first.result.is_err());
+        assert!(client.status().uncertain);
+        let events = events.lock().unwrap();
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| **event == "service-begin-failed")
+                .count(),
+            1,
+            "the cached report must prevent another lease acquisition"
+        );
+        assert!(!events.contains(&"service-probe"));
+        assert!(!events.contains(&"rebuild"));
     }
 
     #[tokio::test]
@@ -6872,6 +7609,29 @@ mod tests {
         })
         .await
         .expect("timed-out startup reconcile remains queued and later completes");
+
+        let eventual = client
+            .cached_startup_report()
+            .await
+            .expect("startup report query should succeed")
+            .expect("queued startup should cache a terminal report");
+        assert_eq!(eventual.outcome, StartupOutcome::Ready);
+        let repeated = client
+            .startup_reconcile()
+            .await
+            .expect("a repeated startup request should return the cached report");
+        assert_eq!(repeated.report.operation_id, eventual.operation_id);
+        assert_eq!(repeated.report.outcome, eventual.outcome);
+        assert_eq!(
+            events
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|event| **event == "rebuild")
+                .count(),
+            1,
+            "the eventual report must remain idempotent after the original caller timed out"
+        );
     }
 
     #[tokio::test]
