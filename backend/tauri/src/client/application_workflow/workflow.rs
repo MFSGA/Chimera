@@ -76,8 +76,8 @@ pub(in crate::client) struct ApplicationWorkflow {
     pub(super) recovery_required: Arc<Mutex<Option<RecoveryContext>>>,
     pub(super) notifications: Option<Arc<dyn crate::client::effects::ports::CommitNotifications>>,
     pub(super) deferred: Option<DeferredTarget>,
-    startup_report: Option<StartupReport>,
-    startup: StartupWorkflowState,
+    pub(super) startup_report: Option<StartupReport>,
+    pub(super) startup: StartupWorkflowState,
     /// Startup and Profile mutations share the application workflow actor;
     /// CoreLifecycleWorkflow adapts its existing runtime and Service ports.
     lifecycle: Option<Arc<CoreLifecycleWorkflow>>,
@@ -119,6 +119,13 @@ impl ApplicationWorkflow {
     pub(in crate::client) fn lifecycle(&self) -> &CoreLifecycleWorkflow {
         self.lifecycle
             .as_deref()
+            .expect("actor-owned application workflow has a lifecycle adapter")
+    }
+
+    pub(in crate::client) fn lifecycle_handle(&self) -> Arc<CoreLifecycleWorkflow> {
+        self.lifecycle
+            .as_ref()
+            .cloned()
             .expect("actor-owned application workflow has a lifecycle adapter")
     }
 
@@ -230,35 +237,14 @@ impl ApplicationWorkflow {
                 operation_id,
                 transition,
             } => {
-                if let Some(report) = &self.startup_report {
-                    return startup_report_result(report);
-                }
-                let lifecycle = self
-                    .lifecycle
-                    .as_ref()
-                    .cloned()
-                    .expect("actor-owned application workflow has a lifecycle adapter");
-                let report = lifecycle
-                    .startup_reconcile(operation_id, transition, self.startup.retry_target_mut())
-                    .await;
-                self.startup_report = Some(report.clone());
+                let report = self.startup_reconcile(operation_id, transition).await;
                 startup_report_result(&report)
             }
             CoreCommand::RecoverStartup {
                 operation_id,
                 transition,
             } => {
-                let lifecycle = self
-                    .lifecycle
-                    .as_ref()
-                    .cloned()
-                    .expect("actor-owned application workflow has a lifecycle adapter");
-                let report = lifecycle
-                    .recover_startup(operation_id, transition, self.startup.retry_target_mut())
-                    .await;
-                if self.startup_report.is_none() {
-                    self.startup_report = Some(report.clone());
-                }
+                let report = self.recover_startup(operation_id, transition).await;
                 startup_report_result(&report)
             }
             CoreCommand::RetryStartup {
@@ -266,19 +252,7 @@ impl ApplicationWorkflow {
                 identity,
                 transition,
             } => {
-                let lifecycle = self
-                    .lifecycle
-                    .as_ref()
-                    .cloned()
-                    .expect("actor-owned application workflow has a lifecycle adapter");
-                let report = lifecycle
-                    .retry_startup(
-                        operation_id,
-                        identity,
-                        transition,
-                        self.startup.retry_target_mut(),
-                    )
-                    .await;
+                let report = self.retry_startup(operation_id, identity, transition).await;
                 startup_report_result(&report)
             }
             CoreCommand::CacheStartupUnsettled {
@@ -302,14 +276,34 @@ impl ApplicationWorkflow {
                 anyhow::bail!(reason)
             }
             command => {
-                let lifecycle = self
-                    .lifecycle
-                    .as_ref()
-                    .cloned()
-                    .expect("actor-owned application workflow has a lifecycle adapter");
-                lifecycle
-                    .execute(command, self.startup.retry_target_mut())
-                    .await
+                let lifecycle = self.lifecycle_handle();
+                let refresh_startup_retry_identity =
+                    matches!(&command, CoreCommand::PatchApplicationConfig { .. });
+                let refresh_startup_target = match &command {
+                    CoreCommand::Reconcile
+                    | CoreCommand::RecoverCore
+                    | CoreCommand::RetryDeferredProfiles { .. }
+                    | CoreCommand::ReconcileProfiles { .. }
+                    | CoreCommand::SelectCore(_) => true,
+                    CoreCommand::PatchApplicationConfig {
+                        patch,
+                        service_connected,
+                    } => crate::client::application_workflow::impact::
+                        application_patch_requires_reconcile(patch, *service_connected),
+                    _ => false,
+                };
+                let mut no_startup_retry_target = None;
+                let result = lifecycle
+                    .execute(command, &mut no_startup_retry_target)
+                    .await;
+                if refresh_startup_target {
+                    self.refresh_startup_retry_target_after_reconcile(&lifecycle, &result)
+                        .await;
+                } else if refresh_startup_retry_identity && result.is_ok() {
+                    self.reschedule_startup_retry_after_committed_config_patch(&lifecycle)
+                        .await;
+                }
+                result
             }
         }
     }
