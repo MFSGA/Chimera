@@ -188,7 +188,8 @@ pub async fn cleanup_processes_async(app_handle: &AppHandle) -> anyhow::Result<(
     if let Err(error) = client.flush_main_window_geometry_saves().await {
         log::error!(target: "app", "failed to flush queued window state before shutdown: {error:?}");
     }
-    client.shutdown_core().await?;
+    // Core shutdown is owned by ChimeraClient::wait_shutdown, after its
+    // tracked tasks drain, as in ref's application lifecycle boundary.
     Ok(())
 }
 

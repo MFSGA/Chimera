@@ -3,6 +3,7 @@
 //! This follows REF's client ownership direction while preserving Chimera's
 //! staged migration from legacy globals and Chimera-specific core support.
 
+mod app_lifecycle;
 mod application;
 pub(crate) mod application_workflow;
 mod clash_api;

@@ -41,7 +41,10 @@ pub fn setup<R: Runtime, M: Manager<R>>(manager: &M) -> anyhow::Result<()> {
         .state::<crate::client::ChimeraClient>()
         .inner()
         .clone();
-    let owners = manager.state::<crate::setup::AppShutdown>().inner().clone();
+    let owners = manager
+        .state::<crate::setup::StartupOwners>()
+        .inner()
+        .clone();
     let shutdown = owners.shutdown.child_token();
     let tasks = owners.tasks.clone();
     let mut proxy_changes = client.subscribe_proxy_changes();

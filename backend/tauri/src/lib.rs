@@ -289,7 +289,7 @@ pub fn run() -> std::process::ExitCode {
             };
 
             setup::run_setup(
-                setup::AppShutdown::default(),
+                setup::StartupOwners::default(),
                 |owners| {
                     // Do not use the reference directory helper here: it can remove a
                     // file obstructing a root. Chimera must preserve user data on error.
@@ -352,7 +352,7 @@ pub fn run() -> std::process::ExitCode {
                     #[cfg(debug_assertions)]
                     setup_frontend_console_bridge(app);
 
-                    resolve::resolve_setup(app, &setup_paths);
+                    resolve::resolve_setup(app);
 
                     #[cfg(windows)]
                     {
