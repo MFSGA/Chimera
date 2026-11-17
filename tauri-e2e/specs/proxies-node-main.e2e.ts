@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import { readAppMessageCatalog, xpathLiteral } from './app-message-catalog.js';
 import { openMainRoute } from './main-window.js';
 import {
   appliedValue,
@@ -532,5 +533,152 @@ describe('main proxy node reference layout', () => {
     await sort.waitForDisplayed({ timeout: 15_000 });
     const locate = await $('[data-slot="proxies-locate-current-node"]');
     await locate.waitForExist({ timeout: 15_000 });
+  });
+
+  // Acceptance: the ref folder controls must be functional, not merely
+  // present. Every mutation below is triggered through a user-visible UI.
+  // Read-only get_profiles is used to assert the committed document; cleanup
+  // restores only this test Profile's original presentation layout.
+  it('creates proxy folders, moves a group, drags it again and restores the layout', async () => {
+    assert.ok(profileUid, 'A fixture Config Profile must be selected.');
+    const uid = profileUid;
+    const before = await readProfiles();
+    const original = before.proxy_group_layouts?.[uid];
+    const firstName = `E2E Proxy First ${Date.now()}`;
+    const secondName = `E2E Proxy Second ${Date.now()}`;
+
+    const layoutForTest = async () =>
+      (await readProfiles()).proxy_group_layouts?.[uid];
+
+    const addFolderFromUi = async (name: string) => {
+      const add = await $('[data-slot="proxies-folder-add"]');
+      await add.waitForClickable({ timeout: 15_000 });
+      await add.click();
+
+      const dialog = await $('[data-slot="folder-name-dialog"]');
+      await dialog.waitForDisplayed({ timeout: 15_000 });
+      const input = await dialog.$('input[aria-label]');
+      await input.waitForDisplayed({ timeout: 15_000 });
+      await input.setValue(name);
+      const save = await dialog.$('button[form="folder-name-dialog-form"]');
+      await save.waitForClickable({ timeout: 15_000 });
+      await save.click();
+      await dialog.waitForDisplayed({ reverse: true, timeout: 15_000 });
+
+      const folder = await $(
+        `[data-slot="proxies-folder"][aria-label="${name}"]`,
+      );
+      await folder.waitForDisplayed({ timeout: 15_000 });
+      await browser.waitUntil(
+        async () =>
+          Boolean(
+            (await layoutForTest())?.folders.some((item) => item.name === name),
+          ),
+        { timeout: 15_000, timeoutMsg: `Folder ${name} was not committed.` },
+      );
+      return folder;
+    };
+
+    try {
+      await openMainRoute('/main/proxies');
+      await addFolderFromUi(firstName);
+
+      const groupItem = await $(`a[data-group-name="${groupName}"]`);
+      await groupItem.waitForDisplayed({ timeout: 15_000 });
+      await groupItem.click({ button: 'right' });
+
+      const catalog = await readAppMessageCatalog();
+      const moveLabel = catalog.profile_move_to_folder;
+      assert.equal(typeof moveLabel, 'string');
+      const moveMenu = await $(
+        `//*[@role="menuitem" and contains(normalize-space(.),${xpathLiteral(moveLabel as string)})]`,
+      );
+      await moveMenu.waitForDisplayed({ timeout: 15_000 });
+      await moveMenu.click();
+
+      const targetFolder = await $(
+        `//*[@role="menuitem" and contains(normalize-space(.),${xpathLiteral(firstName)})]`,
+      );
+      await targetFolder.waitForClickable({ timeout: 15_000 });
+      await targetFolder.click();
+
+      await browser.waitUntil(
+        async () =>
+          Boolean(
+            (await layoutForTest())?.folders
+              .find((f) => f.name === firstName)
+              ?.members.includes(groupName),
+          ),
+        { timeout: 15_000, timeoutMsg: 'Context-menu move did not persist.' },
+      );
+      const insideFirst = `[data-slot="proxies-folder"][aria-label="${firstName}"] a[data-group-name="${groupName}"]`;
+      await $(insideFirst).waitForDisplayed({ timeout: 15_000 });
+
+      const secondFolder = await addFolderFromUi(secondName);
+      const firstGroup = await $(insideFirst);
+      const secondHeading = await secondFolder.$('button[aria-expanded]');
+      await secondHeading.waitForDisplayed({ timeout: 15_000 });
+
+      // Real W3C mouse actions exercise the distance-activated DnD sensor.
+      // Do not synthesize DOM drag events or invoke a mutation as acceptance.
+      await browser
+        .action('pointer', { parameters: { pointerType: 'mouse' } })
+        .move({ origin: firstGroup })
+        .down()
+        .pause(90)
+        .move({ origin: secondHeading, duration: 350 })
+        .pause(100)
+        .up()
+        .perform();
+
+      await browser.waitUntil(
+        async () =>
+          Boolean(
+            (await layoutForTest())?.folders
+              .find((f) => f.name === secondName)
+              ?.members.includes(groupName),
+          ),
+        {
+          timeout: 20_000,
+          timeoutMsg:
+            'Dragging the group onto the second heading did not commit.',
+        },
+      );
+
+      await browser.refresh();
+      await openMainRoute('/main/proxies');
+      const movedLink = await $(
+        `[data-slot="proxies-folder"][aria-label="${secondName}"] a[data-group-name="${groupName}"]`,
+      );
+      await movedLink.waitForDisplayed({ timeout: 20_000 });
+      const stored = await layoutForTest();
+      assert.equal(
+        stored?.folders.find((f) => f.name === firstName)?.members.length,
+        0,
+      );
+      assert.deepEqual(
+        stored?.folders.find((f) => f.name === secondName)?.members,
+        [groupName],
+      );
+    } finally {
+      // The active fixture is isolated, but always restore its layout even if
+      // the drag failed or the UI disappeared after a mutation.
+      const after = await layoutForTest();
+      if (
+        after &&
+        after.folders.some((folder) =>
+          [firstName, secondName].includes(folder.name),
+        )
+      ) {
+        committedValue(
+          await invoke('set_proxy_group_layout', {
+            profile: uid,
+            layout: original ?? { folders: [], ungrouped: [] },
+          }),
+          'Restore proxy group folder layout after UI acceptance',
+        );
+      }
+      await openMainRoute('/main/proxies');
+    }
   });
 });

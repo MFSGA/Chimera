@@ -10,6 +10,7 @@ import { Modal, useModal } from '@chimera/ui/modal';
 import { ask } from '@tauri-apps/plugin-dialog';
 import {
   useCallback,
+  useEffect,
   useMemo,
   useRef,
   useState,
@@ -233,6 +234,14 @@ function ProxiesLayoutContent({ children }: PropsWithChildren) {
     dialog?.mode === 'rename'
       ? layout?.folders.find((folder) => folder.id === dialog.id)
       : undefined;
+
+  // A configuration change can remove the folder while its rename dialog is
+  // visible. Close that dialog rather than editing a stale layout.
+  useEffect(() => {
+    if (open && dialog?.mode === 'rename' && !renaming) {
+      setOpen(false);
+    }
+  }, [open, dialog, renaming, setOpen]);
 
   const handleSubmitName = async (name: string) => {
     if (!dialog) return;
