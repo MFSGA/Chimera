@@ -295,6 +295,13 @@ export const commands = {
     typedError<[CoreState, number, RunType], string>(
       __TAURI_INVOKE('get_core_status'),
     ),
+  /**
+   *  Ref-style typed Core Actor projection. Deliberately separate from the
+   *  legacy get_core_status tuple: the latter cannot describe transitional or
+   *  degraded host ownership without pretending the runtime is Stopped.
+   */
+  getCoreActorStatus: () =>
+    typedError<CoreStatusInfo, string>(__TAURI_INVOKE('get_core_actor_status')),
   getTransparentProxyStatus: () =>
     typedError<NetworkTransparentProxyStatus, string>(
       __TAURI_INVOKE('get_transparent_proxy_status'),
@@ -639,6 +646,9 @@ export const events = {
     'clash-connections-event',
   ),
   clashWsEvent: makeEvent<ClashWsEvent>('clash-ws-event'),
+  coreStatusChangedEvent: makeEvent<CoreStatusChangedEvent>(
+    'core-status-changed-event',
+  ),
   stateChangedEvent: makeEvent<StateChangedEvent>('state-changed-event'),
   storageResyncEvent: makeEvent<StorageResyncEvent>('storage-resync-event'),
   storageValueChangedEvent: makeEvent<StorageValueChangedEvent>(
@@ -1990,6 +2000,23 @@ export type CoreStateDetail =
       Switching?: never;
     });
 
+/**
+ *  Ref-style rich routing status event. Its payload is the authoritative
+ *  CoreActor projection rather than the legacy Running/Stopped tuple.
+ */
+export type CoreStatusChangedEvent = CoreStatusInfo;
+
+export type CoreStatusInfo = {
+  controller: CoreControllerInfo | null;
+  host: ExecutionHost;
+  connectivity: EndpointConnectivity;
+  generation: number;
+  state: CoreStateDetail | null;
+  state_changed_at: number;
+  revision: RevisionIdInfo | null;
+  healthy: boolean | null;
+};
+
 export type CoreType = { clash: ClashCoreType } | 'singbox';
 
 export type Degradation = {
@@ -2081,6 +2108,16 @@ export type DownloaderState =
 
 export type EditorWindowType = 'profile' | 'css-editor';
 
+export type EndpointConnectivity =
+  | { kind: 'connected' }
+  | { kind: 'shut_down' }
+  | { kind: 'handing_off'; from: ExecutionHost; to: ExecutionHost }
+  /**
+   *  The endpoint is unreachable. `desired` names the committed host; the
+   *  router never falls back on its own.
+   */
+  | { kind: 'degraded'; desired: ExecutionHost; reason: string };
+
 export type EnvInfo = {
   os: string;
   arch: string;
@@ -2088,6 +2125,13 @@ export type EnvInfo = {
   device: DeviceInfo;
   build_info: BuildInfo;
 };
+
+/**
+ *  Which controller owns the runtime. The app perceives the difference in
+ *  exactly two places: this tag on the endpoint slot, and the handoff
+ *  protocol.
+ */
+export type ExecutionHost = 'local' | 'service';
 
 export type ExternalControllerPortStrategy =
   'fixed' | 'random' | 'allow_fallback';

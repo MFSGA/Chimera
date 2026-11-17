@@ -2,6 +2,7 @@ import {
   useClashConfig,
   useClashCores,
   useClashSetting,
+  useCoreActorStatus,
   useCoreStatus,
   useSetting,
   useSystemProxy,
@@ -21,7 +22,10 @@ import {
   SystemProxyButton,
   TunModeButton,
 } from '@/components/settings/system-proxy';
-import { getCoreStatusBadgeMessage } from '@/features/dashboard/core-service-status';
+import {
+  getCoreStatusBadgeMessage,
+  getRoutedCoreStatusMessage,
+} from '@/features/dashboard/core-service-status';
 import { getProxyStatus } from '@/features/dashboard/proxy-status';
 import useCoreIcon from '@/hooks/use-core-icon';
 import * as m from '@/paraglide/messages';
@@ -191,15 +195,18 @@ const CoreStatusBadge = () => {
     query: { data: serviceStatus },
   } = useSystemService();
   const coreStatusQuery = useCoreStatus();
+  const routedCoreStatusQuery = useCoreActorStatus();
 
   const message = useMemo<string>(
     () =>
-      getCoreStatusBadgeMessage({
-        coreState: coreStatusQuery.data?.status,
-        serviceStatus: serviceStatus?.status,
-        serviceCoreState: serviceStatus?.server?.core_infos?.state,
-      }),
-    [serviceStatus, coreStatusQuery.data],
+      routedCoreStatusQuery.data
+        ? getRoutedCoreStatusMessage(routedCoreStatusQuery.data)
+        : getCoreStatusBadgeMessage({
+            coreState: coreStatusQuery.data?.status,
+            serviceStatus: serviceStatus?.status,
+            serviceCoreState: serviceStatus?.server?.core_infos?.state,
+          }),
+    [serviceStatus, coreStatusQuery.data, routedCoreStatusQuery.data],
   );
 
   return (
