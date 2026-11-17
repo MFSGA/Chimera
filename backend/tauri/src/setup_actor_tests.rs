@@ -155,6 +155,8 @@ async fn lifecycle_service_probe_and_settlement_use_ref_actor_not_facade() {
     ))
     .with_service_actor(service.clone());
 
+    let mut status_updates = ServiceLifecyclePort::actor_status_updates(&adapter)
+        .expect("production Service bridge must subscribe to ref ServiceActor");
     let observed = ServiceLifecyclePort::probe(&adapter)
         .await
         .expect("ServiceActor probe must remain authoritative");
@@ -162,6 +164,26 @@ async fn lifecycle_service_probe_and_settlement_use_ref_actor_not_facade() {
     assert_eq!(observed.version, "1.10.1");
     assert_eq!(observed.status, ServiceStatus::NotInstalled);
     assert!(daemon.probes.load(Ordering::SeqCst) > 0);
+    let actor_status = ServiceLifecyclePort::actor_status(&adapter)
+        .expect("production bridge must read ref ServiceActor generation");
+    assert_eq!(
+        actor_status.phase,
+        chimera_core::actor_v2::service_policy::ServicePhase::NotInstalled
+    );
+    assert_eq!(
+        actor_status.ready_generation,
+        service.status().ready_generation
+    );
+    // A direct ref Actor probe must reach the same receiver used by the
+    // production startup-recovery observer. Do not create a second watch.
+    tokio::time::timeout(Duration::from_secs(5), status_updates.changed())
+        .await
+        .expect("the ref ServiceActor watch must notify subscribers")
+        .expect("the ServiceActor status channel must remain open");
+    assert_eq!(
+        status_updates.borrow_and_update().ready_generation,
+        actor_status.ready_generation
+    );
     assert!(
         ServiceLifecyclePort::command_settled(&adapter).await,
         "the ref Actor should confirm no outstanding OS command"

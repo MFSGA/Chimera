@@ -57,6 +57,24 @@ pub(crate) trait ServiceTransitionLease: Send {
 #[async_trait]
 pub(crate) trait ServiceLifecyclePort: Send + Sync + 'static {
     async fn probe(&self) -> anyhow::Result<chimera_ipc::types::StatusInfo<'static>>;
+
+    /// Ref ServiceActor is the authoritative readiness-generation source.
+    /// Legacy test ports have no ref actor and return None.
+    fn actor_status(&self) -> Option<chimera_core::actor_v2::service_status::ServiceHostStatus> {
+        None
+    }
+
+    /// The actor's watch is used for production startup-recovery wakeups,
+    /// rather than treating CoreLifecycle's compatibility watch as another
+    /// readiness-generation publisher.
+    fn actor_status_updates(
+        &self,
+    ) -> Option<
+        tokio::sync::watch::Receiver<chimera_core::actor_v2::service_router::ServiceHostStatus>,
+    > {
+        None
+    }
+
     fn runtime_owned(&self, info: &chimera_ipc::types::StatusInfo<'_>) -> bool {
         crate::core::service::is_service_runtime_owned(info)
     }

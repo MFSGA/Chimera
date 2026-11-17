@@ -41,6 +41,20 @@ struct LegacyServiceTransition {
 
 #[async_trait]
 impl ServiceLifecyclePort for LegacyServiceBridge {
+    fn actor_status(&self) -> Option<chimera_core::actor_v2::service_status::ServiceHostStatus> {
+        self.service_actor.as_ref().map(|actor| {
+            crate::client::service_status::project_actor_service_status(&actor.status())
+        })
+    }
+
+    fn actor_status_updates(
+        &self,
+    ) -> Option<
+        tokio::sync::watch::Receiver<chimera_core::actor_v2::service_router::ServiceHostStatus>,
+    > {
+        self.service_actor.as_ref().map(|actor| actor.subscribe())
+    }
+
     async fn probe(&self) -> anyhow::Result<chimera_ipc::types::StatusInfo<'static>> {
         if let Some(service) = &self.service_actor {
             let status = service.probe().await?;
