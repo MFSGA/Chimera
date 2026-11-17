@@ -9,7 +9,7 @@ use anyhow::Context as _;
 use camino::Utf8PathBuf;
 use chimera_config::profile::{
     FolderId, ProfileDefinition, ProfileId, ProfileLayout, ProfileMetadata, ProfileMetadataPatch,
-    Profiles, RemoteProfileOptions, RemoteProfileOptionsPatch,
+    Profiles, ProxyGroupLayout, RemoteProfileOptions, RemoteProfileOptionsPatch,
 };
 use chimera_core::state::{PersistentStateManagerSetup, StateSnapshot};
 use ractor::{Actor, ActorRef, RpcReplyPort, rpc::CallResult};
@@ -140,8 +140,13 @@ impl ProfilesClient {
         // one new durable generation before exposing the snapshot.
         let mut loaded = manager.snapshot().as_ref().clone();
         let repair = loaded.repair_folders();
-        if !repair.is_empty() {
-            tracing::warn!(?repair, "repaired malformed profile folders");
+        let proxy_group_repair = loaded.repair_proxy_group_layouts();
+        if !repair.is_empty() || !proxy_group_repair.is_empty() {
+            tracing::warn!(
+                ?repair,
+                ?proxy_group_repair,
+                "repaired malformed profile presentation folders"
+            );
             loaded
                 .bump_revision()
                 .context("failed to advance profiles revision after repairing folders")?;
@@ -313,6 +318,40 @@ impl ProfilesClient {
     ) -> Result<(CommitReport, FolderId), ProfilesError> {
         self.call(
             |reply| ProfilesActorMessage::CreateFolder {
+                name,
+                members,
+                reply,
+            },
+            None,
+        )
+        .await
+    }
+
+    pub async fn set_proxy_group_layout(
+        &self,
+        profile: ProfileId,
+        layout: ProxyGroupLayout,
+    ) -> Result<CommitReport, ProfilesError> {
+        self.call(
+            |reply| ProfilesActorMessage::SetProxyGroupLayout {
+                profile,
+                layout,
+                reply,
+            },
+            None,
+        )
+        .await
+    }
+
+    pub async fn create_proxy_group_folder(
+        &self,
+        profile: ProfileId,
+        name: String,
+        members: Vec<String>,
+    ) -> Result<(CommitReport, FolderId), ProfilesError> {
+        self.call(
+            |reply| ProfilesActorMessage::CreateProxyGroupFolder {
+                profile,
                 name,
                 members,
                 reply,
@@ -2908,6 +2947,114 @@ mod tests {
                 .get(&ProfileId("cfg2".into()))
                 .is_none()
         );
+    }
+
+    #[tokio::test]
+    async fn proxy_group_layout_is_profile_scoped_persisted_and_not_a_runtime_change() {
+        use chimera_config::profile::{ProxyGroupFolder, ProxyGroupLayout};
+
+        let (client, dir) = seeded_client().await;
+        let before = client.snapshot().revision();
+        let layout = ProxyGroupLayout {
+            ungrouped: vec!["Auto".into()],
+            folders: vec![ProxyGroupFolder {
+                id: FolderId("f1".into()),
+                name: "Streaming".into(),
+                members: vec!["Netflix".into()],
+            }],
+        };
+        let report = client
+            .set_proxy_group_layout(ProfileId("cfg1".into()), layout.clone())
+            .await
+            .unwrap();
+        assert_eq!(report.snapshot.revision(), before + 1);
+        assert!(!report.affects_current);
+        assert_eq!(
+            report
+                .snapshot
+                .proxy_group_layouts
+                .get(&ProfileId("cfg1".into())),
+            Some(&layout),
+        );
+        assert!(
+            report
+                .snapshot
+                .proxy_group_layouts
+                .get(&ProfileId("cfg2".into()))
+                .is_none()
+        );
+
+        let persisted: Profiles =
+            serde_yaml_ng::from_slice(&std::fs::read(temp_profiles_path(&dir)).unwrap()).unwrap();
+        assert_eq!(
+            persisted.proxy_group_layouts,
+            report.snapshot.proxy_group_layouts
+        );
+
+        let empty = client
+            .set_proxy_group_layout(ProfileId("cfg1".into()), ProxyGroupLayout::default())
+            .await
+            .unwrap();
+        assert_eq!(empty.snapshot.revision(), before + 2);
+        assert!(
+            !empty
+                .snapshot
+                .proxy_group_layouts
+                .contains_key(&ProfileId("cfg1".into()))
+        );
+    }
+
+    #[tokio::test]
+    async fn create_proxy_group_folder_moves_members_once_and_rejects_invalid_profiles() {
+        use chimera_config::profile::{ProxyGroupFolder, ProxyGroupLayout};
+
+        let (client, dir) = seeded_client().await;
+        client
+            .set_proxy_group_layout(
+                ProfileId("cfg1".into()),
+                ProxyGroupLayout {
+                    ungrouped: vec!["Auto".into(), "Netflix".into()],
+                    folders: vec![ProxyGroupFolder {
+                        id: FolderId("f1".into()),
+                        name: "Old".into(),
+                        members: vec!["JP".into()],
+                    }],
+                },
+            )
+            .await
+            .unwrap();
+        let before = client.snapshot().revision();
+        let (report, folder_id) = client
+            .create_proxy_group_folder(
+                ProfileId("cfg1".into()),
+                "Streaming".into(),
+                vec!["Netflix".into(), "JP".into()],
+            )
+            .await
+            .unwrap();
+        assert!(folder_id.0.starts_with('f'));
+        assert_ne!(folder_id, FolderId("f1".into()));
+        assert_eq!(report.snapshot.revision(), before + 1);
+        assert!(!report.affects_current);
+        let current = &report.snapshot.proxy_group_layouts[&ProfileId("cfg1".into())];
+        assert_eq!(current.ungrouped, vec!["Auto"]);
+        assert!(current.folders[0].members.is_empty());
+        assert_eq!(current.folders[1].members, vec!["Netflix", "JP"]);
+
+        let committed = std::fs::read(temp_profiles_path(&dir)).unwrap();
+        for uid in ["missing", "ovl1"] {
+            let error = client
+                .create_proxy_group_folder(
+                    ProfileId(uid.into()),
+                    "Rejected".into(),
+                    vec!["Proxy".into()],
+                )
+                .await
+                .unwrap_err();
+            assert!(matches!(error, ProfilesError::ValidationFailed(_)));
+            assert_eq!(client.snapshot().revision(), before + 1);
+            assert_eq!(std::fs::read(temp_profiles_path(&dir)).unwrap(), committed);
+        }
     }
 
     fn test_folder(

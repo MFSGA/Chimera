@@ -938,6 +938,38 @@ impl ChimeraClient {
         .with_commit(report.receipt.clone()))
     }
 
+    /// Presentation-only proxy group ordering for one Config Profile.
+    pub(crate) async fn set_proxy_group_layout(
+        &self,
+        profile: ProfileId,
+        layout: chimera_config::profile::ProxyGroupLayout,
+    ) -> anyhow::Result<MutationOutcome<()>> {
+        let report = self
+            .profiles_client()?
+            .set_proxy_group_layout(profile, layout)
+            .await?;
+        self.refresh_profiles();
+        Ok(self.after_commit(&report).await)
+    }
+
+    pub(crate) async fn create_proxy_group_folder(
+        &self,
+        profile: ProfileId,
+        name: String,
+        members: Vec<String>,
+    ) -> anyhow::Result<MutationOutcome<FolderId>> {
+        let (report, folder) = self
+            .profiles_client()?
+            .create_proxy_group_folder(profile, name, members)
+            .await?;
+        self.refresh_profiles();
+        Ok(MutationOutcome::from_parts(
+            folder,
+            self.collect_post_commit_degradations(&report).await,
+        )
+        .with_commit(report.receipt.clone()))
+    }
+
     pub(crate) async fn refresh_profile(
         &self,
         uid: ProfileId,

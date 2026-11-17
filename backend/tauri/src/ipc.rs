@@ -516,6 +516,29 @@ pub async fn create_profile_folder(
 
 #[tauri::command]
 #[specta::specta]
+pub async fn set_proxy_group_layout(
+    client: State<'_, ChimeraClient>,
+    profile: chimera_config::profile::ProfileId,
+    layout: chimera_config::profile::ProxyGroupLayout,
+) -> Result<MutationOutcome<()>> {
+    Ok(client.set_proxy_group_layout(profile, layout).await?)
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn create_proxy_group_folder(
+    client: State<'_, ChimeraClient>,
+    profile: chimera_config::profile::ProfileId,
+    name: String,
+    members: Vec<String>,
+) -> Result<MutationOutcome<chimera_config::profile::FolderId>> {
+    Ok(client
+        .create_proxy_group_folder(profile, name, members)
+        .await?)
+}
+
+#[tauri::command]
+#[specta::specta]
 pub async fn activate_profile(
     client: State<'_, ChimeraClient>,
     uid: Option<ProfileUid>,

@@ -35,6 +35,10 @@ pub struct Profiles {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub folders: Vec<ProfileFolder>,
 
+    /// Presentation-only proxy group layouts keyed by the owning Config profile.
+    #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
+    pub proxy_group_layouts: IndexMap<ProfileId, ProxyGroupLayout>,
+
     /// Serialized as a sequence, kept as an ordered map in memory.
     #[serde(default, with = "items_serde")]
     pub items: IndexMap<ProfileId, ProfileItem>,
@@ -51,6 +55,8 @@ struct ProfileDocument {
     valid: Vec<String>,
     #[specta(optional)]
     folders: Vec<ProfileFolder>,
+    #[specta(optional, type = HashMap<ProfileId, ProxyGroupLayout>)]
+    proxy_group_layouts: IndexMap<ProfileId, ProxyGroupLayout>,
     #[specta(type = Vec<ProfileItem>)]
     items: IndexMap<ProfileId, ProfileItem>,
 }
@@ -69,6 +75,7 @@ impl Default for Profiles {
             global_transforms: Vec::new(),
             valid: default_valid(),
             folders: Vec::new(),
+            proxy_group_layouts: IndexMap::new(),
             items: IndexMap::new(),
         }
     }
@@ -113,6 +120,7 @@ impl Profiles {
     pub fn remove_item_unchecked(&mut self, uid: &ProfileId) -> Option<ProfileItem> {
         let removed = self.items.shift_remove(uid);
         if removed.is_some() {
+            self.proxy_group_layouts.shift_remove(uid);
             for folder in &mut self.folders {
                 folder.members.retain(|member| member != uid);
             }
@@ -246,6 +254,7 @@ impl Profiles {
         }
 
         validate_folders(&self.items, &self.folders, &mut errors);
+        validate_proxy_group_layouts(&self.items, &self.proxy_group_layouts, &mut errors);
 
         if errors.is_empty() {
             Ok(())
@@ -344,6 +353,21 @@ pub enum ProfileValidationError {
 
     #[error("remote URL scheme is not supported for {profile}: {scheme}")]
     UnsupportedRemoteUrlScheme { profile: ProfileId, scheme: String },
+
+    #[error("proxy group layout belongs to an unknown or non-Config profile: {profile}")]
+    ProxyGroupLayoutProfileNotConfig { profile: ProfileId },
+
+    #[error("proxy group folder id duplicated in profile {profile}: {id}")]
+    ProxyGroupFolderDuplicateId { profile: ProfileId, id: FolderId },
+
+    #[error("proxy group folder name empty in profile {profile}: {id}")]
+    ProxyGroupFolderNameEmpty { profile: ProfileId, id: FolderId },
+
+    #[error("proxy group name empty in profile {profile}")]
+    ProxyGroupNameEmpty { profile: ProfileId },
+
+    #[error("proxy group {name} repeated in layout of profile {profile}")]
+    ProxyGroupDuplicate { profile: ProfileId, name: String },
 
     #[error("folder id is used more than once: {id}")]
     FolderDuplicateId { id: FolderId },
