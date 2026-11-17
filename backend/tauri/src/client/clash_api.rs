@@ -170,12 +170,13 @@ impl ChimeraClient {
     pub async fn clash_native_proxies(
         &self,
     ) -> Result<chimera_core::clash::proxies::NativeProxies> {
+        let default_url = self.get_app_config()?.default_latency_test;
         Ok(self
             .inner
             .proxies
             .get(false)
             .await?
-            .without_group_icon_urls())
+            .trim_for_frontend(&default_url))
     }
 
     /// Separate icon URLs from ordinary native proxy graph reads. This app's

@@ -396,6 +396,14 @@ export const commands = {
     typedError<{ [key in string]: number }, string>(
       __TAURI_INVOKE('test_native_proxy_group_delay', { group }),
     ),
+  /**
+   *  Test one member using its live group's own URL or the app default.
+   *  The URL is never accepted from or returned to the native UI.
+   */
+  testNativeProxyNodeDelay: (group: string, name: string) =>
+    typedError<number, string>(
+      __TAURI_INVOKE('test_native_proxy_node_delay', { group, name }),
+    ),
   clashApiDeleteConnections: (id: string | null) =>
     typedError<null, string>(
       __TAURI_INVOKE('clash_api_delete_connections', { id }),
@@ -3052,7 +3060,8 @@ export type ProxyGroup = {
   all: ProxyName[];
   now: ProxyName | null;
   fixed: ProxyName | null;
-  testUrl: string | null;
+  /**  Opaque history source key; raw test URLs never leave the native read view. */
+  delayKey: string;
   expectedStatus: string | null;
   hidden: boolean;
   /**

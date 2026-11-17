@@ -1665,6 +1665,31 @@ pub async fn clash_api_get_group_delay(
         .collect())
 }
 
+/// Test one member using its live group's own URL or the app default.
+/// The URL is never accepted from or returned to the native UI.
+#[tauri::command]
+#[specta::specta]
+pub async fn test_native_proxy_node_delay(
+    group: String,
+    name: String,
+    client: State<'_, ChimeraClient>,
+) -> Result<u16> {
+    let default_url = client.get_app_config()?.default_latency_test;
+    let api = client.clash_api_client().await?;
+    let result = chimera_core::proxies::test_group_node_delay(
+        &api,
+        &group,
+        &name,
+        &default_url,
+        std::time::Duration::from_secs(10),
+    )
+    .await;
+    // A timed-out IPC reply may still have recorded a sample. Queue a real
+    // snapshot refresh before either outcome reaches the frontend.
+    client.request_proxy_refresh();
+    Ok(result?)
+}
+
 /// One instance-bound group delay operation. All member requests share the
 /// same running core even if an external profile switch races the test.
 #[tauri::command]

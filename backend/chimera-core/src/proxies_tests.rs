@@ -85,6 +85,68 @@ async fn controller(
     (api, endpoint, address)
 }
 
+#[test]
+fn native_node_delay_spec_uses_live_group_url_provider_and_rejects_spoofed_membership() {
+    let record = |value| serde_json::from_value(value).unwrap();
+    let mut records = IndexMap::new();
+    for value in [
+        serde_json::json!({"name":"DIRECT","type":"Direct","udp":false,"history":[]}),
+        serde_json::json!({"name":"REJECT","type":"Reject","udp":false,"history":[]}),
+        serde_json::json!({"name":"Auto","type":"URLTest","udp":false,"history":[],"all":["A"],"testUrl":"https://user:credential@group.test/check","expectedStatus":"200/204"}),
+        serde_json::json!({"name":"Default","type":"Selector","udp":false,"history":[],"all":["A"]}),
+        serde_json::json!({"name":"A","type":"Vless","udp":false,"history":[],"provider-name":"provider-a"}),
+    ] {
+        let proxy: clash_api::Proxy = record(value);
+        records.insert(proxy.name.clone(), proxy);
+    }
+    let graph = NativeProxies::from_responses(records, &IndexMap::new(), None).unwrap();
+    let (own, provider) =
+        group_node_delay_spec(&graph, "Auto", "A", "https://app.test/default", DEADLINE).unwrap();
+    assert_eq!(own.url.as_str(), "https://user:credential@group.test/check");
+    assert_eq!(own.expected.unwrap().as_str(), "200/204");
+    assert_eq!(provider.unwrap().as_str(), "provider-a");
+
+    let (app_default, _) =
+        group_node_delay_spec(&graph, "Default", "A", "https://app.test/default", DEADLINE)
+            .unwrap();
+    assert_eq!(app_default.url.as_str(), "https://app.test/default");
+    assert!(group_node_delay_spec(&graph, "Unknown", "A", "", DEADLINE).is_err());
+    assert!(group_node_delay_spec(&graph, "Auto", "DIRECT", "", DEADLINE).is_err());
+    assert!(group_node_delay_spec(&graph, "Auto", "missing", "", DEADLINE).is_err());
+}
+
+#[tokio::test]
+async fn native_single_node_delay_uses_bound_group_url_without_frontend_url() {
+    let (api, controller, _) = controller(false, false).await;
+    let delay = tokio::time::timeout(
+        DEADLINE,
+        test_group_node_delay(
+            &api,
+            "Auto",
+            "node-a",
+            "https://app.test/default",
+            Duration::from_millis(3100),
+        ),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(delay, 37);
+    let routes = controller.await.unwrap();
+    assert_eq!(routes.len(), 4);
+    let request = routes
+        .iter()
+        .find(|line| line.contains("/healthcheck?"))
+        .unwrap();
+    assert!(
+        request.contains("url=https%3A%2F%2Fgroup.test%2Fcheck"),
+        "{request}"
+    );
+    assert!(request.contains("expected=200%2F204"), "{request}");
+    assert!(request.contains("timeout=3100"), "{request}");
+    assert!(!routes.iter().any(|line| line.contains("/group/Auto/delay")));
+}
+
 #[tokio::test]
 async fn unpinned_group_uses_only_group_delay_with_current_url_and_expected_status() {
     let (api, controller, _) = controller(false, false).await;
