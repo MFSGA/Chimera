@@ -28,6 +28,9 @@ pub(crate) struct ApplicationEffectExecutor {
     accelerators: Arc<dyn AcceleratorValidator>,
     adapters: Arc<dyn ApplicationEffectAdapters>,
     core: Arc<dyn crate::client::core_lifecycle::CoreLifecyclePort>,
+    /// Production side effects enter the ref CoreActor mailbox. The legacy
+    /// port is retained for injected test adapters only.
+    core_router: Option<chimera_core::actor_v2::CoreClient>,
 }
 
 impl ApplicationEffectExecutor {
@@ -44,7 +47,13 @@ impl ApplicationEffectExecutor {
             accelerators,
             adapters,
             core,
+            core_router: None,
         }
+    }
+
+    pub(crate) fn with_core_router(mut self, core: chimera_core::actor_v2::CoreClient) -> Self {
+        self.core_router = Some(core);
+        self
     }
 
     async fn apply_hotkeys(&self, revision: EffectRevision, raw: &[String]) -> EffectStatus {
@@ -115,15 +124,26 @@ impl ApplicationEffectExecutor {
                 effective_hash: String::new(),
             },
         };
-        let status = match self.core.reconcile_transparent_proxy(&request).await {
+        let result = match &self.core_router {
+            Some(core) => core
+                .reconcile_transparent_proxy(request)
+                .await
+                .map_err(|error| (error.to_string(), error.retryable)),
+            None => self
+                .core
+                .reconcile_transparent_proxy(&request)
+                .await
+                .map_err(|error| (format!("{error:#}"), true)),
+        };
+        let status = match result {
             Ok(status) => status,
-            Err(error) => {
+            Err((message, retryable)) => {
                 return degraded(
                     EffectKind::TransparentProxy,
                     revision,
                     "transparent_proxy_failed",
-                    format!("{error:#}"),
-                    true,
+                    message,
+                    retryable,
                 );
             }
         };
@@ -467,6 +487,80 @@ mod tests {
     struct NoopSink;
     impl HotkeyActionSink for NoopSink {
         fn dispatch(&self, _action: HotkeyAction) {}
+    }
+
+    struct EffectsLocalHost;
+
+    #[async_trait::async_trait]
+    impl chimera_core::actor_v2::endpoint::ControlEndpoint for EffectsLocalHost {
+        fn host(&self) -> chimera_core::actor_v2::endpoint::ExecutionHost {
+            chimera_core::actor_v2::endpoint::ExecutionHost::Local
+        }
+
+        async fn submit(
+            &self,
+            _: chimera_core::actor_v2::endpoint::CoreSubmission,
+        ) -> Result<chimera_ipc::api::core::v2::OperationInfo, chimera_core_manager::CoreError>
+        {
+            panic!("effects must not submit a Core lifecycle operation")
+        }
+
+        async fn wait_operation(
+            &self,
+            _: chimera_core_manager::OperationId,
+            _: std::time::Duration,
+        ) -> Option<chimera_ipc::api::core::v2::OperationInfo> {
+            panic!("effects must not wait for unrelated Core operations")
+        }
+
+        async fn status(
+            &self,
+        ) -> Result<
+            chimera_core::actor_v2::endpoint::CoreStatusSnapshot,
+            chimera_core_manager::CoreError,
+        > {
+            Ok(chimera_core::actor_v2::endpoint::CoreStatusSnapshot {
+                instance_id: None,
+                controller: None,
+                state: Some(chimera_ipc::api::status::CoreStateDetail::Stopped { reason: None }),
+                state_changed_at: 0,
+                revision: None,
+                source_hash: None,
+                healthy: Some(true),
+                applied_kind: None,
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn production_transparent_effect_uses_ref_host_fence_not_legacy_port() {
+        use chimera_config::clash::config::TransparentProxyMode;
+        let core = chimera_core::actor_v2::CoreClient::spawn(Arc::new(EffectsLocalHost))
+            .await
+            .unwrap();
+        let executor = new_executor(Arc::new(RecordingAdapters::default()))
+            .await
+            .with_core_router(core.clone());
+        let mut config = chimera_config::clash::config::TransparentProxyConfig::default();
+        config.mode = TransparentProxyMode::Redir;
+        let status = executor
+            .apply_transparent_proxy(
+                EffectRevision::new(12),
+                &TransparentProxyDesired {
+                    config,
+                    port: Some(7890),
+                },
+            )
+            .await;
+        assert!(matches!(
+            status.health,
+            EffectHealth::Degraded {
+                code: "transparent_proxy_failed",
+                retryable: false,
+                ..
+            }
+        ));
+        core.finish_shutdown().await;
     }
 
     #[tokio::test]

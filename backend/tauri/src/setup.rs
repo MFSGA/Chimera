@@ -293,7 +293,8 @@ pub fn setup(
             accelerators.clone(),
             effect_adapters,
             core_bridge.clone(),
-        ),
+        )
+        .with_core_router(core_router.clone()),
     );
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     let window: Arc<dyn WindowControl> = Arc::new(TauriWindowControl::new(app.handle().clone()));

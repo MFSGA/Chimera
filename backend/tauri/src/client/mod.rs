@@ -715,6 +715,10 @@ impl ChimeraClient {
         &self,
     ) -> anyhow::Result<chimera_ipc::api::network::transparent_proxy::NetworkTransparentProxyStatus>
     {
+        if let Some(core) = &self.inner.core_api {
+            return Ok(core.transparent_proxy_status().await?);
+        }
+        // Test-only legacy lifecycle injection.
         self.inner.core.transparent_proxy_status().await
     }
 
