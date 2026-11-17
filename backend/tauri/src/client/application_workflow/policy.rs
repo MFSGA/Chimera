@@ -188,3 +188,208 @@ pub(crate) fn disposition(facts: &TryFailureFacts) -> FailureDisposition {
         FailureDisposition::Reject
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // The upstream runtime-only policy has no peripheral-effects parameter.
+    // Chimera additionally permits save-only and notify-only source writes.
+    fn ref_policy_for(
+        class: CommandClass,
+        impact: RuntimeImpact,
+        intent: CoreRunIntent,
+    ) -> CommandPolicy {
+        policy_for(class, impact, &ChangedOwnerInputs::default(), intent)
+    }
+
+    /// Re-selecting the profile that is already current reaches the runtime
+    /// with the least impact, and so do `update_core` and an
+    /// `enable_service_mode` switch to the value already stored; all three
+    /// still owe the confirmation the command promised.
+    #[test]
+    fn an_explicit_switch_must_apply() {
+        for impact in [
+            RuntimeImpact::Reconcile,
+            RuntimeImpact::CoreSwap,
+            RuntimeImpact::HostSwitch,
+        ] {
+            assert_eq!(
+                ref_policy_for(CommandClass::ExplicitSwitch, impact, CoreRunIntent::Running),
+                CommandPolicy::MustApply,
+                "{impact:?}"
+            );
+        }
+    }
+
+    /// A stopped core outranks the switch: the promise is still not kept by
+    /// starting a core the user asked to stop.
+    #[test]
+    fn a_stopped_core_turns_even_a_no_op_explicit_switch_into_a_saved_inactive() {
+        assert_eq!(
+            ref_policy_for(
+                CommandClass::ExplicitSwitch,
+                RuntimeImpact::Reconcile,
+                CoreRunIntent::StoppedByUser
+            ),
+            CommandPolicy::SavedInactive
+        );
+    }
+
+    #[test]
+    fn an_ordinary_runtime_save_may_defer() {
+        assert_eq!(
+            ref_policy_for(
+                CommandClass::Save,
+                RuntimeImpact::Reconcile,
+                CoreRunIntent::Running
+            ),
+            CommandPolicy::AllowDeferredWhenSafe
+        );
+    }
+
+    /// Which binary or host carries the user's traffic is never deferred, even
+    /// when the change arrived inside an ordinary save.
+    #[test]
+    fn a_save_that_moves_the_core_or_the_host_must_still_apply() {
+        for impact in [RuntimeImpact::CoreSwap, RuntimeImpact::HostSwitch] {
+            assert_eq!(
+                ref_policy_for(CommandClass::Save, impact, CoreRunIntent::Running),
+                CommandPolicy::MustApply,
+                "{impact:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_stopped_core_turns_every_runtime_change_into_a_saved_inactive() {
+        for class in [CommandClass::ExplicitSwitch, CommandClass::Save] {
+            for impact in [
+                RuntimeImpact::Reconcile,
+                RuntimeImpact::CoreSwap,
+                RuntimeImpact::HostSwitch,
+            ] {
+                assert_eq!(
+                    ref_policy_for(class, impact, CoreRunIntent::StoppedByUser),
+                    CommandPolicy::SavedInactive,
+                    "{class:?} {impact:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn only_allow_deferred_when_safe_permits_a_deferral() {
+        for policy in [CommandPolicy::MustApply, CommandPolicy::SavedInactive] {
+            assert!(!policy.allows_deferral(), "{policy:?}");
+        }
+        assert!(CommandPolicy::AllowDeferredWhenSafe.allows_deferral());
+    }
+
+    /// The one fact pattern where every condition of the conjunction holds.
+    fn deferrable() -> TryFailureFacts {
+        TryFailureFacts {
+            cause: TryCauseKind::Transient,
+            baseline: BaselineAvailability::Known,
+            policy: CommandPolicy::AllowDeferredWhenSafe,
+            candidate_has_invalid_item: false,
+        }
+    }
+
+    #[test]
+    fn every_condition_holding_is_what_makes_a_failure_deferrable() {
+        assert_eq!(disposition(&deferrable()), FailureDisposition::Deferrable);
+    }
+
+    #[test]
+    fn dropping_any_single_condition_stops_the_deferral() {
+        struct Case {
+            condition: &'static str,
+            break_it: fn(&mut TryFailureFacts),
+            expected: FailureDisposition,
+        }
+
+        const CASES: &[Case] = &[
+            Case {
+                condition: "the cause is not typed retryable",
+                break_it: |facts| facts.cause = TryCauseKind::Permanent,
+                expected: FailureDisposition::Reject,
+            },
+            Case {
+                condition: "the candidate itself was rejected",
+                break_it: |facts| facts.cause = TryCauseKind::Deterministic,
+                expected: FailureDisposition::Reject,
+            },
+            Case {
+                condition: "the outcome was not observed",
+                break_it: |facts| facts.cause = TryCauseKind::Unknown,
+                expected: FailureDisposition::RecoveryRequired,
+            },
+            Case {
+                condition: "no safe baseline is known",
+                break_it: |facts| facts.baseline = BaselineAvailability::Unconfirmed,
+                expected: FailureDisposition::RecoveryRequired,
+            },
+            Case {
+                condition: "the command does not allow deferring",
+                break_it: |facts| facts.policy = CommandPolicy::MustApply,
+                expected: FailureDisposition::Reject,
+            },
+            Case {
+                condition: "the candidate holds a deterministically invalid item",
+                break_it: |facts| facts.candidate_has_invalid_item = true,
+                expected: FailureDisposition::Reject,
+            },
+        ];
+
+        for case in CASES {
+            let mut facts = deferrable();
+            (case.break_it)(&mut facts);
+            assert_eq!(
+                disposition(&facts),
+                case.expected,
+                "broken condition: {}",
+                case.condition
+            );
+        }
+    }
+
+    /// An unobserved outcome cannot be rejected either: the candidate may be
+    /// running, so the state has to be established before anything else.
+    #[test]
+    fn an_unknown_outcome_never_enters_the_retryable_branch() {
+        let facts = TryFailureFacts {
+            cause: TryCauseKind::Unknown,
+            ..deferrable()
+        };
+
+        assert_eq!(disposition(&facts), FailureDisposition::RecoveryRequired);
+        assert_ne!(disposition(&facts), FailureDisposition::Deferrable);
+    }
+
+    /// A terminated, observed, transient failure with a lost baseline is still
+    /// not rejectable: "rolled back" is a claim about a request, not about what
+    /// the core is running.
+    #[test]
+    fn an_unconfirmed_baseline_requires_recovery_rather_than_a_rejection() {
+        let facts = TryFailureFacts {
+            baseline: BaselineAvailability::Unconfirmed,
+            ..deferrable()
+        };
+        assert_eq!(disposition(&facts), FailureDisposition::RecoveryRequired);
+    }
+    #[test]
+    fn chimera_source_only_save_is_not_a_runtime_deferral() {
+        assert_eq!(
+            policy_for(
+                CommandClass::Save,
+                RuntimeImpact::None,
+                &ChangedOwnerInputs::default(),
+                CoreRunIntent::Running,
+            ),
+            CommandPolicy::SaveOnly,
+        );
+        assert!(!CommandPolicy::SaveOnly.allows_deferral());
+        assert!(!CommandPolicy::SaveThenNotify.allows_deferral());
+    }
+}

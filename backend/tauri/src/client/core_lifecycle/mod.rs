@@ -9025,6 +9025,40 @@ mod tests {
         assert_eq!(events.lock().unwrap().as_slice(), ["lower-stop"]);
     }
 
+    #[test]
+    fn workflow_attempt_cannot_clear_while_the_lower_core_action_is_unsettled() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let core = Arc::new(LowerUncertainCore {
+            events: events.clone(),
+            uncertain: AtomicBool::new(true),
+        });
+        let lifecycle = CoreLifecycleWorkflow::new(
+            ApplicationClient::legacy().unwrap(),
+            ClashConfigClient::legacy().unwrap(),
+            None,
+            core.clone(),
+            Arc::new(RecordingInstaller {
+                events: events.clone(),
+            }),
+            RuntimePaths::from_config_root(std::path::PathBuf::from("test-runtime-root")),
+            Arc::new(RecordingService { events }),
+        );
+        let mut workflow = ApplicationWorkflow::with_lifecycle(lifecycle);
+        workflow.seed_unresolved_lifecycle_attempt_for_tests();
+
+        assert!(!workflow.conclude_attempt(None));
+        assert!(
+            workflow.has_unresolved_attempt(),
+            "a successful outer result must not erase a pending lower action"
+        );
+
+        // The fake lower owner becomes settled. No host writes were used to
+        // produce this transition: it tests only the Workflow clearance fence.
+        core.uncertain.store(false, AtomicOrdering::Release);
+        assert!(workflow.conclude_attempt(None));
+        assert!(!workflow.has_unresolved_attempt());
+    }
+
     #[tokio::test]
     async fn reconcile_runs_inside_lifecycle_mailbox() {
         let events = Arc::new(Mutex::new(Vec::new()));
