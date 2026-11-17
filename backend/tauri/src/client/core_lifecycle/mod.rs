@@ -1543,6 +1543,8 @@ impl CoreLifecycleClient {
                 }
             });
         }
+        #[cfg(not(test))]
+        let service_actor_updates = service.actor_status_updates();
         let client = Self(Arc::new(CoreLifecycleClientInner::Actor {
             actor_ref,
             next_id,
@@ -1560,23 +1562,58 @@ impl CoreLifecycleClient {
             let mut status_updates = service_status_rx.clone();
             let recovery_shutdown = shutdown.child_token();
             tasks.spawn(async move {
-                let mut previous_status = status_updates.borrow().clone();
-                loop {
-                    tokio::select! {
-                        _ = recovery_shutdown.cancelled() => break,
-                        changed = status_updates.changed() => {
-                            if changed.is_err() {
-                                break;
+                if let Some(mut ref_updates) = service_actor_updates {
+                    // Production startup recovery observes the *same* ref
+                    // ServiceActor watch that owns readiness generation and
+                    // probe phase. CoreLifecycle's legacy watch remains only
+                    // for its not-yet-migrated workflow commands.
+                    let mut previous = super::service_status::project_actor_service_status(
+                        &ref_updates.borrow_and_update(),
+                    );
+                    loop {
+                        tokio::select! {
+                            biased;
+                            _ = recovery_shutdown.cancelled() => break,
+                            changed = ref_updates.changed() => {
+                                if changed.is_err() {
+                                    break;
+                                }
+                                let current = super::service_status::project_actor_service_status(
+                                    &ref_updates.borrow_and_update(),
+                                );
+                                let evidence_changed = startup_recovery_evidence_changed(
+                                    &previous,
+                                    &current,
+                                    startup_owner_unproven_signal.load(Ordering::Acquire),
+                                );
+                                previous = current;
+                                if evidence_changed && recovery_client.startup_recovery_needed() {
+                                    recovery_client.request_startup_recovery();
+                                }
                             }
-                            let status = status_updates.borrow().clone();
-                            let recovery_evidence_changed = startup_recovery_evidence_changed(
-                                &previous_status,
-                                &status,
-                                startup_owner_unproven_signal.load(Ordering::Acquire),
-                            );
-                            previous_status = status;
-                            if recovery_evidence_changed && recovery_client.startup_recovery_needed() {
-                                recovery_client.request_startup_recovery();
+                        }
+                    }
+                } else {
+                    // Injected compatibility port without a ref ServiceActor.
+                    let mut previous = status_updates.borrow_and_update().clone();
+                    loop {
+                        tokio::select! {
+                            biased;
+                            _ = recovery_shutdown.cancelled() => break,
+                            changed = status_updates.changed() => {
+                                if changed.is_err() {
+                                    break;
+                                }
+                                let current = status_updates.borrow_and_update().clone();
+                                let evidence_changed = startup_recovery_evidence_changed(
+                                    &previous,
+                                    &current,
+                                    startup_owner_unproven_signal.load(Ordering::Acquire),
+                                );
+                                previous = current;
+                                if evidence_changed && recovery_client.startup_recovery_needed() {
+                                    recovery_client.request_startup_recovery();
+                                }
                             }
                         }
                     }
@@ -2145,16 +2182,23 @@ impl CoreLifecycleClient {
                 startup_owner_unproven,
                 service_failed_generation,
                 service_status,
+                service,
                 core,
                 ..
             } => {
                 !core.outcome_uncertain()
                     && (startup_owner_unproven.load(Ordering::Acquire) || {
                         let failed_generation = service_failed_generation.load(Ordering::Acquire);
-                        let status = service_status.borrow();
+                        // The failed generation was recorded from the ref
+                        // ServiceActor during startup. Compare only with that
+                        // same Actor's generation, not CoreLifecycle's
+                        // independently incremented compatibility watch.
+                        let current = service
+                            .actor_status()
+                            .unwrap_or_else(|| service_status.borrow().clone());
                         failed_generation != 0
-                            && status.ready_generation != failed_generation
-                            && status.phase.readiness() == Some(true)
+                            && current.ready_generation != failed_generation
+                            && current.phase.readiness() == Some(true)
                     })
             }
             #[cfg(test)]
@@ -2767,6 +2811,110 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn ref_service_actor_generation_drives_startup_recovery_not_legacy_watch() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let mut actor_status = ServiceHostStatus::probing();
+        actor_status.phase = ServicePhase::Ready;
+        actor_status.settled_ready = true;
+        actor_status.ready_generation = 5;
+        let service = Arc::new(ActorEvidenceService {
+            actor_status: Arc::new(Mutex::new(actor_status)),
+            probe_failed: AtomicBool::new(false),
+            events: events.clone(),
+        });
+        let core = Arc::new(ConfirmedStoppedCore {
+            events,
+            run_type: RunType::Normal,
+        });
+        let client = spawn_startup_client(core, service.clone()).await;
+        let CoreLifecycleClientInner::Actor {
+            service_failed_generation,
+            service_status,
+            ..
+        } = client.0.as_ref()
+        else {
+            panic!("startup fixture must use the lifecycle actor")
+        };
+        assert_eq!(
+            service_status.borrow().ready_generation,
+            0,
+            "the legacy watch deliberately has a different generation"
+        );
+        service_failed_generation.store(5, Ordering::Release);
+        assert!(
+            !client.startup_recovery_needed(),
+            "the same ref ServiceActor generation must not retry an already failed startup"
+        );
+
+        service.actor_status.lock().unwrap().ready_generation = 6;
+        assert!(
+            client.startup_recovery_needed(),
+            "a new Ready generation in the ref Actor permits recovery"
+        );
+
+        service.actor_status.lock().unwrap().phase = ServicePhase::Unknown;
+        assert!(
+            !client.startup_recovery_needed(),
+            "a new but unproven generation cannot authorize recovery"
+        );
+    }
+
+    #[tokio::test]
+    async fn startup_service_evidence_keeps_ref_actor_generation_on_probe_error() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let mut actor_status = ServiceHostStatus::probing();
+        actor_status.phase = ServicePhase::DaemonStopped;
+        actor_status.ready_generation = 13;
+        let service = Arc::new(ActorEvidenceService {
+            actor_status: Arc::new(Mutex::new(actor_status.clone())),
+            probe_failed: AtomicBool::new(false),
+            events: events.clone(),
+        });
+        let (legacy_sender, legacy_receiver) =
+            tokio::sync::watch::channel(ServiceHostStatus::probing());
+        legacy_sender.send_modify(|status| {
+            status.ready_generation = 999;
+            status.phase = ServicePhase::Ready;
+        });
+
+        let workflow = CoreLifecycleWorkflow::new(
+            ApplicationClient::legacy().unwrap(),
+            ClashConfigClient::legacy().unwrap(),
+            None,
+            Arc::new(ConfirmedStoppedCore {
+                events,
+                run_type: RunType::Normal,
+            }),
+            Arc::new(chimera_os::core_install::FsBinaryInstaller::new(Arc::new(
+                chimera_os::elevation::RefuseElevation,
+            ))),
+            RuntimePaths::from_config_root(std::path::PathBuf::from("test-runtime-root")),
+            service.clone(),
+        )
+        .with_service_status(legacy_receiver);
+
+        let (evidence, generation) = workflow.service_evidence().await;
+        assert_eq!(generation, 13);
+        assert_eq!(
+            evidence,
+            crate::client::application_workflow::startup::ServiceEvidence::from_status(
+                &actor_status
+            ),
+            "startup ownership must not be derived from the contradictory legacy watch"
+        );
+
+        service.probe_failed.store(true, Ordering::Release);
+        let (unreadable, failed_generation) = workflow.service_evidence().await;
+        assert_eq!(failed_generation, 13);
+        assert!(matches!(
+            unreadable,
+            crate::client::application_workflow::startup::ServiceEvidence::Unreadable {
+                phase: ServicePhase::Unknown
+            }
+        ));
+    }
+
+    #[tokio::test]
     async fn application_workflow_connection_keeps_owner_and_runs_startup() {
         let events = Arc::new(Mutex::new(Vec::new()));
         let client = spawn_startup_client(
@@ -3220,6 +3368,14 @@ mod tests {
     }
 
     struct RecordingService {
+        events: Arc<Mutex<Vec<&'static str>>>,
+    }
+
+    /// Explicitly contradictory Actor/legacy generation fixture. This
+    /// catches accidental mixing of two independent readiness counters.
+    struct ActorEvidenceService {
+        actor_status: Arc<Mutex<ServiceHostStatus>>,
+        probe_failed: AtomicBool,
         events: Arc<Mutex<Vec<&'static str>>>,
     }
 
@@ -4040,6 +4196,31 @@ mod tests {
 
         async fn begin_transition(&self) -> anyhow::Result<Box<dyn ServiceTransitionLease>> {
             self.events.lock().unwrap().push("service-begin");
+            Ok(Box::new(RecordingServiceTransition {
+                events: self.events.clone(),
+            }))
+        }
+    }
+
+    #[async_trait]
+    impl ServiceLifecyclePort for ActorEvidenceService {
+        async fn probe(&self) -> anyhow::Result<chimera_ipc::types::StatusInfo<'static>> {
+            if self.probe_failed.load(Ordering::Acquire) {
+                anyhow::bail!("ref ServiceActor probe did not answer");
+            }
+            Ok(chimera_ipc::types::StatusInfo {
+                name: "chimera-service".into(),
+                version: "1.10.1".into(),
+                status: chimera_ipc::types::ServiceStatus::NotInstalled,
+                server: None,
+            })
+        }
+
+        fn actor_status(&self) -> Option<ServiceHostStatus> {
+            Some(self.actor_status.lock().unwrap().clone())
+        }
+
+        async fn begin_transition(&self) -> anyhow::Result<Box<dyn ServiceTransitionLease>> {
             Ok(Box::new(RecordingServiceTransition {
                 events: self.events.clone(),
             }))
