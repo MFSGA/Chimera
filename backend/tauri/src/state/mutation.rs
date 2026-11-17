@@ -1,5 +1,8 @@
 //! Startup-injected connection to the application mutation participant.
 
+mod profile_content;
+pub(crate) use profile_content::{ProfileContentLock, ProfileContentReader};
+
 use std::{collections::HashMap, sync::Arc};
 
 use chimera_config::profile::Profiles;
