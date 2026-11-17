@@ -3,7 +3,11 @@ import test from 'node:test';
 import type { CoreStatusInfo } from '@chimera/interface';
 import * as m from '@/paraglide/messages';
 import { overwriteGetLocale } from '../../paraglide/runtime.js';
-import { getRoutedCoreStatusMessage } from './core-service-status';
+import {
+  getRoutedCoreHostLabel,
+  getRoutedCoreStatusMessage,
+  isRoutedCoreRunning,
+} from './core-service-status';
 
 overwriteGetLocale(() => 'en');
 
@@ -28,7 +32,7 @@ test('ref CoreActor routing states cannot be mislabeled as stopped', () => {
         connectivity: { kind: 'handing_off', from: 'local', to: 'service' },
       }),
     ),
-    m.common_loading(),
+    m.dashboard_widget_core_status_switching(),
   );
   assert.equal(
     getRoutedCoreStatusMessage(
@@ -44,7 +48,7 @@ test('ref CoreActor routing states cannot be mislabeled as stopped', () => {
   );
   assert.equal(
     getRoutedCoreStatusMessage(status({ state: { Starting: { epoch: 2 } } })),
-    m.common_loading(),
+    m.dashboard_widget_core_status_starting(),
   );
   assert.equal(
     getRoutedCoreStatusMessage(
@@ -53,8 +57,65 @@ test('ref CoreActor routing states cannot be mislabeled as stopped', () => {
     m.settings_clash_core_manager_card_restarting(),
   );
   assert.equal(
+    getRoutedCoreStatusMessage(
+      status({ state: { Switching: { from: 1, to: 2 } } }),
+    ),
+    m.dashboard_widget_core_status_switching(),
+  );
+  assert.equal(
+    getRoutedCoreStatusMessage(status({ state: { Stopping: { epoch: 2 } } })),
+    m.dashboard_widget_core_status_stopping(),
+  );
+  assert.equal(
     getRoutedCoreStatusMessage(status({ state: null })),
     m.common_loading(),
+  );
+});
+
+test('ref CoreActor only marks a connected, healthy Running core as running', () => {
+  assert.equal(isRoutedCoreRunning(status()), true);
+  assert.equal(
+    isRoutedCoreRunning(
+      status({
+        connectivity: { kind: 'handing_off', from: 'local', to: 'service' },
+      }),
+    ),
+    false,
+  );
+  assert.equal(
+    isRoutedCoreRunning(
+      status({
+        connectivity: { kind: 'degraded', desired: 'local', reason: 'lost' },
+      }),
+    ),
+    false,
+  );
+  assert.equal(
+    isRoutedCoreRunning(status({ state: { Starting: { epoch: 4 } } })),
+    false,
+  );
+  assert.equal(isRoutedCoreRunning(status({ state: null })), false);
+  assert.equal(isRoutedCoreRunning(status({ healthy: false })), false);
+  assert.equal(
+    getRoutedCoreStatusMessage(status({ healthy: false })),
+    m.common_error(),
+  );
+});
+
+test('ref CoreActor host display does not report an in-flight destination as committed', () => {
+  assert.equal(getRoutedCoreHostLabel(status()), 'normal');
+  assert.equal(getRoutedCoreHostLabel(status({ host: 'service' })), 'service');
+  assert.equal(
+    getRoutedCoreHostLabel(
+      status({
+        connectivity: {
+          kind: 'handing_off',
+          from: 'service',
+          to: 'local',
+        },
+      }),
+    ),
+    'service → normal',
   );
 });
 
@@ -66,6 +127,12 @@ test('ref CoreActor running host and stopped state use legacy localized labels',
   assert.equal(
     getRoutedCoreStatusMessage(
       status({ state: { Stopped: { reason: null } } }),
+    ),
+    m.dashboard_widget_core_status_stopped(),
+  );
+  assert.equal(
+    getRoutedCoreStatusMessage(
+      status({ state: { Stopped: { reason: null } }, healthy: false }),
     ),
     m.dashboard_widget_core_status_stopped(),
   );
