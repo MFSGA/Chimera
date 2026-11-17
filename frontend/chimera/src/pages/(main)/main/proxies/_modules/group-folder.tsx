@@ -1,5 +1,6 @@
 import type { ProxyGroupFolder } from '@chimera/interface';
 import { ContextMenuItem } from '@chimera/ui/context-menu';
+import { ModalAnchor } from '@chimera/ui/modal';
 import {
   NavigationListItem,
   NavigationListItemIcon,
@@ -110,39 +111,41 @@ export default function GroupFolder({
       data-dragging={isDragging || undefined}
     >
       <RegisterContextMenu>
-        <RegisterContextMenuTrigger asChild>
-          <NavigationListItem
-            ref={(element: HTMLButtonElement | null) => {
-              headingDropRef(element);
-              handleRef(element);
-            }}
-            active={false}
-            aria-expanded={expanded}
-            // The block's top corners stay large; below the heading is a list.
-            className={cn(expanded && 'rounded-b-sm')}
-            onClick={onToggle}
-            data-drop-target={isDropTarget || undefined}
-          >
-            <ExpandMoreRounded
-              className={cn(
-                'text-on-surface-variant size-5 shrink-0 transition-transform duration-200',
-                !expanded && '-rotate-90',
-              )}
-              aria-hidden
-            />
+        <ModalAnchor>
+          <RegisterContextMenuTrigger asChild>
+            <NavigationListItem
+              ref={(element: HTMLButtonElement | null) => {
+                headingDropRef(element);
+                handleRef(element);
+              }}
+              active={false}
+              aria-expanded={expanded}
+              // The block's top corners stay large; below the heading is a list.
+              className={cn(expanded && 'rounded-b-sm')}
+              onClick={onToggle}
+              data-drop-target={isDropTarget || undefined}
+            >
+              <ExpandMoreRounded
+                className={cn(
+                  'text-on-surface-variant size-5 shrink-0 transition-transform duration-200',
+                  !expanded && '-rotate-90',
+                )}
+                aria-hidden
+              />
 
-            <NavigationListItemIcon color="neutral">
-              <FolderRounded />
-            </NavigationListItemIcon>
+              <NavigationListItemIcon color="neutral">
+                <FolderRounded />
+              </NavigationListItemIcon>
 
-            <NavigationListItemText
-              headline={folder.name}
-              supporting={m.proxies_nav_group_count({
-                count: folder.members.length,
-              })}
-            />
-          </NavigationListItem>
-        </RegisterContextMenuTrigger>
+              <NavigationListItemText
+                headline={folder.name}
+                supporting={m.proxies_nav_group_count({
+                  count: folder.members.length,
+                })}
+              />
+            </NavigationListItem>
+          </RegisterContextMenuTrigger>
+        </ModalAnchor>
 
         <RegisterContextMenuContent>
           <ContextMenuItem onClick={() => openRenameFolder(folder.id)}>
