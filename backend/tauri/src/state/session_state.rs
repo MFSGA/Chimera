@@ -5,7 +5,7 @@ use chimera_config::state::{
     PersistentState, PersistentStatePatch,
     window::{WindowLabel, WindowState},
 };
-use chimera_core::state::{PersistentStateManager, ReplaceIfVersionResult, Version};
+use chimera_state_engine::{PersistentStateManager, ReplaceIfVersionResult, Version};
 use ractor::{Actor, ActorProcessingErr, ActorRef, RpcReplyPort};
 use struct_patch::Patch;
 
@@ -204,7 +204,7 @@ mod tests {
     use super::*;
     use crate::state::mirror::PreparedLegacyMirror;
     use chimera_config::state::window::{WindowLabel, WindowState};
-    use chimera_core::state::PersistentStateManagerSetup;
+    use chimera_state_engine::PersistentStateManagerSetup;
     use ractor::rpc::CallResult;
     use std::collections::BTreeMap;
     use struct_patch::Patch;
@@ -249,9 +249,7 @@ mod tests {
         let manager = PersistentStateManagerSetup::<PersistentState>::builder()
             .config_path(path)
             .assemble()
-            .from_state(PersistentState::default())
-            .await
-            .expect("session manager should initialize");
+            .from_state(PersistentState::default());
         let (actor_ref, _handle) = Actor::spawn(
             None,
             SessionStateActor,

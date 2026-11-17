@@ -13,7 +13,7 @@ use chimera_config::{
     clash::config::ClashConfig,
     state::PersistentState,
 };
-use chimera_core::state::{PersistentStateManagerSetup, StateSnapshot};
+use chimera_state_engine::{PersistentStateManagerSetup, StateSnapshot};
 use ractor::{Actor, ActorRef, RpcReplyPort, rpc::CallResult};
 use struct_patch::Patch;
 
@@ -105,10 +105,7 @@ impl ApplicationClient {
                 .await
                 .context("failed to load application persistent state manager")?
         } else {
-            setup
-                .from_state(seed)
-                .await
-                .context("failed to initialize application persistent state manager")?
+            setup.from_state(seed)
         };
         let mut initial = manager.snapshot_handle().load().state.clone();
         let channel = match initial.release_channel {
