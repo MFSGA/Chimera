@@ -596,25 +596,34 @@ impl ChimeraClient {
         )?;
 
         let service_connected = crate::core::service::ipc::get_ipc_state().is_connected();
-        if super::application_workflow::impact::application_patch_requires_reconcile(
-            &patch,
-            service_connected,
-        ) || patch.enable_service_mode.is_some()
+        let mut degradations =
+            if super::application_workflow::impact::application_patch_requires_reconcile(
+                &patch,
+                service_connected,
+            ) || patch.enable_service_mode.is_some()
+            {
+                // Source commit is serialized by the one CoreLifecycle owner.
+                // Its post-commit Core errors return as degradations, never as a
+                // false report that the application.yaml write did not happen.
+                self.inner
+                    .core_lifecycle
+                    .patch_application_config(patch)
+                    .await?
+            } else {
+                self.inner.application.patch_typed(patch).await?;
+                Vec::new()
+            };
+        // The one existing lifecycle actor retries a newly committed target;
+        // there is still no second runtime controller. Deterministic Core
+        // refusal remains deferred without consuming an automatic retry loop.
+        if degradations
+            .iter()
+            .any(|item| item.code == "application_runtime_deferred" && item.retryable)
         {
-            // A disconnected Service Mode preference stays a source-only
-            // save, but it still changes the committed startup target. Route
-            // it through the lifecycle queue so an open startup retry is
-            // updated in the same order as the save.
-            self.inner
-                .core_lifecycle
-                .patch_application_config(patch)
-                .await?;
-        } else {
-            self.inner.application.patch_typed(patch).await?;
+            self.inner.core_lifecycle.request_runtime_rebuild();
         }
         let snapshot = self.inner.application.get().await?;
         self.configure_app_update(&snapshot.state);
-        let mut degradations = Vec::new();
 
         // Keep the legacy Verge file current while existing service and agent
         // entry points still read it. The typed application.yaml is already
@@ -652,13 +661,20 @@ impl ChimeraClient {
         }
 
         self.inner.ui_sink.refresh_verge();
+        let has_deferred_runtime = degradations
+            .iter()
+            .any(|item| item.code == "application_runtime_deferred");
         Ok(
             super::MutationOutcome::from_parts((), degradations).with_commit(
                 super::runtime::CommitReceipt {
                     operation_id: None,
                     domain: "application".into(),
                     source_version: snapshot.version,
-                    runtime: super::runtime::RuntimeCommitStatus::Pending,
+                    runtime: if has_deferred_runtime {
+                        super::runtime::RuntimeCommitStatus::Deferred
+                    } else {
+                        super::runtime::RuntimeCommitStatus::Pending
+                    },
                 },
             ),
         )
