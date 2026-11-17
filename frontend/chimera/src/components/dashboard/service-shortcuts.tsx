@@ -1,4 +1,8 @@
-import { useCoreStatus, useSystemService } from '@chimera/interface';
+import {
+  useCoreActorStatus,
+  useCoreStatus,
+  useSystemService,
+} from '@chimera/interface';
 import { alpha } from '@chimera/ui';
 import { Box, CircularProgress, Paper, Tooltip } from '@mui/material';
 import Grid from '@mui/material/Grid';
@@ -7,9 +11,11 @@ import dayjs from 'dayjs';
 import { useAtomValue } from 'jotai';
 import { useMemo } from 'react';
 import {
+  getRoutedCoreStatusMessage,
   getRunningCoreMessage,
   getServiceStatusMessage,
   getStoppedCoreReason,
+  isRoutedCoreRunning,
 } from '@/features/dashboard/core-service-status';
 import * as m from '@/paraglide/messages';
 import { atomIsDrawer } from '@/store';
@@ -26,7 +32,9 @@ export const ServiceShortcuts = () => {
     query: { data: serviceStatus },
   } = useSystemService();
 
-  const coreStatusQuery = useCoreStatus();
+  const actorStatusQuery = useCoreActorStatus();
+  const coreStatusQuery = useCoreStatus({ enabled: !actorStatusQuery.data });
+  const actorStatus = actorStatusQuery.data;
 
   const status: Status = useMemo(() => {
     const label = getServiceStatusMessage(serviceStatus?.status);
@@ -68,24 +76,36 @@ export const ServiceShortcuts = () => {
 
   const coreStatus: Status = useMemo(() => {
     const stoppedReason = getStoppedCoreReason(coreStatusQuery.data?.status);
-    const isStopped = coreStatusQuery.data?.status !== 'Running';
+    const isLegacyRunning = coreStatusQuery.data?.status === 'Running';
+    const isRunning = actorStatus
+      ? isRoutedCoreRunning(actorStatus)
+      : isLegacyRunning;
+    const label = actorStatus
+      ? getRoutedCoreStatusMessage(actorStatus)
+      : !coreStatusQuery.data
+        ? m.common_loading()
+        : isLegacyRunning
+          ? getRunningCoreMessage({ coreType: coreStatusQuery.data?.type })
+          : stoppedReason?.trim()
+            ? m.dashboard_widget_core_stopped_with_message({
+                message: stoppedReason,
+              })
+            : m.dashboard_widget_core_status_stopped();
 
     return {
-      label: isStopped
-        ? stoppedReason?.trim()
-          ? m.dashboard_widget_core_stopped_with_message({
-              message: stoppedReason,
-            })
-          : m.dashboard_widget_core_status_stopped()
-        : getRunningCoreMessage({ coreType: coreStatusQuery.data?.type }),
+      label,
       sx: ((theme) => ({
-        backgroundColor: alpha(theme.vars.palette.success.light, 0.3),
+        backgroundColor: isRunning
+          ? alpha(theme.vars.palette.success.light, 0.3)
+          : theme.vars.palette.grey[100],
         ...theme.applyStyles('dark', {
-          backgroundColor: alpha(theme.vars.palette.success.dark, 0.3),
+          backgroundColor: isRunning
+            ? alpha(theme.vars.palette.success.dark, 0.3)
+            : theme.vars.palette.background.paper,
         }),
       })) as SxProps<Theme>,
     };
-  }, [coreStatusQuery.data]);
+  }, [actorStatus, coreStatusQuery.data]);
 
   return (
     <Grid
@@ -119,8 +139,11 @@ export const ServiceShortcuts = () => {
                 <div>{m.dashboard_widget_core_status()}</div>
                 <Tooltip
                   title={
-                    !!coreStatusQuery.data?.startAt &&
-                    `Last changed ${dayjs(coreStatusQuery.data.startAt).fromNow()}`
+                    !!(
+                      actorStatus?.state_changed_at ??
+                      coreStatusQuery.data?.startAt
+                    ) &&
+                    `Last changed ${dayjs(actorStatus?.state_changed_at ?? coreStatusQuery.data?.startAt).fromNow()}`
                   }
                 >
                   <div>{coreStatus.label}</div>
