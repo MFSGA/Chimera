@@ -12,7 +12,7 @@ use chimera_core::{
     actor_v2::{
         endpoint::ExecutionHost,
         router::{CoreStatusProjection, EndpointConnectivity},
-        service_actor::ServiceHealthRounds,
+        service_command_actor::ServiceHealthRounds,
     },
     service::compat::ServiceCompat,
 };

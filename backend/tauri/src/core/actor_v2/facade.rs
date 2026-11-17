@@ -6,8 +6,9 @@
 //! facades constructed without the production `LocalRuntimeHost`.
 
 use chimera_core::actor_v2::{
-    routed_endpoint::RoutedEndpoint, router::CoreClient, service_actor::ServiceCommandActor,
-    service_command_port::ServiceCommandPort, service_process::ServiceCommand,
+    routed_endpoint::RoutedEndpoint, router::CoreClient,
+    service_command_actor::ServiceCommandActor, service_command_port::ServiceCommandPort,
+    service_process::ServiceCommand,
 };
 
 use std::{
