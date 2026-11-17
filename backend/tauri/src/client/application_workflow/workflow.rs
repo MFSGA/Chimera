@@ -469,6 +469,10 @@ impl ApplicationWorkflow {
                 let report = self.retry_startup(operation_id, identity, transition).await;
                 startup_report_result(&report)
             }
+            CoreCommand::FollowService {
+                operation_id,
+                transition,
+            } => self.follow_service(operation_id, transition).await,
             CoreCommand::RecoverCore => {
                 let lifecycle = self.lifecycle_handle();
                 #[cfg(test)]
@@ -852,7 +856,7 @@ impl ApplicationWorkflow {
     }
 }
 
-fn startup_report_result(report: &StartupReport) -> anyhow::Result<()> {
+pub(super) fn startup_report_result(report: &StartupReport) -> anyhow::Result<()> {
     match report.outcome.failure_reason() {
         Some(reason) => Err(anyhow::anyhow!(reason.to_owned())),
         None => Ok(()),

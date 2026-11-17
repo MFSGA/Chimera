@@ -58,6 +58,11 @@ pub(in crate::client) enum Command {
     },
     SelectCore(ClashCore),
     RecoverCore,
+    /// Re-evaluate the runtime owner after Service readiness changes.
+    FollowService {
+        operation_id: u64,
+        transition: Box<dyn ServiceTransitionLease>,
+    },
     StartupReconcile {
         operation_id: u64,
         transition: Box<dyn ServiceTransitionLease>,
@@ -510,8 +515,13 @@ impl CoreLifecycleWorkflow {
             #[cfg(not(test))]
             Command::StartupReconcile { .. }
             | Command::RecoverStartup { .. }
-            | Command::RetryStartup { .. } => {
+            | Command::RetryStartup { .. }
+            | Command::FollowService { .. } => {
                 anyhow::bail!("startup commands must be handled by ApplicationWorkflow")
+            }
+            #[cfg(test)]
+            Command::FollowService { .. } => {
+                anyhow::bail!("Service readiness follow-up must run through ApplicationWorkflow")
             }
             Command::CacheStartupUnsettled { .. } => {
                 anyhow::bail!("an unsettled startup report must be cached by ApplicationWorkflow")
@@ -1272,6 +1282,12 @@ impl CoreLifecycleWorkflow {
             format!("could not acquire the Service transition lease: {error:#}")
         })?;
         self.release_service_owner().await
+    }
+
+    pub(in crate::client) async fn try_begin_service_transition(
+        &self,
+    ) -> anyhow::Result<Box<dyn ServiceTransitionLease>> {
+        self.service.try_begin_transition().await
     }
 
     pub(in crate::client) async fn service_evidence(&self) -> (ServiceEvidence, u64) {

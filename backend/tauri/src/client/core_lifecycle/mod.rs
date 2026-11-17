@@ -23,13 +23,10 @@ use ractor::{Actor, ActorProcessingErr, ActorRef, RpcReplyPort, rpc::CallResult}
 use tokio_util::{sync::CancellationToken, task::TaskTracker};
 
 #[cfg(test)]
-use super::application_workflow::startup::StartupWorkflowState;
+use super::application_workflow::startup::{StartupOutcome, StartupWorkflowState};
 use super::{
-    ChimeraClient,
-    application::ApplicationClient,
-    application_workflow::startup::{StartupOutcome, StartupReport},
-    application_workflow::workflow::ApplicationWorkflow,
-    clash_config::ClashConfigClient,
+    ChimeraClient, application::ApplicationClient, application_workflow::startup::StartupReport,
+    application_workflow::workflow::ApplicationWorkflow, clash_config::ClashConfigClient,
     runtime::RuntimePaths,
 };
 pub(in crate::client) use workflow::{Command, CoreLifecycleWorkflow};
@@ -100,12 +97,12 @@ fn startup_recovery_evidence_changed(
     current: &ServiceHostStatus,
     owner_unproven: bool,
 ) -> bool {
-    let readiness_advanced = current.phase.readiness() == Some(true)
-        && current.ready_generation != previous.ready_generation;
+    let readiness_changed = previous.phase.readiness() != current.phase.readiness()
+        || current.ready_generation != previous.ready_generation;
     let owner_evidence_changed = owner_unproven
         && crate::client::application_workflow::startup::ServiceEvidence::from_status(previous)
             != crate::client::application_workflow::startup::ServiceEvidence::from_status(current);
-    readiness_advanced || owner_evidence_changed
+    readiness_changed || owner_evidence_changed
 }
 
 #[allow(unused_imports)]
@@ -146,6 +143,7 @@ enum Message {
     ObserveService {
         info: chimera_ipc::types::StatusInfo<'static>,
     },
+    ServiceReadiness,
     ServiceProbeFailed,
     RecoverCore,
     RuntimeDirty,
@@ -402,6 +400,53 @@ impl ApplicationWorkflowState {
         });
     }
 
+    async fn follow_service(&mut self) {
+        if self.active.is_some()
+            || self.uncertain
+            || self.shutting_down
+            || self.startup_owner_unproven
+            || self.startup_owner_unproven_shared.load(Ordering::Acquire)
+        {
+            return;
+        }
+        let Some(workflow) = self.workflow.as_ref() else {
+            return;
+        };
+        if !workflow.service_host_change_due().await {
+            return;
+        }
+        let transition = match workflow.lifecycle().try_begin_service_transition().await {
+            Ok(transition) => transition,
+            Err(error) => {
+                tracing::debug!(%error, "Service owner follow-up deferred while a transition is active");
+                return;
+            }
+        };
+        if !workflow.service_host_change_due().await {
+            return;
+        }
+        if self.pending.len() >= MAX_PENDING {
+            tracing::warn!("dropping Service owner follow-up because the lifecycle queue is full");
+            return;
+        }
+        let operation_id = self.allocate_operation_id();
+        // Run this post-command owner reconciliation before requests already
+        // queued behind the event that observed the readiness change. The
+        // lease is held across the request, so allowing another queued Core
+        // mutation to run first would invert the reference actor's order.
+        self.pending.push_front(Request {
+            command: Command::FollowService {
+                operation_id,
+                transition,
+            },
+            response: Response {
+                id: operation_id,
+                reply: None,
+            },
+            deferred_retry: None,
+        });
+    }
+
     fn publish(&self) {
         let mut status = self.status.lock();
         status.active = self.active.as_ref().map(|operation| operation.response.id);
@@ -651,6 +696,7 @@ impl ApplicationWorkflowState {
             &request.command,
             Command::Reconcile
                 | Command::StartupReconcile { .. }
+                | Command::FollowService { .. }
                 | Command::RecoverStartup { .. }
                 | Command::RetryStartup { .. }
                 | Command::RetryDeferredProfiles { .. }
@@ -677,6 +723,7 @@ impl ApplicationWorkflowState {
                 | Command::StopService(_)
                 | Command::ServiceEndpointDown(_)
                 | Command::StartupReconcile { .. }
+                | Command::FollowService { .. }
                 | Command::RecoverStartup { .. }
                 | Command::RetryStartup { .. }
         );
@@ -1126,6 +1173,7 @@ impl Actor for ApplicationWorkflowActor {
                             let _ = actor.cast(Message::RecoverCore);
                         });
                     }
+                    state.follow_service().await;
                 } else {
                     tracing::warn!(id, "ignoring stale core lifecycle completion");
                 }
@@ -1143,9 +1191,12 @@ impl Actor for ApplicationWorkflowActor {
             }
             Message::ObserveService { info } => {
                 state.publish_service_status(info);
+                state.follow_service().await;
             }
+            Message::ServiceReadiness => state.follow_service().await,
             Message::ServiceProbeFailed => {
                 state.publish_service_probe_failure();
+                state.follow_service().await;
             }
             Message::RecoverCore => {
                 if state.uncertain || state.shutting_down {
@@ -1561,6 +1612,8 @@ impl CoreLifecycleClient {
         }
         #[cfg(not(test))]
         let service_actor_updates = service.actor_status_updates();
+        #[cfg(not(test))]
+        let service_followup_actor = actor_ref.clone();
         let client = Self(Arc::new(CoreLifecycleClientInner::Actor {
             actor_ref,
             next_id,
@@ -1603,6 +1656,9 @@ impl CoreLifecycleClient {
                                     startup_owner_unproven_signal.load(Ordering::Acquire),
                                 );
                                 previous = current;
+                                if service_followup_actor.cast(Message::ServiceReadiness).is_err() {
+                                    break;
+                                }
                                 if evidence_changed && recovery_client.startup_recovery_needed() {
                                     recovery_client.request_startup_recovery();
                                 }
@@ -1627,6 +1683,9 @@ impl CoreLifecycleClient {
                                     startup_owner_unproven_signal.load(Ordering::Acquire),
                                 );
                                 previous = current;
+                                if service_followup_actor.cast(Message::ServiceReadiness).is_err() {
+                                    break;
+                                }
                                 if evidence_changed && recovery_client.startup_recovery_needed() {
                                     recovery_client.request_startup_recovery();
                                 }
@@ -2796,15 +2855,15 @@ mod tests {
             &recovered,
             true
         ));
-        assert!(!startup_recovery_evidence_changed(
+        assert!(startup_recovery_evidence_changed(
             &unavailable,
             &recovered,
-            false
+            false,
         ));
     }
 
     #[test]
-    fn startup_recovery_evidence_detects_ready_generation_change_alone() {
+    fn startup_recovery_evidence_detects_readiness_and_generation_changes() {
         let mut previous = ServiceHostStatus::probing();
         previous.phase = ServicePhase::Ready;
         previous.settled_ready = true;
@@ -2820,6 +2879,15 @@ mod tests {
         );
         assert!(startup_recovery_evidence_changed(
             &previous, &current, false
+        ));
+
+        let mut unavailable = previous.clone();
+        unavailable.phase = ServicePhase::DaemonStopped;
+        unavailable.settled_ready = false;
+        assert!(startup_recovery_evidence_changed(
+            &previous,
+            &unavailable,
+            false,
         ));
     }
 
@@ -3452,6 +3520,12 @@ mod tests {
         events: Arc<Mutex<Vec<&'static str>>>,
     }
 
+    struct ToggleStartupServiceProbe {
+        events: Arc<Mutex<Vec<&'static str>>>,
+        ready: Arc<AtomicBool>,
+        core_running: Arc<AtomicBool>,
+    }
+
     struct TransitionUnavailableService {
         inner: RecordingService,
     }
@@ -3486,6 +3560,7 @@ mod tests {
 
     struct StartupOwnerCore {
         events: Arc<Mutex<Vec<&'static str>>>,
+        reconciles: AtomicUsize,
         selected: Mutex<RunType>,
         local_status: Mutex<(CoreState, i64)>,
         service_running: Arc<AtomicBool>,
@@ -3574,6 +3649,7 @@ mod tests {
     ) -> StartupOwnerCore {
         StartupOwnerCore {
             events,
+            reconciles: AtomicUsize::new(0),
             selected: Mutex::new(RunType::Normal),
             local_status: Mutex::new(local_state),
             service_running,
@@ -3631,6 +3707,15 @@ mod tests {
         )
         .await
         .unwrap()
+    }
+
+    fn signal_service_readiness_change(client: &CoreLifecycleClient) {
+        let CoreLifecycleClientInner::Actor { actor_ref, .. } = client.0.as_ref() else {
+            panic!("Service readiness follow-up requires the lifecycle actor");
+        };
+        actor_ref
+            .cast(Message::ServiceReadiness)
+            .expect("Service readiness change should reach the lifecycle actor");
     }
 
     async fn spawn_startup_client_with_profiles(
@@ -4582,6 +4667,7 @@ mod tests {
             _target_core: ClashCore,
             run_type: RunType,
         ) -> anyhow::Result<()> {
+            self.reconciles.fetch_add(1, AtomicOrdering::AcqRel);
             let (host, label) = match run_type {
                 RunType::Normal => {
                     *self.local_status.lock().unwrap() = (CoreState::Running, 3);
@@ -4827,6 +4913,77 @@ mod tests {
         }
 
         async fn begin_transition(&self) -> anyhow::Result<Box<dyn ServiceTransitionLease>> {
+            Ok(Box::new(RecordingServiceTransition {
+                events: self.events.clone(),
+            }))
+        }
+    }
+
+    #[async_trait]
+    impl ServiceLifecyclePort for ToggleStartupServiceProbe {
+        async fn probe(&self) -> anyhow::Result<chimera_ipc::types::StatusInfo<'static>> {
+            self.events.lock().unwrap().push("service-probe");
+            let ready = self.ready.load(AtomicOrdering::Acquire);
+            let core_running = self.core_running.load(AtomicOrdering::Acquire);
+            let state = if core_running {
+                CoreState::Running
+            } else {
+                CoreState::Stopped(None)
+            };
+            let detail = if core_running {
+                chimera_ipc::api::status::CoreStateDetail::Running { epoch: 1, pid: 7 }
+            } else {
+                chimera_ipc::api::status::CoreStateDetail::Stopped { reason: None }
+            };
+            Ok(chimera_ipc::types::StatusInfo {
+                name: std::borrow::Cow::Borrowed("chimera-service"),
+                version: std::borrow::Cow::Borrowed("1.11.1"),
+                status: if ready {
+                    chimera_ipc::types::ServiceStatus::Running
+                } else {
+                    chimera_ipc::types::ServiceStatus::Stopped
+                },
+                server: ready.then(|| chimera_ipc::api::status::StatusResBody {
+                    version: std::borrow::Cow::Borrowed("1.11.1"),
+                    core_infos: chimera_ipc::api::status::CoreInfos {
+                        instance_id: Some("9af54a67-fc31-4dcb-8422-26644c6277c8".into()),
+                        r#type: None,
+                        state,
+                        state_changed_at: if core_running { 1 } else { 2 },
+                        config_path: None,
+                        controller: None,
+                        health: None,
+                        revision: Some(chimera_ipc::api::status::ConfigRevisionInfo {
+                            epoch: 1,
+                            generation: 3,
+                            source_hash: "89abcdef01234567".into(),
+                            effective_hash: "0123456789abcdef".into(),
+                        }),
+                        detail: Some(detail),
+                    },
+                    runtime_infos: chimera_ipc::api::status::RuntimeInfos {
+                        service_data_dir: std::borrow::Cow::Owned(Default::default()),
+                        service_config_dir: std::borrow::Cow::Owned(Default::default()),
+                        nyanpasu_config_dir: std::borrow::Cow::Owned(Default::default()),
+                        nyanpasu_data_dir: std::borrow::Cow::Owned(Default::default()),
+                    },
+                }),
+            })
+        }
+
+        fn runtime_owned(&self, _info: &chimera_ipc::types::StatusInfo<'_>) -> bool {
+            true
+        }
+
+        async fn begin_transition(&self) -> anyhow::Result<Box<dyn ServiceTransitionLease>> {
+            self.events.lock().unwrap().push("service-begin");
+            Ok(Box::new(RecordingServiceTransition {
+                events: self.events.clone(),
+            }))
+        }
+
+        async fn try_begin_transition(&self) -> anyhow::Result<Box<dyn ServiceTransitionLease>> {
+            self.events.lock().unwrap().push("service-try-begin");
             Ok(Box::new(RecordingServiceTransition {
                 events: self.events.clone(),
             }))
@@ -6672,6 +6829,179 @@ mod tests {
         assert!(events.contains(&"service-core-retire"));
         assert!(!events.contains(&"stop-local"));
         assert!(!events.contains(&"rebuild-local"));
+    }
+
+    /// Contract: a running Local Core follows Service readiness changes in
+    /// both directions, with owner handoff completed before the new host runs.
+    /// This actor/port integration uses only mock Core and Service hosts; an
+    /// implementation that ignores readiness changes fails the owner/count
+    /// assertions, and an unsafe handoff fails the recorded event ordering.
+    #[tokio::test]
+    async fn startup_follows_service_readiness_in_both_directions() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let service_ready = Arc::new(AtomicBool::new(false));
+        let service_running = Arc::new(AtomicBool::new(false));
+        let core = Arc::new(startup_owner_core(
+            events.clone(),
+            (CoreState::Running, 1),
+            service_running.clone(),
+        ));
+        let service = Arc::new(ToggleStartupServiceProbe {
+            events: events.clone(),
+            ready: service_ready.clone(),
+            core_running: service_running.clone(),
+        });
+        let app = chimera_config::application::ChimeraAppConfig {
+            enable_service_mode: true,
+            ..Default::default()
+        };
+        let client = spawn_startup_client_with_application(
+            core.clone(),
+            service,
+            ApplicationClient::static_state(app),
+        )
+        .await;
+
+        let initial = client.startup_reconcile().await.unwrap();
+        assert_eq!(initial.report.outcome, StartupOutcome::Ready);
+        assert_eq!(core.reconciles.load(AtomicOrdering::Acquire), 1);
+
+        service_ready.store(true, AtomicOrdering::Release);
+        signal_service_readiness_change(&client);
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                let status = client.core_status().await.unwrap();
+                if core.reconciles.load(AtomicOrdering::Acquire) >= 2
+                    && status.run_type == RunType::Service
+                    && matches!(status.state, CoreState::Running)
+                    && client.status().active.is_none()
+                {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("Service readiness should move the running Core to Service");
+
+        let first_events = events.lock().unwrap().clone();
+        let stop_local = first_events
+            .iter()
+            .position(|event| *event == "stop-local")
+            .expect("Local must be stopped before handing off");
+        let rebuild_service = first_events
+            .iter()
+            .position(|event| *event == "rebuild-service")
+            .expect("the committed runtime should be applied on Service");
+        assert!(stop_local < rebuild_service);
+        assert!(!first_events.contains(&"service-start"));
+        assert!(!first_events.contains(&"service-install"));
+
+        service_running.store(false, AtomicOrdering::Release);
+        service_ready.store(false, AtomicOrdering::Release);
+        signal_service_readiness_change(&client);
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                let status = client.core_status().await.unwrap();
+                if core.reconciles.load(AtomicOrdering::Acquire) >= 3
+                    && status.run_type == RunType::Normal
+                    && matches!(status.state, CoreState::Running)
+                    && client.status().active.is_none()
+                {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("Service becoming unavailable should hand the Core back to Local");
+
+        {
+            let events = events.lock().unwrap();
+            let rebuild_service = events
+                .iter()
+                .position(|event| *event == "rebuild-service")
+                .unwrap();
+            let select_local = events
+                .iter()
+                .rposition(|event| *event == "select-local")
+                .expect("Local should be selected after Service becomes unavailable");
+            let rebuild_local = events
+                .iter()
+                .rposition(|event| *event == "rebuild-local")
+                .expect("the committed runtime should be re-established locally");
+            assert!(rebuild_service < select_local && select_local < rebuild_local);
+        }
+        client.shutdown().await.unwrap();
+    }
+
+    /// Contract: a stopped Local snapshot without explicit stop intent still
+    /// follows Service readiness, as ref does when `stop_requested` is false.
+    /// The fixture mutates only its in-memory status to represent an external
+    /// runtime stop; production has no StopCore command or stop-intent signal.
+    #[tokio::test]
+    async fn service_readiness_follows_after_local_core_stops_without_explicit_intent() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let service_ready = Arc::new(AtomicBool::new(false));
+        let service_running = Arc::new(AtomicBool::new(false));
+        let core = Arc::new(startup_owner_core(
+            events.clone(),
+            (CoreState::Running, 1),
+            service_running.clone(),
+        ));
+        let service = Arc::new(ToggleStartupServiceProbe {
+            events: events.clone(),
+            ready: service_ready.clone(),
+            core_running: service_running,
+        });
+        let app = chimera_config::application::ChimeraAppConfig {
+            enable_service_mode: true,
+            ..Default::default()
+        };
+        let client = spawn_startup_client_with_application(
+            core.clone(),
+            service,
+            ApplicationClient::static_state(app),
+        )
+        .await;
+
+        let initial = client.startup_reconcile().await.unwrap();
+        assert_eq!(initial.report.outcome, StartupOutcome::Ready);
+        let followup_start = events.lock().unwrap().len();
+        *core.local_status.lock().unwrap() = (CoreState::Stopped(None), 2);
+        service_ready.store(true, AtomicOrdering::Release);
+        signal_service_readiness_change(&client);
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                let status = client.core_status().await.unwrap();
+                if core.reconciles.load(AtomicOrdering::Acquire) >= 2
+                    && status.run_type == RunType::Service
+                    && matches!(status.state, CoreState::Running)
+                    && client.status().active.is_none()
+                {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("Service readiness should follow a stopped Local snapshot without stop intent");
+
+        {
+            let events = events.lock().unwrap();
+            let followup_events = &events[followup_start..];
+            let select_service = followup_events
+                .iter()
+                .position(|event| *event == "select-service")
+                .expect("Service should become the selected owner");
+            let rebuild_service = followup_events
+                .iter()
+                .position(|event| *event == "rebuild-service")
+                .expect("the committed runtime should be applied on Service");
+            assert!(select_service < rebuild_service);
+            assert!(!followup_events.contains(&"stop-local"));
+        }
+        client.shutdown().await.unwrap();
     }
 
     /// ST-LIFE-03; isolated lifecycle integration using mock hosts.

@@ -1857,6 +1857,78 @@ impl ApplicationWorkflow {
             .await
     }
 
+    pub(in crate::client) async fn service_host_change_due(&self) -> bool {
+        if self.startup_report.is_none() || self.live.is_some() || self.startup.owner_unproven() {
+            return false;
+        }
+        if self.deferred.as_ref().is_some_and(|target| {
+            target.is_reestablish()
+                && (matches!(
+                    target.health,
+                    crate::client::convergence::ConvergenceHealth::Blocked
+                        | crate::client::convergence::ConvergenceHealth::RecoveryRequired
+                ) || target
+                    .next_attempt
+                    .is_some_and(|next_attempt| next_attempt > tokio::time::Instant::now()))
+        }) {
+            return false;
+        }
+        let lifecycle = self.lifecycle();
+        if lifecycle.outcome_uncertain() {
+            return false;
+        }
+        let app = lifecycle.startup_application_config();
+        if !app.enable_service_mode {
+            return false;
+        }
+        let Ok(current) = lifecycle.startup_core_status().await else {
+            return false;
+        };
+        // Unlike ref's `stop_requested`, Chimera currently has no production
+        // StopCore command or persisted stop intent. Once startup proved an
+        // owner, follow Service preference from current readiness evidence.
+        let owner = host_for_run_type(current.run_type);
+        let (service, generation) = lifecycle.service_evidence().await;
+        let failed_generation = lifecycle.startup_failed_generation();
+        let readiness = if failed_generation != 0 && failed_generation == generation {
+            Some(false)
+        } else {
+            service.phase().readiness()
+        };
+        let desired = if matches!(service, ServiceEvidence::ForeignCore { .. }) {
+            ExecutionHost::Local
+        } else {
+            effective_host(app.enable_service_mode, readiness, owner)
+        };
+        desired != owner
+    }
+
+    pub(in crate::client) async fn follow_service(
+        &mut self,
+        operation_id: u64,
+        _transition: Box<dyn ServiceTransitionLease>,
+    ) -> anyhow::Result<()> {
+        if !self.service_host_change_due().await {
+            return Ok(());
+        }
+        self.startup.mark_owner_unproven();
+        self.begin_reestablish_attempt(ReestablishCause::ServiceReadiness);
+        if let Some(attempt) = &mut self.live {
+            attempt.stage = AttemptStage::TryingCritical;
+        }
+        let lifecycle = self.lifecycle_handle();
+        let report = self.startup_reconcile_once(operation_id, false).await;
+        let report = self
+            .update_reestablish_attempt(
+                &lifecycle,
+                report,
+                false,
+                ReestablishCause::ServiceReadiness,
+            )
+            .await;
+        super::workflow::startup_report_result(&report)
+    }
+
     pub(super) async fn refresh_startup_retry_target_after_reconcile(
         &mut self,
         lifecycle: &CoreLifecycleWorkflow,
