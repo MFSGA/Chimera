@@ -401,7 +401,12 @@ impl ChimeraClient {
                             paths.cache_dir().join("geodata-index"),
                         )),
                         mode_source: Arc::new(crate::client::traffic::ActiveCoreGeodataMode(
-                            client.inner.core.clone(),
+                            client
+                                .inner
+                                .core_api
+                                .as_ref()
+                                .context("production geodata needs the ref CoreActor")?
+                                .clone(),
                         )),
                     },
                     shutdown,
