@@ -1,7 +1,11 @@
 use std::path::PathBuf;
 
 use anyhow::Context;
-use chimera_ipc::api::status::CoreState;
+use chimera_core::actor_v2::{
+    endpoint::ExecutionHost,
+    router::{CoreStatusProjection, EndpointConnectivity},
+};
+use chimera_ipc::api::status::CoreStateDetail;
 use chimera_ipc::types::StatusInfo;
 use once_cell::sync::Lazy;
 
@@ -9,6 +13,10 @@ use crate::utils::dirs::{app_config_dir, app_data_dir, app_install_dir};
 
 pub mod control;
 pub mod ipc;
+
+#[cfg(test)]
+#[path = "service_host_tests.rs"]
+mod host_tests;
 
 const SERVICE_NAME: &str = "chimera-service";
 
@@ -57,25 +65,50 @@ pub fn is_service_runtime_owned(status: &StatusInfo<'_>) -> bool {
     expected_config_dir == service_config_dir && expected_data_dir == service_data_dir
 }
 
+/// Windows TUN preflight is a privileged host proof, not a request to
+/// prefer the Service run type. The ref router must report a connected and
+/// running endpoint with a stable process identity.
+fn actor_core_running(status: &CoreStatusProjection) -> bool {
+    matches!(status.connectivity, EndpointConnectivity::Connected)
+        && status.snapshot.as_ref().is_some_and(|snapshot| {
+            matches!(snapshot.state, Some(CoreStateDetail::Running { .. }))
+                && snapshot.healthy != Some(false)
+                && snapshot
+                    .instance_id
+                    .as_deref()
+                    .is_some_and(|id| !id.is_empty())
+        })
+}
+
+fn actor_service_core_running(status: &CoreStatusProjection) -> bool {
+    status.host == ExecutionHost::Service && actor_core_running(status)
+}
+
 async fn converge_core_to_service_host_locked(
     client: &crate::client::ChimeraClient,
     ready_timeout: std::time::Duration,
     require_running_before: bool,
 ) -> anyhow::Result<()> {
-    use crate::core::RunType;
     ipc::wait_until_ready(ready_timeout)
         .await
         .context("Chimera Service backend did not become ready")?;
 
     let before = client
-        .core_status()
+        .refreshed_routed_core_status()
         .await
-        .context("failed to inspect the core before Service host convergence")?;
-    if require_running_before && !matches!(before.state, CoreState::Running) {
-        anyhow::bail!("TUN on Windows requires a running core");
+        .context("failed to inspect the ref CoreActor before Service host convergence")?;
+    if require_running_before && !actor_core_running(&before) {
+        anyhow::bail!("TUN on Windows requires a confirmed running CoreActor instance");
     }
+    anyhow::ensure!(
+        !matches!(
+            before.connectivity,
+            EndpointConnectivity::HandingOff { .. } | EndpointConnectivity::ShutDown
+        ),
+        "CoreActor is changing ownership; cannot admit another Service handoff"
+    );
 
-    if (!matches!(before.state, CoreState::Running) || before.run_type != RunType::Service)
+    if !actor_service_core_running(&before)
         && let Err(error) = client.rebuild_running_config().await
     {
         ipc::request_reconcile(client);
@@ -89,11 +122,11 @@ async fn converge_core_to_service_host_locked(
         .await
         .context("Chimera Service became unavailable during core handoff")?;
     let after = client
-        .core_status()
+        .refreshed_routed_core_status()
         .await
-        .context("failed to verify the core after Service host convergence")?;
-    if !matches!(after.state, CoreState::Running) || after.run_type != RunType::Service {
-        anyhow::bail!("core did not reach the Chimera Service host");
+        .context("failed to verify the ref CoreActor after Service host convergence")?;
+    if !actor_service_core_running(&after) {
+        anyhow::bail!("CoreActor did not confirm a running Chimera Service host");
     }
 
     Ok(())
