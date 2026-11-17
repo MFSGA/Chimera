@@ -1,7 +1,7 @@
 //! Running-core Clash API capability owned by ChimeraClient.
 //!
-//! This follows the reference client ownership direction and reads the active
-//! runtime through the shared CoreFacade host boundary.
+//! Production Clash API reads acquire the ref CoreActor's instance-bound
+//! capability directly. Compatibility tests may still inject a legacy port.
 
 use std::sync::Arc;
 
@@ -80,6 +80,11 @@ impl ChimeraClient {
     }
 
     pub(crate) async fn clash_api_client(&self) -> Result<ApiClient> {
+        if let Some(core) = &self.inner.core_api {
+            return Ok(ApiClient::from_core_client(core.api_client().await?));
+        }
+        // Only test fixtures constructed from injected legacy ports take this
+        // fallback. The production Client always receives ref CoreClient.
         self.inner.core.clash_api_client().await
     }
 

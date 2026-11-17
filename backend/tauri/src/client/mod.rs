@@ -324,14 +324,14 @@ impl ChimeraClient {
         let streams_shutdown = shutdown.child_token();
         let streams =
             tauri::async_runtime::block_on(chimera_core::clash::ws::StreamsClient::spawn(
-                clash_api::streams_api_client_source(core.clone()),
+                Arc::new(core_v2.clone()),
                 typed.clash_config.get()?.overrides.log_level(),
                 streams_shutdown.clone(),
                 &tasks,
             ))?;
         let proxies =
             tauri::async_runtime::block_on(chimera_core::proxies_actor::ProxiesClient::spawn(
-                clash_api::proxy_core_client(core.clone()),
+                chimera_core::proxies_actor::CoreClient::new(Arc::new(core_v2.clone())),
                 shutdown.clone(),
                 &tasks,
             ))?;

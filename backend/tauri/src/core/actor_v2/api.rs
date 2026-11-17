@@ -71,6 +71,12 @@ impl Deref for ApiClient {
 }
 
 impl ApiClient {
+    /// A Tauri-facing view of the ref CoreActor's instance-bound API lease.
+    /// No second lease monitor or endpoint authority is created here.
+    pub(crate) fn from_core_client(inner: CoreApiClient) -> Self {
+        Self { inner }
+    }
+
     pub(crate) fn new(info: crate::config::clash::ClashInfo) -> Result<Self> {
         Ok(Self {
             inner: CoreApiClient::new_unbound(info.server, info.secret)?,
