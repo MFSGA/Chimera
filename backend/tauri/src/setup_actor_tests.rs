@@ -57,6 +57,50 @@ struct OfflineService {
     probes: AtomicUsize,
 }
 
+#[derive(Default)]
+struct PersistentlyStoppedService {
+    starts: AtomicUsize,
+    unreadable: std::sync::atomic::AtomicBool,
+}
+
+#[async_trait::async_trait]
+impl ServiceProcessControl for PersistentlyStoppedService {
+    async fn probe(&self) -> Result<String, ServiceCommandError> {
+        if self.unreadable.load(Ordering::SeqCst) {
+            return Ok("unparseable daemon status".into());
+        }
+        Ok(serde_json::to_string(&StatusInfo {
+            name: "chimera-service".into(),
+            version: "1.10.1".into(),
+            status: ServiceStatus::Stopped,
+            server: None,
+        })
+        .unwrap())
+    }
+
+    async fn install(&self) -> Result<(), ServiceCommandError> {
+        panic!("endpoint-down recovery must not install a daemon")
+    }
+    async fn update(&self) -> Result<(), ServiceCommandError> {
+        panic!("endpoint-down recovery must not update a daemon")
+    }
+    async fn uninstall(&self) -> Result<(), ServiceCommandError> {
+        panic!("endpoint-down recovery must not uninstall a daemon")
+    }
+    async fn start_daemon(&self) -> Result<(), ServiceCommandError> {
+        self.starts.fetch_add(1, Ordering::SeqCst);
+        // Simulate a successful helper that could not bring the daemon up.
+        // Recovery must still honor the Actor's bounded retry budget.
+        Ok(())
+    }
+    async fn stop_daemon(&self) -> Result<(), ServiceCommandError> {
+        panic!("endpoint-down recovery must not stop a daemon")
+    }
+    async fn restart_daemon(&self) -> Result<(), ServiceCommandError> {
+        panic!("endpoint-down recovery must not issue a restart command")
+    }
+}
+
 #[async_trait::async_trait]
 impl ServiceProcessControl for OfflineService {
     async fn probe(&self) -> Result<String, ServiceCommandError> {
@@ -205,6 +249,92 @@ async fn lifecycle_service_probe_and_settlement_use_ref_actor_not_facade() {
         !ServiceLifecyclePort::command_settled(&adapter).await,
         "an unreachable actor cannot prove the last OS helper settled"
     );
+}
+
+#[tokio::test]
+async fn service_endpoint_recovery_uses_ref_actor_restart_budget_not_facade_counter() {
+    use crate::client::core_lifecycle::{LegacyServiceBridge, ports::ServiceLifecyclePort};
+    use chimera_core::actor_v2::service_router::ServicePhase as RefServicePhase;
+
+    let daemon = Arc::new(PersistentlyStoppedService::default());
+    let service = chimera_core::actor_v2::service_actor::ServiceClient::spawn(
+        daemon.clone(),
+        Arc::new(IpcServiceEndpointFactory::new(|| -> EndpointHandle {
+            panic!("a persistently stopped daemon cannot supply a Core endpoint")
+        })),
+        3,
+    )
+    .await
+    .expect("spawn ref ServiceActor");
+    let facade = Arc::new(crate::core::actor_v2::facade::CoreFacade::new_local());
+    let adapter = LegacyServiceBridge::new(facade.clone()).with_service_actor(service.clone());
+
+    assert_eq!(service.status().phase, RefServicePhase::DaemonStopped);
+    // An unreadable probe is Unknown: it cannot authorize a restart.
+    daemon.unreadable.store(true, Ordering::SeqCst);
+    {
+        let mut lease = ServiceLifecyclePort::begin_transition(&adapter)
+            .await
+            .expect("acquire exclusive host lease");
+        lease.report_endpoint_down().await.unwrap();
+    }
+    assert_eq!(daemon.starts.load(Ordering::SeqCst), 0);
+    assert_eq!(ServiceLifecyclePort::restart_policy(&adapter).attempts, 0);
+    daemon.unreadable.store(false, Ordering::SeqCst);
+
+    for expected in 1..=3 {
+        let mut lease = ServiceLifecyclePort::begin_transition(&adapter)
+            .await
+            .expect("acquire exclusive host lease");
+        lease.report_endpoint_down().await.unwrap();
+        drop(lease);
+        assert_eq!(daemon.starts.load(Ordering::SeqCst), expected);
+        let policy = ServiceLifecyclePort::restart_policy(&adapter);
+        assert_eq!(policy.attempts as usize, expected);
+        assert!(!policy.exhausted);
+        assert_eq!(
+            facade.service_restart_policy().attempts,
+            0,
+            "production endpoint recovery must never increment Facade's duplicate counter"
+        );
+    }
+
+    {
+        let mut lease = ServiceLifecyclePort::begin_transition(&adapter)
+            .await
+            .expect("acquire exclusive host lease");
+        lease.report_endpoint_down().await.unwrap();
+    }
+    assert_eq!(daemon.starts.load(Ordering::SeqCst), 3);
+    assert!(ServiceLifecyclePort::restart_policy(&adapter).exhausted);
+    assert_eq!(service.status().phase, RefServicePhase::Exhausted);
+
+    // An explicit user start is an Actor command, not an implicit retry.
+    // It re-arms the same budget that endpoint recovery exhausted.
+    service
+        .start_daemon()
+        .await
+        .expect("explicit daemon start settles");
+    assert_eq!(daemon.starts.load(Ordering::SeqCst), 4);
+    assert_eq!(ServiceLifecyclePort::restart_policy(&adapter).attempts, 0);
+    assert!(!ServiceLifecyclePort::restart_policy(&adapter).exhausted);
+    {
+        let mut lease = ServiceLifecyclePort::begin_transition(&adapter)
+            .await
+            .expect("rearmed Service owner lease");
+        lease.report_endpoint_down().await.unwrap();
+    }
+    assert_eq!(daemon.starts.load(Ordering::SeqCst), 5);
+    assert_eq!(ServiceLifecyclePort::restart_policy(&adapter).attempts, 1);
+
+    let tasks = tokio_util::task::TaskTracker::new();
+    let shutdown = tokio_util::sync::CancellationToken::new();
+    service.drain_on_shutdown(&tasks, shutdown.clone());
+    shutdown.cancel();
+    tasks.close();
+    tokio::time::timeout(Duration::from_secs(5), tasks.wait())
+        .await
+        .expect("ref ServiceActor should drain after recovery test");
 }
 
 #[tokio::test]

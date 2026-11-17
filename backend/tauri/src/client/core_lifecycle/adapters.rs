@@ -37,6 +37,9 @@ impl LegacyServiceBridge {
 
 struct LegacyServiceTransition {
     inner: crate::core::actor_v2::facade::ServiceTransition,
+    /// The ref ServiceActor owns endpoint recovery and the restart budget.
+    /// Manager-only fixtures without a ServiceActor retain Facade behavior.
+    service_actor: Option<chimera_core::actor_v2::service_actor::ServiceClient>,
 }
 
 #[async_trait]
@@ -81,18 +84,28 @@ impl ServiceLifecyclePort for LegacyServiceBridge {
     fn restart_policy(
         &self,
     ) -> chimera_core::actor_v2::service_policy::ServiceRestartPolicySnapshot {
+        if let Some(service) = &self.service_actor {
+            let status = service.status();
+            return chimera_core::actor_v2::service_policy::ServiceRestartPolicySnapshot {
+                attempts: status.restart_attempts,
+                exhausted: status.phase
+                    == chimera_core::actor_v2::service_router::ServicePhase::Exhausted,
+            };
+        }
         self.facade.service_restart_policy()
     }
 
     async fn begin_transition(&self) -> anyhow::Result<Box<dyn ServiceTransitionLease>> {
         Ok(Box::new(LegacyServiceTransition {
             inner: self.facade.begin_service_transition().await?,
+            service_actor: self.service_actor.clone(),
         }))
     }
 
     async fn try_begin_transition(&self) -> anyhow::Result<Box<dyn ServiceTransitionLease>> {
         Ok(Box::new(LegacyServiceTransition {
             inner: self.facade.try_begin_service_transition().await?,
+            service_actor: self.service_actor.clone(),
         }))
     }
 }
@@ -100,6 +113,17 @@ impl ServiceLifecyclePort for LegacyServiceBridge {
 #[async_trait]
 impl ServiceTransitionLease for LegacyServiceTransition {
     async fn report_endpoint_down(&mut self) -> anyhow::Result<()> {
+        if let Some(service) = &self.service_actor {
+            // The outer Facade lease still serializes host transitions. The
+            // ref ServiceActor is the sole authority for a stopped-daemon
+            // proof, bounded restart attempts and exhaustion. Recovery is
+            // best-effort: the endpoint-down notification does not promise a
+            // usable daemon, and the Actor publishes its failure status.
+            if let Err(error) = service.recover_endpoint().await {
+                tracing::warn!(%error, "ref ServiceActor could not recover the down endpoint");
+            }
+            return Ok(());
+        }
         self.inner.report_endpoint_down().await
     }
 
