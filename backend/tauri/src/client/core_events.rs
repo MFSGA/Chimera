@@ -67,7 +67,7 @@ impl ChimeraClient {
                         let current = updates.borrow_and_update().clone();
                         let ui_changed = runtime_materially_changed(&previous, &current);
                         let binding_changed = runtime_binding_changed(&previous, &current);
-                        previous = current;
+                        previous = current.clone();
                         if shutdown.is_cancelled() {
                             break;
                         }
@@ -75,6 +75,7 @@ impl ChimeraClient {
                             // UI state is a notification, not an independent
                             // poll or a cached authority. The typed Actor
                             // projection remains the authoritative state.
+                            client.inner.ui_sink.core_status_changed(current.clone().into());
                             client.inner.ui_sink.refresh_clash();
                         }
                         if binding_changed {

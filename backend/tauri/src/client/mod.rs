@@ -1178,6 +1178,9 @@ mod tests {
     }
 
     impl UiEventSink for RecordingUi {
+        fn core_status_changed(&self, _: chimera_core::actor_v2::router::CoreStatusInfo) {
+            self.events.lock().unwrap().push("core-status-changed");
+        }
         fn refresh_clash(&self) {
             self.events.lock().unwrap().push("refresh-ui");
         }
@@ -1441,7 +1444,8 @@ mod tests {
         core.shutdown().await.unwrap();
         tokio::time::timeout(std::time::Duration::from_secs(5), async {
             loop {
-                if events.lock().unwrap().contains(&"refresh-ui") {
+                let observed = events.lock().unwrap();
+                if observed.contains(&"refresh-ui") && observed.contains(&"core-status-changed") {
                     break;
                 }
                 tokio::task::yield_now().await;
