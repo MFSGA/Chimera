@@ -313,11 +313,12 @@ impl ChimeraClient {
                 &tasks,
             ))?;
         let core_lifecycle =
-            tauri::async_runtime::block_on(CoreLifecycleClient::spawn_with_profiles(
+            tauri::async_runtime::block_on(CoreLifecycleClient::spawn_with_profiles_and_content(
                 core.clone(),
                 typed.application.clone(),
                 typed.clash_config.clone(),
                 Some(typed_profiles.snapshot_handle()),
+                Some(typed_profiles.content_reader()),
                 runtime_paths,
                 Arc::new(chimera_os::core_install::FsBinaryInstaller::new(Arc::new(
                     crate::adapters::elevation::InteractiveElevationConsent,
