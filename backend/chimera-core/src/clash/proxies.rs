@@ -107,7 +107,9 @@ pub struct ProxyGroup {
     pub test_url: Option<String>,
     pub expected_status: Option<String>,
     pub hidden: bool,
-    pub icon: Option<String>,
+    /// Icon presence only. The actual URL may include credentials and is
+    /// returned separately rather than being embedded in the native graph.
+    pub icon_configured: bool,
     pub capabilities: ProxyGroupCapabilities,
 }
 
@@ -130,7 +132,7 @@ impl ProxyGroup {
                 .clone()
                 .filter(|status| !status.is_empty()),
             hidden: record.hidden.unwrap_or(false),
-            icon: record.icon.clone(),
+            icon_configured: record.icon.as_deref().is_some_and(|icon| !icon.is_empty()),
             capabilities,
         }
     }
@@ -307,6 +309,28 @@ impl NativeProxies {
         })
     }
 
+    /// Icon URLs from the live snapshot, keyed by group name. Kept out of
+    /// the ordinary native graph query, in line with ref's split API.
+    pub fn group_icons(&self) -> IndexMap<ProxyName, String> {
+        self.global
+            .iter()
+            .chain(&self.groups)
+            .filter_map(|group| {
+                let icon = self.nodes.get(&group.name)?.icon.as_deref()?;
+                (!icon.is_empty()).then(|| (group.name.clone(), icon.to_owned()))
+            })
+            .collect()
+    }
+
+    /// Redact icon URLs on a cloned IPC projection. The core's original
+    /// snapshot retains them for the dedicated icon query and legacy view.
+    pub fn without_group_icon_urls(mut self) -> Self {
+        for node in self.nodes.values_mut() {
+            node.icon = None;
+        }
+        self
+    }
+
     /// Keep only per-URL latency histories that the normalized proxy view
     /// can display. This mirrors ref's native-node filtering rather than
     /// filtering repeated legacy group member projections.
@@ -410,6 +434,32 @@ mod tests {
         assert_eq!(unknown.kind, ProxyGroupKind::Unknown("NewCoreKind".into()));
         assert!(!unknown.capabilities.select);
         assert!(!unknown.capabilities.clear_fixed);
+    }
+
+    #[test]
+    fn ordinary_native_view_redacts_icon_urls_but_preserves_presence() {
+        let credential = "https://user:secret@example.invalid/group.svg?token=secret";
+        let mut group = native("Streaming", "Selector", Some(vec!["DIRECT"]));
+        group.icon = Some(credential.into());
+        let native =
+            NativeProxies::from_responses(snapshot(vec![group]).proxies, &IndexMap::new(), None)
+                .unwrap();
+        assert!(native.groups[0].icon_configured);
+        assert_eq!(
+            native.group_icons()[&ProxyName::from("Streaming")],
+            credential
+        );
+        let public = native.clone().without_group_icon_urls();
+        assert!(public.groups[0].icon_configured);
+        assert!(public.nodes[&ProxyName::from("Streaming")].icon.is_none());
+        assert!(public.group_icons().is_empty());
+        let serialized = serde_json::to_string(&public).unwrap();
+        assert!(!serialized.contains("secret"));
+        assert!(!serialized.contains("icon\":\"https:"));
+        assert_eq!(
+            native.group_icons()[&ProxyName::from("Streaming")],
+            credential
+        );
     }
 
     #[test]

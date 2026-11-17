@@ -170,7 +170,21 @@ impl ChimeraClient {
     pub async fn clash_native_proxies(
         &self,
     ) -> Result<chimera_core::clash::proxies::NativeProxies> {
-        self.inner.proxies.get(false).await
+        Ok(self
+            .inner
+            .proxies
+            .get(false)
+            .await?
+            .without_group_icon_urls())
+    }
+
+    /// Separate icon URLs from ordinary native proxy graph reads. This app's
+    /// existing desktop IPC currently has no ref-style per-scope permissions;
+    /// adding an icon command does not itself establish an authorization gate.
+    pub async fn clash_proxy_group_icons(
+        &self,
+    ) -> Result<indexmap::IndexMap<clash_api::ProxyName, String>> {
+        Ok(self.inner.proxies.get(false).await?.group_icons())
     }
 
     pub async fn proxy_providers(

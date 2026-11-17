@@ -926,6 +926,14 @@ pub async fn get_native_proxies(
 
 #[tauri::command]
 #[specta::specta]
+pub async fn get_proxy_group_icons(
+    client: State<'_, ChimeraClient>,
+) -> Result<IndexMap<clash_api::ProxyName, String>> {
+    Ok(client.clash_proxy_group_icons().await?)
+}
+
+#[tauri::command]
+#[specta::specta]
 pub async fn select_proxy(
     group: String,
     name: String,

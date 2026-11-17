@@ -72,6 +72,7 @@ macro_rules! build_builder {
                 crate::ipc::patch_clash_core_config,
                 crate::ipc::get_proxies,
                 crate::ipc::get_native_proxies,
+                crate::ipc::get_proxy_group_icons,
                 crate::ipc::select_proxy,
                 crate::ipc::clear_proxy_fixed,
                 crate::ipc::change_clash_core,

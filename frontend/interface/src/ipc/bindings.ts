@@ -277,6 +277,10 @@ export const commands = {
     typedError<NativeProxies_Serialize, string>(
       __TAURI_INVOKE('get_native_proxies'),
     ),
+  getProxyGroupIcons: () =>
+    typedError<{ [key in ProxyName]: string }, string>(
+      __TAURI_INVOKE('get_proxy_group_icons'),
+    ),
   selectProxy: (group: string, name: string) =>
     typedError<null, string>(__TAURI_INVOKE('select_proxy', { group, name })),
   /**
@@ -3051,7 +3055,11 @@ export type ProxyGroup = {
   testUrl: string | null;
   expectedStatus: string | null;
   hidden: boolean;
-  icon: string | null;
+  /**
+   *  Icon presence only. The actual URL may include credentials and is
+   *  returned separately rather than being embedded in the native graph.
+   */
+  iconConfigured: boolean;
   capabilities: ProxyGroupCapabilities;
 };
 
