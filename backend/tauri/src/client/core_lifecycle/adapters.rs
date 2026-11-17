@@ -12,11 +12,26 @@ use super::ports::{
 
 pub(crate) struct LegacyServiceBridge {
     facade: Arc<CoreFacade>,
+    /// The ref ServiceActor owns production probe and unsettled-command
+    /// evidence. The Facade remains only for Chimera's host transition lease
+    /// and restart policy while those adapter boundaries are being retired.
+    service_actor: Option<chimera_core::actor_v2::service_actor::ServiceClient>,
 }
 
 impl LegacyServiceBridge {
     pub(crate) fn new(facade: Arc<CoreFacade>) -> Self {
-        Self { facade }
+        Self {
+            facade,
+            service_actor: None,
+        }
+    }
+
+    pub(crate) fn with_service_actor(
+        mut self,
+        service_actor: chimera_core::actor_v2::service_actor::ServiceClient,
+    ) -> Self {
+        self.service_actor = Some(service_actor);
+        self
     }
 }
 
@@ -27,10 +42,25 @@ struct LegacyServiceTransition {
 #[async_trait]
 impl ServiceLifecyclePort for LegacyServiceBridge {
     async fn probe(&self) -> anyhow::Result<chimera_ipc::types::StatusInfo<'static>> {
+        if let Some(service) = &self.service_actor {
+            let status = service.probe().await?;
+            return Ok(chimera_ipc::types::StatusInfo {
+                name: status.name,
+                version: status.version,
+                status: status.status,
+                server: status.server,
+            });
+        }
+        // Manager-only test adapters do not instantiate an independent
+        // ServiceActor. The production path always takes the branch above.
         self.facade.probe_service().await
     }
 
     async fn command_settled(&self) -> bool {
+        if let Some(service) = &self.service_actor {
+            // A failed Actor query cannot prove the last OS helper settled.
+            return service.command_settled().await.unwrap_or(false);
+        }
         self.facade.service_command_settled().await
     }
 

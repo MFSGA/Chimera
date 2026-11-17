@@ -135,6 +135,57 @@ fn synchronous_tauri_setup_registers_service_drain_on_the_runtime() {
 }
 
 #[tokio::test]
+async fn lifecycle_service_probe_and_settlement_use_ref_actor_not_facade() {
+    use crate::client::core_lifecycle::{LegacyServiceBridge, ports::ServiceLifecyclePort};
+
+    let daemon = Arc::new(OfflineService::default());
+    let service = chimera_core::actor_v2::service_actor::ServiceClient::spawn(
+        daemon.clone(),
+        Arc::new(IpcServiceEndpointFactory::new(|| -> EndpointHandle {
+            panic!("an offline daemon must never create a Core endpoint")
+        })),
+        3,
+    )
+    .await
+    .expect("spawn production ServiceActor");
+    // A test-only Facade has no production OS process executor or Service
+    // ownership. Any successful probe here must have come from ServiceActor.
+    let adapter = LegacyServiceBridge::new(Arc::new(
+        crate::core::actor_v2::facade::CoreFacade::new_local(),
+    ))
+    .with_service_actor(service.clone());
+
+    let observed = ServiceLifecyclePort::probe(&adapter)
+        .await
+        .expect("ServiceActor probe must remain authoritative");
+    assert_eq!(observed.name, "chimera-service");
+    assert_eq!(observed.version, "1.10.1");
+    assert_eq!(observed.status, ServiceStatus::NotInstalled);
+    assert!(daemon.probes.load(Ordering::SeqCst) > 0);
+    assert!(
+        ServiceLifecyclePort::command_settled(&adapter).await,
+        "the ref Actor should confirm no outstanding OS command"
+    );
+
+    let tasks = tokio_util::task::TaskTracker::new();
+    let shutdown = tokio_util::sync::CancellationToken::new();
+    service.drain_on_shutdown(&tasks, shutdown.clone());
+    shutdown.cancel();
+    tasks.close();
+    tokio::time::timeout(Duration::from_secs(5), tasks.wait())
+        .await
+        .expect("ServiceActor must drain on shutdown");
+    assert!(
+        ServiceLifecyclePort::probe(&adapter).await.is_err(),
+        "a drained actor must not fall back to Facade probe"
+    );
+    assert!(
+        !ServiceLifecyclePort::command_settled(&adapter).await,
+        "an unreachable actor cannot prove the last OS helper settled"
+    );
+}
+
+#[tokio::test]
 async fn actor_owners_follow_ref_spawn_order_and_drain_on_failed_setup() {
     let mut owners = super::StartupOwners::default();
     let offline = Arc::new(OfflineService::default());
