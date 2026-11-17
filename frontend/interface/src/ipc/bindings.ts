@@ -159,6 +159,18 @@ export const commands = {
     typedError<MutationOutcome<FolderId>, string>(
       __TAURI_INVOKE('create_profile_folder', { name, members }),
     ),
+  setProxyGroupLayout: (profile: ProfileId, layout: ProxyGroupLayout) =>
+    typedError<MutationOutcome<null>, string>(
+      __TAURI_INVOKE('set_proxy_group_layout', { profile, layout }),
+    ),
+  createProxyGroupFolder: (
+    profile: ProfileId,
+    name: string,
+    members: string[],
+  ) =>
+    typedError<MutationOutcome<FolderId>, string>(
+      __TAURI_INVOKE('create_proxy_group_folder', { profile, name, members }),
+    ),
   activateProfile: (uid: string | null) =>
     typedError<MutationOutcome<null>, string>(
       __TAURI_INVOKE('activate_profile', { uid }),
@@ -2799,6 +2811,7 @@ export type ProfileDocument_Deserialize = {
   global_transforms?: ProfileId[];
   valid: string[];
   folders?: ProfileFolder[];
+  proxy_group_layouts?: { [key in ProfileId]: ProxyGroupLayout };
   items: ProfileItem_Deserialize[];
 };
 
@@ -2807,6 +2820,7 @@ export type ProfileDocument_Serialize = {
   global_transforms?: ProfileId[];
   valid: string[];
   folders?: ProfileFolder[];
+  proxy_group_layouts?: { [key in ProfileId]: ProxyGroupLayout };
   items: ProfileItem_Serialize[];
 };
 
@@ -3046,6 +3060,16 @@ export type ProxyGroupCapabilities = {
   clearFixed: boolean;
 };
 
+/**
+ *  User-defined presentation folder for proxy groups; members are Clash group
+ *  names, not Profile ids or runtime-config mutations.
+ */
+export type ProxyGroupFolder = {
+  id: FolderId;
+  name: string;
+  members: string[];
+};
+
 export type ProxyGroupItem =
   ProxyGroupItem_Serialize | ProxyGroupItem_Deserialize;
 
@@ -3099,6 +3123,15 @@ export type ProxyGroupKind =
   | 'Relay'
   | 'Smart'
   | string;
+
+/**
+ *  A Config Profile's proxy-group arrangement. A layout can mention groups
+ *  absent from the current core snapshot: reconciliation preserves those names.
+ */
+export type ProxyGroupLayout = {
+  folders: ProxyGroupFolder[];
+  ungrouped: string[];
+};
 
 export type ProxyItem = ProxyItem_Serialize | ProxyItem_Deserialize;
 
