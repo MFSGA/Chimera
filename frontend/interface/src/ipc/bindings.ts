@@ -304,7 +304,7 @@ export const commands = {
       | 'chimera-client-alpha'
       | null,
   ) =>
-    typedError<null, string>(
+    typedError<MutationOutcome<null>, string>(
       __TAURI_INVOKE('change_clash_core', { clashCore }),
     ),
   getCoreStatus: () =>

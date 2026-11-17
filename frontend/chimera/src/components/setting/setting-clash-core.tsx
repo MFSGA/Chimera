@@ -1,6 +1,5 @@
 import {
   ClashCores,
-  useClashConnections,
   useClashCores,
   useClashVersion,
   useCoreActorStatus,
@@ -39,8 +38,6 @@ export const SettingClashCore = () => {
   const coreActorStatus = useCoreActorStatus();
   const actorTransition = isCoreLifecycleTransitioning(coreActorStatus.data);
 
-  const { deleteConnections } = useClashConnections();
-
   const version = useMemo(() => {
     return clashVersion?.premium
       ? `${clashVersion.version} Premium`
@@ -53,13 +50,24 @@ export const SettingClashCore = () => {
     if (loading.mask || actorTransition) return;
     loading.mask = true;
     try {
-      try {
-        await deleteConnections.mutateAsync(undefined);
-      } catch (e) {
-        console.error(e);
+      // Ref: a core selection must not interrupt existing connections
+      // before the candidate check and source commit have succeeded.
+      const outcome = await switchCore.mutateAsync(core);
+      if (outcome.status === 'committed_degraded') {
+        const runtimeDeferred = outcome.commits.some(
+          (receipt) => receipt.runtime === 'deferred',
+        );
+        message(
+          `${runtimeDeferred ? 'Core selection saved, but runtime application is deferred' : 'Core selection saved, but some follow-up actions failed'}: ${outcome.degradations.map((item) => item.message).join('; ')}`,
+          {
+            kind: 'error',
+            title: runtimeDeferred
+              ? 'Saved; runtime not applied'
+              : 'Saved with warnings',
+          },
+        );
+        return;
       }
-
-      await switchCore.mutateAsync(core);
 
       message(
         m.settings_clash_core_switch_success() +
