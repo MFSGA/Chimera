@@ -20,6 +20,7 @@ pub(crate) mod ports;
 pub(crate) mod profiles;
 pub mod runtime;
 pub(crate) mod runtime_inspection;
+mod service_status;
 mod session_state;
 mod system_dns;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -1403,6 +1404,92 @@ mod tests {
         // can represent all ref CoreActor transition and degraded states.
         assert_eq!(client.core_status().await.unwrap().state_changed_at, 7);
         core_api.finish_shutdown().await;
+    }
+
+    /// A production Client must not read the old CoreLifecycle watch for UI
+    /// Service status after its ref ServiceActor has observed the daemon.
+    struct OfflineProbeService;
+
+    #[async_trait]
+    impl chimera_contracts::service::ServiceProcessControl for OfflineProbeService {
+        async fn probe(&self) -> Result<String, chimera_contracts::service::ServiceCommandError> {
+            Ok(serde_json::to_string(&chimera_ipc::types::StatusInfo {
+                name: "chimera-service".into(),
+                version: "1.10.1".into(),
+                status: chimera_ipc::types::ServiceStatus::NotInstalled,
+                server: None,
+            })
+            .unwrap())
+        }
+
+        async fn install(&self) -> Result<(), chimera_contracts::service::ServiceCommandError> {
+            panic!("a read-only Service query must not install a daemon")
+        }
+        async fn update(&self) -> Result<(), chimera_contracts::service::ServiceCommandError> {
+            panic!("a read-only Service query must not update a daemon")
+        }
+        async fn uninstall(&self) -> Result<(), chimera_contracts::service::ServiceCommandError> {
+            panic!("a read-only Service query must not uninstall a daemon")
+        }
+        async fn start_daemon(
+            &self,
+        ) -> Result<(), chimera_contracts::service::ServiceCommandError> {
+            panic!("a read-only Service query must not start a daemon")
+        }
+        async fn stop_daemon(&self) -> Result<(), chimera_contracts::service::ServiceCommandError> {
+            panic!("a read-only Service query must not stop a daemon")
+        }
+        async fn restart_daemon(
+            &self,
+        ) -> Result<(), chimera_contracts::service::ServiceCommandError> {
+            panic!("a read-only Service query must not restart a daemon")
+        }
+    }
+
+    #[tokio::test]
+    async fn production_service_status_uses_ref_actor_not_legacy_workflow_watch() {
+        use chimera_core::actor_v2::{
+            endpoint::EndpointHandle, service_endpoint_factory::IpcServiceEndpointFactory,
+            service_policy::ServicePhase,
+        };
+
+        let (mut client, _) = recording_client(false).await;
+        assert_eq!(
+            client.inner.core_lifecycle.service_status().phase,
+            ServicePhase::Probing
+        );
+        let actor = ServiceClient::spawn(
+            Arc::new(OfflineProbeService),
+            Arc::new(IpcServiceEndpointFactory::new(|| -> EndpointHandle {
+                panic!("uninstalled daemon must not open a Core endpoint")
+            })),
+            3,
+        )
+        .await
+        .expect("spawn ServiceActor");
+        assert_eq!(
+            actor.probe().await.expect("probe ServiceActor").phase,
+            chimera_core::actor_v2::service_router::ServicePhase::NotInstalled
+        );
+        Arc::get_mut(&mut client.inner)
+            .expect("test fixture has one owner")
+            .service_actor = Some(actor.clone());
+
+        assert_eq!(client.service_status().phase, ServicePhase::NotInstalled);
+        assert_eq!(
+            client.inner.core_lifecycle.service_status().phase,
+            ServicePhase::Probing,
+            "the legacy workflow watch must not be consulted by UI status"
+        );
+
+        let tasks = tokio_util::task::TaskTracker::new();
+        let shutdown = tokio_util::sync::CancellationToken::new();
+        actor.drain_on_shutdown(&tasks, shutdown.clone());
+        shutdown.cancel();
+        tasks.close();
+        tokio::time::timeout(std::time::Duration::from_secs(5), tasks.wait())
+            .await
+            .expect("ServiceActor drains after status test");
     }
 
     #[tokio::test]

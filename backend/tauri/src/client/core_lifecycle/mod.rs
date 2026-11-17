@@ -2516,6 +2516,11 @@ impl ChimeraClient {
     }
 
     pub(crate) fn service_status(&self) -> ServiceHostStatus {
+        if let Some(service) = &self.inner.service_actor {
+            return super::service_status::project_actor_service_status(&service.status());
+        }
+        // Injected legacy lifecycle fixtures deliberately omit ServiceActor.
+        // Production always owns the ref ServiceClient from Tauri setup().
         self.inner.core_lifecycle.service_status()
     }
 
