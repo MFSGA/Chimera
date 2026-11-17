@@ -400,6 +400,7 @@
   "logs_raw_record": "原始日誌記錄",
   "logs_loading": "載入中…",
   "logs_core_detail_unavailable": "核心日誌詳細資料無法使用",
+  "rules_search_placeholder": "透過類型、封包內容或 Proxy 伺服器等資訊搜尋路由規則",
   "rules_list_all_proxies": "所有分組",
   "connections_all_connections": "所有連接",
   "connections_search_placeholder": "透過進程、類型、地址等資訊搜尋連接",
