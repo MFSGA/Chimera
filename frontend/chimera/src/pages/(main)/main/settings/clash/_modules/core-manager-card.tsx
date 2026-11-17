@@ -2,6 +2,7 @@ import {
   inspectUpdater,
   useClashConnections,
   useClashCores,
+  useCoreActorStatus,
   useSetting,
   type ClashCore_Serialize,
   type ClashCoresDetail,
@@ -26,6 +27,10 @@ import {
   SettingsCardFooter,
 } from '@/components/settings/settings-card';
 import { OS } from '@/consts';
+import {
+  getRoutedCoreStatusMessage,
+  isCoreLifecycleTransitioning,
+} from '@/features/dashboard/core-service-status';
 import useCoreIcon from '@/hooks/use-core-icon';
 import { useLockFn } from '@/hooks/use-lock-fn';
 import * as m from '@/paraglide/messages';
@@ -163,10 +168,12 @@ function CoreItem({
   core,
   item,
   onClick,
+  disabled,
 }: {
   core: ClashCore_Serialize;
   item: ClashCoresDetail;
   onClick: (core: ClashCore_Serialize) => void;
+  disabled: boolean;
 }) {
   const { value: currentCore } = useSetting('core');
   const icon = useCoreIcon(core);
@@ -186,12 +193,13 @@ function CoreItem({
       data-selected={isSelected}
       data-downloading={updateCoreTask.isPending}
       data-slot="core-manager-item"
+      disabled={disabled}
       className={cn(
         'relative h-auto w-full min-w-0 overflow-hidden rounded-2xl p-2 text-left',
         'flex items-center gap-2',
       )}
       onClick={() => {
-        if (!updateCoreTask.isPending) {
+        if (!disabled && !updateCoreTask.isPending) {
           onClick(core);
         }
       }}
@@ -237,6 +245,7 @@ function CoreItem({
                   void updateCoreTask.execute();
                 }}
                 loading={updateCoreTask.isPending}
+                disabled={disabled}
                 asChild
               >
                 <span>
@@ -263,6 +272,8 @@ export default function CoreManagerCard() {
     fetchRemote,
   } = useClashCores();
   const { deleteConnections } = useClashConnections();
+  const coreActorStatus = useCoreActorStatus();
+  const actorTransition = isCoreLifecycleTransitioning(coreActorStatus.data);
   const { value: currentCoreKey } = useSetting('core');
   const currentCoreIcon = useCoreIcon(currentCoreKey);
   const currentCore = currentCoreKey && clashCores.data?.[currentCoreKey];
@@ -333,7 +344,8 @@ export default function CoreManagerCard() {
   const isLoading =
     clashCores.isPending ||
     switchCoreTask.isPending ||
-    restartSidecarTask.isPending;
+    restartSidecarTask.isPending ||
+    actorTransition;
   const haveNewVersion = currentCore?.latestVersion
     ? currentCore.latestVersion !== currentCore.currentVersion
     : false;
@@ -354,7 +366,11 @@ export default function CoreManagerCard() {
             )}
           >
             <CircularProgress className="size-12" indeterminate />
-            <p>{m.settings_clash_core_manager_card_loading()}</p>
+            <p>
+              {actorTransition && coreActorStatus.data
+                ? getRoutedCoreStatusMessage(coreActorStatus.data)
+                : m.settings_clash_core_manager_card_loading()}
+            </p>
           </motion.div>
         )}
       </AnimatePresence>
@@ -428,6 +444,8 @@ export default function CoreManagerCard() {
                   icon
                   variant="stroked"
                   onClick={() => void restartSidecarTask.execute()}
+                  loading={restartSidecarTask.isPending}
+                  disabled={isLoading || currentCoreUpdate.task.isPending}
                 >
                   <RestartAltRounded className="size-5" />
                 </Button>
@@ -451,6 +469,7 @@ export default function CoreManagerCard() {
                 key={item.name}
                 core={core as ClashCore_Serialize}
                 item={item}
+                disabled={isLoading}
                 onClick={(nextCore) => void switchCoreTask.execute(nextCore)}
               />
             );

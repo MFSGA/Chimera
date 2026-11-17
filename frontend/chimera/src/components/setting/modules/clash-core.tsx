@@ -115,6 +115,7 @@ export interface ClashCoreItemProps {
   data: ClashCoresDetail;
   core: ClashCore;
   onClick: (core: ClashCore) => void;
+  disabled?: boolean;
 }
 
 /**
@@ -135,6 +136,7 @@ export const ClashCoreItem = ({
   data,
   core,
   onClick,
+  disabled = false,
 }: ClashCoreItemProps) => {
   const { query, updateCore } = useClashCores();
 
@@ -209,8 +211,9 @@ export const ClashCoreItem = ({
           },
         })}
         selected={selected}
+        disabled={disabled}
         onClick={() => {
-          if (!downloadState) {
+          if (!disabled && !downloadState) {
             onClick(core);
           }
         }}
@@ -251,6 +254,7 @@ export const ClashCoreItem = ({
                 variant="text"
                 className="!size-8 !min-w-0"
                 loading={downloadState}
+                disabled={disabled}
                 onClick={(e) => {
                   cleanDeepClickEvent(e);
                   handleUpdateCore();

@@ -29,6 +29,31 @@ export function isRoutedCoreRunning(status: CoreStatusInfo): boolean {
   );
 }
 
+/** Advisory UI admission only. The ref CoreActor mailbox still owns
+ * authoritative mutation admission and generation fencing across WebViews.
+ * A degraded host can require manual recovery, so leave recovery actions
+ * available instead of disabling all operations on health errors. */
+export function isCoreLifecycleTransitioning(
+  status?: CoreStatusInfo | null,
+): boolean {
+  if (!status) return false;
+  if (
+    status.connectivity.kind === 'handing_off' ||
+    status.connectivity.kind === 'shut_down'
+  ) {
+    return true;
+  }
+  if (status.connectivity.kind === 'degraded' || !status.state) {
+    return false;
+  }
+  return (
+    'Starting' in status.state ||
+    'Switching' in status.state ||
+    'Stopping' in status.state ||
+    'Restarting' in status.state
+  );
+}
+
 /** The previous RunType used `normal` for the ref Local execution host.
  * A handoff is not yet a committed destination, so do not label it as one. */
 export function getRoutedCoreHostLabel(status: CoreStatusInfo): string {

@@ -6,6 +6,7 @@ import { overwriteGetLocale } from '../../paraglide/runtime.js';
 import {
   getRoutedCoreHostLabel,
   getRoutedCoreStatusMessage,
+  isCoreLifecycleTransitioning,
   isRoutedCoreRunning,
 } from './core-service-status';
 
@@ -116,6 +117,62 @@ test('ref CoreActor host display does not report an in-flight destination as com
       }),
     ),
     'service → normal',
+  );
+});
+
+test('Core lifecycle controls defer to ref Actor handoffs but keep degraded-host recovery available', () => {
+  assert.equal(isCoreLifecycleTransitioning(status()), false);
+  assert.equal(isCoreLifecycleTransitioning(undefined), false);
+  assert.equal(isCoreLifecycleTransitioning(status({ state: null })), false);
+  assert.equal(
+    isCoreLifecycleTransitioning(
+      status({ state: { Stopped: { reason: null } } }),
+    ),
+    false,
+    'a stopped Core is allowed to be restarted',
+  );
+  assert.equal(
+    isCoreLifecycleTransitioning(
+      status({
+        connectivity: { kind: 'degraded', desired: 'service', reason: 'lost' },
+      }),
+    ),
+    false,
+    'degraded owners must still allow manual recovery',
+  );
+  assert.equal(
+    isCoreLifecycleTransitioning(
+      status({
+        connectivity: { kind: 'handing_off', from: 'local', to: 'service' },
+      }),
+    ),
+    true,
+  );
+  assert.equal(
+    isCoreLifecycleTransitioning(
+      status({ connectivity: { kind: 'shut_down' } }),
+    ),
+    true,
+  );
+  assert.equal(
+    isCoreLifecycleTransitioning(
+      status({ state: { Restarting: { epoch: 2, attempt: 1 } } }),
+    ),
+    true,
+  );
+  assert.equal(
+    isCoreLifecycleTransitioning(
+      status({ state: { Switching: { from: 1, to: 2 } } }),
+    ),
+    true,
+  );
+  assert.equal(
+    isCoreLifecycleTransitioning(status({ state: { Starting: { epoch: 1 } } })),
+    true,
+  );
+  assert.equal(
+    isCoreLifecycleTransitioning(status({ state: { Stopping: { epoch: 1 } } })),
+    true,
   );
 });
 
