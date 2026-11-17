@@ -3,11 +3,14 @@
 //! Production Clash API reads acquire the ref CoreActor's instance-bound
 //! capability directly. Compatibility tests may still inject a legacy port.
 
+#[cfg(test)]
 use std::sync::Arc;
 
 use anyhow::Result;
 
-use super::{ChimeraClient, core_lifecycle::CoreLifecyclePort};
+use super::ChimeraClient;
+#[cfg(test)]
+use super::core_lifecycle::CoreLifecyclePort;
 use crate::client::runtime::{Degradation, DegradationPhase, MutationOutcome};
 use crate::core::{
     actor_v2::api::ApiClient,
@@ -16,15 +19,18 @@ use crate::core::{
         proxies::ProxyProviderSummary,
     },
 };
+#[cfg(test)]
 use chimera_core::clash::ws::ClashApiClientSource;
 use chimera_core::client::clash_api::{config_item, rule_provider_item};
-use chimera_core::proxies_actor::{
-    CoreClient as ProxyCoreClient, ProxyApiClientSource, ProxyDegradationPhase,
-    ProxyMutationOutcome,
-};
+#[cfg(test)]
+use chimera_core::proxies_actor::{CoreClient as ProxyCoreClient, ProxyApiClientSource};
+use chimera_core::proxies_actor::{ProxyDegradationPhase, ProxyMutationOutcome};
 
+/// Only injected legacy test clients need a facade-based API source.
+#[cfg(test)]
 struct LifecycleProxyApiClientSource(Arc<dyn CoreLifecyclePort>);
 
+#[cfg(test)]
 #[async_trait::async_trait]
 impl ProxyApiClientSource for LifecycleProxyApiClientSource {
     async fn api_client(&self) -> Result<chimera_core::actor_v2::api::ApiClient> {
@@ -32,6 +38,7 @@ impl ProxyApiClientSource for LifecycleProxyApiClientSource {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn proxy_core_client(core: Arc<dyn CoreLifecyclePort>) -> ProxyCoreClient {
     ProxyCoreClient::new(Arc::new(LifecycleProxyApiClientSource(core)))
 }
@@ -53,8 +60,10 @@ fn into_mutation_outcome(outcome: ProxyMutationOutcome) -> MutationOutcome<()> {
     MutationOutcome::from_parts((), degradations)
 }
 
+#[cfg(test)]
 struct LifecycleStreamsApiClientSource(Arc<dyn CoreLifecyclePort>);
 
+#[cfg(test)]
 #[async_trait::async_trait]
 impl ClashApiClientSource for LifecycleStreamsApiClientSource {
     async fn api_client(&self) -> Result<chimera_core::actor_v2::api::ApiClient> {
@@ -62,6 +71,7 @@ impl ClashApiClientSource for LifecycleStreamsApiClientSource {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn streams_api_client_source(
     core: Arc<dyn CoreLifecyclePort>,
 ) -> Arc<dyn ClashApiClientSource> {
