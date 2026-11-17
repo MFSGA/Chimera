@@ -2,6 +2,8 @@
 members = [
   "chimera-config",
   "chimera-core",
+  "chimera-state-engine",
+  "chimera-persistence",
   "chimera-os",
   "chimera-net",
   "chimera-geodata",

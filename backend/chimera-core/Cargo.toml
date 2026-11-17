@@ -9,6 +9,7 @@ authors.workspace = true
 test-support = []
 
 [dependencies]
+chimera-persistence = { path = "../chimera-persistence" }
 anyhow = "1"
 bon = "3"
 arc-swap = "1"
