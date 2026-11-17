@@ -1,6 +1,4 @@
 use anyhow::{Context, Result, bail};
-use indexmap::IndexMap;
-use serde::{Deserialize, Serialize};
 use serde_yaml::Mapping;
 
 use crate::config::profile::{
@@ -8,16 +6,7 @@ use crate::config::profile::{
     item_type::{ProfileUid, ScriptType},
 };
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
-#[serde(rename_all = "lowercase")]
-pub enum LogSpan {
-    Log,
-    Info,
-    Warn,
-    Error,
-}
-
-pub type Logs = Vec<(LogSpan, String)>;
+pub use chimera_core::client::artifact_snapshot::{LogSpan, Logs, PostProcessingOutput};
 
 #[derive(Debug, thiserror::Error)]
 #[error("transform {transform_uid} failed: {source}")]
@@ -92,15 +81,6 @@ fn truncate_script_log_message(mut message: String) -> String {
     message.truncate(prefix_len);
     message.push_str(SCRIPT_LOG_TRUNCATED_SUFFIX);
     message
-}
-
-#[derive(Default, Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
-/// 后处理输出
-pub struct PostProcessingOutput {
-    /// Per-source transform chain output, keyed by source profile UID and transform UID.
-    pub scopes: IndexMap<ProfileUid, IndexMap<ProfileUid, Logs>>,
-    /// Global transform chain output, keyed by transform UID.
-    pub global: IndexMap<ProfileUid, Logs>,
 }
 
 #[derive(Debug, Clone)]
