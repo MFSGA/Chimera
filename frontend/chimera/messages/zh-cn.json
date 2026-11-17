@@ -400,6 +400,7 @@
   "logs_raw_record": "原始日志记录",
   "logs_loading": "加载中…",
   "logs_core_detail_unavailable": "核心日志详情暂不可用",
+  "rules_search_placeholder": "通过类型、载荷或代理等信息搜索规则",
   "rules_list_all_proxies": "所有分组",
   "connections_all_connections": "所有连接",
   "connections_search_placeholder": "通过进程、类型、地址等信息搜索连接",

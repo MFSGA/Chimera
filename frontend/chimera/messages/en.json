@@ -400,6 +400,7 @@
   "logs_raw_record": "Raw log record",
   "logs_loading": "Loading…",
   "logs_core_detail_unavailable": "Core log details unavailable",
+  "rules_search_placeholder": "Search rules by type, payload, or proxy...",
   "rules_list_all_proxies": "All Groups",
   "connections_all_connections": "All Connections",
   "connections_search_placeholder": "Search connections (host, process, rule, chains...)...",

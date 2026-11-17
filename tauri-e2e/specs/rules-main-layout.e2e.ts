@@ -5,6 +5,11 @@ import { openMainRoute } from './main-window.js';
 
 const targetPath = '/main/rules';
 
+/**
+ * User-visible Rules UI contract after the pinned ref navigation and DataPage
+ * migration. Runtime stats require a separate backend API and are not claimed
+ * here. All interactions go through WebDriver, not DOM-dispatched clicks.
+ */
 describe('main rules reference layout', () => {
   beforeEach(async () => {
     await browser.setWindowSize(1240, 638);
@@ -15,26 +20,23 @@ describe('main rules reference layout', () => {
     await browser.setWindowSize(1240, 638);
   });
 
-  it('uses the ref sidebar, shared scroll area, and bottom search bar', async () => {
+  it('renders the ref navigation rail, DataPage, and floating search', async () => {
     const input = await $('[data-slot="rules-search-input-field"]');
     await input.waitForDisplayed({ timeout: 15_000 });
 
+    const sidebar = await $('[data-slot="navigation-sidebar"]');
+    await sidebar.waitForDisplayed({ timeout: 15_000 });
+    await browser.waitUntil(
+      async () => Math.abs((await sidebar.getSize('width')) - 88) <= 2,
+      {
+        timeout: 15_000,
+        timeoutMsg: 'Rules rail did not settle to the ref width.',
+      },
+    );
+
     const state = await browser.execute(() => {
-      const sidebar = document.querySelector<HTMLElement>(
-        '[data-slot="slider-sidebar"]',
-      );
-      const scrollAreas = Array.from(
-        document.querySelectorAll<HTMLElement>('[data-slot="scroll-area"]'),
-      );
-      const search = document.querySelector<HTMLElement>(
-        '[data-slot="rules-search"]',
-      );
-      const inputElement = document.querySelector<HTMLInputElement>(
-        '[data-slot="rules-search-input-field"]',
-      );
-      const table = document.querySelector<HTMLElement>(
-        '[data-slot="rules-virtual-table"]',
-      );
+      const get = (slot: string) =>
+        document.querySelector<HTMLElement>(`[data-slot="${slot}"]`);
       const rect = (element: HTMLElement | null) =>
         element
           ? {
@@ -46,28 +48,34 @@ describe('main rules reference layout', () => {
           : null;
 
       return {
-        sidebar: rect(sidebar),
-        search: rect(search),
-        input: rect(inputElement),
-        inputPlaceholder: inputElement?.placeholder ?? '',
-        table: rect(table),
-        scrollAreaCount: scrollAreas.length,
+        rail: rect(get('navigation-sidebar')),
+        page: rect(get('data-page')),
+        toolbar: rect(get('rules-search')),
+        search: rect(get('search-field')),
+        header: rect(get('rules-header')),
+        table: rect(get('rules-virtual-table')),
+        empty: rect(get('rules-empty')),
+        scrollAreaCount: document.querySelectorAll('[data-slot="scroll-area"]')
+          .length,
         viewport: { width: innerWidth, height: innerHeight },
       };
     });
 
-    assert.ok(state.viewport.width >= 1200, JSON.stringify(state, null, 2));
-    assert.ok(state.viewport.height >= 600, JSON.stringify(state, null, 2));
-    assert.equal(state.sidebar?.width, 64, JSON.stringify(state, null, 2));
-    assert.equal(state.search?.height, 64, JSON.stringify(state, null, 2));
-    assert.equal(state.input?.height, 40, JSON.stringify(state, null, 2));
-    assert.equal(
-      state.inputPlaceholder,
-      'Search rules (type, payload, or proxy)...',
-      JSON.stringify(state, null, 2),
+    assert.ok(state.viewport.width >= 1200, JSON.stringify(state));
+    assert.ok(state.viewport.height >= 600, JSON.stringify(state));
+    assert.equal(state.rail?.width, 88, JSON.stringify(state));
+    assert.ok(state.page && state.page.height > 0, JSON.stringify(state));
+    assert.ok(state.toolbar && state.toolbar.height > 0, JSON.stringify(state));
+    assert.ok(state.search && state.search.height > 0, JSON.stringify(state));
+    assert.ok(
+      state.header && state.header.height === 40,
+      JSON.stringify(state),
     );
-    assert.ok(state.scrollAreaCount >= 2, JSON.stringify(state, null, 2));
-    assert.ok(state.table, JSON.stringify(state, null, 2));
+    assert.ok(state.scrollAreaCount >= 2, JSON.stringify(state));
+    assert.ok(
+      state.table || state.empty,
+      `Rules must render a real data table or an empty state: ${JSON.stringify(state)}`,
+    );
 
     const evidencePath = process.env.CHIMERA_E2E_EVIDENCE_PATH;
     if (evidencePath) {
@@ -76,106 +84,58 @@ describe('main rules reference layout', () => {
     }
   });
 
-  it('opens the ref tooltip for a focused collapsed sidebar item', async () => {
-    const triggerSelector =
-      '[data-slot="rules-proxy-item"][data-proxy-item-kind="all"]';
-    const triggers = await $$(triggerSelector);
-    assert.equal(
-      triggers.length,
-      1,
-      'The all-proxies sidebar link selector must identify exactly one item.',
-    );
-    const trigger = await $(triggerSelector);
-    await trigger.waitForDisplayed({ timeout: 15_000 });
+  it('expands and collapses the ref rail with the visible toggle', async () => {
+    const toggle = await $('[data-slot="navigation-sidebar-toggle"]');
+    await toggle.waitForDisplayed({ timeout: 15_000 });
 
-    assert.equal(
-      await trigger.isFocused(),
-      false,
-      'The tooltip trigger must start unfocused.',
-    );
-    const focused = await browser.execute((selector) => {
-      const target = document.querySelector<HTMLElement>(selector);
-      if (!target) return false;
-      target.focus();
-      return document.activeElement === target;
-    }, triggerSelector);
-    assert.equal(
-      focused,
-      true,
-      'The all-proxies sidebar link did not receive focus.',
+    assert.equal(await toggle.getAttribute('aria-expanded'), 'false');
+    await toggle.click();
+    await browser.waitUntil(
+      async () => (await toggle.getAttribute('aria-expanded')) === 'true',
+      { timeout: 15_000, timeoutMsg: 'Rules rail did not expand.' },
     );
 
-    const inspectTooltip = () =>
-      browser.execute((selector) => {
-        const trigger = document.querySelector<HTMLElement>(selector);
-        const tooltip = document.querySelector<HTMLElement>('[role="tooltip"]');
-        const rect = (element: HTMLElement | null) =>
-          element
-            ? {
-                x: Math.round(element.getBoundingClientRect().x),
-                y: Math.round(element.getBoundingClientRect().y),
-                width: Math.round(element.getBoundingClientRect().width),
-                height: Math.round(element.getBoundingClientRect().height),
-              }
-            : null;
-
-        return {
-          focused: !!trigger && document.activeElement === trigger,
-          trigger: rect(trigger),
-          tooltip: rect(tooltip),
-          triggerText: trigger?.textContent?.trim() ?? '',
-          tooltipText: tooltip?.textContent?.trim() ?? '',
-          tooltipSide: tooltip?.dataset.side ?? '',
-        };
-      }, triggerSelector);
-
-    let state = await inspectTooltip();
-    try {
-      await browser.waitUntil(
-        async () => {
-          state = await inspectTooltip();
-          return (
-            state.focused &&
-            !!state.tooltip &&
-            state.tooltipText === state.triggerText
-          );
-        },
-        { timeout: 15_000, timeoutMsg: 'Rules sidebar tooltip did not open.' },
-      );
-    } catch (error) {
-      try {
-        state = await inspectTooltip();
-      } catch (diagnosticError) {
-        throw new Error(
-          `Rules sidebar tooltip did not open; last observed state: ${JSON.stringify(state)}; final diagnostic failed: ${String(diagnosticError)}`,
-          { cause: error },
-        );
-      }
-      throw new Error(
-        `Rules sidebar tooltip did not open; final state: ${JSON.stringify(state)}`,
-        { cause: error },
-      );
-    }
-
-    assert.ok(state.trigger, JSON.stringify(state, null, 2));
-    assert.ok(state.tooltip, JSON.stringify(state, null, 2));
-    assert.ok(state.triggerText.length > 0, JSON.stringify(state, null, 2));
-    assert.equal(
-      state.tooltipText,
-      state.triggerText,
-      JSON.stringify(state, null, 2),
+    const allGroups = await $(
+      '[data-slot="rules-proxy-item"][data-proxy-item-kind="all"]',
     );
-    assert.equal(state.tooltipSide, 'right', JSON.stringify(state, null, 2));
-    assert.ok(
-      (state.tooltip?.x ?? 0) >
-        (state.trigger?.x ?? 0) + (state.trigger?.width ?? 0),
-      JSON.stringify(state, null, 2),
+    await allGroups.waitForDisplayed({ timeout: 15_000 });
+    assert.equal(await allGroups.getAttribute('data-active'), 'true');
+
+    await toggle.click();
+    await browser.waitUntil(
+      async () => (await toggle.getAttribute('aria-expanded')) === 'false',
+      { timeout: 15_000, timeoutMsg: 'Rules rail did not collapse.' },
+    );
+  });
+
+  it('searches rules, updates the URL, and clears through the real UI', async () => {
+    const input = await $('[data-slot="rules-search-input-field"]');
+    await input.waitForDisplayed({ timeout: 15_000 });
+
+    const query = 'unlikely-rule-search-e2e-17';
+    await input.setValue(query);
+
+    await browser.waitUntil(
+      async () =>
+        browser.execute(
+          (term) => new URLSearchParams(location.search).get('q') === term,
+          query,
+        ),
+      { timeout: 15_000, timeoutMsg: 'Rules search was not saved to the URL.' },
     );
 
-    const evidencePath = process.env.CHIMERA_E2E_EVIDENCE_PATH;
-    if (evidencePath) {
-      fs.mkdirSync(path.dirname(evidencePath), { recursive: true });
-      await browser.saveScreenshot(evidencePath);
-    }
+    const empty = await $('[data-slot="rules-empty"]');
+    await empty.waitForDisplayed({ timeout: 15_000 });
+
+    const clear = await $('[data-slot="search-field-clear"]');
+    await clear.waitForDisplayed({ timeout: 15_000 });
+    await clear.click();
+
+    await browser.waitUntil(
+      async () =>
+        browser.execute(() => !new URLSearchParams(location.search).has('q')),
+      { timeout: 15_000, timeoutMsg: 'Clear did not remove the Rules query.' },
+    );
+    assert.equal(await input.getValue(), '');
   });
 });

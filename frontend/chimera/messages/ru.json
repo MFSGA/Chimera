@@ -400,6 +400,7 @@
   "logs_raw_record": "Исходная запись журнала",
   "logs_loading": "Загрузка…",
   "logs_core_detail_unavailable": "Не удалось получить подробности журнала ядра",
+  "rules_search_placeholder": "Поиск правил (тип, полезная нагрузка или прокси)...",
   "rules_list_all_proxies": "Все группы",
   "connections_all_connections": "Все соединения",
   "connections_search_placeholder": "Поиск соединений (хост, процесс, правило, цепочки)...",

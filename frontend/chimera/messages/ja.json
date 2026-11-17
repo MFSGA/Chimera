@@ -400,6 +400,7 @@
   "logs_raw_record": "生ログ記録",
   "logs_loading": "読み込み中…",
   "logs_core_detail_unavailable": "コアログの詳細を取得できません",
+  "rules_search_placeholder": "種類、ペイロード、プロキシでルールを検索...",
   "rules_list_all_proxies": "すべてのグループ",
   "connections_all_connections": "すべての接続",
   "connections_search_placeholder": "ホスト、プロセス、ルール、チェーンで接続を検索...",
