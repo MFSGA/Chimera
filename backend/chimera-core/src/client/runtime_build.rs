@@ -169,9 +169,76 @@ impl RuntimeBuilder {
 /// The caller captures the profile snapshot, port choices and staged bytes
 /// before invoking this method. It retains responsibility for publication;
 /// this method never mutates the runtime store or a running Core.
-pub struct RuntimeBuildService;
+/// Factory that creates and drops the script runner on the *same* blocking
+/// worker that executes its candidate. Matches the ref runtime build port.
+pub type ScriptRunnerFactory = dyn Fn() -> anyhow::Result<Box<dyn ScriptRunner>> + Send + Sync;
+
+/// Injected ref-style candidate builder. The application shell supplies the
+/// content source and script runner factory; no global Profiles, filesystem
+/// path, running Core, or runtime product is owned by this service.
+///
+/// Publication remains the confirmed CoreLifecycle transaction until the new
+/// Reconciler is the unique runtime writer. Do not publish during candidate
+/// build/check: those operations must be entirely advisory.
+pub struct RuntimeBuildService {
+    content: Arc<dyn ProfileContentSource + Send + Sync>,
+    scripts: Arc<ScriptRunnerFactory>,
+}
 
 impl RuntimeBuildService {
+    pub fn new(
+        content: Arc<dyn ProfileContentSource + Send + Sync>,
+        scripts: Arc<ScriptRunnerFactory>,
+    ) -> Self {
+        Self { content, scripts }
+    }
+
+    /// Capture every active dependency once, retaining source read failures
+    /// rather than treating a failed read as absent content. This is a separate
+    /// operation for the new independent RuntimeGate check workflow.
+    pub async fn capture_content(
+        &self,
+        profiles: Arc<Profiles>,
+        staged_content: BTreeMap<String, String>,
+    ) -> anyhow::Result<FrozenProfileContent> {
+        let content = Arc::clone(&self.content);
+        tokio::task::spawn_blocking(move || {
+            FrozenProfileContent::capture_content(&profiles, content.as_ref(), staged_content)
+        })
+        .await
+        .context("profile content capture task failed")
+    }
+
+    /// Production build path. Captures managed content before constructing the
+    /// script runner, then builds with that immutable input on the same worker.
+    /// Unsuccessful candidates never write a runtime product or mutate Core.
+    pub async fn build(
+        &self,
+        input: RuntimeBuildInput,
+        staged_content: BTreeMap<String, String>,
+        builtin_transforms: Vec<BuiltinTransform>,
+        strict_transforms: bool,
+    ) -> anyhow::Result<ArtifactSnapshotData> {
+        let content = Arc::clone(&self.content);
+        let scripts = Arc::clone(&self.scripts);
+        tokio::task::spawn_blocking(move || {
+            let frozen = FrozenProfileContent::capture_content(
+                &input.profiles,
+                content.as_ref(),
+                staged_content,
+            );
+            Self::execute_candidate(
+                input,
+                frozen,
+                builtin_transforms,
+                move || scripts(),
+                strict_transforms,
+            )
+        })
+        .await
+        .context("runtime builder task failed")?
+    }
+
     pub async fn build_candidate<C, F>(
         input: RuntimeBuildInput,
         content: C,
@@ -336,6 +403,27 @@ mod tests {
         assert_eq!(factories.load(Ordering::SeqCst), 1);
         assert!(data.inspection.final_node < data.inspection.graph.nodes.len() as u32);
         assert!(data.postprocessing_output.scopes.is_empty());
+    }
+
+    #[tokio::test]
+    async fn injected_builder_uses_one_script_factory_on_a_blocking_worker() {
+        let calling_thread = std::thread::current().id();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let counted = Arc::clone(&calls);
+        let builder = RuntimeBuildService::new(
+            Arc::new(EmptyContent),
+            Arc::new(move || {
+                assert_ne!(std::thread::current().id(), calling_thread);
+                counted.fetch_add(1, Ordering::SeqCst);
+                Ok(Box::new(PassthroughScripts))
+            }),
+        );
+        let data = builder
+            .build(input(), BTreeMap::new(), Vec::new(), true)
+            .await
+            .unwrap();
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert!(data.inspection.final_node < data.inspection.graph.nodes.len() as u32);
     }
 
     #[tokio::test]

@@ -118,23 +118,7 @@ fn core_spec_with(
         &chimera_utils::core::CoreType,
     ) -> std::io::Result<std::path::PathBuf>,
 ) -> AnyResult<CoreSpec> {
-    let core_type: chimera_utils::core::CoreType = core.into();
-    let kind = match core {
-        ClashCore::ClashPremium => CoreKind::ClashPremium,
-        ClashCore::ClashRs | ClashCore::ClashRsAlpha => CoreKind::ClashRust,
-        ClashCore::Mihomo | ClashCore::MihomoAlpha => CoreKind::Mihomo,
-        ClashCore::ChimeraClient => CoreKind::ChimeraClient,
-        ClashCore::ChimeraClientAlpha => CoreKind::ChimeraClient,
-    };
-    let binary_path = to_utf8(find_binary(core, &core_type)?)
-        .map_err(|path| anyhow::anyhow!("path is not valid UTF-8: {}", path.to_string_lossy()))?;
-
-    Ok(CoreSpec {
-        kind,
-        binary_path,
-        version: None,
-        features: Vec::new(),
-    })
+    chimera_core::client::core_spec::resolve_with(core, find_binary).map_err(Into::into)
 }
 
 fn to_utf8(path: std::path::PathBuf) -> Result<Utf8PathBuf, std::path::PathBuf> {
