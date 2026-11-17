@@ -730,11 +730,22 @@ impl ChimeraClient {
                 None
             };
 
-        let snapshot = self
+        let report = self
             .inner
             .clash_config
             .patch_typed_config(self, patch)
             .await?;
+        let snapshot = report.snapshot;
+        let degradations = report.degradations;
+        let runtime_deferred = degradations
+            .iter()
+            .any(|item| item.code == "clash_runtime_deferred");
+        if degradations
+            .iter()
+            .any(|item| item.code == "clash_runtime_deferred" && item.retryable)
+        {
+            self.inner.core_lifecycle.request_runtime_rebuild();
+        }
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
         {
             let app = self.get_app_config()?;
@@ -749,12 +760,18 @@ impl ChimeraClient {
         self.inner.ui_sink.refresh_clash();
 
         Ok(
-            super::MutationOutcome::from_parts((), Vec::new()).with_commit(
+            super::MutationOutcome::from_parts((), degradations).with_commit(
                 super::runtime::CommitReceipt {
                     operation_id: None,
                     domain: "clash".into(),
                     source_version: snapshot.version,
-                    runtime: super::runtime::RuntimeCommitStatus::Pending,
+                    runtime: if runtime_deferred {
+                        super::runtime::RuntimeCommitStatus::Deferred
+                    } else if report.reaches_runtime {
+                        super::runtime::RuntimeCommitStatus::Pending
+                    } else {
+                        super::runtime::RuntimeCommitStatus::Unchanged
+                    },
                 },
             ),
         )
