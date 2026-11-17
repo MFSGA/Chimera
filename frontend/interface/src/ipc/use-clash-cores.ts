@@ -9,8 +9,11 @@ import {
 import {
   CHIMERA_SETTING_QUERY_KEY,
   CLASH_CORE_QUERY_KEY,
+  CLASH_CORE_STATUS_QUERY_KEY,
   CLASH_VERSION_QUERY_KEY,
+  CORE_ACTOR_STATUS_QUERY_KEY,
 } from './consts';
+import { restartCoreSidecar } from './core-mutation';
 
 export const ClashCores = {
   // clash: 'Clash Premium',
@@ -34,6 +37,18 @@ export type ClashCoresDetail = {
 
 export const useClashCores = () => {
   const queryClient = useQueryClient();
+
+  // Both old two-state consumers and ref CoreActor readers need to observe
+  // a completed (or uncertain) lifecycle mutation. Never fabricate Running
+  // from the requested operation; ref CoreActor is the status authority.
+  const refreshCoreStatus = () => {
+    void queryClient.invalidateQueries({
+      queryKey: [CORE_ACTOR_STATUS_QUERY_KEY],
+    });
+    void queryClient.invalidateQueries({
+      queryKey: [CLASH_CORE_STATUS_QUERY_KEY],
+    });
+  };
 
   const query = useQuery({
     queryKey: [CLASH_CORE_QUERY_KEY],
@@ -111,14 +126,23 @@ export const useClashCores = () => {
       return unwrapResult(await commands.changeClashCore(core));
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: [CLASH_CORE_QUERY_KEY] });
-      queryClient.invalidateQueries({ queryKey: [CHIMERA_SETTING_QUERY_KEY] });
-      queryClient.invalidateQueries({ queryKey: [CLASH_VERSION_QUERY_KEY] });
+      void queryClient.invalidateQueries({ queryKey: [CLASH_CORE_QUERY_KEY] });
+      void queryClient.invalidateQueries({
+        queryKey: [CHIMERA_SETTING_QUERY_KEY],
+      });
+      void queryClient.invalidateQueries({
+        queryKey: [CLASH_VERSION_QUERY_KEY],
+      });
     },
+    // An error may occur after the CoreActor admits a mutation. Refresh the
+    // authoritative state on both success and failure, not just on success.
+    onSettled: refreshCoreStatus,
   });
 
-  const restartSidecar = async () => {
-    return await commands.restartSidecar();
+  const restartSidecar = async (): Promise<void> => {
+    // Unwrap the Tauri Result before notifying success. A rejected command
+    // still invalidates both ref and legacy projections via onSettled.
+    await restartCoreSidecar(commands, refreshCoreStatus);
   };
 
   return {

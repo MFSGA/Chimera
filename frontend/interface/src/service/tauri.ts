@@ -4,6 +4,7 @@ import {
   type IpsbResponse,
   type UpdaterSummary,
 } from '../ipc/bindings';
+import { restartCoreSidecar } from '../ipc/core-mutation';
 import { unwrapResult } from '../utils';
 
 export type IPSBResponse = IpsbResponse;
@@ -48,7 +49,7 @@ export const removeStorageItem = async (key: string) => {
 };
 
 export const restartSidecar = async () => {
-  unwrapResult(await commands.restartSidecar());
+  await restartCoreSidecar(commands);
 };
 
 export const isPortable = async () => {

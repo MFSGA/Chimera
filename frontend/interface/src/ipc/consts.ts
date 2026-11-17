@@ -86,6 +86,9 @@ export const CLASH_CORE_QUERY_KEY = 'clash-core';
  */
 export const CLASH_CORE_STATUS_QUERY_KEY = 'clash-core-status';
 
+/** Ref CoreActor host/generation/status projection query. */
+export const CORE_ACTOR_STATUS_QUERY_KEY = 'getCoreActorStatus';
+
 /**
  * Local HTTP server port query key.
  */

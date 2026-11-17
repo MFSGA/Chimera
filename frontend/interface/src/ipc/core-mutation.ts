@@ -5,6 +5,13 @@ export type RestartSidecarCommand = Pick<typeof commands, 'restartSidecar'>;
 
 export async function restartCoreSidecar(
   coreCommands: RestartSidecarCommand,
+  onSettled?: () => void,
 ): Promise<void> {
-  unwrapResult(await coreCommands.restartSidecar());
+  try {
+    unwrapResult(await coreCommands.restartSidecar());
+  } finally {
+    // RPC failure may happen after CoreActor accepted the submission.
+    // Refresh its authoritative projection on both success and failure.
+    onSettled?.();
+  }
 }

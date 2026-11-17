@@ -1,7 +1,10 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect } from 'react';
 import { commands, events } from '../ipc/bindings';
+import { CORE_ACTOR_STATUS_QUERY_KEY } from '../ipc/consts';
 import { unwrapResult } from '../utils';
+
+export { CORE_ACTOR_STATUS_QUERY_KEY } from '../ipc/consts';
 
 /** Ref-style routing state: unlike the legacy two-state core query this
  * distinguishes handoff, degradation, stopping and unknown snapshots.
@@ -10,8 +13,6 @@ import { unwrapResult } from '../utils';
  * Events invalidate the snapshot; infrequent polling is only recovery for
  * missed events (suspended windows or transient listener failures).
  */
-export const CORE_ACTOR_STATUS_QUERY_KEY = 'getCoreActorStatus';
-
 export function useCoreActorStatus() {
   const queryClient = useQueryClient();
 
