@@ -6,9 +6,16 @@ use serde::Serialize;
 use tokio::sync::{MutexGuard, Notify};
 use tracing::instrument;
 
-use crate::{client::ChimeraClient, core::RunType};
+use crate::client::ChimeraClient;
 
-use chimera_core::{actor_v2::service_actor::ServiceHealthRounds, service::compat::ServiceCompat};
+use chimera_core::{
+    actor_v2::{
+        endpoint::ExecutionHost,
+        router::{CoreStatusProjection, EndpointConnectivity},
+        service_actor::ServiceHealthRounds,
+    },
+    service::compat::ServiceCompat,
+};
 
 #[derive(PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -262,19 +269,30 @@ fn dispatch_connected(client: &ChimeraClient, health_round: Option<u64>) {
     }
 }
 
-fn should_rebuild_for_ipc_transition(state: IpcState, run_type: RunType) -> bool {
-    matches!(
-        (state, run_type),
-        (IpcState::Connected, RunType::Normal) | (IpcState::Disconnected, RunType::Service)
-    )
+/// Service IPC is a health observation, not a second owner for core host
+/// selection. Trigger a reconcile only when the committed ref CoreActor host
+/// disagrees with Service availability. A degraded endpoint retains its
+/// committed host and can need recovery, but an in-flight handoff must never
+/// receive a competing reconcile from the legacy health monitor.
+fn should_rebuild_for_ipc_transition(state: IpcState, projection: &CoreStatusProjection) -> bool {
+    if matches!(
+        projection.connectivity,
+        EndpointConnectivity::HandingOff { .. } | EndpointConnectivity::ShutDown
+    ) {
+        return false;
+    }
+    match state {
+        IpcState::Connected => projection.host == ExecutionHost::Local,
+        IpcState::Disconnected => projection.host == ExecutionHost::Service,
+    }
 }
 
 fn should_rebuild_for_ipc_event(
     observed_state: IpcState,
     current_state: IpcState,
-    run_type: RunType,
+    projection: &CoreStatusProjection,
 ) -> bool {
-    observed_state == current_state && should_rebuild_for_ipc_transition(observed_state, run_type)
+    observed_state == current_state && should_rebuild_for_ipc_transition(observed_state, projection)
 }
 
 #[instrument(skip(client))]
@@ -321,7 +339,7 @@ fn on_ipc_state_changed(state: IpcState, client: &ChimeraClient, health_round: O
 
         let Some(status) = await_core_status_or_shutdown(
             &shutdown,
-            client.core_status(),
+            client.refreshed_routed_core_status(),
             IPC_TRANSITION_CORE_STATUS_TIMEOUT,
         )
         .await
@@ -331,16 +349,25 @@ fn on_ipc_state_changed(state: IpcState, client: &ChimeraClient, health_round: O
         let status = match status {
             Ok(status) => status,
             Err(err) => {
-                tracing::warn!("failed to read core status during service IPC transition: {err}");
+                tracing::warn!("failed to read ref CoreActor during service IPC transition: {err}");
                 return;
             }
         };
 
+        // refresh_status is asynchronous; Service may have changed again
+        // while its Core endpoint answered. Never act on the earlier
+        // current_state sample after that await.
+        let latest_state = get_ipc_state();
         if !shutdown.is_cancelled()
             && !health_round.is_some_and(health_round_retired)
-            && should_rebuild_for_ipc_event(state, current_state, status.run_type)
+            && should_rebuild_for_ipc_event(state, latest_state, &status)
         {
-            tracing::info!("Marking runtime dirty due to IPC state change");
+            tracing::info!(
+                host = ?status.host,
+                generation = status.generation,
+                connectivity = ?status.connectivity,
+                "Marking runtime dirty due to Service IPC host mismatch"
+            );
             client.request_runtime_rebuild();
         }
     });
@@ -588,7 +615,10 @@ mod tests {
         service_transition_epoch, should_rebuild_for_ipc_event, should_rebuild_for_ipc_transition,
         stop_health_check, target_ipc_state, wait_for_health_monitor_retirement,
     };
-    use crate::core::RunType;
+    use chimera_core::actor_v2::{
+        endpoint::{CoreStatusSnapshot, ExecutionHost},
+        router::{CoreStatusProjection, EndpointConnectivity},
+    };
     use chimera_core::service::compat::{REQUIRED_SERVICE_MIN, ServiceCompat};
     use tokio::sync::Notify;
     use tokio_util::sync::CancellationToken;
@@ -781,46 +811,127 @@ mod tests {
         assert!(claim_health_check(&running));
     }
 
+    fn core_projection(host: ExecutionHost) -> CoreStatusProjection {
+        CoreStatusProjection {
+            host,
+            generation: 5,
+            connectivity: EndpointConnectivity::Connected,
+            snapshot: Some(CoreStatusSnapshot {
+                instance_id: Some("service-ipc-test-core".into()),
+                controller: None,
+                state: Some(chimera_ipc::api::status::CoreStateDetail::Running {
+                    epoch: 2,
+                    pid: 42,
+                }),
+                state_changed_at: 100,
+                revision: None,
+                source_hash: None,
+                healthy: Some(true),
+                applied_kind: None,
+            }),
+        }
+    }
+
     #[test]
-    fn service_ipc_transition_rebuilds_only_when_runtime_owner_changes() {
+    fn service_ipc_transition_rebuilds_only_when_ref_core_host_changes() {
+        let local = core_projection(ExecutionHost::Local);
+        let service = core_projection(ExecutionHost::Service);
         assert!(should_rebuild_for_ipc_transition(
             IpcState::Connected,
-            RunType::Normal
+            &local
         ));
         assert!(should_rebuild_for_ipc_transition(
             IpcState::Disconnected,
-            RunType::Service
+            &service
         ));
         assert!(!should_rebuild_for_ipc_transition(
             IpcState::Connected,
-            RunType::Service
+            &service
         ));
         assert!(!should_rebuild_for_ipc_transition(
             IpcState::Disconnected,
-            RunType::Normal
+            &local
+        ));
+
+        // An unreachable Service endpoint retains the committed host. A
+        // disconnected daemon must still request reconciliation/recovery.
+        let mut degraded_service = service.clone();
+        degraded_service.connectivity = EndpointConnectivity::Degraded {
+            desired: ExecutionHost::Service,
+            reason: "service IPC lost".into(),
+        };
+        assert!(should_rebuild_for_ipc_transition(
+            IpcState::Disconnected,
+            &degraded_service
         ));
         assert!(!should_rebuild_for_ipc_transition(
             IpcState::Connected,
-            RunType::Elevated
+            &degraded_service
         ));
+
+        let mut degraded_local = local.clone();
+        degraded_local.connectivity = EndpointConnectivity::Degraded {
+            desired: ExecutionHost::Local,
+            reason: "local endpoint unavailable".into(),
+        };
+        assert!(should_rebuild_for_ipc_transition(
+            IpcState::Connected,
+            &degraded_local
+        ));
+
+        for mut projection in [local.clone(), service.clone()] {
+            projection.connectivity = EndpointConnectivity::HandingOff {
+                from: ExecutionHost::Local,
+                to: ExecutionHost::Service,
+            };
+            assert!(!should_rebuild_for_ipc_transition(
+                IpcState::Connected,
+                &projection
+            ));
+            assert!(!should_rebuild_for_ipc_transition(
+                IpcState::Disconnected,
+                &projection
+            ));
+            projection.connectivity = EndpointConnectivity::ShutDown;
+            assert!(!should_rebuild_for_ipc_transition(
+                IpcState::Connected,
+                &projection
+            ));
+            assert!(!should_rebuild_for_ipc_transition(
+                IpcState::Disconnected,
+                &projection
+            ));
+        }
     }
 
     #[test]
     fn stale_ipc_transition_is_discarded_after_serialized_service_restart() {
+        let local = core_projection(ExecutionHost::Local);
+        let service = core_projection(ExecutionHost::Service);
         assert!(!should_rebuild_for_ipc_event(
             IpcState::Disconnected,
             IpcState::Connected,
-            RunType::Service
+            &service
         ));
         assert!(should_rebuild_for_ipc_event(
             IpcState::Disconnected,
             IpcState::Disconnected,
-            RunType::Service
+            &service
         ));
         assert!(!should_rebuild_for_ipc_event(
             IpcState::Connected,
             IpcState::Disconnected,
-            RunType::Normal
+            &local
+        ));
+        // The host generation belongs to the Actor, not the Service health
+        // sample. A newer Actor revision with the same committed host must
+        // not be confused with an old RunType guess.
+        let mut new_generation = service;
+        new_generation.generation += 1;
+        assert!(should_rebuild_for_ipc_event(
+            IpcState::Disconnected,
+            IpcState::Disconnected,
+            &new_generation
         ));
     }
 
