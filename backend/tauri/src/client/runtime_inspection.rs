@@ -1,212 +1,41 @@
-//! Read-only projections of one immutable, promoted runtime build.
-
-use std::sync::Arc;
-
-use chimera_config::{
-    redact::redact_config,
-    runtime::{
-        executor::{StepLog, StepLogEntry, StepLogLevel},
-        snapshot::{
-            BuiltinStepKind, ConfigSnapshot, ConfigSnapshotsBuilder, ConfigSnapshotsGraph,
-            OperatorTag, SnapshotDiffHunk, changed_fields_between,
-        },
-        value::ConfigValue,
-    },
-};
-use chimera_ipc::api::{core::v2::CoreEffectiveConfig, status::ConfigRevisionInfo};
-use serde::Serialize;
+//! Tauri adapter for ref-aligned, shared runtime inspection projections.
+//! Core actor binding verification remains here; graph projection lives in chimera-core.
 
 use super::{ChimeraClient, runtime::RuntimeSnapshot};
+use chimera_ipc::api::{core::v2::CoreEffectiveConfig, status::ConfigRevisionInfo};
+use std::sync::Arc;
 
-#[derive(Debug, Clone)]
-pub(crate) struct RuntimeInspectionData {
-    pub graph: ConfigSnapshotsGraph,
-    /// The node that owns the built YAML, not an arbitrary terminal branch.
-    pub final_node: u32,
-    pub step_logs: Vec<StepLog>,
-}
-
-impl RuntimeInspectionData {
-    /// Empty root used by explicit compatibility constructors and tests that
-    /// do not carry a RuntimeExecutor graph.
-    pub(crate) fn bare() -> Self {
-        let config = ConfigValue::try_from(serde_json::json!({}))
-            .expect("empty JSON object is a valid runtime config value");
-        let graph = ConfigSnapshotsBuilder::new_root(Arc::new(config), OperatorTag::BareRoot)
-            .build()
-            .expect("bare runtime inspection graph must build");
-        Self {
-            final_node: graph.root_id,
-            graph,
-            step_logs: Vec::new(),
-        }
-    }
-}
-
-/// The core's actual reported configuration, attached as a virtual child of
-/// the final build node without changing the immutable pipeline graph.
-#[derive(Debug, Clone)]
-pub(crate) struct EffectiveInspection {
-    pub config: serde_json::Value,
-    pub revision: ConfigRevisionInfo,
-    pub parent: u32,
-    pub tag: OperatorTag,
-    pub changed_fields: Option<Vec<String>>,
-}
-
-#[derive(Debug, Clone, Serialize, specta::Type)]
-pub struct RuntimeInspection {
-    pub snapshot_id: String,
-    /// Whether the selected build matches the currently active core receipt.
-    pub applied: bool,
-    /// An active matching receipt exists but the host cannot yet supply its document.
-    pub effective_pending: bool,
-    pub effective_revision: Option<ConfigRevisionInfo>,
-    pub revision: String,
-    pub target_core: String,
-    pub root_id: u32,
-    pub final_id: u32,
-    pub nodes: Vec<RuntimeInspectionNode>,
-}
-
-#[derive(Debug, Clone, Serialize, specta::Type)]
-pub struct RuntimeInspectionNode {
-    pub id: u32,
-    pub tag: chimera_config::runtime::snapshot::OperatorTag,
-    pub next: Vec<u32>,
-    pub has_logs: bool,
-    /// Highest severity of the recorded step logs, matching the upstream DTO.
-    pub max_log_level: Option<StepLogLevel>,
-    /// None means unchanged or no comparison baseline (including independent roots).
-    pub changed_fields: Option<Vec<String>>,
-}
-
-#[derive(Debug, Clone, Serialize, specta::Type)]
-pub struct RuntimeInspectionContent {
-    pub yaml: String,
-    pub diff: Option<RuntimeInspectionDiff>,
-    pub logs: Vec<StepLogEntry>,
-}
-
-#[derive(Debug, Clone, Serialize, specta::Type)]
-pub struct RuntimeInspectionDiff {
-    pub parent_id: u32,
-    pub hunks: Vec<SnapshotDiffHunk>,
-}
+pub(crate) use chimera_core::client::runtime_inspection::{
+    EffectiveInspection, RuntimeInspectionData,
+};
+pub use chimera_core::client::runtime_inspection::{
+    RuntimeInspection, RuntimeInspectionContent, RuntimeInspectionDiff, RuntimeInspectionNode,
+};
 
 impl RuntimeSnapshot {
-    /// Attach a verified, core-reported view without mutating the committed build.
-    /// The derived identifier is stable across refreshes for the same effective
-    /// revision and changes when the core reports a different document.
+    /// Attach an authenticated effective document to a temporary inspection view.
     fn with_effective_config(&self, effective: CoreEffectiveConfig) -> anyhow::Result<Self> {
-        let yaml: serde_yaml::Value = serde_yaml::from_str(&effective.config)?;
-        let config = serde_json::to_value(yaml)?;
-        let parent = self.inspection.final_node;
-        let parent_node = self
-            .inspection
-            .graph
-            .nodes
-            .get(parent as usize)
-            .ok_or_else(|| anyhow::anyhow!("runtime final node is missing"))?;
-        let selected_profile_id = match &parent_node.tag {
-            OperatorTag::BuiltinStep {
-                selected_profile_id,
-                ..
-            }
-            | OperatorTag::BuiltinTransform {
-                selected_profile_id,
-                ..
-            } => selected_profile_id.clone(),
-            _ => None,
-        };
-        // Compare raw values to retain changed field paths even when both
-        // secret values redact to the same placeholder. Only paths escape.
-        let changed_fields = changed_fields_between(&parent_node.snapshot.config, &config)
-            .map(|fields| fields.into_iter().collect());
+        let view = self.inspection.effective_config(effective)?;
         let mut snapshot = self.clone();
         snapshot.inspection_id = format!(
             "{}:effective:{}:{}:{}",
             self.inspection_id,
-            effective.revision.epoch,
-            effective.revision.generation,
-            effective.revision.effective_hash,
+            view.revision.epoch,
+            view.revision.generation,
+            view.revision.effective_hash,
         );
-        snapshot.effective = Some(Arc::new(EffectiveInspection {
-            config,
-            revision: effective.revision,
-            parent,
-            tag: OperatorTag::BuiltinStep {
-                selected_profile_id,
-                step: BuiltinStepKind::CoreController,
-            },
-            changed_fields,
-        }));
+        snapshot.effective = Some(Arc::new(view));
         Ok(snapshot)
     }
 
-    fn max_log_level(&self, tag: &OperatorTag) -> Option<StepLogLevel> {
-        let key = tag.node_key();
-        self.inspection
-            .step_logs
-            .iter()
-            .filter(|log| log.key == key)
-            .flat_map(|log| &log.entries)
-            .map(|entry| entry.level)
-            .max()
-    }
-
     fn inspection_summary(&self, bound_revision: Option<ConfigRevisionInfo>) -> RuntimeInspection {
-        let mut nodes: Vec<_> = self
-            .inspection
-            .graph
-            .nodes
-            .iter()
-            .enumerate()
-            .map(|(id, node)| {
-                let max_log_level = self.max_log_level(&node.tag);
-                RuntimeInspectionNode {
-                    id: id as u32,
-                    has_logs: max_log_level.is_some(),
-                    max_log_level,
-                    tag: node.tag.clone(),
-                    next: node.next.clone().unwrap_or_default(),
-                    changed_fields: node
-                        .snapshot
-                        .changed_fields
-                        .as_ref()
-                        .map(|fields| fields.iter().cloned().collect()),
-                }
-            })
-            .collect();
-        if let Some(effective) = &self.effective {
-            let id = nodes.len() as u32;
-            if let Some(final_node) = nodes.get_mut(effective.parent as usize) {
-                final_node.next.push(id);
-            }
-            nodes.push(RuntimeInspectionNode {
-                id,
-                tag: effective.tag.clone(),
-                next: Vec::new(),
-                has_logs: false,
-                max_log_level: None,
-                changed_fields: effective.changed_fields.clone(),
-            });
-        }
-        RuntimeInspection {
-            snapshot_id: self.inspection_id.clone(),
-            applied: bound_revision.is_some() && self.effective.is_some(),
-            effective_pending: bound_revision.is_some() && self.effective.is_none(),
-            effective_revision: self
-                .effective
-                .as_ref()
-                .map(|effective| effective.revision.clone())
-                .or(bound_revision),
-            revision: self.revision.get().to_string(),
-            target_core: self.target_core.to_string(),
-            root_id: self.inspection.graph.root_id,
-            final_id: self.inspection.final_node,
-            nodes,
-        }
+        self.inspection.inspection_summary(
+            &self.inspection_id,
+            &self.revision.get().to_string(),
+            &self.target_core.to_string(),
+            self.effective.as_deref(),
+            bound_revision,
+        )
     }
 
     fn inspection_content(
@@ -214,63 +43,12 @@ impl RuntimeSnapshot {
         snapshot_id: &str,
         node_id: u32,
     ) -> anyhow::Result<RuntimeInspectionContent> {
-        anyhow::ensure!(
-            self.inspection_id == snapshot_id,
-            "runtime snapshot changed; refresh the inspection"
-        );
-        if let Some(effective) = self
-            .effective
-            .as_ref()
-            .filter(|_| node_id as usize == self.inspection.graph.nodes.len())
-        {
-            let yaml = serde_yaml::to_string(&redact_config(effective.config.clone()))?;
-            let parent = &self.inspection.graph.nodes[effective.parent as usize];
-            return Ok(RuntimeInspectionContent {
-                diff: Some(RuntimeInspectionDiff {
-                    parent_id: effective.parent,
-                    hunks: ConfigSnapshot::new_unchanged(redact_config(
-                        parent.snapshot.config.clone(),
-                    ))
-                    .diff_yaml_to(&yaml)?,
-                }),
-                yaml,
-                logs: Vec::new(),
-            });
-        }
-        let node = self
-            .inspection
-            .graph
-            .nodes
-            .get(node_id as usize)
-            .ok_or_else(|| anyhow::anyhow!("runtime snapshot node does not exist"))?;
-        let yaml = serde_yaml::to_string(&redact_config(node.snapshot.config.clone()))?;
-        Ok(RuntimeInspectionContent {
-            diff: self
-                .inspection
-                .graph
-                .comparison_parent(node_id)
-                .map(|parent_id| -> anyhow::Result<_> {
-                    Ok(RuntimeInspectionDiff {
-                        parent_id,
-                        hunks: ConfigSnapshot::new_unchanged(redact_config(
-                            self.inspection.graph.nodes[parent_id as usize]
-                                .snapshot
-                                .config
-                                .clone(),
-                        ))
-                        .diff_yaml_to(&yaml)?,
-                    })
-                })
-                .transpose()?,
-            yaml,
-            logs: self
-                .inspection
-                .step_logs
-                .iter()
-                .filter(|log| log.key == node.key)
-                .flat_map(|log| log.entries.iter().cloned())
-                .collect(),
-        })
+        self.inspection.inspection_content(
+            &self.inspection_id,
+            self.effective.as_deref(),
+            snapshot_id,
+            node_id,
+        )
     }
 }
 
@@ -440,7 +218,7 @@ mod tests {
     use chimera_config::{
         profile::ProfileId,
         runtime::{
-            executor::StepLogLevel,
+            executor::{StepLog, StepLogEntry, StepLogLevel},
             snapshot::{BuiltinStepKind, ConfigExecutionRole, ConfigSnapshotsBuilder, OperatorTag},
             value::ConfigValue,
         },
