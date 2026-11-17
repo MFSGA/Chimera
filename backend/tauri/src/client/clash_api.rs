@@ -85,6 +85,9 @@ impl ChimeraClient {
     pub(crate) async fn refreshed_routed_core_status(
         &self,
     ) -> Result<chimera_core::actor_v2::router::CoreStatusProjection> {
+        if let Some(facade) = &self.inner.ref_facade {
+            return Ok(facade.refresh_status().await?);
+        }
         let core = self
             .inner
             .core_api
@@ -94,7 +97,15 @@ impl ChimeraClient {
     }
 
     pub(crate) async fn clash_api_client(&self) -> Result<ApiClient> {
+        if let Some(facade) = &self.inner.ref_facade {
+            let client = facade.api_client_if_running().await?.ok_or_else(|| {
+                anyhow::anyhow!("the ref Core Facade confirmed the core is stopped")
+            })?;
+            return Ok(ApiClient::from_core_client(client));
+        }
         if let Some(core) = &self.inner.core_api {
+            // Test fixtures can inject CoreActor without a ServiceActor;
+            // production always constructs the shared ref Facade above.
             return Ok(ApiClient::from_core_client(core.api_client().await?));
         }
         // Only test fixtures constructed from injected legacy ports take this

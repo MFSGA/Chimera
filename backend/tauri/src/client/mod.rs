@@ -191,6 +191,10 @@ struct ChimeraClientInner {
     core_lifecycle: CoreLifecycleClient,
     core_api: Option<CoreClientV2>,
     service_actor: Option<ServiceClient>,
+    /// Ref CoreFacade is the read-only host/API authority for the production
+    /// Client. Lifecycle mutations remain with the legacy bridge until the
+    /// workflow and facade are moved as one stateful owner.
+    ref_facade: Option<chimera_core::actor_v2::facade::CoreFacade>,
     core: Arc<dyn CoreLifecyclePort>,
     shutdown: tokio_util::sync::CancellationToken,
     tasks: tokio_util::task::TaskTracker,
@@ -559,6 +563,12 @@ impl ChimeraClient {
             dyn hotkey::ports::WindowControl,
         >,
     ) -> Self {
+        let ref_facade = core_api
+            .as_ref()
+            .zip(service_actor.as_ref())
+            .map(|(core, service)| {
+                chimera_core::actor_v2::facade::CoreFacade::new(core.clone(), service.clone())
+            });
         let inner = ChimeraClientInner {
             application: typed.application,
             session_state: typed.session_state,
@@ -569,6 +579,7 @@ impl ChimeraClient {
             core_lifecycle,
             core_api,
             service_actor,
+            ref_facade,
             core,
             shutdown,
             tasks,
@@ -622,12 +633,18 @@ impl ChimeraClient {
     /// The legacy CoreLifecyclePort remains a Chimera runtime-config adapter,
     /// not the owner of Core routing state.
     pub(crate) fn routed_core_status(&self) -> Option<CoreStatusProjection> {
+        if let Some(facade) = &self.inner.ref_facade {
+            return Some(facade.core_status());
+        }
         self.inner.core_api.as_ref().map(CoreClientV2::status)
     }
 
     /// Read the ref Service Actor directly, without asking the old Facade to
     /// reconstruct its own Service phase from a separate IPC status cache.
     pub(crate) fn service_actor_status(&self) -> Option<ServiceHostStatus> {
+        if let Some(facade) = &self.inner.ref_facade {
+            return Some(facade.service_status());
+        }
         self.inner.service_actor.as_ref().map(ServiceClient::status)
     }
 
@@ -1490,6 +1507,76 @@ mod tests {
         tokio::time::timeout(std::time::Duration::from_secs(5), tasks.wait())
             .await
             .expect("ServiceActor drains after status test");
+    }
+
+    /// The production facade must provide Core/Service observations from the
+    /// same typed actors and reject a stopped Core before acquiring an API
+    /// lease; an injected legacy Core status must not substitute for either.
+    #[tokio::test]
+    async fn production_ref_facade_fences_stopped_core_api_and_projects_both_actors() {
+        use chimera_core::actor_v2::{
+            endpoint::{EndpointHandle, ExecutionHost},
+            service_endpoint_factory::IpcServiceEndpointFactory,
+            service_router::ServicePhase,
+        };
+
+        let (mut client, _) = recording_client(false).await;
+        let core = CoreClientV2::spawn(Arc::new(StoppedRoutedHost))
+            .await
+            .expect("spawn CoreActor");
+        let service = ServiceClient::spawn(
+            Arc::new(OfflineProbeService),
+            Arc::new(IpcServiceEndpointFactory::new(|| -> EndpointHandle {
+                panic!("an uninstalled daemon cannot provide an endpoint")
+            })),
+            3,
+        )
+        .await
+        .expect("spawn ServiceActor");
+        assert_eq!(
+            service.probe().await.expect("probe ServiceActor").phase,
+            ServicePhase::NotInstalled
+        );
+        let inner = Arc::get_mut(&mut client.inner).expect("one test Client owner");
+        inner.ref_facade = Some(chimera_core::actor_v2::facade::CoreFacade::new(
+            core.clone(),
+            service.clone(),
+        ));
+
+        assert_eq!(
+            client
+                .routed_core_status()
+                .expect("ref facade provides core projection")
+                .host,
+            ExecutionHost::Local
+        );
+        assert_eq!(
+            client
+                .service_actor_status()
+                .expect("ref service projection")
+                .phase,
+            ServicePhase::NotInstalled
+        );
+        let observed = client.refreshed_routed_core_status().await.unwrap();
+        assert!(matches!(
+            observed.snapshot.and_then(|s| s.state),
+            Some(chimera_ipc::api::status::CoreStateDetail::Stopped { .. })
+        ));
+        let error = client
+            .clash_api_client()
+            .await
+            .expect_err("the ref facade must not lease a stopped controller");
+        assert!(error.to_string().contains("core is stopped"));
+
+        core.finish_shutdown().await;
+        let tasks = tokio_util::task::TaskTracker::new();
+        let shutdown = tokio_util::sync::CancellationToken::new();
+        service.drain_on_shutdown(&tasks, shutdown.clone());
+        shutdown.cancel();
+        tasks.close();
+        tokio::time::timeout(std::time::Duration::from_secs(5), tasks.wait())
+            .await
+            .expect("ServiceActor must drain");
     }
 
     #[tokio::test]
