@@ -147,8 +147,6 @@ enum Message {
         info: chimera_ipc::types::StatusInfo<'static>,
     },
     ServiceProbeFailed,
-    #[cfg(not(test))]
-    RefreshServiceStatus,
     RecoverCore,
     RuntimeDirty,
     DirtyTick,
@@ -285,9 +283,18 @@ impl ApplicationWorkflowState {
         self.next_id.fetch_add(1, Ordering::Relaxed)
     }
 
+    /// Ref ServiceActor is the sole production publisher of daemon phase,
+    /// retry attempts, and readiness generation. The legacy watch is updated
+    /// only for injected compatibility ports that have no actor owner.
+    fn publishes_legacy_service_status(&self) -> bool {
+        self.service.actor_status().is_none()
+    }
+
     fn publish_service_status(&self, info: chimera_ipc::types::StatusInfo<'static>) {
-        let runtime_owned = crate::core::service::is_service_runtime_owned(&info);
-        self.service_status.observe_probe(info, runtime_owned, None);
+        if self.publishes_legacy_service_status() {
+            let runtime_owned = crate::core::service::is_service_runtime_owned(&info);
+            self.service_status.observe_probe(info, runtime_owned, None);
+        }
     }
 
     fn publish_service_status_with_policy(
@@ -295,20 +302,30 @@ impl ApplicationWorkflowState {
         info: chimera_ipc::types::StatusInfo<'static>,
         policy: ServiceRestartPolicySnapshot,
     ) {
-        let runtime_owned = crate::core::service::is_service_runtime_owned(&info);
-        self.service_status
-            .observe_probe(info, runtime_owned, Some(policy));
+        if self.publishes_legacy_service_status() {
+            let runtime_owned = crate::core::service::is_service_runtime_owned(&info);
+            self.service_status
+                .observe_probe(info, runtime_owned, Some(policy));
+        }
     }
 
     fn publish_service_phase(&self, phase: ServicePhase) {
-        self.service_status.publish_phase(phase);
+        if self.publishes_legacy_service_status() {
+            self.service_status.publish_phase(phase);
+        }
     }
 
     fn publish_service_probe_failure(&self) {
-        self.service_status.probe_failed();
+        if self.publishes_legacy_service_status() {
+            self.service_status.probe_failed();
+        }
     }
 
+    #[cfg(test)]
     async fn refresh_service_status(&mut self) -> anyhow::Result<ServiceHostStatus> {
+        if let Some(actor) = self.service.actor_status() {
+            return Ok(actor);
+        }
         let workflow = self
             .workflow
             .as_ref()
@@ -649,6 +666,7 @@ impl ApplicationWorkflowState {
             Command::UninstallService(_) => Some(ServicePhase::Uninstalling),
             _ => None,
         };
+        let publish_legacy_service = self.publishes_legacy_service_status();
         let service_mutation = matches!(
             &request.command,
             Command::InstallService(_)
@@ -743,7 +761,11 @@ impl ApplicationWorkflowState {
             let lower_outcome_uncertain = lifecycle.outcome_uncertain();
             let startup_owner_unproven = workflow.startup_owner_unproven();
             let service_restart_policy = lifecycle.service_restart_policy();
-            let service_probe = if service_mutation && !workflow_panicked {
+            // Ref ServiceActor performs its own bounded probe and publishes
+            // its watch after Service commands. Do not issue a second probe
+            // merely to refresh CoreLifecycle's unused compatibility cache.
+            let service_probe = if service_mutation && !workflow_panicked && publish_legacy_service
+            {
                 Some(
                     match AssertUnwindSafe(lifecycle.probe_service())
                         .catch_unwind()
@@ -1124,12 +1146,6 @@ impl Actor for ApplicationWorkflowActor {
             }
             Message::ServiceProbeFailed => {
                 state.publish_service_probe_failure();
-            }
-            #[cfg(not(test))]
-            Message::RefreshServiceStatus => {
-                if let Err(error) = state.refresh_service_status().await {
-                    tracing::debug!(%error, "failed to refresh cached service status");
-                }
             }
             Message::RecoverCore => {
                 if state.uncertain || state.shutting_down {
@@ -1620,8 +1636,8 @@ impl CoreLifecycleClient {
                 }
             });
         }
-        #[cfg(not(test))]
-        client.request_service_status_refresh();
+        // Ref ServiceActor already published its initial daemon probe during
+        // startup. No second CoreLifecycle probe/cache refresh is needed.
         Ok(client)
     }
 
@@ -2341,15 +2357,6 @@ impl CoreLifecycleClient {
         }
     }
 
-    #[cfg(not(test))]
-    pub(super) fn request_service_status_refresh(&self) {
-        if let CoreLifecycleClientInner::Actor { actor_ref, .. } = self.0.as_ref()
-            && actor_ref.cast(Message::RefreshServiceStatus).is_err()
-        {
-            tracing::debug!("failed to enqueue service status refresh");
-        }
-    }
-
     pub(super) fn service_status(&self) -> ServiceHostStatus {
         match self.0.as_ref() {
             CoreLifecycleClientInner::Actor { service_status, .. } => {
@@ -2363,18 +2370,24 @@ impl CoreLifecycleClient {
     }
 
     pub(super) fn observe_service_status(&self, info: chimera_ipc::types::StatusInfo<'static>) {
-        if let CoreLifecycleClientInner::Actor { actor_ref, .. } = self.0.as_ref()
+        if let CoreLifecycleClientInner::Actor {
+            actor_ref, service, ..
+        } = self.0.as_ref()
+            && service.actor_status().is_none()
             && actor_ref.cast(Message::ObserveService { info }).is_err()
         {
-            tracing::debug!("failed to publish service status observation");
+            tracing::debug!("failed to publish legacy service status observation");
         }
     }
 
     pub(super) fn observe_service_probe_failure(&self) {
-        if let CoreLifecycleClientInner::Actor { actor_ref, .. } = self.0.as_ref()
+        if let CoreLifecycleClientInner::Actor {
+            actor_ref, service, ..
+        } = self.0.as_ref()
+            && service.actor_status().is_none()
             && actor_ref.cast(Message::ServiceProbeFailed).is_err()
         {
-            tracing::debug!("failed to publish service probe failure");
+            tracing::debug!("failed to publish legacy service probe failure");
         }
     }
 
@@ -2820,6 +2833,7 @@ mod tests {
         let service = Arc::new(ActorEvidenceService {
             actor_status: Arc::new(Mutex::new(actor_status)),
             probe_failed: AtomicBool::new(false),
+            probes: AtomicUsize::new(0),
             events: events.clone(),
         });
         let core = Arc::new(ConfirmedStoppedCore {
@@ -2868,6 +2882,7 @@ mod tests {
         let service = Arc::new(ActorEvidenceService {
             actor_status: Arc::new(Mutex::new(actor_status.clone())),
             probe_failed: AtomicBool::new(false),
+            probes: AtomicUsize::new(0),
             events: events.clone(),
         });
         let (legacy_sender, legacy_receiver) =
@@ -2912,6 +2927,63 @@ mod tests {
                 phase: ServicePhase::Unknown
             }
         ));
+    }
+
+    #[tokio::test]
+    async fn ref_service_actor_does_not_publish_duplicate_legacy_status_or_probe() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let mut status = ServiceHostStatus::probing();
+        status.phase = ServicePhase::Ready;
+        status.settled_ready = true;
+        status.ready_generation = 23;
+        let service = Arc::new(ActorEvidenceService {
+            actor_status: Arc::new(Mutex::new(status.clone())),
+            probe_failed: AtomicBool::new(false),
+            probes: AtomicUsize::new(0),
+            events: events.clone(),
+        });
+        let client = spawn_startup_client(
+            Arc::new(ConfirmedStoppedCore {
+                events,
+                run_type: RunType::Normal,
+            }),
+            service.clone(),
+        )
+        .await;
+        let CoreLifecycleClientInner::Actor { service_status, .. } = client.0.as_ref() else {
+            panic!("fixture must own the lifecycle actor");
+        };
+        assert_eq!(service_status.borrow().phase, ServicePhase::Probing);
+
+        client.observe_service_status(chimera_ipc::types::StatusInfo {
+            name: "chimera-service".into(),
+            version: "1.10.1".into(),
+            status: chimera_ipc::types::ServiceStatus::Stopped,
+            server: None,
+        });
+        let observed = client.probe_service().await.expect("read the ref actor");
+        assert_eq!(observed.phase, ServicePhase::Ready);
+        assert_eq!(observed.ready_generation, 23);
+        assert_eq!(
+            service.probes.load(AtomicOrdering::Relaxed),
+            0,
+            "a CoreLifecycle read must not trigger a redundant Service probe"
+        );
+        assert_eq!(
+            service_status.borrow().phase,
+            ServicePhase::Probing,
+            "a stale Service IPC observation must not publish a second phase"
+        );
+
+        client.observe_service_probe_failure();
+        let observed = client
+            .probe_service()
+            .await
+            .expect("read after IPC failure");
+        assert_eq!(observed.phase, ServicePhase::Ready);
+        assert_eq!(observed.ready_generation, 23);
+        assert_eq!(service_status.borrow().phase, ServicePhase::Probing);
+        assert_eq!(service.probes.load(AtomicOrdering::Relaxed), 0);
     }
 
     #[tokio::test]
@@ -3376,6 +3448,7 @@ mod tests {
     struct ActorEvidenceService {
         actor_status: Arc<Mutex<ServiceHostStatus>>,
         probe_failed: AtomicBool,
+        probes: AtomicUsize,
         events: Arc<Mutex<Vec<&'static str>>>,
     }
 
@@ -4205,6 +4278,7 @@ mod tests {
     #[async_trait]
     impl ServiceLifecyclePort for ActorEvidenceService {
         async fn probe(&self) -> anyhow::Result<chimera_ipc::types::StatusInfo<'static>> {
+            self.probes.fetch_add(1, AtomicOrdering::Relaxed);
             if self.probe_failed.load(Ordering::Acquire) {
                 anyhow::bail!("ref ServiceActor probe did not answer");
             }
