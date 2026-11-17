@@ -3,7 +3,7 @@ import { Button } from '@chimera/ui/button';
 import { cn } from '@chimera/utils';
 import FlashOnRounded from '~icons/material-symbols/flash-on-rounded';
 import KeepRounded from '~icons/material-symbols/keep-rounded';
-import { memo, useMemo, type ComponentProps, type MouseEvent } from 'react';
+import { memo, type ComponentProps, type MouseEvent } from 'react';
 import { useBlockTask } from '@/components/providers/block-task-provider';
 import { useLockFn } from '@/hooks/use-lock-fn';
 import DelayChip from './delay-chip';
@@ -33,6 +33,7 @@ function FeatureChip({
 /** Native nodes stay plain JSON; selection and delay are separate actions. */
 export default memo(function ProxyNodeButton({
   proxy,
+  delay,
   selectable,
   fixed = false,
   onSelect,
@@ -40,6 +41,8 @@ export default memo(function ProxyNodeButton({
   ...props
 }: Omit<ComponentProps<typeof Button>, 'onClick' | 'children' | 'onSelect'> & {
   proxy: Proxy_Serialize;
+  /** Last result from this group's opaque delay source. */
+  delay?: number;
   selectable: boolean;
   fixed?: boolean;
   onSelect: (proxy: Proxy_Serialize) => Promise<void>;
@@ -65,10 +68,7 @@ export default memo(function ProxyNodeButton({
     },
   );
 
-  const currentDelay = useMemo(() => {
-    if (!proxy.history?.length) return -1;
-    return proxy.history[proxy.history.length - 1].delay;
-  }, [proxy.history]);
+  const currentDelay = delay ?? -1;
 
   return (
     <Button

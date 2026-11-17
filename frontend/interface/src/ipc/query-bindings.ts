@@ -140,6 +140,11 @@ export const mutations = {
       commands.clearProxyFixed(...input),
   }),
   /** One native group operation on one bound core, even for pinned members. */
+  testNativeProxyNodeDelay: mutationOptions({
+    mutationKey: ['testNativeProxyNodeDelay'],
+    mutationFn: (input: Parameters<typeof commands.testNativeProxyNodeDelay>) =>
+      commands.testNativeProxyNodeDelay(...input),
+  }),
   testNativeProxyGroupDelay: mutationOptions({
     mutationKey: ['testNativeProxyGroupDelay'],
     mutationFn: (

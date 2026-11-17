@@ -49,9 +49,7 @@ export function memberDelay(
 ) {
   const node = proxies.nodes[name];
   if (!node) return undefined;
-  const history = group.testUrl
-    ? (node.extra?.[group.testUrl]?.history ?? node.history)
-    : node.history;
+  const history = node.extra?.[group.delayKey]?.history ?? node.history;
   return history.at(-1)?.delay;
 }
 
