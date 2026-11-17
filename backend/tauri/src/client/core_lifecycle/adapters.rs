@@ -19,19 +19,24 @@ pub(crate) struct LegacyServiceBridge {
 }
 
 impl LegacyServiceBridge {
+    /// Production may only create a Service transition adapter with the ref
+    /// ServiceActor already attached. A Facade-only port is a test fixture.
+    pub(crate) fn with_actor(
+        facade: Arc<CoreFacade>,
+        service_actor: chimera_core::actor_v2::service_actor::ServiceClient,
+    ) -> Self {
+        Self {
+            facade,
+            service_actor: Some(service_actor),
+        }
+    }
+
+    #[cfg(test)]
     pub(crate) fn new(facade: Arc<CoreFacade>) -> Self {
         Self {
             facade,
             service_actor: None,
         }
-    }
-
-    pub(crate) fn with_service_actor(
-        mut self,
-        service_actor: chimera_core::actor_v2::service_actor::ServiceClient,
-    ) -> Self {
-        self.service_actor = Some(service_actor);
-        self
     }
 }
 
@@ -68,9 +73,16 @@ impl ServiceLifecyclePort for LegacyServiceBridge {
                 server: status.server,
             });
         }
-        // Manager-only test adapters do not instantiate an independent
-        // ServiceActor. The production path always takes the branch above.
-        self.facade.probe_service().await
+        // Only manager-only tests have no ServiceActor. Production must
+        // fail closed instead of quietly querying the legacy Facade.
+        #[cfg(test)]
+        {
+            self.facade.probe_service().await
+        }
+        #[cfg(not(test))]
+        {
+            anyhow::bail!("Service probe requires ref ServiceActor")
+        }
     }
 
     async fn command_settled(&self) -> bool {
@@ -78,7 +90,14 @@ impl ServiceLifecyclePort for LegacyServiceBridge {
             // A failed Actor query cannot prove the last OS helper settled.
             return service.command_settled().await.unwrap_or(false);
         }
-        self.facade.service_command_settled().await
+        #[cfg(test)]
+        {
+            self.facade.service_command_settled().await
+        }
+        #[cfg(not(test))]
+        {
+            false
+        }
     }
 
     fn restart_policy(
@@ -92,7 +111,16 @@ impl ServiceLifecyclePort for LegacyServiceBridge {
                     == chimera_core::actor_v2::service_router::ServicePhase::Exhausted,
             };
         }
-        self.facade.service_restart_policy()
+        // Facade's historic policy is only compiled for legacy test ports.
+        // Production must never silently substitute a second retry budget.
+        #[cfg(test)]
+        {
+            self.facade.service_restart_policy()
+        }
+        #[cfg(not(test))]
+        {
+            panic!("production ServiceLifecyclePort requires ref ServiceActor")
+        }
     }
 
     async fn begin_transition(&self) -> anyhow::Result<Box<dyn ServiceTransitionLease>> {
@@ -124,7 +152,14 @@ impl ServiceTransitionLease for LegacyServiceTransition {
             }
             return Ok(());
         }
-        self.inner.report_endpoint_down().await
+        #[cfg(test)]
+        {
+            self.inner.report_endpoint_down().await
+        }
+        #[cfg(not(test))]
+        {
+            anyhow::bail!("Service endpoint recovery requires ref ServiceActor")
+        }
     }
 
     async fn install_daemon(&mut self) -> anyhow::Result<()> {

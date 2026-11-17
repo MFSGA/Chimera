@@ -194,10 +194,10 @@ async fn lifecycle_service_probe_and_settlement_use_ref_actor_not_facade() {
     .expect("spawn production ServiceActor");
     // A test-only Facade has no production OS process executor or Service
     // ownership. Any successful probe here must have come from ServiceActor.
-    let adapter = LegacyServiceBridge::new(Arc::new(
-        crate::core::actor_v2::facade::CoreFacade::new_local(),
-    ))
-    .with_service_actor(service.clone());
+    let adapter = LegacyServiceBridge::with_actor(
+        Arc::new(crate::core::actor_v2::facade::CoreFacade::new_local()),
+        service.clone(),
+    );
 
     let mut status_updates = ServiceLifecyclePort::actor_status_updates(&adapter)
         .expect("production Service bridge must subscribe to ref ServiceActor");
@@ -267,7 +267,7 @@ async fn service_endpoint_recovery_uses_ref_actor_restart_budget_not_facade_coun
     .await
     .expect("spawn ref ServiceActor");
     let facade = Arc::new(crate::core::actor_v2::facade::CoreFacade::new_local());
-    let adapter = LegacyServiceBridge::new(facade.clone()).with_service_actor(service.clone());
+    let adapter = LegacyServiceBridge::with_actor(facade.clone(), service.clone());
 
     assert_eq!(service.status().phase, RefServicePhase::DaemonStopped);
     // An unreadable probe is Unknown: it cannot authorize a restart.
