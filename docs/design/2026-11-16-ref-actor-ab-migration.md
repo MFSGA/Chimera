@@ -10,13 +10,13 @@
 
 ## File and symbol correspondence
 
-| Pinned ref | Chimera | Decision |
-|---|---|---|
-| `backend/nyanpasu-core/src/actor_v2/mod.rs` (`CoreActor`, `CoreClient`, projections, handoff) | `backend/chimera-core/src/actor_v2/mod.rs` | Keep the already-aligned core router body at its upstream module path; `router.rs` re-exports the public API for current callers |
-| `backend/nyanpasu-core/src/actor_v2/service_actor.rs` (`ServiceActor`, `ServiceClient`, ready generation, bounded restart) | `backend/chimera-core/src/actor_v2/service_actor.rs` | Keep the already-aligned actor implementation at its upstream path; `service_router.rs` re-exports it for current callers |
-| `backend/nyanpasu-core/src/actor_v2/facade.rs` (`CoreFacade`, reconcile, handoff, pending actions, reports) | `backend/chimera-core/src/actor_v2/facade.rs` | Copy the full ref implementation and tests, map crate brands, and adapt only the Chimera-specific test wire model, service version gate, and `StopIfOwner` |
-| No extra privileged service command actor in ref | `backend/chimera-core/src/actor_v2/service_command_actor.rs` | Move the existing legacy service command lane away from the canonical ServiceActor path; remain only for current Tauri compatibility |
-| Ref `api.rs`, `endpoint.rs`, `local_host.rs` | Chimera core `api.rs`, `endpoint.rs` and Tauri local host adapters | Not yet structurally identical: retain the existing protocol and OS adapters pending the cross-crate Client/Core migration |
+| Pinned ref                                                                                                                 | Chimera                                                            | Decision                                                                                                                                                   |
+| -------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `backend/nyanpasu-core/src/actor_v2/mod.rs` (`CoreActor`, `CoreClient`, projections, handoff)                              | `backend/chimera-core/src/actor_v2/mod.rs`                         | Keep the already-aligned core router body at its upstream module path; `router.rs` re-exports the public API for current callers                           |
+| `backend/nyanpasu-core/src/actor_v2/service_actor.rs` (`ServiceActor`, `ServiceClient`, ready generation, bounded restart) | `backend/chimera-core/src/actor_v2/service_actor.rs`               | Keep the already-aligned actor implementation at its upstream path; `service_router.rs` re-exports it for current callers                                  |
+| `backend/nyanpasu-core/src/actor_v2/facade.rs` (`CoreFacade`, reconcile, handoff, pending actions, reports)                | `backend/chimera-core/src/actor_v2/facade.rs`                      | Copy the full ref implementation and tests, map crate brands, and adapt only the Chimera-specific test wire model, service version gate, and `StopIfOwner` |
+| No extra privileged service command actor in ref                                                                           | `backend/chimera-core/src/actor_v2/service_command_actor.rs`       | Move the existing legacy service command lane away from the canonical ServiceActor path; remain only for current Tauri compatibility                       |
+| Ref `api.rs`, `endpoint.rs`, `local_host.rs`                                                                               | Chimera core `api.rs`, `endpoint.rs` and Tauri local host adapters | Not yet structurally identical: retain the existing protocol and OS adapters pending the cross-crate Client/Core migration                                 |
 
 ## Intentionally retained differences and convergence
 
