@@ -771,6 +771,31 @@ impl ChimeraClient {
                 return None;
             }
         };
+        // The legacy runtime receipt records a successful prior apply; it
+        // alone cannot prove that the ref CoreActor still owns that instance.
+        // Fence the port publication against both sides of this async read.
+        if let (Some(core), Some(receipt)) = (&self.inner.core_api, receipt.as_deref()) {
+            let before = match core.refresh_status().await {
+                Ok(status) => status,
+                Err(error) => {
+                    tracing::debug!(%error, "CoreActor cannot confirm runtime effect ports");
+                    return None;
+                }
+            };
+            if !actor_confirms_effect_ports(receipt, &before, &before) {
+                return None;
+            }
+            let after = match core.refresh_status().await {
+                Ok(status) => status,
+                Err(error) => {
+                    tracing::debug!(%error, "CoreActor changed during runtime port verification");
+                    return None;
+                }
+            };
+            if !actor_confirms_effect_ports(receipt, &before, &after) {
+                return None;
+            }
+        }
         match resolved_effect_port_binding(receipt.as_deref()) {
             Some(binding) => Some(binding),
             None => {
@@ -781,6 +806,27 @@ impl ChimeraClient {
             }
         }
     }
+}
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+fn actor_confirms_effect_ports(
+    receipt: &super::runtime::RuntimeApplyReceipt,
+    before: &chimera_core::actor_v2::router::CoreStatusProjection,
+    after: &chimera_core::actor_v2::router::CoreStatusProjection,
+) -> bool {
+    use chimera_core::actor_v2::router::EndpointConnectivity;
+    matches!(before.connectivity, EndpointConnectivity::Connected)
+        && matches!(after.connectivity, EndpointConnectivity::Connected)
+        && before.host == after.host
+        && before.generation == after.generation
+        && before
+            .snapshot
+            .as_ref()
+            .is_some_and(|snapshot| receipt.confirms(before.host, snapshot))
+        && after
+            .snapshot
+            .as_ref()
+            .is_some_and(|snapshot| receipt.confirms(after.host, snapshot))
 }
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -1427,6 +1473,76 @@ mod tests {
     #[test]
     fn legacy_patch_without_effect_fields_does_not_request_effect_retries() {
         assert!(requested_effects(&plan_verge_patch(&IVerge::default(), None).unwrap()).is_empty());
+    }
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    #[test]
+    fn effect_ports_require_current_ref_core_actor_owner_and_applied_revision() {
+        use chimera_core::actor_v2::{
+            endpoint::{CoreStatusSnapshot, ExecutionHost},
+            router::{CoreStatusProjection, EndpointConnectivity},
+        };
+        use chimera_ipc::api::status::{CoreStateDetail, RevisionIdInfo};
+
+        let receipt = crate::client::ports::test_runtime_receipt(Default::default());
+        let before = CoreStatusProjection {
+            host: ExecutionHost::Local,
+            generation: 8,
+            connectivity: EndpointConnectivity::Connected,
+            snapshot: Some(CoreStatusSnapshot {
+                instance_id: Some("current-runtime".into()),
+                controller: None,
+                state: Some(CoreStateDetail::Running {
+                    epoch: receipt.applied_revision.epoch,
+                    pid: 22,
+                }),
+                state_changed_at: 7,
+                revision: Some(RevisionIdInfo {
+                    epoch: receipt.applied_revision.epoch,
+                    generation: receipt.applied_revision.generation,
+                    effective_hash: receipt.applied_revision.effective_hash.clone(),
+                }),
+                source_hash: Some(receipt.applied_revision.source_hash.clone()),
+                healthy: Some(true),
+                applied_kind: None,
+            }),
+        };
+        assert!(actor_confirms_effect_ports(&receipt, &before, &before));
+
+        let mut handoff = before.clone();
+        handoff.host = ExecutionHost::Service;
+        handoff.generation += 1;
+        assert!(!actor_confirms_effect_ports(&receipt, &before, &handoff));
+
+        let mut stopped = before.clone();
+        stopped.snapshot.as_mut().unwrap().state = Some(CoreStateDetail::Stopped { reason: None });
+        assert!(!actor_confirms_effect_ports(&receipt, &before, &stopped));
+
+        let mut stale_revision = before.clone();
+        stale_revision
+            .snapshot
+            .as_mut()
+            .unwrap()
+            .revision
+            .as_mut()
+            .unwrap()
+            .generation += 1;
+        assert!(!actor_confirms_effect_ports(
+            &receipt,
+            &before,
+            &stale_revision
+        ));
+
+        let mut disconnected = before.clone();
+        disconnected.connectivity = EndpointConnectivity::Degraded {
+            desired: ExecutionHost::Local,
+            reason: "connection lost".into(),
+        };
+        assert!(!actor_confirms_effect_ports(
+            &receipt,
+            &before,
+            &disconnected
+        ));
     }
 
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
