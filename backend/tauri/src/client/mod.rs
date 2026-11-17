@@ -9,6 +9,7 @@ pub(crate) mod application_workflow;
 mod clash_api;
 mod clash_config;
 pub mod convergence;
+mod core_events;
 pub(crate) mod core_lifecycle;
 pub(crate) mod effects;
 pub(crate) mod event_sink;
@@ -411,6 +412,14 @@ impl ChimeraClient {
                 Err(error) => tracing::warn!(%error, "traffic geography index is unavailable"),
             }
         }
+        // ref's CoreActor publishes host/instance changes independently of
+        // application configuration commits. Subscribe once from the Tauri
+        // reactor after the complete Client exists; a sync setup-thread spawn
+        // here would panic without an entered Tokio runtime.
+        anyhow::ensure!(
+            tauri::async_runtime::block_on(async { client.start_core_status_observer() }),
+            "client shutdown began before its CoreActor observer was registered"
+        );
         Ok(client)
     }
 
@@ -1312,18 +1321,35 @@ mod tests {
 
         async fn submit(
             &self,
-            _: chimera_core::actor_v2::endpoint::CoreSubmission,
+            submission: chimera_core::actor_v2::endpoint::CoreSubmission,
         ) -> Result<chimera_ipc::api::core::v2::OperationInfo, chimera_core_manager::CoreError>
         {
-            unreachable!("the stopped test host must not admit a command")
+            assert!(
+                matches!(
+                    submission.envelope.command,
+                    chimera_core_manager::CoreCommand::Stop
+                ),
+                "the stopped test host only accepts idempotent Stop"
+            );
+            Ok(chimera_ipc::api::core::v2::OperationInfo {
+                id: submission.envelope.operation_id.to_string(),
+                phase: chimera_ipc::api::core::v2::OperationPhase::Running,
+                output: None,
+                error: None,
+            })
         }
 
         async fn wait_operation(
             &self,
-            _: chimera_core_manager::OperationId,
+            id: chimera_core_manager::OperationId,
             _: std::time::Duration,
         ) -> Option<chimera_ipc::api::core::v2::OperationInfo> {
-            unreachable!("the stopped test host must have no pending command")
+            Some(chimera_ipc::api::core::v2::OperationInfo {
+                id: id.to_string(),
+                phase: chimera_ipc::api::core::v2::OperationPhase::Succeeded,
+                output: Some(chimera_ipc::api::core::v2::OperationOutputInfo::Stopped),
+                error: None,
+            })
         }
 
         async fn status(
@@ -1365,9 +1391,70 @@ mod tests {
             chimera_core::actor_v2::endpoint::ExecutionHost::Local
         );
         assert_eq!(routed.generation, 0);
-        // The old runtime adapter still reports its independent fixture time.
+        // The legacy frontend's two-state adapter stays separate until it
+        // can represent all ref CoreActor transition and degraded states.
         assert_eq!(client.core_status().await.unwrap().state_changed_at, 7);
         core_api.finish_shutdown().await;
+    }
+
+    #[test]
+    fn synchronous_tauri_setup_can_register_ref_core_observer() {
+        assert!(
+            tokio::runtime::Handle::try_current().is_err(),
+            "simulate Tauri's synchronous setup callback, not a Tokio task"
+        );
+        let (mut client, _) = tauri::async_runtime::block_on(recording_client(false));
+        let core = tauri::async_runtime::block_on(CoreClientV2::spawn(Arc::new(StoppedRoutedHost)))
+            .unwrap();
+        Arc::get_mut(&mut client.inner)
+            .expect("the fixture has one Client owner")
+            .core_api = Some(core.clone());
+
+        // A bare TaskTracker::spawn here would panic without a reactor. The
+        // composition root must enter Tauri's runtime for registration.
+        assert!(tauri::async_runtime::block_on(async {
+            client.start_core_status_observer()
+        }));
+
+        client.request_shutdown();
+        tauri::async_runtime::block_on(async {
+            tokio::time::timeout(std::time::Duration::from_secs(5), client.inner.tasks.wait())
+                .await
+                .expect("CoreActor observer must drain from synchronous setup");
+            core.finish_shutdown().await;
+        });
+    }
+
+    #[tokio::test]
+    async fn ref_core_status_observer_notifies_ui_and_drains_on_shutdown() {
+        let (mut client, events) = recording_client(false).await;
+        let core = CoreClientV2::spawn(Arc::new(StoppedRoutedHost))
+            .await
+            .unwrap();
+        Arc::get_mut(&mut client.inner)
+            .expect("the fixture has one Client owner")
+            .core_api = Some(core.clone());
+
+        assert!(client.start_core_status_observer());
+        // The ref router publishes an observable terminal transition. The
+        // observer must detect it without an independent legacy Core poll.
+        core.shutdown().await.unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                if events.lock().unwrap().contains(&"refresh-ui") {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("the ref projection must notify the UI");
+
+        client.request_shutdown();
+        tokio::time::timeout(std::time::Duration::from_secs(5), client.inner.tasks.wait())
+            .await
+            .expect("the tracked observer must exit after root cancellation");
+        core.finish_shutdown().await;
     }
 
     #[tokio::test]
