@@ -34,6 +34,7 @@ export * from './use-proxy-mode';
 /** 8 */
 export * from './use-clash-proxies';
 export * from './use-native-proxies';
+export * from './use-proxy-group-icons';
 export * from './use-native-proxy-actions';
 /** 9 */
 export * from './use-clash-cores';

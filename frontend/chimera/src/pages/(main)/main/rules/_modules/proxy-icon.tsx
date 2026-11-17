@@ -11,9 +11,8 @@
  * 用于规则页面的侧栏代理过滤列表，以及连接页面的侧栏代理过滤列表。
  */
 
-import { useNativeProxies } from '@chimera/interface';
+import { useNativeProxies, useProxyGroupIcons } from '@chimera/interface';
 import { cn } from '@chimera/ui';
-import { useMemo } from 'react';
 import { CacheImage } from '@/components/ui/image';
 
 /**
@@ -25,12 +24,11 @@ import { CacheImage } from '@/components/ui/image';
 export default function ProxyIcon({ groupName }: { groupName: string }) {
   const { data: proxies } = useNativeProxies();
 
-  // 从代理数据中查找对应组的 icon
-  const icon = useMemo(() => {
-    const proxyInfo = proxies?.groups.find((p) => p.name === groupName);
-
-    return proxyInfo?.icon;
-  }, [groupName, proxies]);
+  // The ordinary native graph contains only a presence flag. The icon URL
+  // comes from its separate query, matching the Proxies sidebar contract.
+  const group = proxies?.groups.find((item) => item.name === groupName);
+  const icons = useProxyGroupIcons();
+  const icon = group?.iconConfigured ? icons[groupName] : undefined;
 
   return icon ? (
     <CacheImage
