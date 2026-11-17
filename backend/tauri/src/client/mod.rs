@@ -1793,6 +1793,56 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn clash_runtime_failure_is_reported_as_committed_degraded() {
+        let (client, events) = recording_client(true).await;
+        let previous = client.get_clash_config().unwrap();
+        let mut patch = chimera_config::clash::config::ClashConfig::new_empty_patch();
+        patch.enable_clash_fields = Some(!previous.enable_clash_fields);
+        let outcome = client.patch_clash_config(patch).await.unwrap();
+        assert_ne!(
+            client.get_clash_config().unwrap().enable_clash_fields,
+            previous.enable_clash_fields,
+        );
+        assert!(matches!(
+            &outcome,
+            MutationOutcome::CommittedDegraded { .. }
+        ));
+        assert!(outcome.degradations().iter().any(|degradation| {
+            degradation.code == "clash_runtime_deferred"
+                && degradation.message.contains("injected rebuild failure")
+        }));
+        let MutationOutcome::CommittedDegraded { commits, .. } = outcome else {
+            unreachable!("failed runtime apply must produce committed degraded");
+        };
+        assert!(commits.iter().any(|receipt| {
+            receipt.domain == "clash" && receipt.runtime == runtime::RuntimeCommitStatus::Deferred
+        }));
+        assert!(events.lock().unwrap().contains(&"rebuild"));
+    }
+
+    #[tokio::test]
+    async fn clash_ui_only_patch_commits_without_rebuilding_runtime() {
+        let (client, events) = recording_client(false).await;
+        let mut patch = chimera_config::clash::config::ClashConfig::new_empty_patch();
+        patch.web_ui_list = Some(vec!["https://dashboard.example".into()]);
+        let outcome = client.patch_clash_config(patch).await.unwrap();
+        assert_eq!(
+            client.get_clash_config().unwrap().web_ui_list,
+            vec!["https://dashboard.example"],
+        );
+        assert!(
+            outcome
+                .degradations()
+                .iter()
+                .all(|item| item.code != "clash_runtime_deferred")
+        );
+        assert!(
+            !events.lock().unwrap().contains(&"rebuild"),
+            "source-only patch must not mutate Core",
+        );
+    }
+
+    #[tokio::test]
     async fn stop_core_runs_through_the_injected_lifecycle_port() {
         let (client, events) = recording_client(false).await;
         client.stop_core().await.unwrap();
