@@ -40,7 +40,12 @@ use tokio::sync::{broadcast, watch};
 use chimera_core_manager::{
     CoreCommand, CoreCommandEnvelope, CoreError, CoreErrorKind, OperationId,
 };
-use chimera_ipc::api::core::v2::{OperationInfo, OperationOutputInfo, OperationPhase};
+use chimera_ipc::api::{
+    core::v2::{OperationInfo, OperationOutputInfo, OperationPhase},
+    network::transparent_proxy::{
+        NetworkTransparentProxyMode, NetworkTransparentProxyRequest, NetworkTransparentProxyStatus,
+    },
+};
 
 use super::{
     api,
@@ -77,6 +82,10 @@ impl api::CoreApiEndpoint for RouterApiEndpoint {
 #[path = "router_tests.rs"]
 mod tests;
 
+#[cfg(test)]
+#[path = "router_transparent_tests.rs"]
+mod transparent_tests;
+
 /// Monotonic owner fence. Incremented exactly once per completed handoff;
 /// stale pump frames and stale down reports are dropped by comparing it.
 pub type ControllerGeneration = u64;
@@ -91,6 +100,9 @@ const STOP_WAIT: Duration = Duration::from_secs(60);
 /// endpoint that accepts the call and never answers has to degrade the
 /// projection, not stall the router behind it.
 const PUMP_STATUS_TIMEOUT: Duration = Duration::from_secs(10);
+/// Chimera-only OS network setup is not an ordinary Core Submit envelope.
+/// Serialize it in the ref mailbox and bound its IPC leg independently.
+const TRANSPARENT_PROXY_MUTATION_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Scheduling and mailbox-hop slack layered on top of the worst-case internal
 /// leg sum for every caller-facing budget below. It is not a place to hide
@@ -147,6 +159,16 @@ fn shutdown_budget(status_timeout: Duration, stop_wait: Duration) -> Duration {
 /// honestly with `BackendUnavailable`.
 fn submit_budget(status_timeout: Duration) -> Duration {
     status_timeout + CALL_BUDGET_SLACK
+}
+
+fn unsupported_transparent_proxy_status() -> NetworkTransparentProxyStatus {
+    NetworkTransparentProxyStatus {
+        supported: false,
+        active: false,
+        mode: None,
+        revision: None,
+        error: None,
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -312,6 +334,16 @@ pub enum CoreActorMessage {
             Result<Option<chimera_ipc::api::core::v2::CoreEffectiveConfig>, CoreError>,
         >,
     },
+    /// Chimera-only network side effect. Route alongside ref Core Submit and
+    /// handoff so it cannot act on a retired Service endpoint.
+    ReconcileTransparentProxy {
+        request: NetworkTransparentProxyRequest,
+        expected_owner: (ExecutionHost, ControllerGeneration),
+        reply: RpcReplyPort<Result<NetworkTransparentProxyStatus, CoreError>>,
+    },
+    TransparentProxyStatus {
+        reply: RpcReplyPort<Result<NetworkTransparentProxyStatus, CoreError>>,
+    },
     ApiClient {
         reply: RpcReplyPort<Result<api::ApiClient, api::ApiError>>,
     },
@@ -438,6 +470,10 @@ pub struct CoreActorState {
     /// all three alive past the mailbox.
     handoff: Option<tokio::task::JoinHandle<()>>,
     status_timeout: Duration,
+    /// A timed-out network mutation may have reached the OS. There is no
+    /// idempotent Core operation ID for this Chimera-specific effect, so
+    /// disallow further writes until the owner generation is replaced.
+    transparent_proxy_uncertain: bool,
 }
 
 impl CoreActorState {
@@ -687,6 +723,7 @@ impl Actor for CoreActor {
             stop_wait: args.stop_wait,
             handoff: None,
             status_timeout: args.status_timeout,
+            transparent_proxy_uncertain: false,
         })
     }
 
@@ -745,6 +782,138 @@ impl Actor for CoreActor {
                     _ => Err(CoreError::new(
                         CoreErrorKind::BackendUnavailable,
                         "core endpoint is not connected",
+                        true,
+                    )),
+                };
+                let _ = reply.send(result);
+            }
+            CoreActorMessage::ReconcileTransparentProxy {
+                mut request,
+                expected_owner,
+                reply,
+            } => {
+                let result = if expected_owner != (state.projection().host, state.generation) {
+                    Err(CoreError::new(
+                        CoreErrorKind::RevisionConflict,
+                        "transparent proxy effect belongs to a retired Core owner",
+                        false,
+                    ))
+                } else if state.transparent_proxy_uncertain {
+                    Err(CoreError::new(
+                        CoreErrorKind::OperationConflict,
+                        "a prior transparent proxy mutation has an uncertain outcome; do not retry before a new owner is established",
+                        false,
+                    ))
+                } else {
+                    match &state.slot {
+                        EndpointSlot::Connected(endpoint)
+                            if endpoint.host() == ExecutionHost::Service =>
+                        {
+                            let status =
+                                tokio::time::timeout(state.status_timeout, endpoint.status()).await;
+                            match status {
+                                Ok(Ok(snapshot)) => match snapshot.revision {
+                                    Some(revision) => {
+                                        request.expected_revision = revision;
+                                        Ok(endpoint.clone())
+                                    }
+                                    None if request.mode
+                                        == NetworkTransparentProxyMode::Disabled =>
+                                    {
+                                        Ok(endpoint.clone())
+                                    }
+                                    None => Err(CoreError::new(
+                                        CoreErrorKind::BackendUnavailable,
+                                        "Service core has no confirmed runtime revision for transparent capture",
+                                        true,
+                                    )),
+                                },
+                                Ok(Err(error)) => Err(error),
+                                Err(_) => Err(CoreError::new(
+                                    CoreErrorKind::BackendUnavailable,
+                                    "Service core revision read timed out before transparent capture",
+                                    true,
+                                )),
+                            }
+                        }
+                        EndpointSlot::Connected(_) => {
+                            if request.mode == NetworkTransparentProxyMode::Disabled {
+                                let _ = reply.send(Ok(unsupported_transparent_proxy_status()));
+                                return Ok(());
+                            }
+                            Err(CoreError::new(
+                                CoreErrorKind::BackendUnavailable,
+                                "transparent capture requires the Service Core host",
+                                false,
+                            ))
+                        }
+                        _ => Err(CoreError::new(
+                            CoreErrorKind::OperationConflict,
+                            "transparent capture cannot mutate a switching or disconnected Core owner",
+                            true,
+                        )),
+                    }
+                };
+                let result = match result {
+                    Ok(endpoint) => {
+                        match tokio::time::timeout(
+                            TRANSPARENT_PROXY_MUTATION_TIMEOUT,
+                            endpoint.reconcile_transparent_proxy(&request),
+                        )
+                        .await
+                        {
+                            Ok(Ok(status)) => Ok(status),
+                            Ok(Err(error)) => {
+                                if error.retryable
+                                    || error.kind.is_none_or(|kind| {
+                                        matches!(
+                                            kind,
+                                            CoreErrorKind::BackendUnavailable
+                                                | CoreErrorKind::Internal
+                                        )
+                                    })
+                                {
+                                    state.transparent_proxy_uncertain = true;
+                                }
+                                Err(error)
+                            }
+                            Err(_) => {
+                                state.transparent_proxy_uncertain = true;
+                                Err(CoreError::new(
+                                    CoreErrorKind::Internal,
+                                    "transparent capture timed out after dispatch; the OS mutation may have occurred",
+                                    false,
+                                ))
+                            }
+                        }
+                    }
+                    Err(error) => Err(error),
+                };
+                let _ = reply.send(result);
+            }
+            CoreActorMessage::TransparentProxyStatus { reply } => {
+                let result = match &state.slot {
+                    EndpointSlot::Connected(endpoint)
+                        if endpoint.host() == ExecutionHost::Service =>
+                    {
+                        match tokio::time::timeout(
+                            state.status_timeout,
+                            endpoint.transparent_proxy_status(),
+                        )
+                        .await
+                        {
+                            Ok(result) => result,
+                            Err(_) => Err(CoreError::new(
+                                CoreErrorKind::BackendUnavailable,
+                                "transparent capture status read timed out",
+                                true,
+                            )),
+                        }
+                    }
+                    EndpointSlot::Connected(_) => Ok(unsupported_transparent_proxy_status()),
+                    _ => Err(CoreError::new(
+                        CoreErrorKind::BackendUnavailable,
+                        "transparent capture status is unknown while Core ownership is unsettled",
                         true,
                     )),
                 };
@@ -1259,6 +1428,7 @@ impl CoreActor {
         // the old owner's state forward.
         state.snapshot = None;
         state.api.take();
+        state.transparent_proxy_uncertain = false;
         state.slot = EndpointSlot::Connected(target.clone());
         state.publish();
         state.pump = Some(spawn_pump(
@@ -1303,6 +1473,59 @@ impl CoreObserver {
 }
 
 impl CoreClient {
+    /// Chimera-specific network mutation through ref's authoritative Core
+    /// mailbox. The effect may be rejected if a handoff wins before admission.
+    /// Timeout after dispatch has an unknown outcome: callers must not retry
+    /// blindly with an unrelated runtime revision.
+    pub async fn reconcile_transparent_proxy(
+        &self,
+        request: NetworkTransparentProxyRequest,
+    ) -> Result<NetworkTransparentProxyStatus, CoreError> {
+        let status = self.status();
+        let expected_owner = (status.host, status.generation);
+        match self
+            .actor
+            .call(
+                |reply| CoreActorMessage::ReconcileTransparentProxy {
+                    request,
+                    expected_owner,
+                    reply,
+                },
+                Some(self.submit_budget + TRANSPARENT_PROXY_MUTATION_TIMEOUT),
+            )
+            .await
+        {
+            Ok(ractor::rpc::CallResult::Success(result)) => result,
+            _ => Err(CoreError::new(
+                CoreErrorKind::Internal,
+                "transparent capture did not return after dispatch; the OS mutation outcome may be unknown, do not blindly retry",
+                false,
+            )),
+        }
+    }
+
+    /// Network status is read from the currently connected Service host. A
+    /// disconnected or transitioning owner never masquerades as disabled.
+    pub async fn transparent_proxy_status(
+        &self,
+    ) -> Result<NetworkTransparentProxyStatus, CoreError> {
+        match self
+            .actor
+            .call(
+                |reply| CoreActorMessage::TransparentProxyStatus { reply },
+                Some(self.submit_budget),
+            )
+            .await
+        {
+            Ok(ractor::rpc::CallResult::Success(result)) => result,
+            _ => Err(CoreError::new(
+                CoreErrorKind::BackendUnavailable,
+                "transparent capture status is unavailable from the Core Actor",
+                true,
+            )),
+        }
+    }
+
     /// The endpoint owning the runtime right now, for a read-only call the
     /// mailbox must not sit behind.
     pub async fn connected_endpoint(&self) -> Result<EndpointHandle, CoreError> {
