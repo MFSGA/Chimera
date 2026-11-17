@@ -1,56 +1,16 @@
 //! Fixed source inputs and content for one runtime target and build.
 use super::impact;
 use chimera_config::{
-    application::ChimeraAppConfig,
-    clash::config::ClashConfig,
-    profile::{ManagedProfilePath, Profiles},
+    application::ChimeraAppConfig, clash::config::ClashConfig, profile::Profiles,
+};
+#[cfg(test)]
+use chimera_config::{
+    profile::ManagedProfilePath,
     runtime::executor::{PortError, ProfileContentSource},
 };
 use std::{collections::BTreeMap, sync::Arc};
 
-#[derive(Debug, Clone, Default)]
-pub(in crate::client) struct FrozenProfileContent(pub BTreeMap<String, Result<String, String>>);
-
-impl FrozenProfileContent {
-    pub fn capture_content(
-        profiles: &Profiles,
-        source: &dyn ProfileContentSource,
-        staged_content: BTreeMap<String, String>,
-    ) -> Self {
-        let mut content = Self::default();
-        for uid in crate::state::profiles::ProfilesActor::current_closure(profiles) {
-            if let Some(source_path) = profiles
-                .items
-                .get(&uid)
-                .and_then(|item| item.definition.source())
-            {
-                let path = &source_path.materialized().file;
-                content.0.insert(
-                    path.to_string(),
-                    source.read(path).map_err(|error| error.to_string()),
-                );
-            }
-        }
-        for (path, staged) in staged_content {
-            if let Some(captured) = content.0.get_mut(&path) {
-                *captured = Ok(staged);
-            }
-        }
-        content
-    }
-}
-
-impl ProfileContentSource for FrozenProfileContent {
-    fn read(&self, path: &ManagedProfilePath) -> Result<String, PortError> {
-        self.0
-            .get(&path.to_string())
-            .cloned()
-            .map(|result| result.map_err(Into::into))
-            .ok_or_else(|| -> PortError {
-                format!("profile content was not captured: {path}").into()
-            })?
-    }
-}
+pub(in crate::client) use chimera_core::client::runtime_build_port::FrozenProfileContent;
 
 #[derive(Debug, Clone)]
 pub(in crate::client) struct RuntimeInputs {

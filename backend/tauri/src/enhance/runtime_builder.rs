@@ -11,7 +11,7 @@ use chimera_config::{
     clash::config::{ClashConfig, tun_stack::TunStack},
     profile::Profiles,
     runtime::executor::{
-        BuiltinTransform, PortError, ProfileContentSource, ResolvedPortBindings, RuntimeArtifact,
+        BuiltinTransform, ProfileContentSource, ResolvedPortBindings, RuntimeArtifact,
         ScriptRunner, TunFlavor,
     },
 };
@@ -157,13 +157,11 @@ pub(crate) async fn build_from_profiles_with_inspection(
     } else {
         Vec::new()
     };
-    let content = CandidateProfileContentSource {
-        base: FsProfileContentSource::new(profiles_dir),
-        staged: staged_content,
-    };
-    let data = chimera_core::client::runtime_build::RuntimeBuildService::build_candidate(
+    let content = FsProfileContentSource::new(profiles_dir);
+    let data = chimera_core::client::runtime_build::RuntimeBuildService::build_with_capture(
         input,
         content,
+        staged_content,
         builtin_transforms,
         || Ok(Box::new(EnhanceScriptRunner::new()?)),
         strict_transforms,
@@ -175,24 +173,6 @@ pub(crate) async fn build_from_profiles_with_inspection(
         data.postprocessing_output,
         data.inspection,
     ))
-}
-
-struct CandidateProfileContentSource {
-    base: FsProfileContentSource,
-    staged: BTreeMap<String, String>,
-}
-
-impl ProfileContentSource for CandidateProfileContentSource {
-    fn read(
-        &self,
-        path: &chimera_config::profile::ManagedProfilePath,
-    ) -> Result<String, PortError> {
-        self.staged
-            .get(&path.to_string())
-            .cloned()
-            .map(Ok)
-            .unwrap_or_else(|| self.base.read(path))
-    }
 }
 
 fn map_core(core: LegacyClashCore) -> chimera_config::application::ClashCore {
@@ -305,14 +285,19 @@ mod tests {
                 ..Default::default()
             },
         };
-        let staged = "proxies: []\nmode: global\nextra-key: staged\n".to_string();
-        let content = CandidateProfileContentSource {
-            base: FsProfileContentSource::new(directory.path().to_path_buf()),
-            staged: BTreeMap::from([("active.yaml".into(), staged)]),
+        // A second candidate verifies that the runner cannot see source
+        // changes made after the capture phase on the same blocking thread.
+        let after_input = RuntimeBuildInput {
+            profiles: Arc::clone(&input.profiles),
+            clash: input.clash.clone(),
+            app: input.app.clone(),
+            resolved_ports: input.resolved_ports.clone(),
         };
-        let data = chimera_core::client::runtime_build::RuntimeBuildService::build_candidate(
+        let staged = "proxies: []\nmode: global\nextra-key: staged\n".to_string();
+        let data = chimera_core::client::runtime_build::RuntimeBuildService::build_with_capture(
             input,
-            content,
+            FsProfileContentSource::new(directory.path().to_path_buf()),
+            BTreeMap::from([("active.yaml".into(), staged)]),
             Vec::new(),
             || Ok(Box::new(EchoRunner)),
             true,
@@ -326,6 +311,30 @@ mod tests {
         );
         assert_eq!(std::fs::read_to_string(&path).unwrap(), disk);
         assert!(data.inspection.final_node < data.inspection.graph.nodes.len() as u32);
+
+        let path_to_remove = path.clone();
+        let second = chimera_core::client::runtime_build::RuntimeBuildService::build_with_capture(
+            after_input,
+            FsProfileContentSource::new(directory.path().to_path_buf()),
+            BTreeMap::new(),
+            Vec::new(),
+            move || {
+                // Runs *after* capture; deleting the file must not affect
+                // the executor's already-frozen document.
+                std::fs::remove_file(&path_to_remove)?;
+                Ok(Box::new(EchoRunner))
+            },
+            true,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            second
+                .config
+                .get(serde_yaml::Value::String("extra-key".into())),
+            Some(&serde_yaml::Value::String("disk".into()))
+        );
+        assert!(!path.exists());
     }
 
     #[test]

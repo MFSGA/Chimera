@@ -16,9 +16,13 @@ use chimera_config::{
     },
     runtime::snapshot::OperatorTag,
 };
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use super::artifact_snapshot::{ArtifactSnapshotData, artifact_to_snapshot_data};
+use super::{
+    artifact_snapshot::{ArtifactSnapshotData, artifact_to_snapshot_data},
+    runtime_build_port::FrozenProfileContent,
+};
 
 #[derive(Debug, thiserror::Error)]
 pub enum RuntimeBuildError {
@@ -180,20 +184,71 @@ impl RuntimeBuildService {
         F: FnOnce() -> anyhow::Result<Box<dyn ScriptRunner>> + Send + 'static,
     {
         tokio::task::spawn_blocking(move || {
-            let scripts = make_scripts()?;
-            let artifact =
-                RuntimeBuilder::build(&input, &builtin_transforms, &content, scripts.as_ref())?;
-            if strict_transforms {
-                RuntimeBuilder::validate_transforms(&artifact)?;
-            }
-            let names: Vec<_> = builtin_transforms
-                .iter()
-                .map(|builtin| builtin.name.clone())
-                .collect();
-            artifact_to_snapshot_data(artifact, &input.profiles, &names)
+            Self::execute_candidate(
+                input,
+                content,
+                builtin_transforms,
+                make_scripts,
+                strict_transforms,
+            )
         })
         .await
         .context("runtime builder task failed")?
+    }
+
+    /// Capture the active Profile dependency closure exactly once from the
+    /// supplied source, then build from that frozen image on the same blocking
+    /// thread. Only captured paths receive staged overrides. Missing/failed
+    /// reads stay explicit errors rather than falling back to changed files.
+    pub async fn build_with_capture<C, F>(
+        input: RuntimeBuildInput,
+        source: C,
+        staged_content: BTreeMap<String, String>,
+        builtin_transforms: Vec<BuiltinTransform>,
+        make_scripts: F,
+        strict_transforms: bool,
+    ) -> anyhow::Result<ArtifactSnapshotData>
+    where
+        C: ProfileContentSource + Send + 'static,
+        F: FnOnce() -> anyhow::Result<Box<dyn ScriptRunner>> + Send + 'static,
+    {
+        tokio::task::spawn_blocking(move || {
+            let content =
+                FrozenProfileContent::capture_content(&input.profiles, &source, staged_content);
+            Self::execute_candidate(
+                input,
+                content,
+                builtin_transforms,
+                make_scripts,
+                strict_transforms,
+            )
+        })
+        .await
+        .context("runtime builder task failed")?
+    }
+
+    fn execute_candidate<C, F>(
+        input: RuntimeBuildInput,
+        content: C,
+        builtin_transforms: Vec<BuiltinTransform>,
+        make_scripts: F,
+        strict_transforms: bool,
+    ) -> anyhow::Result<ArtifactSnapshotData>
+    where
+        C: ProfileContentSource,
+        F: FnOnce() -> anyhow::Result<Box<dyn ScriptRunner>>,
+    {
+        let scripts = make_scripts()?;
+        let artifact =
+            RuntimeBuilder::build(&input, &builtin_transforms, &content, scripts.as_ref())?;
+        if strict_transforms {
+            RuntimeBuilder::validate_transforms(&artifact)?;
+        }
+        let names: Vec<_> = builtin_transforms
+            .iter()
+            .map(|builtin| builtin.name.clone())
+            .collect();
+        artifact_to_snapshot_data(artifact, &input.profiles, &names)
     }
 }
 
