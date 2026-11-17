@@ -193,6 +193,8 @@ fn map_core(core: LegacyClashCore) -> chimera_config::application::ClashCore {
 mod tests {
     use super::*;
     use crate::enhance::{EnhanceScriptRunner, FsProfileContentSource};
+    #[cfg(target_os = "linux")]
+    use chimera_config::clash::config::TransparentProxyMode;
     use chimera_config::{
         clash::config::overrides::ManageableField,
         profile::{
