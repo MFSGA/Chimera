@@ -109,7 +109,7 @@ fn startup_recovery_evidence_changed(
 }
 
 #[allow(unused_imports)]
-pub(crate) use adapters::{LegacyCoreBridge, LegacyRunningConfigBridge, LegacyServiceBridge};
+pub(crate) use adapters::{ActorRunningConfigBridge, LegacyCoreBridge, LegacyServiceBridge};
 #[allow(unused_imports)]
 pub(crate) use ports::{
     BinaryInstallProgress, CoreLifecyclePort, CoreStatusSnapshot, PreparedCoreBinary,

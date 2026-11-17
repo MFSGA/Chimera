@@ -135,7 +135,7 @@ fn utf8_path(path: std::path::PathBuf) -> anyhow::Result<camino::Utf8PathBuf> {
 async fn new_typed_config_clients(
     paths: &PathResolver,
     bridges: &LegacyBridgeSet,
-    core: Arc<dyn CoreLifecyclePort>,
+    core_router: CoreClientV2,
     build_channel: ReleaseChannel,
 ) -> anyhow::Result<TypedConfigClients> {
     let application = ApplicationClient::new(
@@ -155,7 +155,7 @@ async fn new_typed_config_clients(
         utf8_path(paths.clash_config_path())?,
         bridges.clash.snapshot_legacy()?,
         bridges.clash.clone(),
-        Arc::new(core_lifecycle::LegacyRunningConfigBridge::new(core)),
+        Arc::new(core_lifecycle::ActorRunningConfigBridge::new(core_router)),
     )
     .await?;
 
@@ -270,7 +270,7 @@ impl ChimeraClient {
         let typed = tauri::async_runtime::block_on(new_typed_config_clients(
             &paths,
             &bridges,
-            core.clone(),
+            core_v2.clone(),
             bundle_metadata.release_channel,
         ))?;
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -1398,6 +1398,41 @@ mod tests {
         // can represent all ref CoreActor transition and degraded states.
         assert_eq!(client.core_status().await.unwrap().state_changed_at, 7);
         core_api.finish_shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn running_clash_config_requires_a_live_ref_core_api_capability() {
+        use crate::client::core_lifecycle::{ActorRunningConfigBridge, ports::RunningConfigPort};
+
+        // The old Facade could return a cached HTTP controller after the
+        // owning Core had stopped. The ref bridge must instead acquire a
+        // fresh instance-bound lease from CoreActor for every read/write.
+        let core = CoreClientV2::spawn(Arc::new(StoppedRoutedHost))
+            .await
+            .unwrap();
+        let running_config = ActorRunningConfigBridge::new(core.clone());
+        assert!(
+            RunningConfigPort::read(&running_config).await.is_err(),
+            "a stopped Core without an API binding cannot serve live config"
+        );
+        assert!(
+            RunningConfigPort::patch(&running_config, &serde_yaml::Mapping::new())
+                .await
+                .is_err(),
+            "live config writes must not bypass CoreActor's API lease"
+        );
+
+        core.finish_shutdown().await;
+        assert!(
+            RunningConfigPort::read(&running_config).await.is_err(),
+            "a shut-down CoreActor must never fall back to a Facade controller"
+        );
+        assert!(
+            RunningConfigPort::patch(&running_config, &serde_yaml::Mapping::new())
+                .await
+                .is_err(),
+            "live config writes must fail closed after CoreActor shutdown"
+        );
     }
 
     #[test]
