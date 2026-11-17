@@ -915,7 +915,8 @@ pub async fn get_proxies(
 }
 
 /// Additive native proxy view for typed consumers. The legacy `get_proxies`
-/// command remains unchanged for both Chimera UIs and Agent integrations.
+/// wire shape remains available to existing UI/Agent consumers, but credential-
+/// bearing icon URLs are omitted and read through `get_proxy_group_icons`.
 #[tauri::command]
 #[specta::specta]
 pub async fn get_native_proxies(
