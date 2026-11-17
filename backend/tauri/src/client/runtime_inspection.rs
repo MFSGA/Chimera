@@ -274,7 +274,65 @@ impl RuntimeSnapshot {
     }
 }
 
+/// Ref-first effective-config evidence: two actor-serialized reads must
+/// describe the same endpoint generation, running instance and applied
+/// revision. A host that changes away and back cannot reuse an old answer.
+fn actor_effective_config_matches_receipt(
+    receipt: &crate::client::runtime::RuntimeApplyReceipt,
+    before: &chimera_core::actor_v2::router::CoreStatusProjection,
+    after: &chimera_core::actor_v2::router::CoreStatusProjection,
+    effective: &CoreEffectiveConfig,
+) -> bool {
+    use chimera_core::actor_v2::router::EndpointConnectivity;
+    if !matches!(before.connectivity, EndpointConnectivity::Connected)
+        || !matches!(after.connectivity, EndpointConnectivity::Connected)
+        || before.host != after.host
+        || before.generation != after.generation
+        || before.snapshot != after.snapshot
+    {
+        return false;
+    }
+    let (Some(before_status), Some(after_status)) = (&before.snapshot, &after.snapshot) else {
+        return false;
+    };
+    receipt.confirms(before.host, before_status)
+        && receipt.confirms(after.host, after_status)
+        && before_status.instance_id.as_deref() == Some(effective.instance_id.as_str())
+        && effective.revision == receipt.applied_revision
+}
+
 impl ChimeraClient {
+    /// The ref CoreActor owns effective-config reads on production clients.
+    /// The legacy port is needed only by injected unit-test clients; those
+    /// have no CoreActor and must never fabricate a separate routing owner.
+    async fn active_effective_inspection_config(
+        &self,
+        receipt: &crate::client::runtime::RuntimeApplyReceipt,
+    ) -> anyhow::Result<Option<CoreEffectiveConfig>> {
+        let Some(core) = &self.inner.core_api else {
+            return self.inner.core.active_effective_config().await;
+        };
+        let before = core.refresh_status().await?;
+        if !matches!(
+            before.connectivity,
+            chimera_core::actor_v2::router::EndpointConnectivity::Connected
+        ) || !before
+            .snapshot
+            .as_ref()
+            .is_some_and(|status| receipt.confirms(before.host, status))
+        {
+            return Ok(None);
+        }
+        let Some(effective) = core.effective_config().await? else {
+            return Ok(None);
+        };
+        let after = core.refresh_status().await?;
+        Ok(
+            actor_effective_config_matches_receipt(receipt, &before, &after, &effective)
+                .then_some(effective),
+        )
+    }
+
     pub(crate) async fn runtime_exists(&self) -> Vec<String> {
         self.inner
             .core
@@ -305,7 +363,7 @@ impl ChimeraClient {
             return (snapshot.clone(), None);
         };
         let revision = receipt.applied_revision.clone();
-        let effective = self.inner.core.active_effective_config().await;
+        let effective = self.active_effective_inspection_config(&receipt).await;
         let Ok(Some(effective)) = effective else {
             if let Err(error) = effective {
                 tracing::warn!(%error, "failed to read effective inspection config");
@@ -420,6 +478,83 @@ mod tests {
             PostProcessingOutput::default(),
             inspection_data(),
         )
+    }
+
+    #[test]
+    fn actor_effective_inspection_requires_matching_host_generation_and_revision() {
+        use chimera_core::actor_v2::{
+            endpoint::{CoreStatusSnapshot, ExecutionHost},
+            router::{CoreStatusProjection, EndpointConnectivity},
+        };
+        use chimera_ipc::api::status::{CoreStateDetail, RevisionIdInfo};
+
+        let receipt = crate::client::ports::test_runtime_receipt(Default::default());
+        let projection = CoreStatusProjection {
+            host: ExecutionHost::Local,
+            generation: 7,
+            connectivity: EndpointConnectivity::Connected,
+            snapshot: Some(CoreStatusSnapshot {
+                instance_id: Some("running-instance".into()),
+                controller: None,
+                state: Some(CoreStateDetail::Running {
+                    epoch: receipt.applied_revision.epoch,
+                    pid: 42,
+                }),
+                state_changed_at: 12,
+                revision: Some(RevisionIdInfo {
+                    epoch: receipt.applied_revision.epoch,
+                    generation: receipt.applied_revision.generation,
+                    effective_hash: receipt.applied_revision.effective_hash.clone(),
+                }),
+                source_hash: Some(receipt.applied_revision.source_hash.clone()),
+                healthy: Some(true),
+                applied_kind: None,
+            }),
+        };
+        let effective = CoreEffectiveConfig {
+            instance_id: "running-instance".into(),
+            revision: receipt.applied_revision.clone(),
+            config: "mode: rule\n".into(),
+        };
+        assert!(actor_effective_config_matches_receipt(
+            &receipt,
+            &projection,
+            &projection,
+            &effective
+        ));
+
+        let mut after_handoff = projection.clone();
+        after_handoff.generation += 1;
+        assert!(!actor_effective_config_matches_receipt(
+            &receipt,
+            &projection,
+            &after_handoff,
+            &effective
+        ));
+        let mut after_reconcile = projection.clone();
+        after_reconcile.snapshot.as_mut().unwrap().state_changed_at += 1;
+        assert!(!actor_effective_config_matches_receipt(
+            &receipt,
+            &projection,
+            &after_reconcile,
+            &effective
+        ));
+        let mut wrong_revision = effective.clone();
+        wrong_revision.revision.generation += 1;
+        assert!(!actor_effective_config_matches_receipt(
+            &receipt,
+            &projection,
+            &projection,
+            &wrong_revision
+        ));
+        let mut unrelated_instance = effective;
+        unrelated_instance.instance_id = "stale-instance".into();
+        assert!(!actor_effective_config_matches_receipt(
+            &receipt,
+            &projection,
+            &projection,
+            &unrelated_instance
+        ));
     }
 
     #[test]
