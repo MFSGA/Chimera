@@ -46,6 +46,17 @@ pub trait ClashApiClientSource: Send + Sync + 'static {
     async fn api_client(&self) -> Result<ApiClient>;
 }
 
+/// Same authority as ref: WebSocket workers acquire an instance-bound API
+/// lease directly from the active CoreActor, not from a Tauri Facade cache.
+#[async_trait::async_trait]
+impl ClashApiClientSource for crate::actor_v2::CoreClient {
+    async fn api_client(&self) -> Result<ApiClient> {
+        crate::actor_v2::CoreClient::api_client(self)
+            .await
+            .map_err(Into::into)
+    }
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ClashConnectionsMessage {
