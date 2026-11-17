@@ -478,4 +478,59 @@ describe('main proxy node reference layout', () => {
     assert.equal(state.tooltipState, 'closed', JSON.stringify(state, null, 2));
     assert.equal(state.loadingState, 'false', JSON.stringify(state, null, 2));
   });
+
+  it('filters the native node list through the ref search UI and restores it', async () => {
+    const navigation = await $('[data-slot="proxies-navigate"]');
+    await navigation.waitForDisplayed({ timeout: 15_000 });
+    const activeGroup = await $('a[data-group-name]');
+    await activeGroup.waitForExist({ timeout: 15_000 });
+
+    const searchButton = await $('[data-slot="proxies-node-search-button"]');
+    await searchButton.waitForDisplayed({ timeout: 15_000 });
+    await searchButton.click();
+
+    const field = await $('[data-slot="proxies-node-search-field"]');
+    await field.waitForDisplayed({ timeout: 15_000 });
+    await field.setValue('nonexistent-proxy-node-for-e2e');
+
+    const empty = await $('[data-slot="proxies-node-no-match"]');
+    await empty.waitForDisplayed({ timeout: 15_000 });
+    await browser.waitUntil(
+      async () =>
+        browser.execute(
+          () =>
+            new URLSearchParams(location.search).get('q') ===
+            'nonexistent-proxy-node-for-e2e',
+        ),
+      { timeout: 15_000, timeoutMsg: 'Proxy search did not update the URL.' },
+    );
+
+    const close = await $('[data-slot="proxies-node-search-close"]');
+    await close.click();
+    await browser.waitUntil(
+      async () =>
+        browser.execute(() => !new URLSearchParams(location.search).has('q')),
+      {
+        timeout: 15_000,
+        timeoutMsg: 'Closed proxy search retained its filter.',
+      },
+    );
+    await browser.waitUntil(
+      async () =>
+        browser.execute(
+          () =>
+            document.querySelectorAll('[data-slot="proxies-virtual-item"]')
+              .length > 0,
+        ),
+      {
+        timeout: 15_000,
+        timeoutMsg: 'Proxy node did not return after search.',
+      },
+    );
+
+    const sort = await $('[data-slot="proxies-node-sort-button"]');
+    await sort.waitForDisplayed({ timeout: 15_000 });
+    const locate = await $('[data-slot="proxies-locate-current-node"]');
+    await locate.waitForExist({ timeout: 15_000 });
+  });
 });
