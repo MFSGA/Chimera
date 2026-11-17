@@ -1148,11 +1148,10 @@ pub async fn update_core(
 pub async fn change_clash_core(
     client: State<'_, ChimeraClient>,
     clash_core: Option<chimera::ClashCore>,
-) -> Result {
+) -> Result<MutationOutcome<()>> {
     log::debug!("change_clash_core: {clash_core:?}");
     let clash_core = clash_core.ok_or_else(|| anyhow!("clash core is null"))?;
-    client.change_core(clash_core).await?;
-    Ok(())
+    Ok(client.change_core(clash_core).await?)
 }
 
 /// restart the sidecar

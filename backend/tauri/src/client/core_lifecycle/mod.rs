@@ -710,9 +710,10 @@ impl ApplicationWorkflowState {
                 | Command::RetryDeferredProfiles { .. }
                 | Command::ReconcileProfiles { .. }
                 | Command::RecoverCore
-                | Command::SelectCore(_)
                 | Command::ReplaceCoreBinary(_)
         ) || application_runtime_reconcile;
+        #[cfg(test)]
+        let reconciled = reconciled || matches!(&request.command, Command::SelectCore(_));
         let service_phase = match &request.command {
             Command::InstallService(_) => Some(ServicePhase::Installing),
             Command::StartService { .. } => Some(ServicePhase::StartingDaemon),
@@ -2592,6 +2593,9 @@ impl CoreLifecycleClient {
         }
     }
 
+    // Only legacy actor tests exercise the original direct-core adapter.
+    // Production selects through ChimeraClient::patch_app_config instead.
+    #[cfg(test)]
     pub(super) async fn select_core(
         &self,
         core: crate::config::chimera::ClashCore,
@@ -2733,11 +2737,18 @@ impl ChimeraClient {
         self.inner.core.promoted_runtime_snapshot()
     }
 
+    /// Ref: selecting a core is an Application source transaction, not a
+    /// second mutating CoreLifecycle command. Preserve the commit receipt
+    /// and post-commit runtime degradations for the UI.
     pub(crate) async fn change_core(
         &self,
         clash_core: crate::config::chimera::ClashCore,
-    ) -> anyhow::Result<()> {
-        self.inner.core_lifecycle.select_core(clash_core).await
+    ) -> anyhow::Result<crate::client::runtime::MutationOutcome<()>> {
+        self.patch_app_config(chimera_config::application::ChimeraAppConfigPatch {
+            core: Some(clash_core),
+            ..Default::default()
+        })
+        .await
     }
 
     #[cfg(test)]

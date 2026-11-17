@@ -166,6 +166,9 @@ impl ApplicationClient {
         }
     }
 
+    /// Legacy test adapter for the retired direct core selection command.
+    /// The production entry is ChimeraClient::patch_app_config(core).
+    #[cfg(test)]
     pub(crate) async fn patch_core(
         &self,
         core: chimera_config::application::ClashCore,

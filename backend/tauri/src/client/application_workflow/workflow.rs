@@ -551,7 +551,9 @@ impl ApplicationWorkflow {
                     | CoreCommand::RecoverCore
                     | CoreCommand::RetryDeferredProfiles { .. }
                     | CoreCommand::ReconcileProfiles { .. }
-                    | CoreCommand::SelectCore(_) => true,
+                    => true,
+                    #[cfg(test)]
+                    CoreCommand::SelectCore(_) => true,
                     CoreCommand::PatchApplicationConfig {
                         patch,
                         service_connected,

@@ -1708,11 +1708,88 @@ mod tests {
         core.finish_shutdown().await;
     }
 
+    /// These checks must not depend on the process-global legacy application
+    /// config used by unrelated concurrent tests. The source owner and CAS
+    /// version are real; only the lower Core port is injected.
+    struct CoreSelectionMirror;
+
+    impl crate::state::mirror::VergeLegacyBridge for CoreSelectionMirror {
+        fn prepare(
+            &self,
+            _next: &chimera_config::application::ChimeraAppConfig,
+        ) -> anyhow::Result<Box<dyn crate::state::mirror::PreparedLegacyMirror>> {
+            Ok(Box::new(crate::state::mirror::NoopPreparedLegacyMirror))
+        }
+
+        fn snapshot_legacy(&self) -> anyhow::Result<chimera_config::application::ChimeraAppConfig> {
+            Ok(chimera_config::application::ChimeraAppConfig::default())
+        }
+    }
+
+    async fn isolated_core_selection_client(
+        fail_rebuild: bool,
+    ) -> (ChimeraClient, Arc<Mutex<Vec<&'static str>>>) {
+        let (mut client, events) = recording_client(fail_rebuild).await;
+        let root = client
+            .inner
+            ._test_profile_dir
+            .as_ref()
+            .expect("test client retains a temporary root")
+            .path()
+            .join("core-selection-application.yaml");
+        let application = ApplicationClient::new(
+            camino::Utf8PathBuf::from_path_buf(root).unwrap(),
+            chimera_config::application::ChimeraAppConfig::default(),
+            Arc::new(CoreSelectionMirror),
+            chimera_config::application::ReleaseChannel::Stable,
+        )
+        .await
+        .unwrap();
+        let inner = Arc::get_mut(&mut client.inner).expect("unique test client");
+        inner.application = application.clone();
+        inner.core_lifecycle = CoreLifecycleClient::direct(
+            inner.core.clone(),
+            application,
+            inner.clash_config.clone(),
+            RuntimePaths::from_config_root(
+                inner
+                    ._test_profile_dir
+                    .as_ref()
+                    .unwrap()
+                    .path()
+                    .to_path_buf(),
+            ),
+        );
+        (client, events)
+    }
+
     #[tokio::test]
-    async fn change_core_runs_through_the_injected_lifecycle_port() {
-        let (client, events) = recording_client(false).await;
-        client.change_core(ClashCore::Mihomo).await.unwrap();
-        assert_eq!(events.lock().unwrap().as_slice(), ["change-core"]);
+    async fn change_core_is_a_committed_application_patch_not_a_direct_core_mutation() {
+        let (client, events) = isolated_core_selection_client(false).await;
+        let outcome = client.change_core(ClashCore::Mihomo).await.unwrap();
+        assert_eq!(client.get_app_config().unwrap().core, ClashCore::Mihomo);
+        assert_eq!(outcome.value(), &());
+        assert_eq!(events.lock().unwrap().as_slice(), ["rebuild"]);
+        assert!(
+            outcome
+                .degradations()
+                .iter()
+                .all(|degradation| { degradation.code != "application_runtime_deferred" }),
+            "legacy mirror failures may degrade the test fixture but not the Core reconcile"
+        );
+    }
+
+    #[tokio::test]
+    async fn change_core_commits_source_even_when_postcommit_runtime_apply_fails() {
+        let (client, events) = isolated_core_selection_client(true).await;
+        let outcome = client.change_core(ClashCore::ClashRs).await.unwrap();
+        assert_eq!(client.get_app_config().unwrap().core, ClashCore::ClashRs);
+        assert!(matches!(outcome, MutationOutcome::CommittedDegraded { .. }));
+        assert!(outcome.degradations().iter().any(|degradation| {
+            degradation.code == "application_runtime_deferred"
+                && degradation.message.contains("injected rebuild failure")
+        }));
+        assert_eq!(events.lock().unwrap().as_slice(), ["rebuild"]);
     }
 
     #[tokio::test]

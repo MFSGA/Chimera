@@ -62,6 +62,8 @@ pub(in crate::client) enum Command {
         notifications: Arc<dyn crate::client::effects::ports::CommitNotifications>,
         persist_legacy_mirror: Arc<dyn Fn() -> anyhow::Result<()> + Send + Sync>,
     },
+    /// Retired production entry. Legacy actor tests retain the old adapter.
+    #[cfg(test)]
     SelectCore(ClashCore),
     RecoverCore,
     /// Re-evaluate the runtime owner after Service readiness changes.
@@ -472,8 +474,9 @@ impl CoreLifecycleWorkflow {
             Command::Reconcile
             | Command::RecoverCore
             | Command::RetryDeferredProfiles { .. }
-            | Command::ReconcileProfiles { .. }
-            | Command::SelectCore(_) => true,
+            | Command::ReconcileProfiles { .. } => true,
+            #[cfg(test)]
+            Command::SelectCore(_) => true,
             Command::PatchApplicationConfig {
                 patch,
                 service_connected,
@@ -586,6 +589,7 @@ impl CoreLifecycleWorkflow {
                 )
                 .await
                 .map_err(anyhow::Error::new),
+            #[cfg(test)]
             Command::SelectCore(core) => self.select_core(core).await,
             Command::ReplaceCoreBinary(artifact) => self.replace_binary(artifact).await,
             Command::InstallService(mut transition) => transition.install_daemon().await,
@@ -1684,6 +1688,7 @@ impl CoreLifecycleWorkflow {
             .await
     }
 
+    #[cfg(test)]
     async fn select_core(&self, core: ClashCore) -> anyhow::Result<()> {
         let Some(profiles) = &self.profiles else {
             return self.core.change_core(core).await;
