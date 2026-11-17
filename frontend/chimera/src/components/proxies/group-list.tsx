@@ -1,4 +1,8 @@
-import { useClashProxies, useServerPort } from '@chimera/interface';
+import {
+  useClashProxies,
+  useProxyGroupIcons,
+  useServerPort,
+} from '@chimera/interface';
 import { alpha, LazyImage } from '@chimera/ui';
 import {
   ListItem,
@@ -50,6 +54,7 @@ export const GroupList = ({
   const {
     proxies: { data },
   } = useClashProxies();
+  const groupIcons = useProxyGroupIcons();
 
   const [proxyGroup, setProxyGroup] = useAtom(proxyGroupAtom);
   const proxiesFilter = useAtomValue(proxiesFilterAtom);
@@ -105,7 +110,9 @@ export const GroupList = ({
               ]}
               {...listItemButtonProps}
             >
-              {group.icon && <IconRender icon={group.icon} />}
+              {groupIcons[group.name] && (
+                <IconRender icon={groupIcons[group.name]} />
+              )}
 
               <ListItemText
                 className="!truncate"
