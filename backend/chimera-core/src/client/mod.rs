@@ -3,3 +3,5 @@ pub mod clash_info;
 pub mod convergence;
 
 pub mod app_update;
+
+pub mod traffic_frames;
