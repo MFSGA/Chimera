@@ -108,10 +108,8 @@ impl Config {
             )
             .await?;
 
-        *Config::runtime().draft() = IRuntime {
-            config: Some(config.clone()),
-        };
-
+        // A candidate check must not alter the active (or pending) legacy
+        // runtime projection. Only a confirmed/promoted product may publish it.
         Ok(RuntimeInputOutput {
             config,
             exists_keys,
@@ -129,16 +127,35 @@ impl Config {
         Self::generate_runtime_input_with(&clash, core).await
     }
 
-    /// Generate the runtime mapping once and retain the exact draft used by the product pipeline.
+    /// Generate a standalone runtime mapping. No draft or product is published.
     pub async fn generate_runtime_mapping() -> Result<Mapping> {
         Self::generate_runtime_input()
             .await
             .map(|(config, _postprocessing_output)| config)
     }
 
-    /// Legacy compatibility entry point for callers that only need the generated draft.
+    /// Legacy compatibility entry point: `generate()` explicitly writes the
+    /// draft as before, while advisory candidate builds remain read-only.
     pub async fn generate() -> Result<()> {
-        Self::generate_runtime_mapping().await.map(drop)
+        let config = Self::generate_runtime_mapping().await?;
+        *Self::runtime().draft() = IRuntime {
+            config: Some(config),
+        };
+        Ok(())
+    }
+
+    /// Publish the legacy runtime projection only *after* Core acceptance,
+    /// candidate promotion and the immutable applied snapshot have settled.
+    /// The typed RuntimeLifecycle remains the authoritative running product.
+    pub(crate) fn publish_applied_runtime_legacy(config: &Mapping) {
+        Self::publish_runtime_into(&Self::runtime(), config);
+    }
+
+    fn publish_runtime_into(runtime: &Draft<IRuntime>, config: &Mapping) {
+        *runtime.draft() = IRuntime {
+            config: Some(config.clone()),
+        };
+        runtime.apply();
     }
 
     pub fn clash() -> Draft<IClashTemp> {
@@ -161,6 +178,26 @@ mod tests {
     use serde_yaml::{Mapping, Value};
 
     use super::Config;
+
+    #[test]
+    fn only_confirmed_product_replaces_pending_legacy_runtime_draft() {
+        use crate::config::{draft::Draft, runtime::IRuntime};
+
+        let mut previous = Mapping::new();
+        previous.insert("mode".into(), "rule".into());
+        let legacy = Draft::from(IRuntime {
+            config: Some(previous),
+        });
+        let mut rejected_candidate = Mapping::new();
+        rejected_candidate.insert("mode".into(), "global".into());
+        legacy.draft().config = Some(rejected_candidate);
+        let mut confirmed = Mapping::new();
+        confirmed.insert("mode".into(), "direct".into());
+
+        Config::publish_runtime_into(&legacy, &confirmed);
+        assert_eq!(legacy.data().config.as_ref(), Some(&confirmed));
+        assert_eq!(legacy.latest().config.as_ref(), Some(&confirmed));
+    }
 
     #[test]
     fn runtime_render_is_deterministic_and_has_the_product_header() {
