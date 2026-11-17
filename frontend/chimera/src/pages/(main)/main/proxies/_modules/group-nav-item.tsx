@@ -1,7 +1,9 @@
-import {
-  type NativeProxies_Serialize,
-  type ProxyGroup,
+import type {
+  FolderId,
+  NativeProxies_Serialize,
+  ProxyGroup,
 } from '@chimera/interface';
+import { ContextMenuItem } from '@chimera/ui/context-menu';
 import {
   NavigationListItem,
   NavigationListItemIcon,
@@ -9,8 +11,12 @@ import {
   NavigationListItemTrailing,
   type NavigationListItemColor,
 } from '@chimera/ui/navigation-list';
+import { pointerIntersection } from '@dnd-kit/collision';
+import { useSortable } from '@dnd-kit/react/sortable';
 import { Link } from '@tanstack/react-router';
 import AltRouteRounded from '~icons/material-symbols/alt-route-rounded';
+import ArrowDownwardRounded from '~icons/material-symbols/arrow-downward-rounded';
+import ArrowUpwardRounded from '~icons/material-symbols/arrow-upward-rounded';
 import BalanceRounded from '~icons/material-symbols/balance-rounded';
 import KeepRounded from '~icons/material-symbols/keep-rounded';
 import RouteRounded from '~icons/material-symbols/route-rounded';
@@ -18,15 +24,27 @@ import ShieldRounded from '~icons/material-symbols/shield-rounded';
 import SpeedRounded from '~icons/material-symbols/speed-rounded';
 import TouchAppRounded from '~icons/material-symbols/touch-app-rounded';
 import { memo, type ComponentType, type SVGProps } from 'react';
+import {
+  RegisterContextMenu,
+  RegisterContextMenuContent,
+  RegisterContextMenuTrigger,
+} from '@/components/providers/context-menu-provider';
 import { CacheImage } from '@/components/ui/image';
+import * as m from '@/paraglide/messages';
+import { FOLDER_ITEM_DRAG_SENSORS } from '@/utils/dnd-sensors';
 import DelayChip from './delay-chip';
+import { locateGroup } from './group-layout';
+import { GroupMoveContextMenu, useGroupMove } from './group-move-menu';
+import { memberDelay } from './node-list';
+import { GROUP_DRAG_TYPE, groupDragId, sectionId } from './resolve-group-drop';
+import { useGroupLayout } from './use-group-layout';
 
 type GroupGlyph = {
   color: NavigationListItemColor;
   icon: ComponentType<SVGProps<SVGSVGElement>>;
 };
 
-/** Keep the ref type icons even while group folders and DnD are not wired. */
+/** What stands in for the icon of a group that has none. */
 const GLYPHS: Record<string, GroupGlyph> = {
   Selector: { color: 'blue', icon: TouchAppRounded },
   URLTest: { color: 'green', icon: SpeedRounded },
@@ -34,88 +52,157 @@ const GLYPHS: Record<string, GroupGlyph> = {
   LoadBalance: { color: 'purple', icon: BalanceRounded },
   Relay: { color: 'cyan', icon: RouteRounded },
 };
-const FALLBACK_GLYPH: GroupGlyph = {
-  color: 'neutral',
-  icon: AltRouteRounded,
-};
 
+const FALLBACK_GLYPH: GroupGlyph = { color: 'neutral', icon: AltRouteRounded };
+
+function GroupDelay({
+  group,
+  proxies,
+}: {
+  group: ProxyGroup;
+  proxies: NativeProxies_Serialize;
+}) {
+  const delay = group.now ? memberDelay(group.now, group, proxies) : undefined;
+
+  if (delay === undefined) {
+    return null;
+  }
+
+  return (
+    <span className="text-xs tabular-nums">
+      {delay <= 0 ? (
+        <span className="text-red-500" title={m.proxies_delay_history_failed()}>
+          ∞
+        </span>
+      ) : (
+        <DelayChip delay={delay} />
+      )}
+    </span>
+  );
+}
+
+/**
+ * A group in the sidebar: a link to its page, with the type, pin, current node
+ * and delay it showed before, and a menu to arrange it. Memoized so that
+ * switching groups re-renders only the items whose active state changed.
+ */
 const GroupNavItem = memo(function GroupNavItem({
   group,
   proxies,
   active,
+  index,
+  section,
 }: {
   group: ProxyGroup;
   proxies: NativeProxies_Serialize;
   active: boolean;
+  /** Where the group sits in its list, as the list shows it now. */
+  index: number;
+  /** The folder the group is in; `null` for the ungrouped groups. */
+  section: FolderId | null;
 }) {
+  const { layout, moveGroupBy } = useGroupLayout();
+  const move = useGroupMove(group.name);
+
+  const place = layout ? locateGroup(layout, group.name) : undefined;
+
   const glyph = GLYPHS[group.type] ?? FALLBACK_GLYPH;
-  const selected = group.now ? proxies.nodes[group.now] : undefined;
-  const history = selected?.history;
-  const delay = history?.at(-1)?.delay;
+
+  // The whole item is the drag source; a click still opens the group, so a
+  // mouse drag starts only after the pointer moved.
+  const { ref, isDragging } = useSortable({
+    id: groupDragId(group.name),
+    index,
+    group: sectionId(section),
+    type: GROUP_DRAG_TYPE,
+    accept: [GROUP_DRAG_TYPE],
+    collisionDetector: pointerIntersection,
+    sensors: FOLDER_ITEM_DRAG_SENSORS,
+  });
 
   return (
-    <NavigationListItem
-      active={active}
-      asChild
-      data-slot="proxies-group-nav-item"
-    >
-      <Link
-        to="/main/proxies/$name"
-        params={{ name: group.name }}
-        search={(previous) => ({ q: previous.q })}
-        aria-current={active ? 'page' : undefined}
-        data-group-name={group.name}
-      >
-        {group.icon ? (
-          <NavigationListItemIcon image>
-            <CacheImage
-              icon={group.icon}
-              className="size-full"
-              loadingClassName="rounded-full"
-            />
-          </NavigationListItemIcon>
-        ) : (
-          <NavigationListItemIcon color={glyph.color}>
-            <glyph.icon />
-          </NavigationListItemIcon>
-        )}
-
-        <NavigationListItemText
-          headline={group.name}
-          supporting={group.now ?? ''}
-          supportingStart={
-            <>
-              <span className="bg-secondary-container text-on-secondary-container shrink-0 rounded-full px-1.5 py-0.5 text-[10px] leading-3">
-                {group.type}
-              </span>
-              {group.fixed && (
-                <span
-                  className="shrink-0"
-                  data-slot="group-summary-fixed-icon"
-                  title={group.fixed}
-                >
-                  <KeepRounded className="size-3.5" />
-                </span>
-              )}
-            </>
-          }
-        />
-        {delay !== undefined && (
-          <NavigationListItemTrailing>
-            {delay <= 0 ? (
-              <span
-                className="text-xs text-red-500"
-                title="Latency test failed"
-              >
-                ∞
-              </span>
+    <RegisterContextMenu>
+      <RegisterContextMenuTrigger asChild>
+        <NavigationListItem
+          ref={ref}
+          active={active}
+          data-slot="proxies-group-nav-item"
+          asChild
+          data-dragging={isDragging || undefined}
+        >
+          <Link
+            // dnd-kit gives its drag source the button role unless one is set.
+            role="link"
+            aria-current={active ? 'page' : undefined}
+            to="/main/proxies/$name"
+            params={{ name: group.name }}
+            data-group-name={group.name}
+            search={(previous) => ({ q: previous.q })}
+          >
+            {group.icon ? (
+              <NavigationListItemIcon image>
+                <CacheImage
+                  icon={group.icon}
+                  className="size-full"
+                  // The picture is never clipped, but its placeholder stays round.
+                  loadingClassName="rounded-full"
+                />
+              </NavigationListItemIcon>
             ) : (
-              <DelayChip delay={delay} />
+              <NavigationListItemIcon color={glyph.color}>
+                <glyph.icon />
+              </NavigationListItemIcon>
             )}
-          </NavigationListItemTrailing>
-        )}
-      </Link>
-    </NavigationListItem>
+
+            <NavigationListItemText
+              headline={group.name}
+              supporting={group.now ?? ''}
+              supportingStart={
+                <>
+                  <span className="bg-secondary-container text-on-secondary-container shrink-0 rounded-full px-1.5 py-0.5 text-[10px] leading-3">
+                    {group.type}
+                  </span>
+
+                  {group.now && group.fixed && (
+                    <span
+                      className="shrink-0"
+                      title={group.fixed}
+                      data-slot="group-summary-fixed-icon"
+                    >
+                      <KeepRounded className="size-3.5" />
+                    </span>
+                  )}
+                </>
+              }
+            />
+
+            <NavigationListItemTrailing>
+              <GroupDelay group={group} proxies={proxies} />
+            </NavigationListItemTrailing>
+          </Link>
+        </NavigationListItem>
+      </RegisterContextMenuTrigger>
+
+      <RegisterContextMenuContent>
+        <GroupMoveContextMenu move={move} />
+
+        <ContextMenuItem
+          disabled={!place || place.index === 0}
+          onClick={() => moveGroupBy(group.name, -1)}
+        >
+          <ArrowUpwardRounded className="size-4" />
+          <span>{m.profile_folder_move_up()}</span>
+        </ContextMenuItem>
+
+        <ContextMenuItem
+          disabled={!place || place.index === place.count - 1}
+          onClick={() => moveGroupBy(group.name, 1)}
+        >
+          <ArrowDownwardRounded className="size-4" />
+          <span>{m.profile_folder_move_down()}</span>
+        </ContextMenuItem>
+      </RegisterContextMenuContent>
+    </RegisterContextMenu>
   );
 });
 
