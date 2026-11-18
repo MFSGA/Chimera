@@ -277,6 +277,29 @@ pub(crate) trait CoreLifecyclePort: Send + Sync {
     }
     async fn change_core(&self, clash_core: ClashCore) -> anyhow::Result<()>;
     async fn status(&self) -> anyhow::Result<CoreStatusSnapshot>;
+    /// Whether the shared Core router currently reports an unreachable Service
+    /// endpoint. Compatibility ports without the ref router report `false`.
+    fn service_endpoint_degraded(&self) -> bool {
+        false
+    }
+    fn service_endpoint_recovery_supported(&self) -> bool {
+        false
+    }
+    /// Clear a completed operation retained by the shared Core facade before
+    /// another endpoint recovery is submitted. `Err` means prior work is still
+    /// pending, so the retry budget must not be spent yet.
+    async fn settle_service_recovery_action(&self) -> Option<Result<(), String>> {
+        None
+    }
+    /// Reconnect and re-adopt the Service endpoint through the shared Core
+    /// router. `None` is reserved for compatibility fixtures that still use
+    /// the legacy Service transition adapter.
+    async fn recover_service_endpoint(
+        &self,
+        _closing: &tokio_util::sync::CancellationToken,
+    ) -> Option<Result<(), chimera_core_manager::CoreError>> {
+        None
+    }
     /// Select an already proven execution host without applying a runtime.
     /// Startup uses this between the host handoff (S2) and owner verification
     /// (S3), matching the reference lifecycle's separate `move_execution_host`

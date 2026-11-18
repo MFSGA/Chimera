@@ -107,6 +107,28 @@ impl ApplicationWorkflow {
             .is_some_and(|attempt| attempt.unresolved.is_some())
     }
 
+    pub(in crate::client) async fn service_endpoint_recovery_due(&self) -> bool {
+        if self.has_unresolved_attempt() {
+            return false;
+        }
+        let Some(lifecycle) = &self.lifecycle else {
+            return false;
+        };
+        lifecycle.service_endpoint_recovery_due().await
+    }
+
+    pub(in crate::client) fn service_recovery_blocks_handoff(&self) -> bool {
+        self.lifecycle
+            .as_ref()
+            .is_some_and(|lifecycle| lifecycle.service_recovery_blocks_handoff())
+    }
+
+    pub(in crate::client) fn take_service_recovery_reconnected(&self) -> bool {
+        self.lifecycle
+            .as_ref()
+            .is_some_and(|lifecycle| lifecycle.take_service_recovery_reconnected())
+    }
+
     #[cfg(test)]
     pub(crate) fn seed_unresolved_lifecycle_attempt_for_tests(
         &mut self,
@@ -446,21 +468,23 @@ impl ApplicationWorkflow {
     pub(in crate::client) async fn execute_lifecycle(
         &mut self,
         command: CoreCommand,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<bool> {
         match command {
             CoreCommand::StartupReconcile {
                 operation_id,
                 transition,
             } => {
                 let report = self.startup_reconcile(operation_id, transition).await;
-                startup_report_result(&report)
+                startup_report_result(&report)?;
+                Ok(false)
             }
             CoreCommand::RecoverStartup {
                 operation_id,
                 transition,
             } => {
                 let report = self.recover_startup(operation_id, transition).await;
-                startup_report_result(&report)
+                startup_report_result(&report)?;
+                Ok(false)
             }
             CoreCommand::RetryStartup {
                 operation_id,
@@ -468,12 +492,16 @@ impl ApplicationWorkflow {
                 transition,
             } => {
                 let report = self.retry_startup(operation_id, identity, transition).await;
-                startup_report_result(&report)
+                startup_report_result(&report)?;
+                Ok(false)
             }
             CoreCommand::FollowService {
                 operation_id,
                 transition,
-            } => self.follow_service(operation_id, transition).await,
+            } => {
+                self.follow_service(operation_id, transition).await?;
+                Ok(false)
+            }
             CoreCommand::RecoverCore => {
                 let lifecycle = self.lifecycle_handle();
                 #[cfg(test)]
@@ -486,7 +514,7 @@ impl ApplicationWorkflow {
                 #[cfg(not(test))]
                 lifecycle.execute(CoreCommand::RecoverCore).await?;
                 self.recover_after_reconcile(lifecycle.as_ref()).await?;
-                Ok(())
+                Ok(false)
             }
             CoreCommand::Reconcile if self.has_unresolved_attempt() => {
                 let lifecycle = self.lifecycle_handle();
@@ -500,7 +528,7 @@ impl ApplicationWorkflow {
                 #[cfg(not(test))]
                 lifecycle.execute(CoreCommand::RecoverCore).await?;
                 self.recover_after_reconcile(lifecycle.as_ref()).await?;
-                Ok(())
+                Ok(false)
             }
             CoreCommand::CacheStartupUnsettled {
                 operation_id,
@@ -546,6 +574,8 @@ impl ApplicationWorkflow {
                 }
                 let refresh_startup_retry_identity =
                     matches!(&command, CoreCommand::PatchApplicationConfig { .. });
+                let service_endpoint_recovery =
+                    matches!(&command, CoreCommand::ServiceEndpointDown(_));
                 let refresh_startup_target = match &command {
                     CoreCommand::Reconcile
                     | CoreCommand::RecoverCore
@@ -590,7 +620,10 @@ impl ApplicationWorkflow {
                         self.conclude_attempt(None);
                     }
                 }
-                result
+                let recovered = service_endpoint_recovery
+                    && result.is_ok()
+                    && lifecycle.take_service_recovery_reconnected();
+                result.map(|()| recovered)
             }
         }
     }

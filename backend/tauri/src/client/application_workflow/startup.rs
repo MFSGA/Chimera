@@ -1884,6 +1884,9 @@ impl ApplicationWorkflow {
         let Ok(current) = lifecycle.startup_core_status().await else {
             return false;
         };
+        if self.service_recovery_blocks_handoff() {
+            return false;
+        }
         // Unlike ref's `stop_requested`, Chimera currently has no production
         // StopCore command or persisted stop intent. Once startup proved an
         // owner, follow Service preference from current readiness evidence.

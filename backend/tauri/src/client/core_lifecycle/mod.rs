@@ -33,6 +33,8 @@ pub(in crate::client) use workflow::{Command, CoreLifecycleWorkflow};
 
 const CALL_WAIT: Duration = Duration::from_secs(180);
 const DIRTY_WINDOW: Duration = Duration::from_millis(500);
+const RECOVERY_INTERVAL: Duration = Duration::from_secs(5);
+const STARTUP_RECOVERY_LEASE_ATTEMPTS: usize = 3;
 const MAX_PENDING: usize = 32;
 const COMPLETED_LIMIT: usize = 32;
 
@@ -49,6 +51,74 @@ fn completed_from_startup_report(report: StartupReport) -> CompletedLifecycleOpe
         .failure_reason()
         .map_or(Ok(()), |reason| Err(anyhow::anyhow!(reason.to_owned())));
     CompletedLifecycleOperation { result, report }
+}
+
+fn schedule_startup_recovery(
+    actor_ref: ActorRef<Message>,
+    next_id: Arc<AtomicU64>,
+    service: Arc<dyn ServiceLifecyclePort>,
+    startup_recovery_pending: Arc<AtomicBool>,
+    is_needed: impl Fn() -> bool + Send + Sync + 'static,
+) {
+    if startup_recovery_pending
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        return;
+    }
+
+    tokio::spawn(async move {
+        let result = async {
+            for attempt in 0..STARTUP_RECOVERY_LEASE_ATTEMPTS {
+                // Acquire the host lease before asking the serialized actor to
+                // run recovery, preserving the global host-lock/mailbox order.
+                let transition = match service.begin_transition().await {
+                    Ok(transition) => transition,
+                    Err(error) if attempt + 1 < STARTUP_RECOVERY_LEASE_ATTEMPTS => {
+                        tracing::debug!(%error, "startup owner recovery lease busy; retrying");
+                        tokio::time::sleep(RECOVERY_INTERVAL).await;
+                        continue;
+                    }
+                    Err(error) => return Err(error),
+                };
+                if !is_needed() {
+                    return Ok(());
+                }
+                let operation_id = next_id.fetch_add(1, Ordering::Relaxed);
+                return match actor_ref
+                    .call(
+                        |reply| {
+                            Message::Request(Request {
+                                command: Command::RecoverStartup {
+                                    operation_id,
+                                    transition,
+                                },
+                                response: Response {
+                                    id: operation_id,
+                                    reply: Some(reply),
+                                },
+                                deferred_retry: None,
+                            })
+                        },
+                        Some(CALL_WAIT),
+                    )
+                    .await?
+                {
+                    CallResult::Success(result) => result,
+                    CallResult::Timeout => Err(anyhow::anyhow!("startup owner recovery timed out")),
+                    CallResult::SenderError => {
+                        Err(anyhow::anyhow!("startup owner recovery reply was dropped"))
+                    }
+                };
+            }
+            unreachable!("startup recovery lease retry loop always returns or exhausts")
+        }
+        .await;
+        startup_recovery_pending.store(false, Ordering::Release);
+        if let Err(error) = result {
+            tracing::warn!(%error, "automatic startup owner recovery did not complete");
+        }
+    });
 }
 
 fn is_source_only_application_patch(command: &Command) -> bool {
@@ -132,6 +202,7 @@ enum Message {
         service_probe: Option<Result<chimera_ipc::types::StatusInfo<'static>, String>>,
         retry_reconcile_on_failure: bool,
         recover: bool,
+        service_endpoint_recovery: bool,
         shutdown: bool,
         request_runtime_rebuild: bool,
         deferred_retry: Option<String>,
@@ -146,6 +217,8 @@ enum Message {
     },
     ServiceReadiness,
     ServiceProbeFailed,
+    ServiceRecoveryTick,
+    ServiceRecoveryLeaseFailed,
     RecoverCore,
     RuntimeDirty,
     DirtyTick,
@@ -224,6 +297,9 @@ struct ApplicationWorkflowState {
     shutdown_waiters: Vec<Response>,
     dirty: bool,
     dirty_tick_scheduled: bool,
+    service_recovery_inflight: bool,
+    service_recovery_timer: tokio::task::JoinHandle<()>,
+    startup_recovery_pending: Arc<AtomicBool>,
 }
 
 fn record_startup_retry_lease_failure(
@@ -258,6 +334,7 @@ struct ApplicationWorkflowArgs {
     service_status: ServiceHostWatch,
     service: Arc<dyn ServiceLifecyclePort>,
     startup_owner_unproven_shared: Arc<AtomicBool>,
+    startup_recovery_pending: Arc<AtomicBool>,
 }
 
 struct Response {
@@ -401,6 +478,17 @@ impl ApplicationWorkflowState {
         });
     }
 
+    fn request_startup_recovery(&self, myself: &ActorRef<Message>) {
+        let startup_owner_unproven = self.startup_owner_unproven_shared.clone();
+        schedule_startup_recovery(
+            myself.clone(),
+            self.next_id.clone(),
+            self.service.clone(),
+            self.startup_recovery_pending.clone(),
+            move || startup_owner_unproven.load(Ordering::Acquire),
+        );
+    }
+
     async fn follow_service(&mut self) {
         if self.active.is_some()
             || self.uncertain
@@ -481,7 +569,10 @@ impl ApplicationWorkflowState {
         }
     }
 
-    fn reject(&self, mut request: Request, error: anyhow::Error) {
+    fn reject(&mut self, mut request: Request, error: anyhow::Error) {
+        if matches!(&request.command, Command::ServiceEndpointDown(_)) {
+            self.service_recovery_inflight = false;
+        }
         if let Command::ProfileMutation(mutation) = &mut request.command {
             let message = error.to_string();
             mutation.answer(
@@ -537,6 +628,7 @@ impl ApplicationWorkflowState {
                     | Command::RecoverStartup { .. }
                     | Command::RetryStartup { .. }
                     | Command::CacheStartupUnsettled { .. }
+                    | Command::ServiceEndpointDown(_)
             ) || is_source_only_application_patch(&request.command)
             {
                 allowed.push_back(request);
@@ -745,6 +837,7 @@ impl ApplicationWorkflowState {
                 | Command::UpdateService(_)
         );
         let recover = matches!(&request.command, Command::RecoverCore);
+        let service_endpoint_recovery = matches!(&request.command, Command::ServiceEndpointDown(_));
         let progress = match &request.command {
             Command::ReplaceCoreBinary(artifact) => Some(artifact.progress.clone()),
             _ => None,
@@ -784,7 +877,7 @@ impl ApplicationWorkflowState {
                             )
                             .await;
                             mutation.settle(Err(message.clone()));
-                            (Err(anyhow::anyhow!(message)), true, false)
+                            (Err::<(), _>(anyhow::anyhow!(message)), true, false)
                         }
                     }
                 }
@@ -793,12 +886,19 @@ impl ApplicationWorkflowState {
                         .catch_unwind()
                         .await
                     {
-                        Ok(result) => (result, false, false),
+                        Ok(Ok(request_runtime_rebuild)) => {
+                            (Ok::<(), anyhow::Error>(()), false, request_runtime_rebuild)
+                        }
+                        Ok(Err(error)) => (Err(error), false, false),
                         Err(_) => {
                             let message =
                                 "core lifecycle workflow panicked; execution state is uncertain";
                             workflow.mark_recovery_required(message.into()).await;
-                            (Err(anyhow::anyhow!(message)), true, false)
+                            (
+                                Err::<(), anyhow::Error>(anyhow::anyhow!(message)),
+                                true,
+                                false,
+                            )
                         }
                     }
                 }
@@ -847,6 +947,7 @@ impl ApplicationWorkflowState {
                     service_probe,
                     retry_reconcile_on_failure,
                     recover,
+                    service_endpoint_recovery,
                     shutdown,
                     request_runtime_rebuild,
                     deferred_retry,
@@ -880,9 +981,11 @@ impl Actor for ApplicationWorkflowActor {
 
     async fn pre_start(
         &self,
-        _myself: ActorRef<Self::Msg>,
+        myself: ActorRef<Self::Msg>,
         args: Self::Arguments,
     ) -> Result<Self::State, ActorProcessingErr> {
+        let service_recovery_timer =
+            myself.send_interval(RECOVERY_INTERVAL, || Message::ServiceRecoveryTick);
         Ok(ApplicationWorkflowState {
             workflow: Some(args.workflow),
             pending_mutation_connection: None,
@@ -903,6 +1006,9 @@ impl Actor for ApplicationWorkflowActor {
             shutdown_waiters: Vec::new(),
             dirty: false,
             dirty_tick_scheduled: false,
+            service_recovery_inflight: false,
+            service_recovery_timer,
+            startup_recovery_pending: args.startup_recovery_pending,
         })
     }
 
@@ -958,6 +1064,9 @@ impl Actor for ApplicationWorkflowActor {
                 }
             }
             Message::Request(mut request) => {
+                if matches!(&request.command, Command::ServiceEndpointDown(_)) {
+                    state.service_recovery_inflight = true;
+                }
                 let service_connected = crate::core::service::ipc::get_ipc_state().is_connected();
                 if let Command::PatchApplicationConfig {
                     service_connected: patch_service_connected,
@@ -1003,6 +1112,7 @@ impl Actor for ApplicationWorkflowActor {
                             | Command::RecoverStartup { .. }
                             | Command::RetryStartup { .. }
                             | Command::CacheStartupUnsettled { .. }
+                            | Command::ServiceEndpointDown(_)
                     )
                     && !source_only_application_patch
                 {
@@ -1029,6 +1139,7 @@ impl Actor for ApplicationWorkflowActor {
                 service_probe,
                 retry_reconcile_on_failure,
                 recover,
+                service_endpoint_recovery,
                 shutdown,
                 request_runtime_rebuild,
                 deferred_retry,
@@ -1048,6 +1159,9 @@ impl Actor for ApplicationWorkflowActor {
                     debug_assert_eq!(active.shutdown, shutdown);
                     let _ = active.task.await;
                     state.workflow = Some(workflow);
+                    if service_endpoint_recovery {
+                        state.service_recovery_inflight = false;
+                    }
                     state.startup_owner_unproven = startup_owner_unproven;
                     state
                         .startup_owner_unproven_shared
@@ -1167,14 +1281,22 @@ impl Actor for ApplicationWorkflowActor {
                         state.mark_runtime_dirty(&myself);
                     }
                     if request_runtime_rebuild && !state.shutting_down {
-                        let deferred = state
-                            .workflow
-                            .as_ref()
-                            .and_then(ApplicationWorkflow::deferred_retry);
-                        if let Some((digest, next_attempt)) = deferred {
-                            state.schedule_deferred_retry(&myself, digest, next_attempt);
+                        if state.startup_owner_unproven
+                            || state.startup_owner_unproven_shared.load(Ordering::Acquire)
+                        {
+                            if !state.uncertain {
+                                state.request_startup_recovery(&myself);
+                            }
                         } else {
-                            state.mark_runtime_dirty(&myself);
+                            let deferred = state
+                                .workflow
+                                .as_ref()
+                                .and_then(ApplicationWorkflow::deferred_retry);
+                            if let Some((digest, next_attempt)) = deferred {
+                                state.schedule_deferred_retry(&myself, digest, next_attempt);
+                            } else {
+                                state.mark_runtime_dirty(&myself);
+                            }
                         }
                     }
                     if recover && failed && !state.uncertain && !state.shutting_down {
@@ -1209,6 +1331,51 @@ impl Actor for ApplicationWorkflowActor {
             Message::ServiceProbeFailed => {
                 state.publish_service_probe_failure();
                 state.follow_service().await;
+            }
+            Message::ServiceRecoveryTick => {
+                let can_recover = !state.uncertain
+                    && !state.shutting_down
+                    && state.active.is_none()
+                    && state.pending.is_empty()
+                    && !state.service_recovery_inflight;
+                let recovery_due = if can_recover {
+                    match state.workflow.as_ref() {
+                        Some(workflow) => workflow.service_endpoint_recovery_due().await,
+                        None => false,
+                    }
+                } else {
+                    false
+                };
+                if recovery_due {
+                    state.service_recovery_inflight = true;
+                    let service = state.service.clone();
+                    let actor = myself.clone();
+                    let operation_id = state.allocate_operation_id();
+                    tokio::spawn(async move {
+                        match service.begin_transition().await {
+                            Ok(transition) => {
+                                let request = Request {
+                                    command: Command::ServiceEndpointDown(transition),
+                                    response: Response {
+                                        id: operation_id,
+                                        reply: None,
+                                    },
+                                    deferred_retry: None,
+                                };
+                                if actor.cast(Message::Request(request)).is_err() {
+                                    let _ = actor.cast(Message::ServiceRecoveryLeaseFailed);
+                                }
+                            }
+                            Err(error) => {
+                                tracing::debug!(%error, "Service recovery retry deferred while acquiring its transition lease");
+                                let _ = actor.cast(Message::ServiceRecoveryLeaseFailed);
+                            }
+                        }
+                    });
+                }
+            }
+            Message::ServiceRecoveryLeaseFailed => {
+                state.service_recovery_inflight = false;
             }
             Message::RecoverCore => {
                 if state.uncertain || state.shutting_down {
@@ -1473,6 +1640,15 @@ impl Actor for ApplicationWorkflowActor {
         state.drive(&myself);
         Ok(())
     }
+
+    async fn post_stop(
+        &self,
+        _myself: ActorRef<Self::Msg>,
+        state: &mut Self::State,
+    ) -> Result<(), ActorProcessingErr> {
+        state.service_recovery_timer.abort();
+        Ok(())
+    }
 }
 
 enum CoreLifecycleClientInner {
@@ -1614,6 +1790,7 @@ impl CoreLifecycleClient {
             runtime_paths,
             service.clone(),
         )
+        .with_shutdown(shutdown.child_token())
         .with_service_status(service_status_rx.clone())
         .with_profile_content_reader(content_reader);
         let startup_owner_unproven = lifecycle.startup_owner_unproven_handle();
@@ -1634,6 +1811,7 @@ impl CoreLifecycleClient {
                 service_status,
                 service: service.clone(),
                 startup_owner_unproven_shared: startup_owner_unproven.clone(),
+                startup_recovery_pending: startup_recovery_pending.clone(),
             },
         )
         .await?;
@@ -2360,59 +2538,14 @@ impl CoreLifecycleClient {
             #[cfg(test)]
             CoreLifecycleClientInner::Direct { .. } => return,
         };
-        if startup_recovery_pending
-            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-            .is_err()
-        {
-            return;
-        }
-
-        let actor_ref = actor_ref.clone();
-        let next_id = next_id.clone();
-        let service = service.clone();
-        let startup_recovery_pending = startup_recovery_pending.clone();
         let client = self.clone();
-        tokio::spawn(async move {
-            let result = async {
-                // Acquire the host lease before asking the serialized actor to
-                // run recovery, preserving the global host-lock/mailbox order.
-                let transition = service.begin_transition().await?;
-                if !client.startup_recovery_needed() {
-                    return Ok(());
-                }
-                let operation_id = next_id.fetch_add(1, Ordering::Relaxed);
-                match actor_ref
-                    .call(
-                        |reply| {
-                            Message::Request(Request {
-                                command: Command::RecoverStartup {
-                                    operation_id,
-                                    transition,
-                                },
-                                response: Response {
-                                    id: operation_id,
-                                    reply: Some(reply),
-                                },
-                                deferred_retry: None,
-                            })
-                        },
-                        Some(CALL_WAIT),
-                    )
-                    .await?
-                {
-                    CallResult::Success(result) => result,
-                    CallResult::Timeout => anyhow::bail!("startup owner recovery timed out"),
-                    CallResult::SenderError => {
-                        anyhow::bail!("startup owner recovery reply was dropped")
-                    }
-                }
-            }
-            .await;
-            startup_recovery_pending.store(false, Ordering::Release);
-            if let Err(error) = result {
-                tracing::warn!(%error, "automatic startup owner recovery did not complete");
-            }
-        });
+        schedule_startup_recovery(
+            actor_ref.clone(),
+            next_id.clone(),
+            service.clone(),
+            startup_recovery_pending.clone(),
+            move || client.startup_recovery_needed(),
+        );
     }
 
     pub(super) async fn request_service_endpoint_down(&self) {
@@ -2433,6 +2566,10 @@ impl CoreLifecycleClient {
             #[cfg(test)]
             CoreLifecycleClientInner::Direct { .. } => return,
         };
+
+        if !still_current() {
+            return;
+        }
 
         // Preserve the existing host-lock-before-mailbox ordering used by
         // service transitions and TUN preflight.

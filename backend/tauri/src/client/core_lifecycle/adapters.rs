@@ -42,8 +42,9 @@ impl LegacyServiceBridge {
 
 struct LegacyServiceTransition {
     inner: crate::core::actor_v2::facade::ServiceTransition,
-    /// The ref ServiceActor owns endpoint recovery and the restart budget.
-    /// Manager-only fixtures without a ServiceActor retain Facade behavior.
+    /// Compatibility fallback for lifecycle fixtures without the shared Core
+    /// recovery facade. Production re-adopts the returned endpoint in
+    /// `CoreLifecyclePort::recover_service_endpoint` instead.
     service_actor: Option<chimera_core::actor_v2::service_actor::ServiceClient>,
 }
 
@@ -142,11 +143,8 @@ impl ServiceLifecyclePort for LegacyServiceBridge {
 impl ServiceTransitionLease for LegacyServiceTransition {
     async fn report_endpoint_down(&mut self) -> anyhow::Result<()> {
         if let Some(service) = &self.service_actor {
-            // The outer Facade lease still serializes host transitions. The
-            // ref ServiceActor is the sole authority for a stopped-daemon
-            // proof, bounded restart attempts and exhaustion. Recovery is
-            // best-effort: the endpoint-down notification does not promise a
-            // usable daemon, and the Actor publishes its failure status.
+            // Test-only compatibility path. Production uses the lifecycle
+            // Core facade so the returned endpoint is re-adopted by its router.
             if let Err(error) = service.recover_endpoint().await {
                 tracing::warn!(%error, "ref ServiceActor could not recover the down endpoint");
             }
@@ -234,11 +232,25 @@ impl RunningConfigPort for ActorRunningConfigBridge {
 
 pub(crate) struct LegacyCoreBridge {
     facade: Arc<CoreFacade>,
+    service_recovery: Option<Arc<tokio::sync::Mutex<chimera_core::actor_v2::facade::CoreFacade>>>,
 }
 
 impl LegacyCoreBridge {
     pub(crate) fn new(facade: Arc<CoreFacade>) -> Self {
-        Self { facade }
+        Self {
+            facade,
+            service_recovery: None,
+        }
+    }
+
+    pub(crate) fn with_service_recovery(
+        facade: Arc<CoreFacade>,
+        service_recovery: chimera_core::actor_v2::facade::CoreFacade,
+    ) -> Self {
+        Self {
+            facade,
+            service_recovery: Some(Arc::new(tokio::sync::Mutex::new(service_recovery))),
+        }
     }
 
     /// Compatibility boundary for the staged lifecycle migration.
@@ -414,6 +426,34 @@ impl CoreLifecyclePort for LegacyCoreBridge {
 
     async fn status(&self) -> anyhow::Result<CoreStatusSnapshot> {
         Ok(self.facade().status().await)
+    }
+
+    fn service_endpoint_degraded(&self) -> bool {
+        self.facade().service_endpoint_degraded()
+    }
+
+    fn service_endpoint_recovery_supported(&self) -> bool {
+        self.service_recovery.is_some()
+    }
+
+    async fn settle_service_recovery_action(&self) -> Option<Result<(), String>> {
+        let service_recovery = self.service_recovery.as_ref()?;
+        Some(service_recovery.lock().await.consume_settled_action().await)
+    }
+
+    async fn recover_service_endpoint(
+        &self,
+        closing: &tokio_util::sync::CancellationToken,
+    ) -> Option<Result<(), chimera_core_manager::CoreError>> {
+        let service_recovery = self.service_recovery.as_ref()?;
+        Some(
+            service_recovery
+                .lock()
+                .await
+                .recover_service_endpoint(closing)
+                .await
+                .map(|_| ()),
+        )
     }
 
     async fn select_execution_host(
