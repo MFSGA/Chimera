@@ -15,3 +15,4 @@ mod os_port_contract_tests;
 
 /// Preserve the original library failure cause in typed network errors.
 pub type BoxedCause = Box<dyn std::error::Error + Send + Sync + 'static>;
+pub mod storage;
