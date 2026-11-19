@@ -1879,6 +1879,12 @@ impl Actor for ApplicationWorkflowActor {
                     // Do not consume dirty/source_dirty or dispatch a runtime
                     // submit while Startup or FollowService owns the host.
                     // A resolved transition will rearm this same dirty state.
+                } else if state.pending.len() >= MAX_PENDING {
+                    // Do not consume a durable source apply intent until its
+                    // serialized Core command can actually be admitted.
+                    // The next completed lifecycle command will rearm this
+                    // dirty tick as queue capacity becomes available.
+                    tracing::debug!("deferring runtime dirty while lifecycle queue is full");
                 } else if state.dirty {
                     state.dirty = false;
                     let source_round = std::mem::take(&mut state.source_dirty);
@@ -4222,6 +4228,53 @@ mod tests {
         release_stop: Arc<Notify>,
         recovery_notify: Arc<Notify>,
         run_type: RunType,
+    }
+
+    /// Keep one source apply in flight while the Actor mailbox fills. The
+    /// second reconcile must eventually apply the newest committed source.
+    struct PausedFirstReconcileCore {
+        entered: Arc<Notify>,
+        resume: Arc<Notify>,
+        calls: AtomicUsize,
+    }
+
+    #[async_trait]
+    impl CoreLifecyclePort for PausedFirstReconcileCore {
+        async fn reconcile(
+            &self,
+            _clash: ClashConfig,
+            _target_core: ClashCore,
+            _run_type: RunType,
+        ) -> anyhow::Result<()> {
+            if self.calls.fetch_add(1, AtomicOrdering::AcqRel) == 0 {
+                self.entered.notify_one();
+                self.resume.notified().await;
+            }
+            Ok(())
+        }
+
+        async fn stop(&self) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        async fn change_core(&self, _core: ClashCore) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        async fn status(&self) -> anyhow::Result<CoreStatusSnapshot> {
+            Ok(CoreStatusSnapshot {
+                instance_id: None,
+                state: CoreState::Stopped(None),
+                state_changed_at: 0,
+                run_type: RunType::Normal,
+            })
+        }
+
+        fn recovery_notify(&self) -> Option<Arc<Notify>> {
+            None
+        }
+
+        async fn on_profile_change(&self, _: bool) {}
     }
 
     struct ConfirmedStoppedCore {
@@ -8047,6 +8100,97 @@ mod tests {
             events.iter().filter(|event| **event == "select").count(),
             MAX_PENDING
         );
+    }
+
+    /// A full lifecycle queue may not erase a committed source's runtime
+    /// intent. When capacity returns, the Actor must apply the latest source
+    /// without needing a second SourceCommitted notification.
+    #[tokio::test]
+    async fn committed_source_dirty_survives_full_lifecycle_queue() {
+        let core = Arc::new(PausedFirstReconcileCore {
+            entered: Arc::new(Notify::new()),
+            resume: Arc::new(Notify::new()),
+            calls: AtomicUsize::new(0),
+        });
+        let client = CoreLifecycleClient::spawn(
+            core.clone(),
+            ApplicationClient::legacy().unwrap(),
+            ClashConfigClient::legacy().unwrap(),
+            RuntimePaths::from_config_root(std::path::PathBuf::from("test-runtime-root")),
+        )
+        .await
+        .unwrap();
+
+        client.request_runtime_rebuild();
+        tokio::time::timeout(Duration::from_secs(3), core.entered.notified())
+            .await
+            .expect("first reconcile should hold the sole Core executor");
+        assert_eq!(core.calls.load(AtomicOrdering::Acquire), 1);
+
+        let mut queued = Vec::new();
+        for _ in 0..MAX_PENDING {
+            let queued_client = client.clone();
+            queued.push(tokio::spawn(async move {
+                queued_client.select_core(ClashCore::Mihomo).await
+            }));
+        }
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                if client.status().queued.len() == MAX_PENDING {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("Actor mailbox must be at capacity before committing source");
+
+        client.source_committed(SourceDomain::Profiles, 1, true);
+        tokio::time::sleep(DIRTY_WINDOW + Duration::from_millis(70)).await;
+        assert_eq!(core.calls.load(AtomicOrdering::Acquire), 1);
+
+        core.resume.notify_one();
+        for task in queued {
+            task.await.unwrap().unwrap();
+        }
+        tokio::time::timeout(Duration::from_secs(4), async {
+            loop {
+                let status = client.reconciler_status();
+                if core.calls.load(AtomicOrdering::Acquire) == 2
+                    && status
+                        .recent
+                        .iter()
+                        .any(|round| round.trigger == "SourceCommitted")
+                    && status.active.is_none()
+                {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap_or_else(|_| {
+            let status = client.reconciler_status();
+            panic!(
+                "latest source lost after queue pressure: calls={}, recent={:?}, active={:?}, queued={:?}",
+                core.calls.load(AtomicOrdering::Acquire),
+                status.recent.iter().map(|round| &round.trigger).collect::<Vec<_>>(),
+                client.status().active,
+                client.status().queued,
+            )
+        });
+        assert_eq!(core.calls.load(AtomicOrdering::Acquire), 2);
+        assert_eq!(
+            client
+                .reconciler_status()
+                .recent
+                .iter()
+                .filter(|round| round.trigger == "SourceCommitted")
+                .count(),
+            1,
+            "queue recovery must not duplicate the source reconciliation"
+        );
+        client.shutdown().await.unwrap();
     }
 
     #[tokio::test]
