@@ -1253,10 +1253,18 @@ impl Actor for ApplicationWorkflowActor {
                         } else {
                             None
                         };
-                    let verified_running = reconciled
-                        && observed_core.as_ref().is_some_and(|snapshot| {
-                            matches!(snapshot.state, chimera_ipc::api::status::CoreState::Running)
-                        });
+                    let verified_running = if reconciled && result.is_ok() {
+                        if let Some(observed) = observed_core.as_ref() {
+                            workflow
+                                .lifecycle()
+                                .verified_applied_runtime(observed)
+                                .await
+                        } else {
+                            false
+                        }
+                    } else {
+                        false
+                    };
                     let verified_stopped = active.trigger == "Stop"
                         && observed_core.as_ref().is_some_and(|snapshot| {
                             matches!(
@@ -3884,6 +3892,86 @@ mod tests {
         stops: AtomicUsize,
         fail_next_reconcile: AtomicBool,
         active_profiles: Mutex<Option<chimera_config::profile::Profiles>>,
+    }
+
+    /// A test endpoint with a stable accepted runtime receipt. Unlike
+    /// lifecycle-only fakes it can prove the exact committed target.
+    struct ReceiptProofCore {
+        active: Mutex<Option<Arc<crate::client::runtime::RuntimeApplyReceipt>>>,
+        publish_wrong_target: bool,
+        change_instance_between_reads: bool,
+        status_reads: AtomicUsize,
+    }
+
+    #[async_trait]
+    impl CoreLifecyclePort for ReceiptProofCore {
+        async fn reconcile(&self, _: ClashConfig, _: ClashCore, _: RunType) -> anyhow::Result<()> {
+            anyhow::bail!("this fixture requires typed committed Profiles")
+        }
+
+        async fn reconcile_profiles(
+            &self,
+            _: ClashConfig,
+            _: ClashCore,
+            _: RunType,
+            _: Arc<chimera_config::profile::Profiles>,
+            _: chimera_config::application::ChimeraAppConfig,
+            _: std::collections::BTreeMap<String, String>,
+            target: Option<String>,
+        ) -> anyhow::Result<()> {
+            let mut receipt = crate::client::ports::test_runtime_receipt(Default::default());
+            receipt.target = if self.publish_wrong_target {
+                Some("an-older-committed-target".into())
+            } else {
+                target
+            };
+            *self.active.lock().unwrap() = Some(Arc::new(receipt));
+            Ok(())
+        }
+
+        async fn stop(&self) -> anyhow::Result<()> {
+            *self.active.lock().unwrap() = None;
+            Ok(())
+        }
+
+        async fn change_core(&self, _: ClashCore) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        async fn status(&self) -> anyhow::Result<CoreStatusSnapshot> {
+            let running = self.active.lock().unwrap().is_some();
+            Ok(CoreStatusSnapshot {
+                instance_id: running.then(|| {
+                    if self.change_instance_between_reads {
+                        format!(
+                            "receipt-proof-core-{}",
+                            self.status_reads.fetch_add(1, AtomicOrdering::AcqRel)
+                        )
+                    } else {
+                        "receipt-proof-core".to_owned()
+                    }
+                }),
+                state: if running {
+                    CoreState::Running
+                } else {
+                    CoreState::Stopped(None)
+                },
+                state_changed_at: 1,
+                run_type: RunType::Normal,
+            })
+        }
+
+        async fn active_runtime_receipt(
+            &self,
+        ) -> anyhow::Result<Option<Arc<crate::client::runtime::RuntimeApplyReceipt>>> {
+            Ok(self.active.lock().unwrap().clone())
+        }
+
+        fn recovery_notify(&self) -> Option<Arc<Notify>> {
+            None
+        }
+
+        async fn on_profile_change(&self, _: bool) {}
     }
 
     struct AckOnlyProfileChange;
@@ -10258,6 +10346,54 @@ mod tests {
             candidate.valid
         );
         client.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn running_core_only_converges_when_receipt_proves_exact_committed_target() {
+        use chimera_core::client::reconciler::plan::Conclusion;
+
+        for (wrong_target, changed_instance) in [(false, false), (true, false), (false, true)] {
+            let dir = tempfile::tempdir().unwrap();
+            let path = Utf8PathBuf::from_path_buf(dir.path().join("profiles.yaml")).unwrap();
+            let manager = PersistentStateManagerSetup::<
+                chimera_config::profile::Profiles,
+                crate::core::migration::modules::profiles::ProfilesFormat,
+            >::builder()
+            .config_path(path)
+            .assemble()
+            .from_state(chimera_config::profile::Profiles::default())
+            .await
+            .unwrap();
+            let core = Arc::new(ReceiptProofCore {
+                active: Mutex::new(None),
+                publish_wrong_target: wrong_target,
+                change_instance_between_reads: changed_instance,
+                status_reads: AtomicUsize::new(0),
+            });
+            let client = spawn_startup_client_with_profiles(
+                core,
+                Arc::new(RecordingService {
+                    events: Arc::new(Mutex::new(Vec::new())),
+                }),
+                manager.snapshot_handle(),
+            )
+            .await;
+
+            client.start_core().await.unwrap();
+            let status = client.reconciler_status();
+            if wrong_target || changed_instance {
+                assert!(
+                    matches!(status.conclusion, Conclusion::Waiting { .. }),
+                    "an unmatched target or Core instance is not convergence: {wrong_target:?}/{changed_instance:?}"
+                );
+            } else {
+                assert!(
+                    matches!(status.conclusion, Conclusion::Converged),
+                    "the same stable Core and exact committed target must converge"
+                );
+            }
+            client.shutdown().await.unwrap();
+        }
     }
 
     #[tokio::test]

@@ -139,7 +139,7 @@ impl ReconcilerStatus {
         } else if reconciled {
             Conclusion::Waiting {
                 cause: Arc::new(RuntimeError::new(
-                    "core apply returned successfully but Running has not been observed",
+                    "core apply returned successfully, but the current target, host, and active revision have not all been verified",
                 )),
             }
         } else {
