@@ -1,17 +1,16 @@
-//! Crash-safe filesystem writes for the migration subsystem.
+//! Migration filesystem adapters over the ref-aligned persistence crate.
 //!
-//! Wraps [`atomicwrites`] (already a workspace dependency via `chimera-core`)
-//! behind a single helper so the migration store and every config rewrite share
-//! one durable write path. Keeping the third-party type in one place means a
-//! future swap only touches this file.
+//! Chimera migration inputs may be externally managed, so the migration
+//! boundary refuses to replace symlinks or non-file nodes before delegating
+//! the actual atomic write to the shared persistence implementation.
 
 use super::MigrationCheckError;
 use anyhow::{Context, bail, ensure};
-use atomicwrites::{AllowOverwrite, AtomicFile};
-use chimera_core::format::{DocumentStamp, Inspected, StampError};
+use chimera_core::format::{Inspected, StampError};
+use chimera_persistence::write as persistence_write;
 use serde::de::DeserializeOwned;
 use serde_yaml_ng::Mapping;
-use std::{io::Write, path::Path};
+use std::path::Path;
 
 /// Whether `path` exists, reporting an inaccessible parent as an error
 /// instead of the `false` that [`Path::exists`] would return.
@@ -120,42 +119,25 @@ pub(crate) fn write_document(
     payload: Mapping,
     prefix: Option<&str>,
 ) -> anyhow::Result<()> {
-    let stamp = DocumentStamp {
-        document: document.to_owned(),
-        schema_revision,
-    };
-    let stamped = chimera_core::format::stamp(payload, &stamp)
-        .with_context(|| format!("failed to stamp {}", path.display()))?;
-    let body = serde_yaml_ng::to_string(&stamped)
-        .with_context(|| format!("failed to serialize {}", path.display()))?;
-    let content = match prefix {
-        Some(prefix) => format!("{prefix}\n\n{body}"),
-        None => body,
-    };
-    atomic_write(path, content.as_bytes())
+    validate_destination(path)?;
+    persistence_write::write_document(path, document, schema_revision, payload, prefix)?;
+    Ok(())
 }
 
-/// Atomically write `contents` to `path`.
-///
-/// The destination is never left half-written: `atomicwrites` writes the bytes
-/// into a temp file under a randomized `.atomicwrite` subdirectory of the
-/// target's parent, fsyncs it, then atomically replaces `path`. On Unix it also
-/// fsyncs the parent directories so the rename survives a crash; on Windows it
-/// replaces via `MoveFileExW` with write-through semantics. Missing parent
-/// directories are created first.
+/// Atomically write `contents` using shared persistence after validating
+/// the migration destination's stricter compatibility requirements.
 pub(crate) fn atomic_write(path: &Path, contents: &[u8]) -> anyhow::Result<()> {
+    validate_destination(path)?;
+    persistence_write::atomic_write(path, contents)?;
+    Ok(())
+}
+
+fn validate_destination(path: &Path) -> anyhow::Result<()> {
     ensure!(
         path.file_name().is_some(),
         "destination path has no file name: {}",
         path.display()
     );
-    if let Some(parent) = path
-        .parent()
-        .filter(|parent| !parent.as_os_str().is_empty())
-    {
-        crate::core::corrupt::retry_io(|| std::fs::create_dir_all(parent))
-            .with_context(|| format!("failed to create dir {}", parent.display()))?;
-    }
     // An atomic rename would replace a symbolic link itself rather than
     // updating its target, silently breaking externally managed config paths.
     // A directory or other non-file node must never be replaced either.
@@ -179,15 +161,6 @@ pub(crate) fn atomic_write(path: &Path, contents: &[u8]) -> anyhow::Result<()> {
                 .with_context(|| format!("failed to inspect destination {}", path.display()));
         }
     }
-    crate::core::corrupt::retry(
-        || AtomicFile::new(path, AllowOverwrite).write(|file| file.write_all(contents)),
-        |error| {
-            let (atomicwrites::Error::Internal(error) | atomicwrites::Error::User(error)) = error;
-            crate::utils::recovery_io::classify(error)
-                == crate::utils::recovery_io::IoFailure::Transient
-        },
-    )
-    .with_context(|| format!("failed to atomically write {}", path.display()))?;
     Ok(())
 }
 
@@ -229,6 +202,36 @@ mod tests {
             b"keep"
         );
         assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn stamped_migration_write_uses_shared_document_format() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("nested").join("profiles.yaml");
+        let mut payload = Mapping::new();
+        payload.insert("revision".into(), 7.into());
+        write_document(&path, "profiles", 4, payload, Some("# migrated")).unwrap();
+        let document = read_document(&path, "profiles").unwrap().unwrap();
+        assert!(document.raw.starts_with("# migrated\n\n"));
+        assert_eq!(document.schema_revision, Some(4));
+        assert_eq!(document.payload["revision"].as_u64(), Some(7));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn stamped_migration_write_preserves_link_and_target() {
+        use std::os::unix::fs::symlink;
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("managed.yaml");
+        let link = dir.path().join("profiles.yaml");
+        std::fs::write(&target, b"external config").unwrap();
+        symlink(&target, &link).unwrap();
+        let mut payload = Mapping::new();
+        payload.insert("revision".into(), 7.into());
+        let error = write_document(&link, "profiles", 4, payload, None).unwrap_err();
+        assert!(format!("{error:#}").contains("symbolic link"));
+        assert_eq!(std::fs::read_link(link).unwrap(), target);
+        assert_eq!(std::fs::read(target).unwrap(), b"external config");
     }
 
     #[cfg(unix)]
