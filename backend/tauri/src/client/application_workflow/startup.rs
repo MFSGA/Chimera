@@ -25,8 +25,7 @@ use chimera_core::{
         endpoint::ExecutionHost, service_policy::ServicePhase, service_status::ServiceHostStatus,
     },
     client::reconciler::plan::{
-        self, CoreFact, Facts, OwnerPlan, Ownership, RunIntent,
-        ServiceEvidence as ReconcilerServiceEvidence, Step, Trigger,
+        OwnerPlan, ServiceEvidence as ReconcilerServiceEvidence, Step,
         plan_owner as reconcile_plan_owner,
     },
 };
@@ -646,7 +645,7 @@ pub(crate) fn effective_host(
 /// Adapt Chimera's quarantine evidence into ref's runtime ownership planner.
 /// A stopped Core with an error reason may still own quarantined processes:
 /// it must never be presented to the planner as an ordinary stopped Core.
-fn reconciler_service_evidence(service: &ServiceEvidence) -> ReconcilerServiceEvidence {
+pub(crate) fn reconciler_service_evidence(service: &ServiceEvidence) -> ReconcilerServiceEvidence {
     match service {
         ServiceEvidence::Absent { phase } => ReconcilerServiceEvidence::Absent { phase: *phase },
         ServiceEvidence::CoreStopped { ready, phase, .. } => {
@@ -686,20 +685,12 @@ fn s2_step(
     service: &ServiceEvidence,
     recovering: bool,
 ) -> Step {
-    let evidence = reconciler_service_evidence(service);
-    plan::plan(&Facts {
-        trigger: Trigger::ServiceReadiness,
-        recovering,
-        run: RunIntent::Running,
-        desired_host: desired,
+    crate::client::reconciler::decision::plan_owner_boundary(
+        desired,
         owner,
-        ownership: Ownership::Unproven,
-        service: Some(evidence),
-        core: CoreFact::Unreadable,
-        target: String::new(),
-        applied: None,
-        attempt: None,
-    })
+        reconciler_service_evidence(service),
+        recovering,
+    )
 }
 
 /// Production startup now first consults the *full* ref `plan(Facts)`

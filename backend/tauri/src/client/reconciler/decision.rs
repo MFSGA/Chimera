@@ -1,13 +1,11 @@
-//! Adapt ref's pure `plan(Facts)` to the already-established Core host.
-//!
-//! This is a deliberately bounded migration of S3/S4 into Chimera's sole
-//! CoreLifecycle executor. A host handoff is still owned by StartupWorkflow:
-//! an unavailable or mismatched host does NOT become an invented ownership
-//! proof merely so the planner can advance.
+//! One ref-shaped Facts assembly boundary for both S2 owner planning and
+//! S3/S4 committed-target decisions. The existing CoreLifecycle mailbox is
+//! still the sole executor; this module never acquires a lease or mutates Core.
 use chimera_core::{
     actor_v2::endpoint::ExecutionHost,
     client::reconciler::plan::{
-        self, Attempt, CoreFact, Facts, Ownership, RunIntent, Step, Trigger,
+        self, Attempt, CoreFact, Facts, OwnerPlan, Ownership, RunIntent, ServiceEvidence, Step,
+        Trigger,
     },
 };
 use chimera_ipc::api::status::CoreState;
@@ -17,22 +15,82 @@ use crate::client::{
     runtime::RuntimeApplyReceipt,
 };
 
-/// Only call the ref planner for a host whose selection is stably observed.
-/// A Running instance additionally needs an authoritative active receipt:
-/// otherwise Chimera's older host adapter must decide how to recover it.
-pub(crate) fn plan_established_target(
+/// The reusable ref Facts frame. In S2 the Core fact stays Unreadable and
+/// ownership Unproven; in a committed round Core facts are sampled only after
+/// the selected endpoint has supplied a stable observation.
+struct FactFrame {
+    trigger: Trigger,
+    recovering: bool,
+    desired: ExecutionHost,
+    owner: ExecutionHost,
+    service: ServiceEvidence,
+}
+
+impl FactFrame {
+    fn plan(
+        self,
+        core: CoreFact,
+        target: &str,
+        applied: Option<&str>,
+        attempt: Option<Attempt>,
+    ) -> Step {
+        plan::plan(&Facts {
+            trigger: self.trigger,
+            recovering: self.recovering,
+            run: RunIntent::Running,
+            desired_host: self.desired,
+            owner: self.owner,
+            ownership: Ownership::Unproven,
+            service: Some(self.service),
+            core,
+            target: target.to_owned(),
+            applied: applied.map(ToOwned::to_owned),
+            attempt,
+        })
+    }
+}
+
+/// S2's sole ownership decision. Even when plan_owner returns Owned, this
+/// S2-only call cannot cause Core Apply/Stop: the core is explicitly unreadable.
+pub(crate) fn plan_owner_boundary(
+    desired: ExecutionHost,
+    owner: ExecutionHost,
+    service: ServiceEvidence,
+    recovering: bool,
+) -> Step {
+    FactFrame {
+        trigger: Trigger::ServiceReadiness,
+        recovering,
+        desired,
+        owner,
+        service,
+    }
+    .plan(CoreFact::Unreadable, "", None, None)
+}
+
+/// S2 then S3/S4 in one ref Facts round. Returns None when there is no stable
+/// current Core or an unverified Running Core would otherwise be misclassified
+/// as a new target: the existing recovery adapter must handle that case.
+///
+/// A Service owner action or Waiting on ownership evidence is returned as an
+/// explicit step and must NOT be treated as permission to submit Core.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn plan_committed_target(
     target: &str,
     desired: ExecutionHost,
     observed: &CoreStatusSnapshot,
+    service: ServiceEvidence,
+    recovering: bool,
     active_receipt: Option<&RuntimeApplyReceipt>,
     verified_applied: bool,
     attempt: Option<Attempt>,
     trigger: Trigger,
 ) -> Option<Step> {
-    let owner = host_for(observed.run_type);
-    if observed.state_changed_at == 0 || desired != owner {
+    if observed.state_changed_at == 0 {
         return None;
     }
+    let owner = host_for(observed.run_type);
+    let owner_plan = plan::plan_owner(desired, owner, &service);
     let core = match &observed.state {
         CoreState::Stopped(reason) => CoreFact::Stopped {
             failed: reason.is_some(),
@@ -40,31 +98,37 @@ pub(crate) fn plan_established_target(
         CoreState::Running if active_receipt.is_some() => CoreFact::Running {
             verified: verified_applied,
         },
-        CoreState::Running => return None,
+        // Unverified Running is never enough for an S3/S4 stop. We still
+        // execute S2 to detect a distinct owned Service Core or handoff.
+        CoreState::Running => CoreFact::Unreadable,
     };
-    let applied = verified_applied
-        .then_some(target.to_owned())
-        .filter(|_| matches!(core, CoreFact::Running { verified: true }));
-    let facts = Facts {
+    let applied = (verified_applied && matches!(core, CoreFact::Running { verified: true }))
+        .then_some(target);
+    let step = FactFrame {
         trigger,
-        recovering: false,
-        run: RunIntent::Running,
-        desired_host: desired,
+        recovering,
+        desired,
         owner,
-        ownership: Ownership::Established { host: owner },
-        service: None,
-        core,
-        target: target.to_owned(),
-        applied,
-        attempt,
-    };
-    Some(plan::plan(&facts))
+        service,
+    }
+    .plan(core, target, applied, attempt);
+    // S2 established ownership but S3 cannot safely infer the active Core
+    // target: leave it to Chimera's existing Core receipt recovery path.
+    if matches!(owner_plan, OwnerPlan::Owned) && matches!(core, CoreFact::Unreadable) && !recovering
+    {
+        None
+    } else {
+        Some(step)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chimera_core::client::reconciler::plan::{AttemptOutcome, Conclusion, RuntimeError};
+    use chimera_core::{
+        actor_v2::service_policy::ServicePhase,
+        client::reconciler::plan::{AttemptOutcome, Conclusion, RuntimeError},
+    };
     use std::sync::Arc;
 
     fn running(run_type: crate::core::RunType) -> CoreStatusSnapshot {
@@ -80,22 +144,41 @@ mod tests {
         crate::client::ports::test_runtime_receipt(Default::default())
     }
 
+    fn absent() -> ServiceEvidence {
+        ServiceEvidence::Absent {
+            phase: ServicePhase::DaemonStopped,
+        }
+    }
+
+    fn owned_service() -> ServiceEvidence {
+        ServiceEvidence::CoreRunning {
+            ready: true,
+            phase: ServicePhase::Ready,
+            instance: Some("owned".into()),
+            revision: None,
+        }
+    }
+
     #[test]
     fn source_notification_does_not_reapply_verified_committed_target() {
-        let step = plan_established_target(
+        let step = plan_committed_target(
             "same-target",
             ExecutionHost::Local,
             &running(crate::core::RunType::Normal),
+            absent(),
+            false,
             Some(&receipt()),
             true,
             None,
             Trigger::SourceCommitted,
         );
         assert!(matches!(step, Some(Step::Idle(Conclusion::Converged))));
-        let retry = plan_established_target(
+        let retry = plan_committed_target(
             "same-target",
             ExecutionHost::Local,
             &running(crate::core::RunType::Normal),
+            absent(),
+            false,
             Some(&receipt()),
             true,
             None,
@@ -106,10 +189,12 @@ mod tests {
 
     #[test]
     fn wrong_accepted_target_demands_stop_before_new_apply() {
-        let step = plan_established_target(
+        let step = plan_committed_target(
             "new-target",
             ExecutionHost::Local,
             &running(crate::core::RunType::Normal),
+            absent(),
+            false,
             Some(&receipt()),
             false,
             None,
@@ -119,24 +204,82 @@ mod tests {
     }
 
     #[test]
-    fn host_handoff_or_missing_core_proof_is_left_to_existing_owner() {
-        assert!(
-            plan_established_target(
-                "new",
-                ExecutionHost::Service,
-                &running(crate::core::RunType::Normal),
+    fn source_round_first_checks_s2_before_s3_core_mutations() {
+        let current = running(crate::core::RunType::Normal);
+        let handoff = plan_committed_target(
+            "new",
+            ExecutionHost::Service,
+            &current,
+            ServiceEvidence::CoreStopped {
+                ready: true,
+                phase: ServicePhase::Ready,
+            },
+            false,
+            Some(&receipt()),
+            false,
+            None,
+            Trigger::SourceCommitted,
+        );
+        assert!(matches!(
+            handoff,
+            Some(Step::Owner(OwnerPlan::AdoptService))
+        ));
+        let second_owner = plan_committed_target(
+            "new",
+            ExecutionHost::Local,
+            &current,
+            owned_service(),
+            false,
+            Some(&receipt()),
+            false,
+            None,
+            Trigger::SourceCommitted,
+        );
+        assert!(matches!(
+            second_owner,
+            Some(Step::Owner(OwnerPlan::RetireServiceThenLocal))
+        ));
+        let unreadable = ServiceEvidence::Unreadable {
+            phase: ServicePhase::Unknown,
+        };
+        let wait = plan_committed_target(
+            "new",
+            ExecutionHost::Local,
+            &current,
+            unreadable,
+            false,
+            Some(&receipt()),
+            false,
+            None,
+            Trigger::SourceCommitted,
+        );
+        assert!(matches!(wait, Some(Step::Idle(Conclusion::Waiting { .. }))));
+    }
+
+    #[test]
+    fn recovery_and_unverified_owner_cannot_authorize_apply_or_stop() {
+        let current = running(crate::core::RunType::Normal);
+        assert!(matches!(
+            plan_committed_target(
+                "next",
+                ExecutionHost::Local,
+                &current,
+                owned_service(),
+                true,
                 Some(&receipt()),
                 false,
                 None,
                 Trigger::SourceCommitted,
-            )
-            .is_none()
-        );
+            ),
+            Some(Step::Idle(Conclusion::Waiting { .. }))
+        ));
         assert!(
-            plan_established_target(
-                "new",
+            plan_committed_target(
+                "next",
                 ExecutionHost::Local,
-                &running(crate::core::RunType::Normal),
+                &current,
+                absent(),
+                false,
                 None,
                 false,
                 None,
@@ -144,13 +287,15 @@ mod tests {
             )
             .is_none()
         );
-        let mut unproven = running(crate::core::RunType::Normal);
+        let mut unproven = current;
         unproven.state_changed_at = 0;
         assert!(
-            plan_established_target(
-                "new",
+            plan_committed_target(
+                "next",
                 ExecutionHost::Local,
                 &unproven,
+                owned_service(),
+                false,
                 Some(&receipt()),
                 false,
                 None,
@@ -174,14 +319,19 @@ mod tests {
             run_type: crate::core::RunType::Service,
         };
         assert!(matches!(
-            plan_established_target(
+            plan_committed_target(
                 "target",
                 ExecutionHost::Service,
                 &stopped,
+                ServiceEvidence::CoreStopped {
+                    ready: true,
+                    phase: ServicePhase::Ready
+                },
+                false,
                 None,
                 false,
                 Some(rejected),
-                Trigger::SourceCommitted
+                Trigger::SourceCommitted,
             ),
             Some(Step::FallBackToLocal)
         ));

@@ -1311,10 +1311,59 @@ impl CoreLifecycleWorkflow {
             false
         };
         let previous = self.attempt_policy.lock().snapshot();
-        let step = crate::client::reconciler::decision::plan_established_target(
+        // Read the same ServiceActor-owned evidence as StartupWorkflow. Its
+        // epoch/readiness and the selected Core state form ONE ref Facts round
+        // instead of permitting S3 to bypass a pending S2 owner transition.
+        let (service, _) = self.service_evidence().await;
+        // The Service probe is asynchronous. A Core instance or routing
+        // generation change during that await invalidates the paired Facts
+        // sample; never stop/apply based on observations from two owners.
+        let resampled = self.core.status().await.ok();
+        if !resampled
+            .as_ref()
+            .is_some_and(|current| same_core_status(&observed, current))
+        {
+            return Ok(Some(Err(
+                crate::client::reconciler::attempt::OwnershipTransitionPending {
+                    reason: "the selected Core changed while sampling Service ownership".into(),
+                }
+                .into(),
+            )));
+        }
+        if let Some(original) = receipt.as_ref()
+            && !self
+                .core
+                .active_runtime_receipt()
+                .await
+                .ok()
+                .flatten()
+                .is_some_and(|current| Arc::ptr_eq(original, &current))
+        {
+            return Ok(Some(Err(
+                crate::client::reconciler::attempt::OwnershipTransitionPending {
+                    reason: "the accepted Core revision changed while sampling Service ownership"
+                        .into(),
+                }
+                .into(),
+            )));
+        }
+        if host == ExecutionHost::Service && matches!(service, ServiceEvidence::ForeignCore { .. })
+        {
+            return Ok(Some(Err(
+                crate::client::reconciler::attempt::OwnershipTransitionPending {
+                    reason:
+                        "Service belongs to another instance; Local owner selection is required"
+                            .into(),
+                }
+                .into(),
+            )));
+        }
+        let step = crate::client::reconciler::decision::plan_committed_target(
             target,
             host,
             &observed,
+            crate::client::application_workflow::startup::reconciler_service_evidence(&service),
+            self.service_recovery_blocks_handoff(),
             receipt.as_deref(),
             verified,
             previous,
@@ -1322,6 +1371,18 @@ impl CoreLifecycleWorkflow {
         );
         match step {
             Some(Step::Idle(Conclusion::Converged)) => Ok(Some(Ok(()))),
+            Some(Step::Owner(owner_plan)) => Ok(Some(Err(
+                crate::client::reconciler::attempt::OwnershipTransitionPending {
+                    reason: format!("ref S2 selected {owner_plan:?}; the existing lifecycle actor must acquire the Service handoff lease"),
+                }
+                .into(),
+            ))),
+            Some(Step::Idle(Conclusion::Waiting { cause })) => Ok(Some(Err(
+                crate::client::reconciler::attempt::OwnershipTransitionPending {
+                    reason: cause.to_string(),
+                }
+                .into(),
+            ))),
             Some(Step::Stop { intent: false }) => {
                 // A live Core with the wrong accepted revision must stop
                 // before we submit this different committed target.

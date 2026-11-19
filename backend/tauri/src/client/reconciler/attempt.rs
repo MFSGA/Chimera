@@ -11,6 +11,15 @@ use chimera_core::{
 };
 use chimera_core_manager::{CoreError, CoreErrorKind};
 
+/// The ref planner selected S2 ownership work or a dependency wait. A
+/// committed source stays durable; the single lifecycle actor must complete
+/// its existing Service transition before a Core apply can be attempted.
+#[derive(Debug, thiserror::Error)]
+#[error("runtime ownership is awaiting S2 reconciliation: {reason}")]
+pub(crate) struct OwnershipTransitionPending {
+    pub reason: String,
+}
+
 /// A rejected Service application can fall back only after the old owner
 /// has been safely released. This is a dependency wait, not a refused Local
 /// target and not a reason to undo a durable source commit.
@@ -102,6 +111,7 @@ impl AttemptPolicy {
 pub(crate) fn waiting_dependency(error: &anyhow::Error) -> bool {
     if error.downcast_ref::<ServiceFallbackDeferred>().is_some()
         || error.downcast_ref::<CommittedTargetAdvanced>().is_some()
+        || error.downcast_ref::<OwnershipTransitionPending>().is_some()
     {
         return true;
     }

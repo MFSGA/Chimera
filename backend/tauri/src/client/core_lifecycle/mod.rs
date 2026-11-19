@@ -1994,6 +1994,36 @@ enum CoreLifecycleClientInner {
 #[derive(Clone)]
 pub(crate) struct CoreLifecycleClient(Arc<CoreLifecycleClientInner>);
 
+/// A direct, core-only test has no ServiceActor. Its Service endpoint is
+/// explicitly **not installed**, not an ambiguous OS-global legacy probe.
+/// This makes the fixture model a real no-daemon environment while keeping
+/// production's fail-closed S2 ownership checks fully enabled.
+#[cfg(test)]
+struct DirectNoDaemonService {
+    inner: Arc<dyn ports::ServiceLifecyclePort>,
+}
+
+#[cfg(test)]
+#[async_trait::async_trait]
+impl ports::ServiceLifecyclePort for DirectNoDaemonService {
+    async fn probe(&self) -> anyhow::Result<chimera_ipc::types::StatusInfo<'static>> {
+        Ok(chimera_ipc::types::StatusInfo {
+            name: "chimera-test-service".into(),
+            version: "0".into(),
+            status: chimera_ipc::types::ServiceStatus::NotInstalled,
+            server: None,
+        })
+    }
+
+    async fn begin_transition(&self) -> anyhow::Result<Box<dyn ServiceTransitionLease>> {
+        self.inner.begin_transition().await
+    }
+
+    async fn try_begin_transition(&self) -> anyhow::Result<Box<dyn ServiceTransitionLease>> {
+        self.inner.try_begin_transition().await
+    }
+}
+
 impl CoreLifecycleClient {
     #[cfg(test)]
     pub(super) async fn spawn(
@@ -2249,9 +2279,11 @@ impl CoreLifecycleClient {
         clash: ClashConfigClient,
         runtime_paths: RuntimePaths,
     ) -> Self {
-        let service: Arc<dyn ports::ServiceLifecyclePort> = Arc::new(LegacyServiceBridge::new(
-            Arc::new(crate::core::actor_v2::CoreFacade::new_local()),
-        ));
+        let service: Arc<dyn ports::ServiceLifecyclePort> = Arc::new(DirectNoDaemonService {
+            inner: Arc::new(LegacyServiceBridge::new(Arc::new(
+                crate::core::actor_v2::CoreFacade::new_local(),
+            ))),
+        });
         let (_service_status_tx, service_status_rx) =
             tokio::sync::watch::channel(ServiceHostStatus::probing());
         let workflow = CoreLifecycleWorkflow::new(
@@ -11340,6 +11372,198 @@ mod tests {
             );
             client.shutdown().await.unwrap();
         }
+    }
+
+    #[tokio::test]
+    async fn source_committed_does_not_stop_a_core_whose_instance_changed_during_s2_sampling() {
+        use chimera_core::client::reconciler::plan::Conclusion;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = Utf8PathBuf::from_path_buf(dir.path().join("profiles.yaml")).unwrap();
+        let mut manager = PersistentStateManagerSetup::<
+            chimera_config::profile::Profiles,
+            crate::core::migration::modules::profiles::ProfilesFormat,
+        >::builder()
+        .config_path(path)
+        .assemble()
+        .from_state(chimera_config::profile::Profiles::default())
+        .await
+        .unwrap();
+        let core = Arc::new(ReceiptProofCore {
+            active: Mutex::new(None),
+            publish_wrong_target: false,
+            change_instance_between_reads: true,
+            status_reads: AtomicUsize::new(0),
+            submissions: AtomicUsize::new(0),
+            stops: AtomicUsize::new(0),
+        });
+        let client = spawn_startup_client_with_profiles(
+            core.clone(),
+            Arc::new(RecordingService {
+                events: Arc::new(Mutex::new(Vec::new())),
+            }),
+            manager.snapshot_handle(),
+        )
+        .await;
+        client.start_core().await.unwrap();
+        let mut changed = manager.snapshot().as_ref().clone();
+        changed
+            .valid
+            .push("source-must-not-stop-changed-core".into());
+        manager
+            .replace_if_version(chimera_core::state::Version::new(0), changed)
+            .await
+            .unwrap();
+        client.source_committed(SourceDomain::Profiles, 1, true);
+        let settled = tokio::time::timeout(
+            Duration::from_secs(3),
+            client.settled(SourceDomain::Profiles, 1),
+        )
+        .await
+        .expect("a changing Core instance must settle to a retryable ownership wait");
+        assert!(matches!(settled.conclusion, Conclusion::Waiting { .. }));
+        assert_eq!(core.submissions.load(AtomicOrdering::Acquire), 1);
+        assert_eq!(core.stops.load(AtomicOrdering::Acquire), 0);
+        client.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn source_committed_never_mutates_core_when_service_probe_is_unreadable() {
+        use chimera_core::client::reconciler::plan::Conclusion;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = Utf8PathBuf::from_path_buf(dir.path().join("profiles.yaml")).unwrap();
+        let mut manager = PersistentStateManagerSetup::<
+            chimera_config::profile::Profiles,
+            crate::core::migration::modules::profiles::ProfilesFormat,
+        >::builder()
+        .config_path(path)
+        .assemble()
+        .from_state(chimera_config::profile::Profiles::default())
+        .await
+        .unwrap();
+        let core = Arc::new(ReceiptProofCore {
+            active: Mutex::new(None),
+            publish_wrong_target: false,
+            change_instance_between_reads: false,
+            status_reads: AtomicUsize::new(0),
+            submissions: AtomicUsize::new(0),
+            stops: AtomicUsize::new(0),
+        });
+        let client = spawn_startup_client_with_profiles(
+            core.clone(),
+            Arc::new(UnreadableService {
+                events: Arc::new(Mutex::new(Vec::new())),
+            }),
+            manager.snapshot_handle(),
+        )
+        .await;
+        // Explicit Start is not an automatic SourceCommitted round. Once it
+        // is running, an unreadable Service probe must block a source-driven
+        // attempt to stop/restart the selected Core.
+        client.start_core().await.unwrap();
+        let mut changed = manager.snapshot().as_ref().clone();
+        changed
+            .valid
+            .push("blocked-until-service-owner-proven".into());
+        manager
+            .replace_if_version(chimera_core::state::Version::new(0), changed)
+            .await
+            .unwrap();
+        client.source_committed(SourceDomain::Profiles, 1, true);
+        let settled = tokio::time::timeout(
+            Duration::from_secs(3),
+            client.settled(SourceDomain::Profiles, 1),
+        )
+        .await
+        .expect("source round must publish an explicit ownership wait");
+        assert!(matches!(settled.conclusion, Conclusion::Waiting { .. }));
+        assert_eq!(core.submissions.load(AtomicOrdering::Acquire), 1);
+        assert_eq!(core.stops.load(AtomicOrdering::Acquire), 0);
+        client.shutdown().await.unwrap();
+    }
+
+    /// One actual SourceCommitted Actor round must run ref S2 before S3/S4.
+    /// Until another owned Service Core is cleared, neither Stop nor Apply
+    /// may be submitted to the Local Core, even if the source is newer.
+    #[tokio::test]
+    async fn source_committed_waits_for_second_service_owner_before_core_apply() {
+        use chimera_core::client::reconciler::plan::Conclusion;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = Utf8PathBuf::from_path_buf(dir.path().join("profiles.yaml")).unwrap();
+        let mut manager = PersistentStateManagerSetup::<
+            chimera_config::profile::Profiles,
+            crate::core::migration::modules::profiles::ProfilesFormat,
+        >::builder()
+        .config_path(path)
+        .assemble()
+        .from_state(chimera_config::profile::Profiles::default())
+        .await
+        .unwrap();
+        let core = Arc::new(ReceiptProofCore {
+            active: Mutex::new(None),
+            publish_wrong_target: false,
+            change_instance_between_reads: false,
+            status_reads: AtomicUsize::new(0),
+            submissions: AtomicUsize::new(0),
+            stops: AtomicUsize::new(0),
+        });
+        let other_service_core = Arc::new(AtomicBool::new(false));
+        let client = spawn_startup_client_with_profiles(
+            core.clone(),
+            Arc::new(ToggleStartupServiceProbe {
+                events: Arc::new(Mutex::new(Vec::new())),
+                ready: Arc::new(AtomicBool::new(true)),
+                core_running: other_service_core.clone(),
+            }),
+            manager.snapshot_handle(),
+        )
+        .await;
+        client.start_core().await.unwrap();
+        assert_eq!(core.submissions.load(AtomicOrdering::Acquire), 1);
+
+        let mut latest = manager.snapshot().as_ref().clone();
+        latest.valid.push("must-wait-for-S2-owner".into());
+        manager
+            .replace_if_version(chimera_core::state::Version::new(0), latest)
+            .await
+            .unwrap();
+        other_service_core.store(true, AtomicOrdering::Release);
+        client.source_committed(SourceDomain::Profiles, 1, true);
+        let waiting = tokio::time::timeout(
+            Duration::from_secs(3),
+            client.settled(SourceDomain::Profiles, 1),
+        )
+        .await
+        .expect("S2 ownership decision must settle the source round as Waiting");
+        assert!(matches!(waiting.conclusion, Conclusion::Waiting { .. }));
+        assert_eq!(core.submissions.load(AtomicOrdering::Acquire), 1);
+        assert_eq!(core.stops.load(AtomicOrdering::Acquire), 0);
+
+        // A new, fresh Service probe proves the other owned Core stopped.
+        // The source is still durable; a repeated notification now proceeds
+        // through S3/S4 to stop the outdated Local Core before reapplying.
+        other_service_core.store(false, AtomicOrdering::Release);
+        client.source_committed(SourceDomain::Profiles, 1, true);
+        tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                if core.submissions.load(AtomicOrdering::Acquire) == 2
+                    && core.stops.load(AtomicOrdering::Acquire) == 1
+                    && client.status().active.is_none()
+                {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("cleared S2 ownership must allow the latest target to apply once");
+        assert!(matches!(
+            client.reconciler_status().conclusion,
+            Conclusion::Converged
+        ));
+        client.shutdown().await.unwrap();
     }
 
     /// Ref S3/S4 is now called from the real committed-source actor route:
