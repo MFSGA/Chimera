@@ -1060,6 +1060,7 @@ dependencies = [
  "chimera-net",
  "chimera-os",
  "chimera-paths",
+ "chimera-persistence",
  "chimera-state-engine",
  "chimera-traffic",
  "chimera-utils",
@@ -1170,7 +1171,7 @@ dependencies = [
 
 [[package]]
 name = "chimera-clash-api"
-version = "1.1.2"
+version = "1.2.0"
 dependencies = [
  "backon",
  "chimera-utils",
@@ -1292,7 +1293,7 @@ dependencies = [
 
 [[package]]
 name = "chimera-core-manager"
-version = "1.1.2"
+version = "1.2.0"
 dependencies = [
  "camino",
  "chimera-clash-api",
@@ -1336,7 +1337,7 @@ dependencies = [
 
 [[package]]
 name = "chimera-ipc"
-version = "1.11.2"
+version = "1.12.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -1468,15 +1469,22 @@ name = "chimera-persistence"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "atomicwrites",
+ "backon",
+ "chimera-utils",
+ "nix 0.31.3",
  "serde",
  "serde_yaml_ng",
+ "snafu",
  "tempfile",
  "thiserror 2.0.21",
+ "time",
+ "tracing",
 ]
 
 [[package]]
 name = "chimera-serde"
-version = "0.1.3"
+version = "0.2.0"
 dependencies = [
  "chimera-serde-derive",
  "indexmap 2.14.2",
@@ -1485,7 +1493,7 @@ dependencies = [
 
 [[package]]
 name = "chimera-serde-derive"
-version = "0.1.3"
+version = "0.2.0"
 dependencies = [
  "proc-macro-crate 3.5.0",
  "proc-macro2",
@@ -1496,7 +1504,7 @@ dependencies = [
 
 [[package]]
 name = "chimera-service-core-metadata"
-version = "1.1.2"
+version = "1.2.0"
 dependencies = [
  "constcat",
  "enumset",
@@ -1539,7 +1547,7 @@ dependencies = [
 
 [[package]]
 name = "chimera-utils"
-version = "0.2.2"
+version = "0.3.0"
 dependencies = [
  "atomic_enum",
  "backon",
@@ -1557,6 +1565,7 @@ dependencies = [
  "processkit",
  "reqwest",
  "reqwest-websocket",
+ "serde",
  "shared_child",
  "sysinfo 0.39.6",
  "tempfile",
@@ -1656,7 +1665,7 @@ dependencies = [
 
 [[package]]
 name = "clash-api"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "backon",
  "chimera-serde",
