@@ -324,6 +324,7 @@ struct ApplicationWorkflowState {
     service_recovery_inflight: bool,
     service_handoff_maintenance: Option<String>,
     service_recovery_maintenance: Option<String>,
+    product_maintenance: Option<String>,
     service_recovery_timer: tokio::task::JoinHandle<()>,
     startup_recovery_pending: Arc<AtomicBool>,
 }
@@ -542,6 +543,7 @@ impl ApplicationWorkflowState {
         let details: Vec<_> = [
             self.service_handoff_maintenance.as_deref(),
             self.service_recovery_maintenance.as_deref(),
+            self.product_maintenance.as_deref(),
         ]
         .into_iter()
         .flatten()
@@ -1121,6 +1123,7 @@ impl Actor for ApplicationWorkflowActor {
             service_recovery_inflight: false,
             service_handoff_maintenance: None,
             service_recovery_maintenance: None,
+            product_maintenance: None,
             service_recovery_timer,
             startup_recovery_pending: args.startup_recovery_pending,
         })
@@ -1300,6 +1303,16 @@ impl Actor for ApplicationWorkflowActor {
                                 chimera_ipc::api::status::CoreState::Stopped(_)
                             )
                         });
+                    // This belongs to the existing LocalRuntimeHost. The
+                    // status projection only records outstanding publication
+                    // debt and cannot mutate or duplicate the runtime product.
+                    state.product_maintenance = workflow
+                        .lifecycle()
+                        .pending_runtime_product_target()
+                        .map(|target| {
+                            format!("RuntimeProduct publication pending for target {target}")
+                        });
+                    state.publish_maintenance();
                     state.workflow = Some(workflow);
                     if service_endpoint_recovery {
                         state.service_recovery_inflight = false;
@@ -3965,6 +3978,107 @@ mod tests {
         publish_wrong_target: bool,
         change_instance_between_reads: bool,
         status_reads: AtomicUsize,
+    }
+
+    /// The Core accepted a committed revision, but publishing the derived
+    /// Applied snapshot failed after the product had been promoted.
+    struct PendingProductCore {
+        lifecycle: Arc<crate::client::runtime::RuntimeLifecycle>,
+        confirmed: Mutex<Option<Arc<crate::client::runtime::RuntimeApplyReceipt>>>,
+        submissions: AtomicUsize,
+        publications: AtomicUsize,
+    }
+
+    #[async_trait]
+    impl CoreLifecyclePort for PendingProductCore {
+        async fn reconcile(&self, _: ClashConfig, _: ClashCore, _: RunType) -> anyhow::Result<()> {
+            anyhow::bail!("this fixture needs a typed committed target")
+        }
+
+        async fn reconcile_profiles(
+            &self,
+            _: ClashConfig,
+            _: ClashCore,
+            _: RunType,
+            _: Arc<chimera_config::profile::Profiles>,
+            _: chimera_config::application::ChimeraAppConfig,
+            _: std::collections::BTreeMap<String, String>,
+            target: Option<String>,
+        ) -> anyhow::Result<()> {
+            self.submissions.fetch_add(1, AtomicOrdering::AcqRel);
+            let product = Arc::new(crate::client::runtime::RuntimeSnapshot::new(
+                self.lifecycle.allocate_revision().unwrap(),
+                ClashCore::Mihomo,
+                b"mode: rule\n".to_vec(),
+                serde_yaml::Mapping::new(),
+            ));
+            let mut receipt = crate::client::ports::test_runtime_receipt(Default::default());
+            receipt.revision = product.revision;
+            receipt.config_digest = chimera_core_manager::payload_digest(product.product_bytes());
+            receipt.target = target;
+            let receipt = Arc::new(receipt);
+            self.lifecycle.publish_confirmed(receipt.clone());
+            self.lifecycle.publish_promoted(product);
+            *self.confirmed.lock().unwrap() = Some(receipt);
+            anyhow::bail!("injected derived RuntimeProduct publication failure")
+        }
+
+        fn pending_runtime_product_target(&self) -> Option<String> {
+            self.lifecycle.pending_confirmed_product()?.0.target.clone()
+        }
+
+        async fn republish_pending_runtime_product(&self, target: &str) -> anyhow::Result<bool> {
+            let Some(receipt) = self.confirmed.lock().unwrap().clone() else {
+                return Ok(false);
+            };
+            if receipt.target.as_deref() != Some(target) {
+                return Ok(false);
+            }
+            let published = self
+                .lifecycle
+                .republish_confirmed_product(&receipt)?
+                .is_some();
+            if published {
+                self.publications.fetch_add(1, AtomicOrdering::AcqRel);
+            }
+            Ok(published)
+        }
+
+        async fn active_runtime_receipt(
+            &self,
+        ) -> anyhow::Result<Option<Arc<crate::client::runtime::RuntimeApplyReceipt>>> {
+            Ok(self.confirmed.lock().unwrap().clone())
+        }
+
+        async fn status(&self) -> anyhow::Result<CoreStatusSnapshot> {
+            let active = self.confirmed.lock().unwrap().is_some();
+            Ok(CoreStatusSnapshot {
+                instance_id: active.then(|| "pending-product-core".to_owned()),
+                state: if active {
+                    CoreState::Running
+                } else {
+                    CoreState::Stopped(None)
+                },
+                state_changed_at: 1,
+                run_type: RunType::Normal,
+            })
+        }
+
+        async fn stop(&self) -> anyhow::Result<()> {
+            self.lifecycle.invalidate_confirmed();
+            *self.confirmed.lock().unwrap() = None;
+            Ok(())
+        }
+
+        async fn change_core(&self, _: ClashCore) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        fn recovery_notify(&self) -> Option<Arc<Notify>> {
+            None
+        }
+
+        async fn on_profile_change(&self, _: bool) {}
     }
 
     #[async_trait]
@@ -10866,6 +10980,64 @@ mod tests {
             core.active_profiles.lock().unwrap().as_ref().unwrap().valid,
             candidate.valid
         );
+        client.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn explicit_retry_republishes_confirmed_product_without_another_core_apply() {
+        use chimera_core::client::reconciler::plan::Conclusion;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = Utf8PathBuf::from_path_buf(dir.path().join("profiles.yaml")).unwrap();
+        let manager = PersistentStateManagerSetup::<
+            chimera_config::profile::Profiles,
+            crate::core::migration::modules::profiles::ProfilesFormat,
+        >::builder()
+        .config_path(path)
+        .assemble()
+        .from_state(chimera_config::profile::Profiles::default())
+        .await
+        .unwrap();
+        let core = Arc::new(PendingProductCore {
+            lifecycle: Arc::new(crate::client::runtime::RuntimeLifecycle::default()),
+            confirmed: Mutex::new(None),
+            submissions: AtomicUsize::new(0),
+            publications: AtomicUsize::new(0),
+        });
+        let client = spawn_startup_client_with_profiles(
+            core.clone(),
+            Arc::new(RecordingService {
+                events: Arc::new(Mutex::new(Vec::new())),
+            }),
+            manager.snapshot_handle(),
+        )
+        .await;
+
+        let error = client.start_core().await.expect_err(
+            "first Core application is accepted, but the RuntimeProduct was not published",
+        );
+        assert!(error.to_string().contains("RuntimeProduct"));
+        assert_eq!(core.submissions.load(AtomicOrdering::Acquire), 1);
+        assert!(
+            client
+                .reconciler_status()
+                .maintenance
+                .as_deref()
+                .is_some_and(|reason| reason.contains("RuntimeProduct publication pending"))
+        );
+
+        client
+            .reconcile()
+            .await
+            .expect("explicit Retry must finish the identical accepted RuntimeProduct");
+        assert_eq!(core.submissions.load(AtomicOrdering::Acquire), 1);
+        assert_eq!(core.publications.load(AtomicOrdering::Acquire), 1);
+        assert!(core.lifecycle.pending_confirmed_product().is_none());
+        assert!(client.reconciler_status().maintenance.is_none());
+        assert!(matches!(
+            client.reconciler_status().conclusion,
+            Conclusion::Converged
+        ));
         client.shutdown().await.unwrap();
     }
 

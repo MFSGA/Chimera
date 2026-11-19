@@ -1054,6 +1054,10 @@ impl CoreLifecycleWorkflow {
         Ok(())
     }
 
+    pub(super) fn pending_runtime_product_target(&self) -> Option<String> {
+        self.core.pending_runtime_product_target()
+    }
+
     /// Ref's applied-target proof: the Core must report the exact receipt
     /// for the current committed inputs and selected host, then remain the
     /// same instance through a second authoritative observation.
@@ -1213,6 +1217,24 @@ impl CoreLifecycleWorkflow {
     }
 
     async fn reconcile_with_trigger(&self, trigger: Trigger) -> anyhow::Result<()> {
+        // Ref pending-product maintenance happens before rebuilding the target.
+        // A manual Retry may repair the *same* confirmed runtime publication
+        // without a second Core apply. Source notifications and ordinary
+        // readiness ticks never replay a stale pending snapshot.
+        if trigger == Trigger::Retry
+            && !self.core.outcome_uncertain()
+            && let Some(pending) = self.core.pending_runtime_product_target()
+            && self
+                .startup_target_identity()
+                .await
+                .is_ok_and(|current| current == pending)
+            && self
+                .core
+                .republish_pending_runtime_product(&pending)
+                .await?
+        {
+            return Ok(());
+        }
         let clash = self.clash.get()?;
         let app = self.application.get_typed();
         let target_core = app.core;

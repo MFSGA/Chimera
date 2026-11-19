@@ -1089,6 +1089,39 @@ impl CoreFacade {
         self.manager.promoted_runtime_snapshot()
     }
 
+    pub(crate) fn pending_runtime_product_target(&self) -> Option<String> {
+        self.local_runtime
+            .as_ref()
+            .and_then(|runtime| runtime.pending_runtime_product_target())
+    }
+
+    /// Ref-style publication retry. Never replay a Core submission: validate
+    /// the currently selected host's authoritative accepted receipt instead.
+    pub(crate) async fn republish_pending_runtime_product(
+        &self,
+        target: &str,
+    ) -> anyhow::Result<bool> {
+        let Some(runtime) = self.local_runtime.as_ref() else {
+            return Ok(false);
+        };
+        let Some(accepted) = self.active_runtime_receipt().await? else {
+            return Ok(false);
+        };
+        if accepted.target.as_deref() != Some(target) {
+            return Ok(false);
+        }
+        if !runtime.republish_pending_runtime_product(&accepted)? {
+            return Ok(false);
+        }
+        anyhow::ensure!(
+            self.active_runtime_receipt()
+                .await?
+                .is_some_and(|current| Arc::ptr_eq(&current, &accepted)),
+            "the active Core receipt changed while repairing runtime product publication"
+        );
+        Ok(true)
+    }
+
     pub(crate) fn runtime_transform_failure(&self) -> Option<RuntimeTransformFailure> {
         if let Some(local_runtime) = self.local_runtime.as_ref() {
             return local_runtime.runtime_transform_failure();

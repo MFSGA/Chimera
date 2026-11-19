@@ -370,6 +370,15 @@ pub(crate) trait CoreLifecyclePort: Send + Sync {
         None
     }
 
+    /// Ref pending-product maintenance: no new Core submit is permitted.
+    /// The production bridge checks the currently accepted runtime receipt.
+    fn pending_runtime_product_target(&self) -> Option<String> {
+        None
+    }
+    async fn republish_pending_runtime_product(&self, _target: &str) -> anyhow::Result<bool> {
+        Ok(false)
+    }
+
     fn effective_clash_info(&self) -> crate::config::clash::ClashInfo {
         crate::config::core::Config::clash()
             .latest()

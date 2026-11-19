@@ -1163,6 +1163,28 @@ impl LocalRuntimeHost {
         self.lifecycle.snapshot().promoted
     }
 
+    pub(crate) fn pending_runtime_product_target(&self) -> Option<String> {
+        let (receipt, _) = self.lifecycle.pending_confirmed_product()?;
+        receipt.target.clone()
+    }
+
+    /// Repair only the derived snapshot publication for a still-active Core
+    /// receipt. The caller first checks the selected endpoint's live revision;
+    /// this method does not re-submit runtime bytes or touch Profile sources.
+    pub(crate) fn republish_pending_runtime_product(
+        &self,
+        receipt: &Arc<RuntimeApplyReceipt>,
+    ) -> anyhow::Result<bool> {
+        if self.closed.load(Ordering::Acquire) || self.outcome_uncertain() {
+            return Ok(false);
+        }
+        let Some(product) = self.lifecycle.republish_confirmed_product(receipt)? else {
+            return Ok(false);
+        };
+        Config::publish_applied_runtime_legacy(&product.config);
+        Ok(true)
+    }
+
     pub(crate) fn runtime_transform_failure(&self) -> Option<RuntimeTransformFailure> {
         self.lifecycle.snapshot().last_transform_failure
     }

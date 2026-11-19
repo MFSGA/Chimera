@@ -494,6 +494,66 @@ impl RuntimeLifecycle {
         self.state.write().confirmed_available = false;
     }
 
+    /// The ref pending-product boundary, retained by the *existing* runtime
+    /// lifecycle rather than duplicated in the higher CoreLifecycle actor.
+    /// A promoted product is retryable only against the very same accepted
+    /// Core receipt. A newer confirmation or an invalidated receipt makes the
+    /// older product ineligible; it must never be re-published as current.
+    pub fn pending_confirmed_product(
+        &self,
+    ) -> Option<(Arc<RuntimeApplyReceipt>, Arc<RuntimeSnapshot>)> {
+        let state = self.state.read();
+        let receipt = state.confirmed.as_ref()?.clone();
+        let product = state.promoted.as_ref()?.clone();
+        if !state.confirmed_available
+            || state
+                .applied
+                .as_ref()
+                .is_some_and(|applied| applied.identity_eq(&product))
+            || receipt.revision != product.revision
+            || receipt.config_digest
+                != chimera_core_manager::payload_digest(product.product_bytes())
+            || receipt.target_core != product.target_core
+        {
+            return None;
+        }
+        Some((receipt, product))
+    }
+
+    /// Retry only the derived Applied publication; never re-submit the Core
+    /// or revive a product invalidated by a later accepted revision.
+    pub fn republish_confirmed_product(
+        &self,
+        active: &Arc<RuntimeApplyReceipt>,
+    ) -> Result<Option<Arc<RuntimeSnapshot>>> {
+        // The receipt identity, promoted product and Applied publication must
+        // be checked and updated under ONE lock. An intervening confirmation
+        // must never turn a stale product into a newly published snapshot.
+        let mut state = self.state.write();
+        let Some(confirmed) = state.confirmed.as_ref() else {
+            return Ok(None);
+        };
+        let Some(product) = state.promoted.as_ref().cloned() else {
+            return Ok(None);
+        };
+        if !state.confirmed_available
+            || !Arc::ptr_eq(confirmed, active)
+            || state
+                .applied
+                .as_ref()
+                .is_some_and(|applied| applied.identity_eq(&product))
+            || confirmed.revision != product.revision
+            || confirmed.config_digest
+                != chimera_core_manager::payload_digest(product.product_bytes())
+            || confirmed.target_core != product.target_core
+        {
+            return Ok(None);
+        }
+        state.applied = Some(product.clone());
+        state.last_transform_failure = None;
+        Ok(Some(product))
+    }
+
     pub fn publish_applied(&self, snapshot: Arc<RuntimeSnapshot>) -> Result<()> {
         let mut state = self.state.write();
         let promoted = state
@@ -1285,6 +1345,63 @@ mod tests {
         );
 
         assert_eq!(snapshot.exists_keys, ["mode", "rules"]);
+    }
+
+    #[test]
+    fn pending_product_republishes_only_for_the_same_accepted_receipt() {
+        let lifecycle = RuntimeLifecycle::default();
+        let product = Arc::new(RuntimeSnapshot::new(
+            lifecycle.allocate_revision().unwrap(),
+            ClashCore::Mihomo,
+            b"mode: rule\n".to_vec(),
+            Mapping::new(),
+        ));
+        let mut receipt = crate::client::ports::test_runtime_receipt(Default::default());
+        receipt.revision = product.revision;
+        receipt.config_digest = chimera_core_manager::payload_digest(product.product_bytes());
+        let receipt = Arc::new(receipt);
+
+        lifecycle.publish_confirmed(receipt.clone());
+        lifecycle.publish_promoted(product.clone());
+        let (pending_receipt, pending_product) = lifecycle
+            .pending_confirmed_product()
+            .expect("confirmed promotion must remain pending before Applied");
+        assert!(Arc::ptr_eq(&pending_receipt, &receipt));
+        assert!(pending_product.identity_eq(&product));
+        assert!(
+            lifecycle
+                .republish_confirmed_product(&Arc::new((*receipt).clone()))
+                .unwrap()
+                .is_none(),
+            "a copied or superseded receipt cannot republish a product"
+        );
+        let published = lifecycle
+            .republish_confirmed_product(&receipt)
+            .unwrap()
+            .expect("retry should finish the existing accepted product");
+        assert!(published.identity_eq(&product));
+        assert!(lifecycle.pending_confirmed_product().is_none());
+        assert!(
+            lifecycle
+                .republish_confirmed_product(&receipt)
+                .unwrap()
+                .is_none(),
+            "an already applied product must not be published twice"
+        );
+
+        let newer = Arc::new(RuntimeSnapshot::new(
+            lifecycle.allocate_revision().unwrap(),
+            ClashCore::Mihomo,
+            b"mode: direct\n".to_vec(),
+            Mapping::new(),
+        ));
+        lifecycle.publish_promoted(newer);
+        assert!(
+            lifecycle.pending_confirmed_product().is_none(),
+            "a promoted product from another revision must not use an old receipt"
+        );
+        lifecycle.invalidate_confirmed();
+        assert!(lifecycle.pending_confirmed_product().is_none());
     }
 
     #[test]
