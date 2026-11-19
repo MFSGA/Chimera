@@ -1052,6 +1052,54 @@ impl CoreLifecycleWorkflow {
         Ok(())
     }
 
+    /// Ref's applied-target proof: the Core must report the exact receipt
+    /// for the current committed inputs and selected host, then remain the
+    /// same instance through a second authoritative observation.
+    pub(super) async fn verified_applied_runtime(&self, observed: &CoreStatusSnapshot) -> bool {
+        if !matches!(observed.state, CoreState::Running) {
+            return false;
+        }
+        let target = match self.startup_target_identity().await {
+            Ok(target) => target,
+            Err(error) => {
+                tracing::debug!(%error, "could not identify committed runtime target for proof");
+                return false;
+            }
+        };
+        let first = match self.core.active_runtime_receipt().await {
+            Ok(Some(receipt)) => receipt,
+            Ok(None) => return false,
+            Err(error) => {
+                tracing::debug!(%error, "could not verify active Core receipt");
+                return false;
+            }
+        };
+        if !crate::client::reconciler::proof::receipt_matches_target(
+            &first,
+            &target,
+            crate::client::reconciler::proof::host_for(observed.run_type),
+        ) {
+            return false;
+        }
+        let after = match self.core.status().await {
+            Ok(after) => after,
+            Err(_) => return false,
+        };
+        if !same_core_status(observed, &after) {
+            return false;
+        }
+        let still_active = match self.core.active_runtime_receipt().await {
+            Ok(Some(current)) => Arc::ptr_eq(&first, &current),
+            _ => false,
+        };
+        if !still_active {
+            return false;
+        }
+        self.startup_target_identity()
+            .await
+            .is_ok_and(|latest| latest == target)
+    }
+
     async fn reconcile(&self) -> anyhow::Result<()> {
         self.reconcile_with_trigger(Trigger::ServiceOperation).await
     }
