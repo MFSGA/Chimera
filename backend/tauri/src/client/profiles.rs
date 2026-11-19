@@ -3435,7 +3435,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn metadata_and_order_commit_source_only_while_active_changes_keep_runtime_participant() {
+    async fn metadata_and_order_commit_source_only_while_active_changes_request_runtime_reconcile()
+    {
         let (client, dir) = seeded_client().await;
         let selected = client
             .set_current(Some(ProfileId("cfg1".into())))
@@ -3443,7 +3444,7 @@ mod tests {
             .unwrap();
         assert!(
             selected.receipt.operation_id.is_some(),
-            "explicit activation still owes a runtime participant"
+            "explicit activation must notify the committed-target reconciler"
         );
         let initial_version = selected.receipt.source_version;
         let reselected = client
@@ -3452,7 +3453,7 @@ mod tests {
             .unwrap();
         assert!(
             reselected.receipt.operation_id.is_some(),
-            "reselecting the same active profile must retain explicit activation intent"
+            "reselecting the same active profile must request runtime reconciliation"
         );
 
         let mut patch = ProfileMetadata::new_empty_patch();
@@ -3506,7 +3507,7 @@ mod tests {
             .unwrap();
         assert!(
             replaced.receipt.operation_id.is_some(),
-            "active definition is still guarded by the legacy runtime participant"
+            "active definition still requests committed-target reconciliation"
         );
     }
 
@@ -3564,7 +3565,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn inactive_managed_file_uses_source_only_commit_but_active_file_keeps_participant() {
+    async fn inactive_managed_file_is_source_only_while_active_file_requests_reconcile() {
         let (client, dir) = seeded_client().await;
         let selected = client
             .set_current(Some(ProfileId("cfg1".into())))
@@ -3590,6 +3591,11 @@ mod tests {
             .await
             .unwrap();
         assert!(active.receipt.operation_id.is_some());
+        assert_eq!(
+            active.receipt.runtime,
+            crate::client::runtime::RuntimeCommitStatus::Unchanged,
+            "the source commit itself must not pretend Core apply has settled"
+        );
         assert!(active.affects_current);
     }
 

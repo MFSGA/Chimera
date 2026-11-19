@@ -221,13 +221,13 @@ enum Message {
     ServiceRecoveryTick,
     ServiceRecoveryLeaseFailed,
     RecoverCore,
-    /// Ref RuntimeGate::committed: observe the source version once durable.
-    /// The compatibility owner still applies successful mutations inline;
-    /// only retryable deferred outcomes schedule its existing dirty loop.
+    /// Ref RuntimeGate::committed: observe the durable source version.
+    /// Profiles requests run a latest-target reconciliation here, while
+    /// already-applied legacy domains may only record their source version.
     SourceCommitted {
         domain: SourceDomain,
         version: u64,
-        retryable_deferred: bool,
+        reconcile_requested: bool,
     },
     RuntimeDirty,
     DirtyTick,
@@ -1243,6 +1243,11 @@ impl Actor for ApplicationWorkflowActor {
                     }
 
                     let failed = result.is_err();
+                    let source_advanced = result.as_ref().err().is_some_and(|error| {
+                        error
+                            .downcast_ref::<workflow::ProfilesSourceAdvanced>()
+                            .is_some()
+                    });
                     let deferred_retry_error = result.as_ref().err().map(ToString::to_string);
                     let deferred_retry_retryable = result.as_ref().err().is_some_and(
                         crate::client::application_workflow::tcc::safe_to_retry_deferred_runtime,
@@ -1288,11 +1293,12 @@ impl Actor for ApplicationWorkflowActor {
                         }
                     }
 
-                    if retry_reconcile_on_failure
-                        && failed
+                    if (retry_reconcile_on_failure && failed || source_advanced)
                         && !state.uncertain
                         && !state.shutting_down
                     {
+                        // A superseded source is not a Core refusal: consume
+                        // the latest durable generation in another round.
                         state.mark_runtime_dirty(&myself);
                     }
                     if request_runtime_rebuild && !state.shutting_down {
@@ -1407,14 +1413,14 @@ impl Actor for ApplicationWorkflowActor {
             Message::SourceCommitted {
                 domain,
                 version,
-                retryable_deferred,
+                reconcile_requested,
             } => {
-                // Domain owners have already published the source version.
-                // Never run a second apply for the successful inline path.
-                // A deferred old version must still trigger convergence:
-                // the latest source may be ahead of the last runtime receipt.
+                // Domain owners have already published their source versions.
+                // Profiles source commits request the one CoreLifecycle runtime
+                // round; legacy inline domains pass false to avoid a second apply.
+                // Always load the latest source, not the notification payload.
                 state.seen_sources.observe(domain, version);
-                if retryable_deferred && !state.uncertain && !state.shutting_down {
+                if reconcile_requested && !state.uncertain && !state.shutting_down {
                     if state.startup_owner_unproven
                         || state.startup_owner_unproven_shared.load(Ordering::Acquire)
                     {
@@ -2550,20 +2556,19 @@ impl CoreLifecycleClient {
     }
 
     /// Observe a source-owned durable commit in the single lifecycle mailbox.
-    /// A normal successful apply is *not* replayed by this notification.
-    /// Deferred commits request reconciliation of the latest source snapshots
-    /// (never of the older notification's payload).
+    /// `reconcile_requested` asks the one runtime owner to apply the latest
+    /// committed snapshots. Already-applied legacy domains pass false.
     pub(crate) fn source_committed(
         &self,
         domain: SourceDomain,
         version: u64,
-        retryable_deferred: bool,
+        reconcile_requested: bool,
     ) {
         // Preserve request_runtime_rebuild's Service-generation fence: a
         // failed startup generation may require owner recovery even when the
         // generic "owner unproven" flag has already cleared. Reconcile must
         // not race that host transition.
-        let recover_startup = retryable_deferred && self.startup_recovery_needed();
+        let recover_startup = reconcile_requested && self.startup_recovery_needed();
         if recover_startup {
             self.request_startup_recovery();
         }
@@ -2573,7 +2578,7 @@ impl CoreLifecycleClient {
                     .cast(Message::SourceCommitted {
                         domain,
                         version,
-                        retryable_deferred: retryable_deferred && !recover_startup,
+                        reconcile_requested: reconcile_requested && !recover_startup,
                     })
                     .is_err()
                 {
@@ -9572,6 +9577,291 @@ mod tests {
         tokio::time::sleep(DIRTY_WINDOW + Duration::from_millis(50)).await;
         assert_eq!(events.lock().unwrap().as_slice(), ["rebuild"]);
         assert_eq!(client.status().completed.len(), 1);
+    }
+
+    struct PausedProfilesCore {
+        seen: Mutex<Vec<Vec<String>>>,
+        first_started: Mutex<Option<oneshot::Sender<()>>>,
+        release_first: Mutex<Option<oneshot::Receiver<()>>>,
+    }
+
+    #[async_trait]
+    impl CoreLifecyclePort for PausedProfilesCore {
+        async fn reconcile(&self, _: ClashConfig, _: ClashCore, _: RunType) -> anyhow::Result<()> {
+            anyhow::bail!("a typed Profiles source must use reconcile_profiles")
+        }
+
+        async fn reconcile_profiles(
+            &self,
+            _: ClashConfig,
+            _: ClashCore,
+            _: RunType,
+            profiles: Arc<chimera_config::profile::Profiles>,
+            _: chimera_config::application::ChimeraAppConfig,
+            _: std::collections::BTreeMap<String, String>,
+            _: Option<String>,
+        ) -> anyhow::Result<()> {
+            self.seen.lock().unwrap().push(profiles.valid.clone());
+            let started = self.first_started.lock().unwrap().take();
+            if let Some(started) = started {
+                let release = self.release_first.lock().unwrap().take().unwrap();
+                let _ = started.send(());
+                release
+                    .await
+                    .map_err(|_| anyhow::anyhow!("source test release dropped"))?;
+            }
+            Ok(())
+        }
+
+        async fn stop(&self) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        async fn change_core(&self, _: ClashCore) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        async fn status(&self) -> anyhow::Result<CoreStatusSnapshot> {
+            Ok(CoreStatusSnapshot {
+                instance_id: None,
+                state: CoreState::Stopped(None),
+                state_changed_at: 1,
+                run_type: RunType::Normal,
+            })
+        }
+
+        fn recovery_notify(&self) -> Option<Arc<Notify>> {
+            None
+        }
+
+        async fn on_profile_change(&self, _: bool) {}
+    }
+
+    #[tokio::test]
+    async fn source_advancing_during_apply_reconciles_latest_in_a_new_round() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = Utf8PathBuf::from_path_buf(dir.path().join("profiles.yaml")).unwrap();
+        let mut manager = PersistentStateManagerSetup::<
+            chimera_config::profile::Profiles,
+            crate::core::migration::modules::profiles::ProfilesFormat,
+        >::builder()
+        .config_path(path)
+        .assemble()
+        .from_state(chimera_config::profile::Profiles::default())
+        .await
+        .unwrap();
+        let snapshot = manager.snapshot_handle();
+        let mut first = manager.snapshot().as_ref().clone();
+        first.valid.push("first-committed".into());
+        manager
+            .replace_if_version(chimera_core::state::Version::new(0), first.clone())
+            .await
+            .unwrap();
+
+        let (started, first_started) = oneshot::channel();
+        let (release_first, resume) = oneshot::channel();
+        let core = Arc::new(PausedProfilesCore {
+            seen: Mutex::new(Vec::new()),
+            first_started: Mutex::new(Some(started)),
+            release_first: Mutex::new(Some(resume)),
+        });
+        let client = spawn_startup_client_with_profiles(
+            core.clone(),
+            Arc::new(RecordingService {
+                events: Arc::new(Mutex::new(Vec::new())),
+            }),
+            snapshot,
+        )
+        .await;
+
+        client.source_committed(
+            crate::client::reconciler::committed::SourceDomain::Profiles,
+            1,
+            true,
+        );
+        tokio::time::timeout(Duration::from_secs(3), first_started)
+            .await
+            .expect("first runtime round must reach the Core port")
+            .unwrap();
+
+        let mut latest = first.clone();
+        latest.valid.push("next-committed".into());
+        manager
+            .replace_if_version(chimera_core::state::Version::new(1), latest.clone())
+            .await
+            .unwrap();
+        client.source_committed(
+            crate::client::reconciler::committed::SourceDomain::Profiles,
+            2,
+            true,
+        );
+        release_first.send(()).unwrap();
+        tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                if core
+                    .seen
+                    .lock()
+                    .unwrap()
+                    .last()
+                    .is_some_and(|valid| valid == &latest.valid)
+                {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("superseded apply must be followed by a latest-target round");
+        assert_eq!(core.seen.lock().unwrap().first().unwrap(), &first.valid);
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                if client.status().completed.iter().any(|round| {
+                    round.error.as_deref().is_some_and(|reason| {
+                        reason.contains("Profiles source advanced while reconciling runtime")
+                    })
+                }) {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("the superseded round must explicitly report its version conflict");
+        client.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn failed_postcommit_profiles_apply_preserves_the_source_document() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = Utf8PathBuf::from_path_buf(dir.path().join("profiles.yaml")).unwrap();
+        let mut manager = PersistentStateManagerSetup::<
+            chimera_config::profile::Profiles,
+            crate::core::migration::modules::profiles::ProfilesFormat,
+        >::builder()
+        .config_path(path)
+        .assemble()
+        .from_state(chimera_config::profile::Profiles::default())
+        .await
+        .unwrap();
+        let snapshot = manager.snapshot_handle();
+        let mut committed = manager.snapshot().as_ref().clone();
+        committed.valid.push("committed-before-core-failure".into());
+        manager
+            .replace_if_version(chimera_core::state::Version::new(0), committed.clone())
+            .await
+            .unwrap();
+        let core = Arc::new(ProfileTccCore {
+            validations: AtomicUsize::new(0),
+            stops: AtomicUsize::new(0),
+            fail_next_reconcile: AtomicBool::new(true),
+            active_profiles: Mutex::new(None),
+        });
+        let client = spawn_startup_client_with_profiles(
+            core.clone(),
+            Arc::new(RecordingService {
+                events: Arc::new(Mutex::new(Vec::new())),
+            }),
+            snapshot.clone(),
+        )
+        .await;
+        client.source_committed(
+            crate::client::reconciler::committed::SourceDomain::Profiles,
+            1,
+            true,
+        );
+        tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                if client.status().completed.iter().any(|round| {
+                    round.error.as_deref().is_some_and(|message| {
+                        message.contains("injected current Profiles reconcile failure")
+                    })
+                }) {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("runtime apply failure must be observable separately from source commit");
+        assert!(core.active_profiles.lock().unwrap().is_none());
+        assert_eq!(
+            snapshot.load().version,
+            chimera_core::state::Version::new(1)
+        );
+        assert_eq!(
+            snapshot.load().state.valid,
+            committed.valid,
+            "a postcommit Core refusal must not roll back the Profiles source"
+        );
+        client.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn profiles_source_commit_applies_latest_document_not_notified_version() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = Utf8PathBuf::from_path_buf(dir.path().join("profiles.yaml")).unwrap();
+        let mut manager = PersistentStateManagerSetup::<
+            chimera_config::profile::Profiles,
+            crate::core::migration::modules::profiles::ProfilesFormat,
+        >::builder()
+        .config_path(path)
+        .assemble()
+        .from_state(chimera_config::profile::Profiles::default())
+        .await
+        .unwrap();
+        let snapshot = manager.snapshot_handle();
+        let mut first = manager.snapshot().as_ref().clone();
+        first.valid.push("first-committed".into());
+        manager
+            .replace_if_version(chimera_core::state::Version::new(0), first.clone())
+            .await
+            .unwrap();
+        let mut latest = first;
+        latest.valid.push("latest-committed".into());
+        manager
+            .replace_if_version(chimera_core::state::Version::new(1), latest.clone())
+            .await
+            .unwrap();
+
+        let core = Arc::new(ProfileTccCore {
+            validations: AtomicUsize::new(0),
+            stops: AtomicUsize::new(0),
+            fail_next_reconcile: AtomicBool::new(false),
+            active_profiles: Mutex::new(None),
+        });
+        let client = spawn_startup_client_with_profiles(
+            core.clone(),
+            Arc::new(RecordingService {
+                events: Arc::new(Mutex::new(Vec::new())),
+            }),
+            snapshot,
+        )
+        .await;
+        // An older SourceCommitted notification starts a round against the
+        // latest source snapshot; the old candidate is never replayed.
+        client.source_committed(
+            crate::client::reconciler::committed::SourceDomain::Profiles,
+            1,
+            true,
+        );
+        tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                if core
+                    .active_profiles
+                    .lock()
+                    .unwrap()
+                    .as_ref()
+                    .is_some_and(|current| current.valid == latest.valid)
+                {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("a source notification should apply the latest committed profiles");
+        assert_eq!(core.validations.load(AtomicOrdering::SeqCst), 0);
+        client.shutdown().await.unwrap();
     }
 
     #[tokio::test]

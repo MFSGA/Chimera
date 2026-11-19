@@ -40,6 +40,16 @@ use super::{
     },
 };
 
+/// An older source generation became stale while the single runtime actor
+/// was building or applying it. The actor must schedule another latest-source
+/// round, but must not blindly retry arbitrary Core apply failures.
+#[derive(Debug, thiserror::Error)]
+#[error("Profiles source advanced while reconciling runtime: {before} -> {after}")]
+pub(crate) struct ProfilesSourceAdvanced {
+    before: u64,
+    after: u64,
+}
+
 pub(in crate::client) enum Command {
     ProfileMutation(Box<crate::client::application_workflow::mutation::MutationRequest>),
     Shutdown,
@@ -1040,8 +1050,43 @@ impl CoreLifecycleWorkflow {
             crate::core::service::ipc::get_ipc_state(),
         );
         if let Some(profiles) = &self.profiles {
-            self.reconcile_profiles(Arc::new(profiles.load().state.clone()), Default::default())
-                .await
+            let before = *profiles.load().version.as_ref();
+            // Capture both the authoritative committed document and its managed
+            // file bytes under the same publication fence, as in ref.
+            let (target, app, clash, current, content) =
+                self.capture_reconcile_committed_target(app, clash).await?;
+            let captured = *profiles.load().version.as_ref();
+            if captured != before {
+                return Err(ProfilesSourceAdvanced {
+                    before,
+                    after: captured,
+                }
+                .into());
+            }
+            let applied = self
+                .core
+                .reconcile_profiles(
+                    clash,
+                    app.core,
+                    crate::core::RunType::classify(
+                        app.enable_service_mode,
+                        crate::core::service::ipc::get_ipc_state(),
+                    ),
+                    current,
+                    app,
+                    content,
+                    Some(target),
+                )
+                .await;
+            let after = *profiles.load().version.as_ref();
+            if after != captured {
+                return Err(ProfilesSourceAdvanced {
+                    before: captured,
+                    after,
+                }
+                .into());
+            }
+            applied
         } else {
             self.core.reconcile(clash, target_core, run_type).await
         }
