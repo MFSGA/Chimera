@@ -7,6 +7,8 @@ pub(crate) mod attempt;
 pub(crate) mod check;
 pub(crate) mod committed;
 pub(crate) mod decision;
+pub(in crate::client) mod inputs;
+pub(crate) mod mutation;
 pub(crate) mod proof;
 pub(crate) mod release;
 pub(crate) mod status;

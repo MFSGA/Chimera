@@ -22,13 +22,11 @@ use crate::client::application_workflow::startup::{
 };
 #[cfg(test)]
 use crate::client::application_workflow::workflow::ApplicationWorkflow;
-use crate::client::application_workflow::{
-    inputs::{FrozenProfileContent, RuntimeInputs},
-    workflow::ProfileRuntime,
-};
+use crate::client::application_workflow::workflow::ProfileRuntime;
 use crate::client::reconciler::attempt::{
     AttemptPolicy, CommittedTargetAdvanced, ServiceFallbackDeferred, waiting_dependency,
 };
+use crate::client::reconciler::inputs::{FrozenProfileContent, RuntimeInputs};
 use crate::config::chimera::ClashCore;
 use crate::core::actor_v2::control_endpoint::ExecutionHost;
 use crate::enhance::FsProfileContentSource;

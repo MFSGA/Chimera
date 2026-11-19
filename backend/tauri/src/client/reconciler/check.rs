@@ -121,7 +121,7 @@ mod tests {
     };
 
     use super::*;
-    use crate::{client::application_workflow::inputs::FrozenProfileContent, core::RunType};
+    use crate::{client::reconciler::inputs::FrozenProfileContent, core::RunType};
 
     #[derive(Default)]
     struct RecordingChecker {
