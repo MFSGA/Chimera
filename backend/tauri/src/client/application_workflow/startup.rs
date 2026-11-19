@@ -25,7 +25,9 @@ use chimera_core::{
         endpoint::ExecutionHost, service_policy::ServicePhase, service_status::ServiceHostStatus,
     },
     client::reconciler::plan::{
-        OwnerPlan, ServiceEvidence as ReconcilerServiceEvidence, plan_owner as reconcile_plan_owner,
+        self, CoreFact, Facts, OwnerPlan, Ownership, RunIntent,
+        ServiceEvidence as ReconcilerServiceEvidence, Step, Trigger,
+        plan_owner as reconcile_plan_owner,
     },
 };
 use chimera_core_manager::{CoreError, CoreErrorKind, CoreOwner, Epoch, OperationId, RevisionId};
@@ -675,28 +677,65 @@ fn reconciler_service_evidence(service: &ServiceEvidence) -> ReconcilerServiceEv
     }
 }
 
-/// Production startup uses ref's RuntimeReconciler ownership planner.
-/// CoreLifecycle still executes the chosen transition until its actor is ported.
+/// An S2-only `Facts` round from ref. Ownership has not been established
+/// until the decision is made; the core's S3/S4 facts are intentionally
+/// unreadable here because this routine must NEVER select Apply or Stop.
+fn s2_step(
+    desired: ExecutionHost,
+    owner: ExecutionHost,
+    service: &ServiceEvidence,
+    recovering: bool,
+) -> Step {
+    let evidence = reconciler_service_evidence(service);
+    plan::plan(&Facts {
+        trigger: Trigger::ServiceReadiness,
+        recovering,
+        run: RunIntent::Running,
+        desired_host: desired,
+        owner,
+        ownership: Ownership::Unproven,
+        service: Some(evidence),
+        core: CoreFact::Unreadable,
+        target: String::new(),
+        applied: None,
+        attempt: None,
+    })
+}
+
+/// Production startup now first consults the *full* ref `plan(Facts)`
+/// decision for owner transitions. For the two waiting owner cells, preserve
+/// the typed `OwnerPlan` so the existing StartupReport reports the correct
+/// readiness versus unproven-ownership failure without changing its API.
 pub(crate) fn plan_owner(
     desired: ExecutionHost,
     owner: ExecutionHost,
     service: &ServiceEvidence,
 ) -> OwnerPlan {
-    reconcile_plan_owner(desired, owner, &reconciler_service_evidence(service))
+    match s2_step(desired, owner, service, false) {
+        Step::Owner(action) => action,
+        Step::Idle(_) => {
+            reconcile_plan_owner(desired, owner, &reconciler_service_evidence(service))
+        }
+        _ => unreachable!("S2 owner planning must not apply or stop a Core"),
+    }
 }
 
-/// A readiness change only starts ownership work if ref's S2 planner found a
-/// concrete, safe host transition. Importantly, an already selected Local
-/// Core may still owe retirement of a second *owned* Service Core: checking
-/// only `desired != owner` would silently leave both owners running.
+/// Readiness work is scheduled only for a concrete ref S2 ownership action,
+/// including retirement of an extra owned Service Core when Local is already
+/// selected. Waiting and unproven ownership cannot authorize a handoff.
 fn owner_followup_required(
     desired: ExecutionHost,
     owner: ExecutionHost,
     service: &ServiceEvidence,
+    recovering: bool,
 ) -> bool {
     matches!(
-        plan_owner(desired, owner, service),
-        OwnerPlan::RetireServiceThenLocal | OwnerPlan::HandBackToLocal | OwnerPlan::AdoptService
+        s2_step(desired, owner, service, recovering),
+        Step::Owner(
+            OwnerPlan::RetireServiceThenLocal
+                | OwnerPlan::HandBackToLocal
+                | OwnerPlan::AdoptService
+        )
     )
 }
 
@@ -713,8 +752,75 @@ mod tests {
         types::ServiceStatus,
     };
 
-    use super::{OwnerPlan, ServiceEvidence, effective_host, owner_followup_required, plan_owner};
+    use super::{
+        OwnerPlan, ServiceEvidence, effective_host, owner_followup_required, plan_owner, s2_step,
+    };
     use crate::core::actor_v2::control_endpoint::ExecutionHost::{Local, Service};
+    use chimera_core::client::reconciler::plan::{Conclusion, Step};
+
+    #[test]
+    fn ref_full_round_is_authoritative_for_all_s2_handoff_actions() {
+        use ServicePhase::{DaemonStopped, Ready, Unknown};
+        let owned_running = ServiceEvidence::CoreRunning {
+            ready: true,
+            phase: Ready,
+            instance: Some("our-service-core".to_owned()),
+            revision: None,
+        };
+        let stopped = ServiceEvidence::CoreStopped {
+            ready: true,
+            phase: Ready,
+            runtime_owned: true,
+        };
+        let absent = ServiceEvidence::Absent {
+            phase: DaemonStopped,
+        };
+        let unknown = ServiceEvidence::Unreadable { phase: Unknown };
+        for (desired, owner, evidence, expected) in [
+            (
+                Local,
+                Local,
+                &owned_running,
+                OwnerPlan::RetireServiceThenLocal,
+            ),
+            (Local, Service, &owned_running, OwnerPlan::HandBackToLocal),
+            (Service, Local, &stopped, OwnerPlan::AdoptService),
+        ] {
+            assert!(
+                matches!(s2_step(desired, owner, evidence, false), Step::Owner(actual) if actual == expected),
+                "{desired:?}/{owner:?}/{evidence:?}"
+            );
+            assert_eq!(plan_owner(desired, owner, evidence), expected);
+            assert!(owner_followup_required(desired, owner, evidence, false));
+        }
+        for (desired, owner, evidence) in [
+            (Local, Local, &absent),
+            (Service, Local, &absent),
+            (Service, Local, &unknown),
+            (Local, Local, &unknown),
+        ] {
+            assert!(
+                matches!(
+                    s2_step(desired, owner, evidence, false),
+                    Step::Idle(Conclusion::Waiting { .. })
+                ),
+                "S2 with unproven ownership must not submit or stop Core: {desired:?}/{owner:?}/{evidence:?}"
+            );
+            assert!(!owner_followup_required(desired, owner, evidence, false));
+        }
+        let healthy = ServiceEvidence::CoreRunning {
+            ready: true,
+            phase: Ready,
+            instance: Some("owned".into()),
+            revision: None,
+        };
+        assert!(owner_followup_required(Local, Local, &healthy, false));
+        assert!(!owner_followup_required(Local, Local, &healthy, true));
+        assert!(matches!(
+            s2_step(Local, Local, &healthy, true),
+            Step::Idle(Conclusion::Waiting { .. })
+        ));
+    }
 
     #[test]
     fn ref_s2_followup_retirement_is_required_even_with_local_already_selected() {
@@ -726,9 +832,24 @@ mod tests {
             instance: Some("owned".into()),
             revision: None,
         };
-        assert!(owner_followup_required(Local, Local, &owned_service_core));
-        assert!(owner_followup_required(Local, Service, &owned_service_core));
-        assert!(owner_followup_required(Service, Local, &owned_service_core));
+        assert!(owner_followup_required(
+            Local,
+            Local,
+            &owned_service_core,
+            false
+        ));
+        assert!(owner_followup_required(
+            Local,
+            Service,
+            &owned_service_core,
+            false
+        ));
+        assert!(owner_followup_required(
+            Service,
+            Local,
+            &owned_service_core,
+            false
+        ));
 
         for service in [
             ServiceEvidence::Absent {
@@ -746,7 +867,7 @@ mod tests {
             ServiceEvidence::Unreadable { phase: Unknown },
         ] {
             assert!(
-                !owner_followup_required(Local, Local, &service),
+                !owner_followup_required(Local, Local, &service, false),
                 "an absent, stopped, foreign or unreadable Service Core must not be retired: {service:?}"
             );
         }
@@ -755,12 +876,14 @@ mod tests {
             Local,
             &ServiceEvidence::Absent {
                 phase: DaemonStopped
-            }
+            },
+            false
         ));
         assert!(!owner_followup_required(
             Service,
             Local,
-            &ServiceEvidence::Unreadable { phase: Unknown }
+            &ServiceEvidence::Unreadable { phase: Unknown },
+            false
         ));
     }
 
@@ -1953,9 +2076,9 @@ impl ApplicationWorkflow {
         let Ok(current) = lifecycle.startup_core_status().await else {
             return false;
         };
-        if self.service_recovery_blocks_handoff() {
-            return false;
-        }
+        // Ref's recovery-priority rule is evaluated by plan(Facts), rather
+        // than a separate S2 readiness shortcut.
+        let recovering = self.service_recovery_blocks_handoff();
         // Explicit RunIntent is already enforced by CoreLifecycle's sole
         // mailbox before this method. Here the ref S2 planner decides whether
         // a host transition is owed; ready Service evidence can require
@@ -1973,7 +2096,7 @@ impl ApplicationWorkflow {
         } else {
             effective_host(app.enable_service_mode, readiness, owner)
         };
-        owner_followup_required(desired, owner, &service)
+        owner_followup_required(desired, owner, &service, recovering)
     }
 
     pub(in crate::client) async fn follow_service(
