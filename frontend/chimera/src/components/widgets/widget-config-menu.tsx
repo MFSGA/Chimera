@@ -26,6 +26,7 @@ import {
   type WidgetConfig,
 } from './widget-config';
 import { ConfigGroup, ConfigRow } from './widget-config-row';
+import { WidgetOptionSelect } from './widget-reference-fields';
 
 type ChoiceOption<T extends string> = { value: T; label: string };
 
@@ -66,28 +67,17 @@ function Choice<T extends string>({
   }
 
   return (
-    <ConfigRow label={label}>
-      <select
-        className="bg-surface-variant text-on-surface max-w-40 rounded-xl px-2 py-1.5 text-xs"
-        data-slot="widget-config-choice"
-        data-config-field={field}
-        aria-label={label}
-        value={value}
-        disabled={disabled}
-        onChange={(event) => {
-          const option = options.find(
-            (item) => item.value === event.target.value,
-          );
-          if (option) onChange(option.value);
-        }}
-      >
-        {options.map((option) => (
-          <option key={option.value} value={option.value}>
-            {option.label}
-          </option>
-        ))}
-      </select>
-    </ConfigRow>
+    <WidgetOptionSelect
+      label={label}
+      value={value}
+      field={field}
+      options={options}
+      disabled={disabled}
+      onChange={(next) => {
+        const option = options.find((item) => item.value === next);
+        if (option) onChange(option.value);
+      }}
+    />
   );
 }
 
@@ -104,15 +94,20 @@ function Toggle({
 }) {
   const id = useId();
   return (
-    <ConfigRow label={label} htmlFor={id}>
+    <div
+      className="flex items-center justify-between gap-3"
+      data-slot="widget-config-toggle"
+    >
+      <label htmlFor={id} className="text-sm">
+        {label}
+      </label>
       <Switch
         id={id}
-        className="h-6 w-11"
         checked={checked}
         disabled={disabled}
         onCheckedChange={onChange}
       />
-    </ConfigRow>
+    </div>
   );
 }
 
