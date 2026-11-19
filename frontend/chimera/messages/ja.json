@@ -1239,5 +1239,15 @@
   "profile_chain_editor_leave_description": "このファイルの変換の変更は適用されておらず、失われます。",
   "profile_chain_editor_update_failed_title": "更新に失敗しました",
   "profile_chain_editor_update_failed": "変換チェーンの更新に失敗しました:\n{error}",
-  "profile_create_transform_name_required": "変換名を入力してください。"
+  "profile_create_transform_name_required": "変換名を入力してください。",
+  "dashboard_widget_config_follow_current": "現在のファイル",
+  "dashboard_widget_config_all_profiles": "全ファイル",
+  "dashboard_widget_config_missing_reference": "見つかりません: {name}",
+  "dashboard_widget_config_profile": "ファイル",
+  "dashboard_widget_config_references_failed": "選択肢を読み込めませんでした",
+  "dashboard_widget_config_profile_attribution": "接続は、最初に観測された時点のファイルで集計されます。",
+  "dashboard_widget_config_resources": "固定したリソース · 空欄の場合は利用可能なリソースを表示",
+  "dashboard_widget_config_proxy_providers": "プロキシ",
+  "dashboard_widget_config_rule_providers": "ルール",
+  "dashboard_widget_config_missing": "見つかりません"
 }
