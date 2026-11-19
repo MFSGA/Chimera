@@ -691,10 +691,10 @@ async fn set_routing_mode(
 fn routing_transaction_error(outcome: &TransactionOutcome) -> Option<AgentCommandError> {
     match outcome {
         TransactionOutcome::Committed => None,
-        TransactionOutcome::Rejected { .. } | TransactionOutcome::RolledBack { .. } => {
-            Some(AgentCommandError::ActionFailed)
-        }
-        TransactionOutcome::RollbackFailed { .. } => Some(AgentCommandError::PartialApply),
+        TransactionOutcome::Rejected { .. } => Some(AgentCommandError::ActionFailed),
+        // The desired state is already committed; the agent cannot claim
+        // success until runtime convergence has been observed.
+        TransactionOutcome::CommittedDeferred { .. } => Some(AgentCommandError::PartialApply),
     }
 }
 
@@ -1413,21 +1413,20 @@ mod tests {
             "agent_action_failed"
         );
         assert_eq!(
-            routing_transaction_error(&TransactionOutcome::RolledBack {
-                primary_error: "persist failed".into(),
+            routing_transaction_error(&TransactionOutcome::CommittedDeferred {
+                message: "runtime apply failed after source commit".into(),
             })
-            .expect("compensated transaction should fail")
-            .to_string(),
-            "agent_action_failed"
-        );
-        assert_eq!(
-            routing_transaction_error(&TransactionOutcome::RollbackFailed {
-                primary_error: "persist failed".into(),
-                rollback_error: "restore failed".into(),
-            })
-            .expect("failed compensation should be partial")
+            .expect("committed but deferred runtime must be partial")
             .to_string(),
             "agent_action_partially_applied"
+        );
+        assert_eq!(
+            routing_transaction_error(&TransactionOutcome::Rejected {
+                primary_error: "candidate check failed".into(),
+            })
+            .expect("rejected candidate must fail")
+            .to_string(),
+            "agent_action_failed"
         );
     }
 

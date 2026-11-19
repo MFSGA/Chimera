@@ -22,10 +22,7 @@ use struct_patch::Patch;
 
 use crate::{
     config::{clash::ClashInfo, core::Config, runtime::ClashConfigOverrides},
-    core::{
-        clash::transaction::{RuntimePatchCoordinator, TransactionOutcome},
-        handle,
-    },
+    core::{clash::transaction::TransactionOutcome, handle},
     log_err,
     state::{
         ConditionalReplaceResult,
@@ -38,32 +35,14 @@ use crate::{
 
 use super::{
     ChimeraClient,
-    core_lifecycle::RunningConfigPort,
     runtime::{Degradation, DegradationPhase},
 };
-
-#[cfg(test)]
-struct TestRunningConfigBridge;
-
-#[cfg(test)]
-#[async_trait::async_trait]
-impl RunningConfigPort for TestRunningConfigBridge {
-    async fn read(&self) -> anyhow::Result<crate::core::clash::api::ClashRuntimeConfig> {
-        Ok(crate::core::clash::api::ClashRuntimeConfig::default())
-    }
-
-    async fn patch(&self, _patch: &Mapping) -> anyhow::Result<()> {
-        Ok(())
-    }
-}
 
 const CLASH_CONFIG_READ_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Clone)]
 pub(crate) struct ClashConfigClient {
     state: Arc<ClashConfigStateBackend>,
-    runtime_patch: Arc<RuntimePatchCoordinator>,
-    running_config: Arc<dyn RunningConfigPort>,
 }
 
 enum ClashConfigStateBackend {
@@ -100,19 +79,15 @@ impl ClashConfigClient {
 
     #[cfg(test)]
     pub(crate) fn legacy_with(config: ClashConfig) -> anyhow::Result<Self> {
-        Ok(Self::with_state_and_running_config(
-            ClashConfigStateBackend::Static {
-                state: parking_lot::RwLock::new(config),
-            },
-            Arc::new(TestRunningConfigBridge),
-        ))
+        Ok(Self::with_state(ClashConfigStateBackend::Static {
+            state: parking_lot::RwLock::new(config),
+        }))
     }
 
     pub(super) async fn new(
         config_path: Utf8PathBuf,
         seed: ClashConfig,
         bridge: Arc<dyn ClashLegacyBridge>,
-        running_config: Arc<dyn RunningConfigPort>,
     ) -> anyhow::Result<Self> {
         // Ref's typed client fails on malformed config; also keep existing
         // dangling links and inaccessible nodes from becoming default seeds.
@@ -141,13 +116,10 @@ impl ClashConfigClient {
         .await
         .context("failed to spawn clash config actor")?;
 
-        let client = Self::with_state_and_running_config(
-            ClashConfigStateBackend::Actor {
-                actor_ref,
-                snapshot,
-            },
-            running_config,
-        );
+        let client = Self::with_state(ClashConfigStateBackend::Actor {
+            actor_ref,
+            snapshot,
+        });
         bridge
             .prepare(&client.get_typed())
             .context("failed to prepare loaded clash legacy mirror")?
@@ -155,14 +127,9 @@ impl ClashConfigClient {
         Ok(client)
     }
 
-    fn with_state_and_running_config(
-        state: ClashConfigStateBackend,
-        running_config: Arc<dyn RunningConfigPort>,
-    ) -> Self {
+    fn with_state(state: ClashConfigStateBackend) -> Self {
         Self {
             state: Arc::new(state),
-            runtime_patch: Arc::new(RuntimePatchCoordinator::default()),
-            running_config,
         }
     }
 
@@ -311,9 +278,8 @@ impl ClashConfigClient {
     }
 
     async fn patch(&self, owner: &ChimeraClient, patch: Mapping) -> Result<ClashCommitReport> {
-        let overrides = ClashConfigOverrides::from_mapping(&patch)?;
-        self.patch_with_overrides(owner, patch, overrides, true)
-            .await
+        ClashConfigOverrides::from_mapping(&patch)?;
+        self.patch_with_overrides(owner, patch).await
     }
 
     /// Ref typed Clash source transition: read-only candidate validation,
@@ -363,16 +329,8 @@ impl ClashConfigClient {
         let mut next = before.state.clone();
         next.apply(patch.clone());
         let reaches_runtime = should_reconcile_clash_patch(&before.state, &next, &patch);
-        self.commit_candidate_with(
-            before,
-            next,
-            reaches_runtime,
-            reaches_runtime,
-            check,
-            apply,
-            save_legacy,
-        )
-        .await
+        self.commit_candidate_with(before, next, reaches_runtime, check, apply, save_legacy)
+            .await
     }
 
     async fn commit_candidate_with<Check, CheckFuture, Apply, ApplyFuture, Save>(
@@ -380,7 +338,6 @@ impl ClashConfigClient {
         before: ClashConfigSnapshot,
         next: ClashConfig,
         reaches_runtime: bool,
-        reconcile_runtime: bool,
         check: Check,
         apply: Apply,
         save_legacy: Save,
@@ -393,7 +350,7 @@ impl ClashConfigClient {
         Save: FnOnce() -> Result<()>,
     {
         let prepared = self.prepare_replace(next.clone()).await?;
-        if reaches_runtime && reconcile_runtime {
+        if reaches_runtime {
             // No source file, running Core, or runtime product is mutated
             // until the independent candidate checker accepts this document.
             check(next).await?;
@@ -410,7 +367,7 @@ impl ClashConfigClient {
         };
 
         let mut degradations = Vec::new();
-        if reaches_runtime && reconcile_runtime {
+        if reaches_runtime {
             // Source is already committed. Even a failed Core operation must
             // not turn this successful source mutation into a rollback.
             if let Err(error) = apply().await {
@@ -475,72 +432,47 @@ impl ClashConfigClient {
         overrides: ClashConfigOverrides,
     ) -> Result<ClashCommitReport> {
         let patch = overrides.to_mapping();
-        self.patch_with_overrides(owner, patch, overrides, true)
-            .await
+        self.patch_with_overrides(owner, patch).await
     }
 
-    async fn patch_overrides_after_running_apply(
-        &self,
-        owner: &ChimeraClient,
-        overrides: ClashConfigOverrides,
-    ) -> Result<ClashCommitReport> {
-        let patch = overrides.to_mapping();
-        self.patch_with_overrides(owner, patch, overrides, false)
-            .await
-    }
-
+    /// Follow the source-owned candidate check and commit before reconciling
+    /// the running core. A failed apply never rolls back committed config.
     async fn patch_running_overrides(
         &self,
         owner: &ChimeraClient,
         overrides: ClashConfigOverrides,
     ) -> TransactionOutcome {
-        let mapping = overrides.to_mapping();
-        let persist_overrides = overrides.clone();
-        let client = owner.clone();
-
-        let read_port = self.running_config.clone();
-        let patch_port = self.running_config.clone();
-
-        self.runtime_patch
-            .apply(
-                mapping,
-                move || {
-                    let port = read_port.clone();
-                    async move { port.read().await }
-                },
-                move |patch| {
-                    let port = patch_port.clone();
-                    async move { port.patch(&patch).await }
-                },
-                move |_patch| {
-                    let overrides = persist_overrides.clone();
-                    let client = client.clone();
-                    async move {
-                        let report = client
-                            .inner
-                            .clash_config
-                            .patch_overrides_after_running_apply(&client, overrides)
-                            .await?;
-                        for degradation in &report.degradations {
-                            tracing::warn!(
-                                code = %degradation.code,
-                                message = %degradation.message,
-                                "live Clash override source committed with degraded mirror"
-                            );
-                        }
-                        Ok(())
+        match self.patch_overrides(owner, overrides).await {
+            Err(error) => TransactionOutcome::Rejected {
+                primary_error: format!("{error:#}"),
+            },
+            Ok(report) => {
+                for degradation in &report.degradations {
+                    tracing::warn!(
+                        code = %degradation.code,
+                        message = %degradation.message,
+                        "running Clash override committed with degraded follow-up"
+                    );
+                }
+                if let Some(deferred) = report
+                    .degradations
+                    .iter()
+                    .find(|item| item.code == "clash_runtime_deferred")
+                {
+                    TransactionOutcome::CommittedDeferred {
+                        message: deferred.message.clone(),
                     }
-                },
-            )
-            .await
+                } else {
+                    TransactionOutcome::Committed
+                }
+            }
+        }
     }
 
     async fn patch_with_overrides(
         &self,
         owner: &ChimeraClient,
         patch: Mapping,
-        overrides: ClashConfigOverrides,
-        reconcile_runtime: bool,
     ) -> Result<ClashCommitReport> {
         let before = self.get_snapshot().await?;
         let current = before.state.clone();
@@ -558,7 +490,6 @@ impl ClashConfigClient {
                 before,
                 next,
                 reaches_runtime,
-                reconcile_runtime,
                 |candidate| owner.check_clash_runtime_candidate(candidate),
                 || async {
                     // RuntimeBuilder consumes the committed typed Clash
@@ -579,13 +510,7 @@ impl ClashConfigClient {
                     Ok(())
                 },
                 || {
-                    // The already-live-applied compatibility transaction
-                    // publishes its old runtime projection after source commit.
-                    // Normal reconciliation publishes this from RuntimeLifecycle.
-                    if !reconcile_runtime {
-                        Config::runtime().draft().patch_config(&overrides);
-                        Config::runtime().apply();
-                    }
+                    // RuntimeLifecycle publishes the confirmed runtime product.
                     // These files are compatibility mirrors, not the
                     // authoritative source; failures cannot roll it back.
                     Config::clash().data().save_config()?;
@@ -595,19 +520,6 @@ impl ClashConfigClient {
             )
             .await?;
 
-        if !reconcile_runtime && mode_changed {
-            match owner.clash_api_client().await {
-                Ok(api) => log_err!(
-                    crate::core::connection_interruption::ConnectionInterruptionService::on_mode_change(
-                        &api,
-                        break_on_mode_change,
-                    )
-                    .await,
-                    "failed to interrupt connections after live mode change"
-                ),
-                Err(error) => tracing::warn!(%error, "mode change committed but connection interruption was unavailable"),
-            }
-        }
         if report
             .degradations
             .iter()
@@ -953,14 +865,9 @@ mod tests {
             mirrored_tun: mirrored_tun.clone(),
         });
         let path = Utf8PathBuf::from_path_buf(path).unwrap();
-        let client = ClashConfigClient::new(
-            path,
-            ClashConfig::default(),
-            bridge,
-            Arc::new(TestRunningConfigBridge),
-        )
-        .await
-        .unwrap();
+        let client = ClashConfigClient::new(path, ClashConfig::default(), bridge)
+            .await
+            .unwrap();
 
         assert!(client.get_typed().enable_tun_mode);
         assert_eq!(*mirrored_tun.lock().unwrap(), Some(true));
@@ -979,7 +886,6 @@ mod tests {
             Arc::new(RecordingBridge {
                 mirrored_tun: mirrored_tun.clone(),
             }),
-            Arc::new(TestRunningConfigBridge),
         )
         .await;
         let Err(error) = result else {
@@ -1006,7 +912,6 @@ mod tests {
             Arc::new(RecordingBridge {
                 mirrored_tun: mirrored_tun.clone(),
             }),
-            Arc::new(TestRunningConfigBridge),
         )
         .await;
         let Err(error) = result else {
@@ -1039,7 +944,6 @@ mod tests {
             Arc::new(RecordingBridge {
                 mirrored_tun: mirrored_tun.clone(),
             }),
-            Arc::new(TestRunningConfigBridge),
         )
         .await
         .unwrap();
@@ -1150,7 +1054,6 @@ mod tests {
             Arc::new(RecordingBridge {
                 mirrored_tun: mirrored_tun.clone(),
             }),
-            Arc::new(TestRunningConfigBridge),
         )
         .await
         .unwrap();
@@ -1217,7 +1120,6 @@ mod tests {
             Arc::new(RecordingBridge {
                 mirrored_tun: mirrored_tun.clone(),
             }),
-            Arc::new(TestRunningConfigBridge),
         )
         .await
         .unwrap();
@@ -1260,7 +1162,6 @@ mod tests {
             Arc::new(RecordingBridge {
                 mirrored_tun: Arc::new(Mutex::new(None)),
             }),
-            Arc::new(TestRunningConfigBridge),
         )
         .await
         .unwrap();
@@ -1295,7 +1196,6 @@ mod tests {
             Arc::new(RecordingBridge {
                 mirrored_tun: Arc::new(Mutex::new(None)),
             }),
-            Arc::new(TestRunningConfigBridge),
         )
         .await
         .unwrap();
@@ -1345,7 +1245,6 @@ mod tests {
             Arc::new(RecordingBridge {
                 mirrored_tun: Arc::new(Mutex::new(None)),
             }),
-            Arc::new(TestRunningConfigBridge),
         )
         .await
         .unwrap();
@@ -1390,7 +1289,6 @@ mod tests {
             Arc::new(RecordingBridge {
                 mirrored_tun: Arc::new(Mutex::new(None)),
             }),
-            Arc::new(TestRunningConfigBridge),
         )
         .await
         .unwrap();
@@ -1442,7 +1340,6 @@ mod tests {
             Arc::new(RecordingBridge {
                 mirrored_tun: Arc::new(Mutex::new(None)),
             }),
-            Arc::new(TestRunningConfigBridge),
         )
         .await
         .unwrap();
@@ -1466,7 +1363,6 @@ mod tests {
                 before,
                 next,
                 reaches_runtime,
-                true,
                 move |candidate| async move {
                     assert_eq!(
                         candidate.overrides.mode(),
@@ -1520,7 +1416,6 @@ mod tests {
             Arc::new(RecordingBridge {
                 mirrored_tun: Arc::new(Mutex::new(None)),
             }),
-            Arc::new(TestRunningConfigBridge),
         )
         .await
         .unwrap();
@@ -1536,7 +1431,6 @@ mod tests {
             .commit_candidate_with(
                 before.clone(),
                 next,
-                true,
                 true,
                 move |_candidate| async move {
                     check_events.lock().unwrap().push("check");
@@ -1566,7 +1460,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn live_applied_override_persistence_does_not_apply_core_twice() {
+    async fn running_override_candidate_must_check_then_commit_then_apply_once() {
+        use chimera_config::clash::config::overrides::Mode;
         let dir = tempfile::tempdir().unwrap();
         let client = ClashConfigClient::new(
             Utf8PathBuf::from_path_buf(dir.path().join("clash-config.yaml")).unwrap(),
@@ -1574,7 +1469,6 @@ mod tests {
             Arc::new(RecordingBridge {
                 mirrored_tun: Arc::new(Mutex::new(None)),
             }),
-            Arc::new(TestRunningConfigBridge),
         )
         .await
         .unwrap();
@@ -1582,38 +1476,39 @@ mod tests {
         let mut mapping = Mapping::new();
         mapping.insert("mode".into(), "global".into());
         let next = apply_mapping_to_typed_clash(&before.state, &mapping).unwrap();
-        let saves = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let save_counter = saves.clone();
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let checking = client.clone();
+        let applying = client.clone();
+        let check_events = events.clone();
+        let apply_events = events.clone();
+        let mirror_events = events.clone();
         let report = client
             .commit_candidate_with(
                 before,
                 next,
                 true,
-                false,
-                |_candidate| async {
-                    panic!("live Core patch has already validated this target");
-                    #[allow(unreachable_code)]
+                move |candidate| async move {
+                    assert_eq!(candidate.overrides.mode(), Mode::Global);
+                    assert_eq!(checking.get_typed().overrides.mode(), Mode::Rule);
+                    check_events.lock().unwrap().push("check");
                     Ok(())
                 },
-                || async {
-                    panic!("live Core patch must not be applied a second time");
-                    #[allow(unreachable_code)]
+                move || async move {
+                    assert_eq!(applying.get_typed().overrides.mode(), Mode::Global);
+                    apply_events.lock().unwrap().push("apply");
                     Ok(())
                 },
                 move || {
-                    save_counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    mirror_events.lock().unwrap().push("mirror");
                     Ok(())
                 },
             )
             .await
             .unwrap();
+        assert_eq!(*events.lock().unwrap(), ["check", "apply", "mirror"]);
         assert!(report.reaches_runtime);
         assert!(report.degradations.is_empty());
-        assert_eq!(
-            client.get_typed().overrides.mode(),
-            chimera_config::clash::config::overrides::Mode::Global
-        );
-        assert_eq!(saves.load(std::sync::atomic::Ordering::Relaxed), 1);
+        assert_eq!(client.get_typed().overrides.mode(), Mode::Global);
     }
 
     #[tokio::test]
@@ -1625,7 +1520,6 @@ mod tests {
             Arc::new(RecordingBridge {
                 mirrored_tun: Arc::new(Mutex::new(None)),
             }),
-            Arc::new(TestRunningConfigBridge),
         )
         .await
         .unwrap();
@@ -1643,7 +1537,6 @@ mod tests {
                     &client.get_typed(),
                     &apply_mapping_to_typed_clash(&client.get_typed(), &mapping).unwrap(),
                 ) != crate::client::application_workflow::impact::RuntimeImpact::None,
-                false,
                 |_candidate| async {
                     panic!("unchanged override must not check Core");
                     #[allow(unreachable_code)]
@@ -1675,7 +1568,6 @@ mod tests {
             Arc::new(RecordingBridge {
                 mirrored_tun: Arc::new(Mutex::new(None)),
             }),
-            Arc::new(TestRunningConfigBridge),
         )
         .await
         .unwrap();

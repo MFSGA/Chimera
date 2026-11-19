@@ -136,7 +136,6 @@ fn utf8_path(path: std::path::PathBuf) -> anyhow::Result<camino::Utf8PathBuf> {
 async fn new_typed_config_clients(
     paths: &PathResolver,
     bridges: &LegacyBridgeSet,
-    core_router: CoreClientV2,
     build_channel: ReleaseChannel,
 ) -> anyhow::Result<TypedConfigClients> {
     let application = ApplicationClient::new(
@@ -156,7 +155,6 @@ async fn new_typed_config_clients(
         utf8_path(paths.clash_config_path())?,
         bridges.clash.snapshot_legacy()?,
         bridges.clash.clone(),
-        Arc::new(core_lifecycle::ActorRunningConfigBridge::new(core_router)),
     )
     .await?;
 
@@ -275,7 +273,6 @@ impl ChimeraClient {
         let typed = tauri::async_runtime::block_on(new_typed_config_clients(
             &paths,
             &bridges,
-            core_v2.clone(),
             bundle_metadata.release_channel,
         ))?;
         #[cfg(not(any(target_os = "android", target_os = "ios")))]

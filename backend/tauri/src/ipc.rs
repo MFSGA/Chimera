@@ -867,17 +867,11 @@ pub async fn patch_runtime_overrides(
     let outcome = feat::patch_running_clash_overrides(&client, overrides).await;
     match &outcome {
         clash::transaction::TransactionOutcome::Committed => {}
+        clash::transaction::TransactionOutcome::CommittedDeferred { message } => {
+            tracing::warn!(%message, "Clash override source committed; runtime reconciliation deferred");
+        }
         clash::transaction::TransactionOutcome::Rejected { primary_error } => {
             tracing::warn!(%primary_error, "runtime patch rejected before core mutation");
-        }
-        clash::transaction::TransactionOutcome::RolledBack { primary_error } => {
-            tracing::warn!(%primary_error, "runtime patch failed and core state was restored");
-        }
-        clash::transaction::TransactionOutcome::RollbackFailed {
-            primary_error,
-            rollback_error,
-        } => {
-            tracing::error!(%primary_error, %rollback_error, "runtime patch failed and core restoration could not be verified");
         }
     }
     if let Err(error) = outcome.into_result() {
