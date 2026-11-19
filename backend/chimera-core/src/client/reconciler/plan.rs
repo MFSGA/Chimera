@@ -68,7 +68,7 @@ pub enum RunIntent {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum Trigger {
+pub enum Trigger {
     Startup,
     SourceCommitted,
     ServiceReadiness,
@@ -83,7 +83,7 @@ pub(super) enum Trigger {
     InterruptConnections,
 }
 impl Trigger {
-    pub(super) fn forced(self) -> bool {
+    pub fn forced(self) -> bool {
         matches!(
             self,
             Self::Start | Self::Retry | Self::BinaryReplaced { restart: true }
@@ -108,13 +108,13 @@ impl Trigger {
 }
 
 #[derive(Debug, Clone)]
-pub(super) enum AttemptOutcome {
+pub enum AttemptOutcome {
     Applied,
     Refused(Arc<RuntimeError>),
     Unknown(Arc<RuntimeError>),
 }
 #[derive(Debug, Clone)]
-pub(super) struct Attempt {
+pub struct Attempt {
     pub target: String,
     pub host: ExecutionHost,
     pub outcome: AttemptOutcome,

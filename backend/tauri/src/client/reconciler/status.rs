@@ -119,7 +119,7 @@ impl ReconcilerStatus {
             }
         } else if let Err(error) = result {
             let cause = Arc::new(RuntimeError::new(error.to_string()));
-            if source_advanced {
+            if source_advanced || super::attempt::waiting_dependency(error) {
                 Conclusion::Waiting { cause }
             } else {
                 Conclusion::NotInEffect { cause }
@@ -183,6 +183,43 @@ mod tests {
         assert_eq!(status.recent.len(), HISTORY_LEN);
         assert_eq!(status.recent.front().unwrap().operation_id, 13);
         assert!(status.active.is_none());
+    }
+
+    #[test]
+    fn transient_host_conflict_is_waiting_not_permanent_refusal() {
+        use chimera_core_manager::{CoreError, CoreErrorKind};
+
+        let mut status = ReconcilerStatus::default();
+        let observed = SourceVersions::default();
+        for (id, kind) in [
+            CoreErrorKind::BackendUnavailable,
+            CoreErrorKind::QueueFull,
+            CoreErrorKind::OperationConflict,
+            CoreErrorKind::RevisionConflict,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            status.begin(id as u64);
+            let outcome =
+                Err(CoreError::new(kind, "the runtime host is temporarily busy", false).into());
+            status.finish(
+                id as u64,
+                "SourceCommitted",
+                &observed,
+                RunIntent::Running,
+                &outcome,
+                true,
+                false,
+                false,
+                false,
+                false,
+            );
+            assert!(
+                matches!(status.conclusion, Conclusion::Waiting { .. }),
+                "{kind:?} should wait for the dependency, not block the target"
+            );
+        }
     }
 
     #[test]
