@@ -117,6 +117,11 @@ impl ReconcilerStatus {
         self.seen.merge(observed_sources);
         self.conclusion = if trigger == "Shutdown" {
             Conclusion::Closed
+        } else if trigger == "ServiceRelease" {
+            // Daemon cleanup is maintenance after an established Local Core,
+            // not a new runtime application. Its failure must not revoke a
+            // separately proven Converged runtime conclusion.
+            self.conclusion.clone()
         } else if outcome_uncertain {
             Conclusion::Unknown {
                 cause: Arc::new(RuntimeError::new(

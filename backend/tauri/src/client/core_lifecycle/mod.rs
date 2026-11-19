@@ -20,6 +20,7 @@ use std::{
 
 use super::reconciler::{
     committed::{SourceDomain, SourceVersions},
+    release::{ReleaseObservation, ServiceReleaseDebt},
     status::ReconcilerStatus,
 };
 use chimera_core::client::reconciler::plan::RunIntent;
@@ -323,6 +324,7 @@ struct ApplicationWorkflowState {
     seen_sources: SourceVersions,
     service_recovery_inflight: bool,
     service_handoff_maintenance: Option<String>,
+    service_release_debt: ServiceReleaseDebt,
     service_recovery_maintenance: Option<String>,
     product_maintenance: Option<String>,
     service_recovery_timer: tokio::task::JoinHandle<()>,
@@ -391,6 +393,7 @@ fn runtime_trigger(command: &Command) -> &'static str {
         Command::Shutdown => "Shutdown",
         Command::Reconcile => "Retry",
         Command::ReconcileSource => "SourceCommitted",
+        Command::MaintainServiceRelease => "ServiceRelease",
         Command::StartupReconcile { .. } => "Startup",
         Command::RetryStartup { .. } => "Retry",
         Command::FollowService { .. } => "ServiceReadiness",
@@ -540,8 +543,10 @@ impl ApplicationWorkflowState {
     /// A handoff failure and a degraded Service endpoint are independent
     /// maintenance debts; keep both even when a Core round converged.
     fn publish_maintenance(&self) {
+        let service_release = self.service_release_debt.maintenance();
         let details: Vec<_> = [
             self.service_handoff_maintenance.as_deref(),
+            service_release.as_deref(),
             self.service_recovery_maintenance.as_deref(),
             self.product_maintenance.as_deref(),
         ]
@@ -551,6 +556,46 @@ impl ApplicationWorkflowState {
         let reason = (!details.is_empty()).then(|| details.join("; "));
         self.reconciler
             .send_modify(|status| status.set_maintenance(reason));
+    }
+
+    /// Evaluate release debt after a proven runtime round or a Service
+    /// observation. This never starts a second Core controller: the actual
+    /// daemon stop is admitted as its own serialized lifecycle command.
+    async fn schedule_service_release(&mut self, explicit_retry: bool) {
+        if self.run_intent == RunIntent::Stopped
+            || self.uncertain
+            || self.shutting_down
+            || self.active.is_some()
+            || self.startup_owner_unproven
+            || self.startup_owner_unproven_shared.load(Ordering::Acquire)
+            || !matches!(
+                self.reconciler.borrow().conclusion,
+                chimera_core::client::reconciler::plan::Conclusion::Converged
+            )
+        {
+            return;
+        }
+        let Some(workflow) = self.workflow.as_ref() else {
+            return;
+        };
+        let observation = workflow.lifecycle().service_release_observation().await;
+        self.service_release_debt.observe(observation);
+        if observation != ReleaseObservation::Owed {
+            self.publish_maintenance();
+            return;
+        }
+        if !self.service_release_debt.begin(explicit_retry) {
+            self.publish_maintenance();
+            return;
+        }
+        if self.pending.len() >= MAX_PENDING {
+            self.service_release_debt
+                .deferred("lifecycle queue is full".into());
+            self.publish_maintenance();
+            return;
+        }
+        self.push_background(Command::MaintainServiceRelease);
+        self.publish_maintenance();
     }
 
     async fn follow_service(&mut self) {
@@ -1122,6 +1167,7 @@ impl Actor for ApplicationWorkflowActor {
             seen_sources: SourceVersions::default(),
             service_recovery_inflight: false,
             service_handoff_maintenance: None,
+            service_release_debt: ServiceReleaseDebt::default(),
             service_recovery_maintenance: None,
             product_maintenance: None,
             service_recovery_timer,
@@ -1418,6 +1464,15 @@ impl Actor for ApplicationWorkflowActor {
                         state.service_handoff_maintenance = None;
                         state.publish_maintenance();
                     }
+                    if active.trigger == "ServiceRelease" {
+                        state.service_release_debt.finish(
+                            result
+                                .as_ref()
+                                .map(|_| ())
+                                .map_err(|error| format!("{error:#}")),
+                        );
+                        state.publish_maintenance();
+                    }
                     state.reconciler.send_modify(|status| {
                         status.finish(
                             active.response.id,
@@ -1513,6 +1568,9 @@ impl Actor for ApplicationWorkflowActor {
                         });
                     }
                     state.follow_service().await;
+                    state
+                        .schedule_service_release(active.trigger == "Retry")
+                        .await;
                 } else {
                     tracing::warn!(id, "ignoring stale core lifecycle completion");
                 }
@@ -1531,11 +1589,16 @@ impl Actor for ApplicationWorkflowActor {
             Message::ObserveService { info } => {
                 state.publish_service_status(info);
                 state.follow_service().await;
+                state.schedule_service_release(false).await;
             }
-            Message::ServiceReadiness => state.follow_service().await,
+            Message::ServiceReadiness => {
+                state.follow_service().await;
+                state.schedule_service_release(false).await;
+            }
             Message::ServiceProbeFailed => {
                 state.publish_service_probe_failure();
                 state.follow_service().await;
+                state.schedule_service_release(false).await;
             }
             Message::ServiceRecoveryTick => {
                 let can_recover = !state.uncertain
@@ -4242,6 +4305,82 @@ mod tests {
         events: Arc<Mutex<Vec<&'static str>>>,
         ready: Arc<AtomicBool>,
         core_running: Arc<AtomicBool>,
+    }
+
+    /// A Service daemon with an owned but *stopped* Core. Its transition
+    /// lease can reject one stop so tests exercise ref's pending_release debt.
+    struct ReleaseOwedService {
+        inner: ToggleStartupServiceProbe,
+        runtime_owned: bool,
+        attempts: Arc<AtomicUsize>,
+        fail_next: Arc<AtomicBool>,
+    }
+
+    struct ReleaseOwedLease {
+        delegate: RecordingServiceTransition,
+        ready: Arc<AtomicBool>,
+        attempts: Arc<AtomicUsize>,
+        fail_next: Arc<AtomicBool>,
+    }
+
+    #[async_trait]
+    impl ServiceTransitionLease for ReleaseOwedLease {
+        async fn install_daemon(&mut self) -> anyhow::Result<()> {
+            self.delegate.install_daemon().await
+        }
+        async fn uninstall_daemon(&mut self) -> anyhow::Result<()> {
+            self.delegate.uninstall_daemon().await
+        }
+        async fn update_daemon(&mut self) -> anyhow::Result<()> {
+            self.delegate.update_daemon().await
+        }
+        async fn start_daemon(&mut self) -> anyhow::Result<()> {
+            self.delegate.start_daemon().await
+        }
+        async fn restart_daemon(&mut self) -> anyhow::Result<()> {
+            self.delegate.restart_daemon().await
+        }
+        async fn stop_daemon(&mut self) -> anyhow::Result<()> {
+            self.attempts.fetch_add(1, AtomicOrdering::AcqRel);
+            if self.fail_next.swap(false, AtomicOrdering::AcqRel) {
+                anyhow::bail!("injected Service daemon stop failure");
+            }
+            self.ready.store(false, AtomicOrdering::Release);
+            self.delegate.stop_daemon().await
+        }
+        async fn confirm_ready(&mut self, timeout: Duration) -> anyhow::Result<()> {
+            self.delegate.confirm_ready(timeout).await
+        }
+        async fn confirm_stopped(&mut self) -> anyhow::Result<()> {
+            anyhow::ensure!(
+                !self.ready.load(AtomicOrdering::Acquire),
+                "daemon was not confirmed stopped"
+            );
+            self.delegate.confirm_stopped().await
+        }
+    }
+
+    #[async_trait]
+    impl ServiceLifecyclePort for ReleaseOwedService {
+        async fn probe(&self) -> anyhow::Result<chimera_ipc::types::StatusInfo<'static>> {
+            self.inner.probe().await
+        }
+        fn runtime_owned(&self, _: &chimera_ipc::types::StatusInfo<'_>) -> bool {
+            self.runtime_owned
+        }
+        async fn begin_transition(&self) -> anyhow::Result<Box<dyn ServiceTransitionLease>> {
+            self.try_begin_transition().await
+        }
+        async fn try_begin_transition(&self) -> anyhow::Result<Box<dyn ServiceTransitionLease>> {
+            Ok(Box::new(ReleaseOwedLease {
+                delegate: RecordingServiceTransition {
+                    events: self.inner.events.clone(),
+                },
+                ready: self.inner.ready.clone(),
+                attempts: self.attempts.clone(),
+                fail_next: self.fail_next.clone(),
+            }))
+        }
     }
 
     /// Inject one transient lease refusal on the post-startup S2 handoff.
@@ -11039,6 +11178,160 @@ mod tests {
             Conclusion::Converged
         ));
         client.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn local_convergence_never_stops_a_foreign_or_unowned_service() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = Utf8PathBuf::from_path_buf(dir.path().join("profiles.yaml")).unwrap();
+        let manager = PersistentStateManagerSetup::<
+            chimera_config::profile::Profiles,
+            crate::core::migration::modules::profiles::ProfilesFormat,
+        >::builder()
+        .config_path(path)
+        .assemble()
+        .from_state(chimera_config::profile::Profiles::default())
+        .await
+        .unwrap();
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let ready = Arc::new(AtomicBool::new(true));
+        let service = Arc::new(ReleaseOwedService {
+            inner: ToggleStartupServiceProbe {
+                events: Arc::new(Mutex::new(Vec::new())),
+                ready: ready.clone(),
+                core_running: Arc::new(AtomicBool::new(false)),
+            },
+            runtime_owned: false,
+            attempts: attempts.clone(),
+            fail_next: Arc::new(AtomicBool::new(false)),
+        });
+        let client = spawn_startup_client_with_profiles(
+            Arc::new(ReceiptProofCore {
+                active: Mutex::new(None),
+                publish_wrong_target: false,
+                change_instance_between_reads: false,
+                status_reads: AtomicUsize::new(0),
+            }),
+            service,
+            manager.snapshot_handle(),
+        )
+        .await;
+        client.start_core().await.unwrap();
+        signal_service_readiness_change(&client);
+        tokio::time::sleep(Duration::from_millis(90)).await;
+        assert_eq!(attempts.load(AtomicOrdering::Acquire), 0);
+        assert!(ready.load(AtomicOrdering::Acquire));
+        assert!(client.reconciler_status().maintenance.is_none());
+        client.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn release_owed_is_independent_and_only_retry_replays_a_failed_daemon_stop() {
+        use chimera_core::client::reconciler::plan::Conclusion;
+
+        for fails_first in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let path = Utf8PathBuf::from_path_buf(dir.path().join("profiles.yaml")).unwrap();
+            let manager = PersistentStateManagerSetup::<
+                chimera_config::profile::Profiles,
+                crate::core::migration::modules::profiles::ProfilesFormat,
+            >::builder()
+            .config_path(path)
+            .assemble()
+            .from_state(chimera_config::profile::Profiles::default())
+            .await
+            .unwrap();
+            let events = Arc::new(Mutex::new(Vec::new()));
+            let ready = Arc::new(AtomicBool::new(true));
+            let attempts = Arc::new(AtomicUsize::new(0));
+            let service = Arc::new(ReleaseOwedService {
+                inner: ToggleStartupServiceProbe {
+                    events: events.clone(),
+                    ready: ready.clone(),
+                    core_running: Arc::new(AtomicBool::new(false)),
+                },
+                runtime_owned: true,
+                attempts: attempts.clone(),
+                fail_next: Arc::new(AtomicBool::new(fails_first)),
+            });
+            let core = Arc::new(ReceiptProofCore {
+                active: Mutex::new(None),
+                publish_wrong_target: false,
+                change_instance_between_reads: false,
+                status_reads: AtomicUsize::new(0),
+            });
+            let client =
+                spawn_startup_client_with_profiles(core, service, manager.snapshot_handle()).await;
+            client.start_core().await.unwrap();
+
+            tokio::time::timeout(Duration::from_secs(3), async {
+                loop {
+                    if attempts.load(AtomicOrdering::Acquire) == 1
+                        && client.status().completed.iter().any(|item| {
+                            item.error.as_deref().is_some_and(|reason| {
+                                reason.contains("injected Service daemon stop failure")
+                            }) == fails_first
+                        })
+                        && client.status().active.is_none()
+                    {
+                        break;
+                    }
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .expect("the first daemon release attempt must finish");
+
+            assert!(matches!(
+                client.reconciler_status().conclusion,
+                Conclusion::Converged
+            ));
+            if fails_first {
+                assert!(ready.load(AtomicOrdering::Acquire));
+                assert!(
+                    client
+                        .reconciler_status()
+                        .maintenance
+                        .as_deref()
+                        .is_some_and(
+                            |reason| reason.contains("injected Service daemon stop failure")
+                        )
+                );
+                signal_service_readiness_change(&client);
+                tokio::time::sleep(Duration::from_millis(80)).await;
+                assert_eq!(
+                    attempts.load(AtomicOrdering::Acquire),
+                    1,
+                    "normal readiness does not hammer a failed daemon stop"
+                );
+                client.reconcile().await.unwrap();
+                tokio::time::timeout(Duration::from_secs(3), async {
+                    loop {
+                        if attempts.load(AtomicOrdering::Acquire) == 2
+                            && !ready.load(AtomicOrdering::Acquire)
+                            && client.status().active.is_none()
+                            && client.reconciler_status().maintenance.is_none()
+                        {
+                            break;
+                        }
+                        tokio::task::yield_now().await;
+                    }
+                })
+                .await
+                .expect("explicit Retry must settle the retained release debt");
+            } else {
+                assert!(!ready.load(AtomicOrdering::Acquire));
+                assert!(client.reconciler_status().maintenance.is_none());
+            }
+            let events = events.lock().unwrap().clone();
+            assert!(events.contains(&"service-stop"));
+            assert!(events.contains(&"service-confirm"));
+            assert_eq!(
+                attempts.load(AtomicOrdering::Acquire),
+                if fails_first { 2 } else { 1 }
+            );
+            client.shutdown().await.unwrap();
+        }
     }
 
     #[tokio::test]

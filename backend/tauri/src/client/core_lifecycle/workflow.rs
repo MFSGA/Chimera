@@ -110,6 +110,8 @@ pub(in crate::client) enum Command {
     Reconcile,
     /// One source notification requests a latest-committed-target round.
     ReconcileSource,
+    /// Ref release-owed maintenance; no Core submit or startup handoff.
+    MaintainServiceRelease,
     RetryDeferredProfiles {
         digest: String,
     },
@@ -815,6 +817,7 @@ impl CoreLifecycleWorkflow {
                     .await
             }
             Command::StopService(mut transition) => self.stop_service(transition.as_mut()).await,
+            Command::MaintainServiceRelease => self.maintain_service_release().await,
             Command::ServiceEndpointDown(mut transition) => {
                 match self.report_service_endpoint_down(transition.as_mut()).await {
                     Ok(recovered) => {
@@ -1051,6 +1054,67 @@ impl CoreLifecycleWorkflow {
                 && after.run_type != crate::core::RunType::Service,
             "core did not recover to the local host after Service stop"
         );
+        Ok(())
+    }
+
+    /// Independent ref release-owed maintenance: only a verified Local
+    /// runtime may retire a daemon whose *stopped* Core is still owned by this
+    /// instance. Running, foreign, quarantined and unreadable Service owners
+    /// are never grounds for stopping the daemon.
+    pub(super) async fn service_release_observation(
+        &self,
+    ) -> crate::client::reconciler::release::ReleaseObservation {
+        use crate::client::reconciler::release::{ReleaseObservation, observation};
+
+        if self.application.get_typed().enable_service_mode {
+            return ReleaseObservation::Cleared;
+        }
+        let Ok(core) = self.core.status().await else {
+            return ReleaseObservation::Unproven;
+        };
+        let verified_local = core.run_type == crate::core::RunType::Normal
+            && self.verified_applied_runtime(&core).await;
+        if !verified_local {
+            return ReleaseObservation::Unproven;
+        }
+        let (service, _) = self.service_evidence().await;
+        observation(false, verified_local, &service)
+    }
+
+    pub(super) async fn maintain_service_release(&self) -> anyhow::Result<()> {
+        use crate::client::reconciler::release::ReleaseObservation;
+
+        let before = self.core.status().await?;
+        anyhow::ensure!(
+            self.service_release_observation().await == ReleaseObservation::Owed,
+            "Service daemon release is not authorized by a verified Local owner"
+        );
+        // Nonblocking lock acquisition preserves ServiceActor -> CoreLifecycle
+        // ordering: a UI command can hold this lock while awaiting our mailbox.
+        let mut lease = self.try_begin_service_transition().await?;
+        anyhow::ensure!(
+            self.service_release_observation().await == ReleaseObservation::Owed,
+            "Service owner evidence changed after acquiring the transition lease"
+        );
+        // An intentionally retired daemon must not be restarted by the
+        // separate endpoint-recovery loop on the next interval.
+        self.service_recovery.lock().suppress();
+        lease.stop_daemon().await?;
+        lease.confirm_stopped().await?;
+        let (after, _) = self.service_evidence().await;
+        anyhow::ensure!(
+            matches!(after, ServiceEvidence::Absent { .. }),
+            "Service stop was acknowledged but a fresh probe did not prove daemon shutdown: {after:?}"
+        );
+        let current = self.core.status().await?;
+        anyhow::ensure!(
+            before.instance_id == current.instance_id
+                && before.state_changed_at == current.state_changed_at
+                && before.run_type == current.run_type
+                && matches!(current.state, CoreState::Running),
+            "Local Core changed while retiring the Service daemon"
+        );
+        self.refresh_service_recovery_host().await;
         Ok(())
     }
 
