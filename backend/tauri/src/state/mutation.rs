@@ -1,4 +1,4 @@
-//! Startup-injected connection to the application mutation participant.
+//! Startup-injected Profiles candidate checks and committed-source notifications.
 
 mod profile_content;
 pub(crate) use profile_content::{ProfileContentLock, ProfileContentReader};
@@ -9,19 +9,24 @@ use std::{
 };
 
 use chimera_config::profile::Profiles;
+#[cfg(test)]
 use chimera_core::state::{DecisionHandle, StateParticipant};
 use chimera_core_manager::OperationId;
 use tokio::sync::{Mutex, OnceCell, watch};
 
 use crate::client::{
-    application_workflow::{
-        ApplicationWorkflowClient, RecoveryContext, impact::MutationHints,
-        mutation::MutationReceipt, participant::ApplicationMutationParticipant,
-        policy::CommandClass,
-    },
+    application_workflow::{ApplicationWorkflowClient, RecoveryContext, mutation::MutationReceipt},
     core_lifecycle::CoreLifecycleClient,
     effects::ports::CommitNotifications,
-    runtime::{CommitReceipt, Degradation, DegradationPhase, RuntimeCommitStatus},
+    runtime::{CommitReceipt, RuntimeCommitStatus},
+};
+
+#[cfg(test)]
+use crate::client::{
+    application_workflow::{
+        impact::MutationHints, participant::ApplicationMutationParticipant, policy::CommandClass,
+    },
+    runtime::{Degradation, DegradationPhase},
 };
 
 /// Source-owned candidate validation is independent of the Core lifecycle's
@@ -144,6 +149,9 @@ impl MutationCoordinator {
         assert!(self.runtime_gate.set(gate).is_ok());
     }
 
+    /// Retained only for legacy transaction migration regression fixtures.
+    /// Profiles production writes never enlist this participant.
+    #[cfg(test)]
     pub fn participant(
         &self,
         operation_id: OperationId,
@@ -171,35 +179,43 @@ impl MutationCoordinator {
         })
     }
 
-    /// Ref Profiles source-only path: after an ordinary versioned document
-    /// commit, publish its version without creating a TCC participant or
-    /// attempting to start/reconcile the Core. The domain actor has already
-    /// proved that no runtime target or explicit activation was requested.
-    pub(crate) fn committed_without_runtime(&self, source_version: u64) -> CommitReceipt {
+    /// A completed source owns its own commit notification and runtime hint.
+    /// The runtime still reads the authoritative latest committed source, not
+    /// the candidate supplied by the source actor before persistence.
+    pub(crate) fn source_committed(
+        &self,
+        source_version: u64,
+        reaches_runtime: bool,
+        operation: Option<OperationId>,
+        files: Vec<chimera_config::profile::ProfileId>,
+    ) -> CommitReceipt {
+        if let Some(notifications) = &self.notifications {
+            notifications.profiles_committed(files);
+        }
         match self.connection.borrow().clone() {
-            Connection::Ready(workflow) => workflow.profiles_source_committed(source_version),
+            Connection::Ready(workflow) => {
+                if reaches_runtime {
+                    workflow.profiles_runtime_committed(source_version);
+                } else {
+                    workflow.profiles_source_committed(source_version);
+                }
+            }
             #[cfg(test)]
             Connection::Isolated => {}
             Connection::Pending => {
-                tracing::error!("Profiles source commit was published before mutation readiness");
+                tracing::error!("Profiles source committed before mutation readiness");
             }
         }
         CommitReceipt {
-            operation_id: None,
+            operation_id: operation.map(|id| id.to_string()),
             domain: "profiles".into(),
             source_version,
             runtime: RuntimeCommitStatus::Unchanged,
         }
     }
 
-    /// A source-only Profiles file commit still publishes its changed content
-    /// to the shared UI/effects owner after the durable source CAS.
-    pub(crate) fn profiles_committed(&self, files: Vec<chimera_config::profile::ProfileId>) {
-        if let Some(notifications) = &self.notifications {
-            notifications.profiles_committed(files);
-        }
-    }
-
+    /// Compatibility readout for transaction participant regression tests.
+    #[cfg(test)]
     pub async fn finish(
         &self,
         operation_id: OperationId,

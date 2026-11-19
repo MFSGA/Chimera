@@ -435,98 +435,84 @@ impl ProfilesActor {
         ),
         ProfilesError,
     > {
-        if Self::source_only_document_change(before, &next, &hints, class) {
-            state
-                .mutations
-                .ensure_ready()
-                .map_err(|error| ProfilesError::Persist(error.to_string()))?;
-            // Use the same publication fence as ref's Profile source actor.
-            // A concurrent committed-content reader cannot observe a mixed
-            // Profiles document and managed-file generation during the write.
-            let fence = state.content_lock.write().await;
-            let result = state
-                .manager
-                .replace_if_version(expected_version, next.clone())
-                .await;
-            drop(fence);
-            return match result {
-                Ok(ReplaceIfVersionResult::Replaced) => {
-                    let version = *state.manager.snapshot_handle().load().version.as_ref();
-                    let receipt = state.mutations.committed_without_runtime(version);
-                    Ok((Arc::new(next), (receipt, Vec::new())))
-                }
-                Ok(ReplaceIfVersionResult::Conflict { actual_version }) => {
-                    Err(ProfilesError::VersionConflict {
-                        expected: *expected_version.as_ref(),
-                        actual: *actual_version.as_ref(),
-                    })
-                }
-                Err(chimera_core::state::ReplaceIfVersionError::State(
-                    chimera_core::state::error::StateChangedError::StateCasMismatch {
-                        expected,
-                        actual,
-                    },
-                )) => Err(ProfilesError::VersionConflict {
-                    expected: *expected.as_ref(),
-                    actual: *actual.as_ref(),
-                }),
-                Err(source) => Err(ProfilesError::SourceTransaction {
-                    source,
-                    cleanup: None,
-                }),
-            };
-        }
-
-        // Ref CandidateCheck runs outside the runtime-mutation mailbox and
-        // precedes any source publication. The legacy participant still owns
-        // the apply step until the postcommit reconciler is migrated.
         state
             .mutations
-            .runtime_gate()
-            .map_err(|error| ProfilesError::RuntimeCheck(error.to_string()))?
-            .check(crate::state::mutation::RuntimeCandidate {
-                profiles: Arc::new(next.clone()),
-                staged: hints.staged_content.clone(),
-            })
-            .await
-            .map_err(|error| ProfilesError::RuntimeCheck(error.to_string()))?;
-        let operation = OperationId::generate();
-        let participant = state
-            .mutations
-            .participant(operation.clone(), hints, class)
+            .ensure_ready()
             .map_err(|error| ProfilesError::Persist(error.to_string()))?;
-        match state
+        let reaches_runtime = !Self::source_only_document_change(before, &next, &hints, class);
+        if reaches_runtime {
+            state
+                .mutations
+                .runtime_gate()
+                .map_err(|error| ProfilesError::RuntimeCheck(error.to_string()))?
+                .check(crate::state::mutation::RuntimeCandidate {
+                    profiles: Arc::new(next.clone()),
+                    staged: hints.staged_content.clone(),
+                })
+                .await
+                .map_err(|error| ProfilesError::RuntimeCheck(error.to_string()))?;
+        }
+        // Use the same publication fence as ref's Profile source actor.
+        // A concurrent committed-content reader cannot observe a mixed
+        // Profiles document and managed-file generation during the write.
+        let fence = state.content_lock.write().await;
+        let result = state
             .manager
-            .replace_if_version_with_participant(
-                expected_version,
-                next.clone(),
-                participant,
-                || async { Ok(()) },
-                || async { Ok(()) },
-            )
-            .await
-            .map_err(|source| ProfilesError::SourceTransaction {
-                source,
-                cleanup: None,
-            })? {
-            ReplaceIfVersionResult::Replaced => {
-                let completion = state
-                    .mutations
-                    .finish(
-                        operation,
-                        "profiles",
-                        *state.manager.snapshot_handle().load().version.as_ref(),
-                    )
-                    .await;
-                Ok((Arc::new(next), completion))
+            .replace_if_version(expected_version, next.clone())
+            .await;
+        drop(fence);
+        match result {
+            Ok(ReplaceIfVersionResult::Replaced) => {
+                let version = *state.manager.snapshot_handle().load().version.as_ref();
+                let receipt = state.mutations.source_committed(
+                    version,
+                    reaches_runtime,
+                    reaches_runtime.then(OperationId::generate),
+                    Self::changed_files(before, &next, None),
+                );
+                Ok((Arc::new(next), (receipt, Vec::new())))
             }
-            ReplaceIfVersionResult::Conflict { actual_version } => {
+            Ok(ReplaceIfVersionResult::Conflict { actual_version }) => {
                 Err(ProfilesError::VersionConflict {
                     expected: *expected_version.as_ref(),
                     actual: *actual_version.as_ref(),
                 })
             }
+            Err(chimera_core::state::ReplaceIfVersionError::State(
+                chimera_core::state::error::StateChangedError::StateCasMismatch {
+                    expected,
+                    actual,
+                },
+            )) => Err(ProfilesError::VersionConflict {
+                expected: *expected.as_ref(),
+                actual: *actual.as_ref(),
+            }),
+            Err(source) => Err(ProfilesError::SourceTransaction {
+                source,
+                cleanup: None,
+            }),
         }
+    }
+
+    /// File ids whose source content disappeared or was explicitly touched.
+    /// Metadata-only edits do not produce spurious file-change events.
+    fn changed_files(
+        before: &Profiles,
+        next: &Profiles,
+        touched: Option<&ProfileId>,
+    ) -> Vec<ProfileId> {
+        let mut files: Vec<_> = before
+            .items
+            .keys()
+            .filter(|id| !next.items.contains_key(*id))
+            .cloned()
+            .collect();
+        if let Some(uid) = touched
+            && !files.contains(uid)
+        {
+            files.push(uid.clone());
+        }
+        files
     }
 
     async fn reconcile_committed(
@@ -917,21 +903,12 @@ impl ProfilesActor {
         } else {
             None
         };
-        // The postcheck runtime apply remains with the compatibility
-        // participant until the committed-target reconciler owns it.
-        let participant = if source_only {
-            None
-        } else {
-            Some(
-                state
-                    .mutations
-                    .participant(operation.clone(), hints, class)
-                    .map_err(|error| ProfilesError::Persist(error.to_string()))?,
-            )
-        };
+        // Ref Source Commit owns materialization, document publication and
+        // compensation. Runtime application is requested only *after* the
+        // durable version is visible, never as a transaction participant.
         let write_lock = state.content_lock.clone();
-        // Ref local-write and legacy participant commits both own file
-        // promotion, document publication and recovery under one fence. Keep
+        // The source-owned local-write commits own file promotion, document
+        // publication and recovery under one fence. Keep
         // the guard in the detached source owner if the waiting actor is dropped.
         // Pre-write conflicts never promote any source file.
         let fence = Arc::new(std::sync::Mutex::new(None));
@@ -946,12 +923,10 @@ impl ProfilesActor {
         let recover_resource = prepared.clone();
         let recover_cleanup = cleanup.clone();
         let write = move || async move {
-            if source_only || write_resource.is_some() {
-                let guard = write_lock.write().await;
-                *write_fence
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(guard);
-            }
+            let guard = write_lock.write().await;
+            *write_fence
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(guard);
             tokio::task::spawn_blocking(move || {
                 if let Some(prepared) = write_resource {
                     write_port.promote(&prepared)?;
@@ -980,33 +955,17 @@ impl ProfilesActor {
             })
             .await?
         };
-        let result = match participant {
-            Some(participant) => {
-                state
-                    .manager
-                    .replace_if_version_with_participant(
-                        expected_version,
-                        candidate.clone(),
-                        participant,
-                        write,
-                        recover,
-                    )
-                    .await
-            }
-            None => {
-                state
-                    .manager
-                    .replace_if_version_with_local_write(
-                        expected_version,
-                        candidate.clone(),
-                        write,
-                        recover,
-                    )
-                    .await
-            }
-        };
-        // Publication/compensation and the participant's settlement have
-        // completed. Do not hold the file fence for later job reconciliation.
+        let result = state
+            .manager
+            .replace_if_version_with_local_write(
+                expected_version,
+                candidate.clone(),
+                write,
+                recover,
+            )
+            .await;
+        // Publication or compensation settled in the source owner. Do not
+        // hold the file fence while reconciling source jobs or runtime.
         drop(
             fence
                 .lock()
@@ -1056,6 +1015,25 @@ impl ProfilesActor {
                     }
                 }
                 return Err(match result {
+                    Err(chimera_core::state::ReplaceIfVersionError::State(
+                        chimera_core::state::error::StateChangedError::StateCasMismatch {
+                            expected,
+                            actual,
+                        },
+                    )) => {
+                        if failures.is_empty() {
+                            ProfilesError::VersionConflict {
+                                expected: *expected.as_ref(),
+                                actual: *actual.as_ref(),
+                            }
+                        } else {
+                            ProfilesError::ConflictCleanup {
+                                expected: *expected.as_ref(),
+                                actual: *actual.as_ref(),
+                                cleanup: failures.join("; "),
+                            }
+                        }
+                    }
                     Err(source) => ProfilesError::SourceTransaction {
                         source,
                         cleanup: (!failures.is_empty()).then(|| failures.join("; ")),
@@ -1079,19 +1057,17 @@ impl ProfilesActor {
             }
         }
         let version = *state.manager.snapshot_handle().load().version.as_ref();
-        let (receipt, runtime_degradations) = if source_only {
-            let files = match &affects {
-                AffectsRule::Touched(uid) => vec![uid.clone()],
-                _ => created.iter().cloned().collect(),
-            };
-            state.mutations.profiles_committed(files);
-            (
-                state.mutations.committed_without_runtime(version),
-                Vec::new(),
-            )
-        } else {
-            state.mutations.finish(operation, "profiles", version).await
+        let touched = match &affects {
+            AffectsRule::Touched(uid) => Some(uid),
+            _ => created.as_ref(),
         };
+        let receipt = state.mutations.source_committed(
+            version,
+            !source_only,
+            (!source_only).then_some(operation),
+            Self::changed_files(&before, &candidate, touched),
+        );
+        let runtime_degradations = Vec::new();
         let snapshot = Arc::new(candidate);
         Self::reconcile_committed(myself, state, &snapshot).await;
         let mut degradations = Vec::new();
