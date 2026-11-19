@@ -124,6 +124,10 @@ fn schedule_startup_recovery(
         }
         .await;
         startup_recovery_pending.store(false, Ordering::Release);
+        // A source commit may reach the mailbox after RecoverStartup has
+        // already completed but before the caller's source observation. Wake
+        // the retained latest-source intent once the recovery lease is gone.
+        let _ = actor_ref.cast(Message::StartupRecoveryFinished);
         if let Err(error) = result {
             tracing::warn!(%error, "automatic startup owner recovery did not complete");
         }
@@ -236,6 +240,10 @@ enum Message {
         domain: SourceDomain,
         version: u64,
         reconcile_requested: bool,
+        /// The caller already observed a ref Service generation / owner that
+        /// requires Startup recovery. Retain the durable runtime intent while
+        /// that single owner is being re-established.
+        startup_recovery_required: bool,
     },
     RuntimeDirty,
     DirtyTick,
@@ -243,6 +251,7 @@ enum Message {
     ReadSourceVersionsForTest {
         reply: RpcReplyPort<SourceVersions>,
     },
+    StartupRecoveryFinished,
     StartupRetryDue {
         identity: String,
     },
@@ -1747,6 +1756,7 @@ impl Actor for ApplicationWorkflowActor {
                 domain,
                 version,
                 reconcile_requested,
+                startup_recovery_required,
             } => {
                 // Domain owners have already published their source versions.
                 // Profiles source commits request the one CoreLifecycle runtime
@@ -1763,10 +1773,26 @@ impl Actor for ApplicationWorkflowActor {
                     && !state.uncertain
                     && !state.shutting_down
                 {
-                    if state.startup_owner_unproven
+                    if startup_recovery_required
+                        || state.startup_owner_unproven
                         || state.startup_owner_unproven_shared.load(Ordering::Acquire)
                     {
-                        state.request_startup_recovery(&myself);
+                        // Ref's source commit stays durable even when S2 must
+                        // recover the initial owner first. Coalesce concurrent
+                        // commits behind ONE latest-source continuation;
+                        // successful verified Startup recovery will consume it.
+                        state.source_after_handoff = true;
+                        if state.startup_owner_unproven
+                            || state.startup_owner_unproven_shared.load(Ordering::Acquire)
+                        {
+                            state.request_startup_recovery(&myself);
+                        } else if !state.startup_recovery_pending.load(Ordering::Acquire) {
+                            // The externally requested recovery may have
+                            // settled before this source message was read.
+                            // Replan through S2 rather than dropping its
+                            // durable apply intent.
+                            state.replan_retained_source_on_service_change(&myself);
+                        }
                     } else {
                         state.source_dirty = true;
                         state.mark_runtime_dirty(&myself);
@@ -1804,6 +1830,9 @@ impl Actor for ApplicationWorkflowActor {
                         Command::Reconcile
                     });
                 }
+            }
+            Message::StartupRecoveryFinished => {
+                state.replan_retained_source_on_service_change(&myself);
             }
             Message::StartupRetryDue { identity } => {
                 if !state.uncertain && !state.shutting_down {
@@ -3000,7 +3029,8 @@ impl CoreLifecycleClient {
                     .cast(Message::SourceCommitted {
                         domain,
                         version,
-                        reconcile_requested: reconcile_requested && !recover_startup,
+                        reconcile_requested,
+                        startup_recovery_required: recover_startup,
                     })
                     .is_err()
                 {
@@ -4434,6 +4464,32 @@ mod tests {
 
     struct RecordingService {
         events: Arc<Mutex<Vec<&'static str>>>,
+    }
+
+    /// Hold the Service lease outside the Actor while two source commits
+    /// arrive through the real CoreLifecycleClient::source_committed entry.
+    struct PausedStartupRecoveryLeaseService {
+        inner: RecordingService,
+        gate: Arc<tokio::sync::Mutex<()>>,
+    }
+
+    #[async_trait]
+    impl ServiceLifecyclePort for PausedStartupRecoveryLeaseService {
+        async fn probe(&self) -> anyhow::Result<chimera_ipc::types::StatusInfo<'static>> {
+            self.inner.probe().await
+        }
+
+        async fn begin_transition(&self) -> anyhow::Result<Box<dyn ServiceTransitionLease>> {
+            let _guard = self.gate.lock().await;
+            self.inner.begin_transition().await
+        }
+
+        async fn try_begin_transition(&self) -> anyhow::Result<Box<dyn ServiceTransitionLease>> {
+            let Ok(_guard) = self.gate.try_lock() else {
+                anyhow::bail!("injected startup recovery lease still held");
+            };
+            self.inner.try_begin_transition().await
+        }
     }
 
     /// Explicitly contradictory Actor/legacy generation fixture. This
@@ -11821,6 +11877,263 @@ mod tests {
         assert_eq!(core.retire_calls.load(AtomicOrdering::Acquire), 0);
         assert_eq!(core.submissions.load(AtomicOrdering::Acquire), 2);
         client.shutdown().await.unwrap();
+    }
+
+    /// The public source-commit entry must not erase its reconcile request
+    /// when it has already scheduled Startup owner recovery. This exercises
+    /// the actual client entry rather than injecting an actor message.
+    #[tokio::test]
+    async fn source_commits_during_real_startup_recovery_lease_keep_latest_intent() {
+        use chimera_core::client::reconciler::plan::Conclusion;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = Utf8PathBuf::from_path_buf(dir.path().join("profiles.yaml")).unwrap();
+        let mut manager = PersistentStateManagerSetup::<
+            chimera_config::profile::Profiles,
+            crate::core::migration::modules::profiles::ProfilesFormat,
+        >::builder()
+        .config_path(path)
+        .assemble()
+        .from_state(chimera_config::profile::Profiles::default())
+        .await
+        .unwrap();
+        let core = Arc::new(ReceiptProofCore {
+            active: Mutex::new(None),
+            publish_wrong_target: false,
+            change_instance_between_reads: false,
+            status_reads: AtomicUsize::new(0),
+            submissions: AtomicUsize::new(0),
+            stops: AtomicUsize::new(0),
+            service_to_retire: None,
+            retire_calls: AtomicUsize::new(0),
+        });
+        let gate = Arc::new(tokio::sync::Mutex::new(()));
+        let client = spawn_startup_client_with_profiles(
+            core.clone(),
+            Arc::new(PausedStartupRecoveryLeaseService {
+                inner: RecordingService {
+                    events: Arc::new(Mutex::new(Vec::new())),
+                },
+                gate: gate.clone(),
+            }),
+            manager.snapshot_handle(),
+        )
+        .await;
+        assert_eq!(
+            client.startup_reconcile().await.unwrap().report.outcome,
+            StartupOutcome::Ready
+        );
+        assert_eq!(core.submissions.load(AtomicOrdering::Acquire), 1);
+
+        let CoreLifecycleClientInner::Actor {
+            startup_owner_unproven,
+            startup_recovery_pending,
+            ..
+        } = client.0.as_ref()
+        else {
+            panic!("this test requires the actual actor entry");
+        };
+        let held_lease = gate.lock().await;
+        startup_owner_unproven.store(true, Ordering::Release);
+        for version in 1_u64..=2 {
+            let mut next = manager.snapshot().as_ref().clone();
+            next.valid
+                .push(format!("latest-recovery-generation-{version}"));
+            manager
+                .replace_if_version(chimera_core::state::Version::new(version - 1), next)
+                .await
+                .unwrap();
+            client.source_committed(SourceDomain::Profiles, version, true);
+        }
+        assert!(
+            startup_recovery_pending.load(Ordering::Acquire),
+            "source notification must first schedule Startup owner recovery"
+        );
+        tokio::time::sleep(DIRTY_WINDOW + Duration::from_millis(70)).await;
+        assert_eq!(core.submissions.load(AtomicOrdering::Acquire), 1);
+        assert_eq!(core.stops.load(AtomicOrdering::Acquire), 0);
+
+        drop(held_lease);
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let status = client.reconciler_status();
+                if !startup_recovery_pending.load(Ordering::Acquire)
+                    && core.submissions.load(AtomicOrdering::Acquire) == 2
+                    && core.stops.load(AtomicOrdering::Acquire) == 1
+                    && status.seen.version(SourceDomain::Profiles) == Some(2)
+                    && status
+                        .recent
+                        .iter()
+                        .filter(|round| round.trigger == "SourceCommitted")
+                        .count()
+                        == 1
+                    && status.active.is_none()
+                    && matches!(status.conclusion, Conclusion::Converged)
+                {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("automatically recovered owner must replan latest committed source");
+        client.shutdown().await.unwrap();
+    }
+
+    /// Source commits are durable even if the caller has already requested
+    /// a Startup owner recovery. The two notifications must coalesce behind
+    /// its lease, then re-read the latest Profiles generation after recovery
+    /// settles. An explicit Stop cancels the continuation instead.
+    #[tokio::test]
+    async fn deferred_startup_source_commits_resume_once_or_cancel_on_stop() {
+        use chimera_core::client::reconciler::plan::Conclusion;
+
+        for stop_before_recovery in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let path = Utf8PathBuf::from_path_buf(dir.path().join("profiles.yaml")).unwrap();
+            let mut manager = PersistentStateManagerSetup::<
+                chimera_config::profile::Profiles,
+                crate::core::migration::modules::profiles::ProfilesFormat,
+            >::builder()
+            .config_path(path)
+            .assemble()
+            .from_state(chimera_config::profile::Profiles::default())
+            .await
+            .unwrap();
+            let core = Arc::new(ReceiptProofCore {
+                active: Mutex::new(None),
+                publish_wrong_target: false,
+                change_instance_between_reads: false,
+                status_reads: AtomicUsize::new(0),
+                submissions: AtomicUsize::new(0),
+                stops: AtomicUsize::new(0),
+                service_to_retire: None,
+                retire_calls: AtomicUsize::new(0),
+            });
+            let client = spawn_startup_client_with_profiles(
+                core.clone(),
+                Arc::new(RecordingService {
+                    events: Arc::new(Mutex::new(Vec::new())),
+                }),
+                manager.snapshot_handle(),
+            )
+            .await;
+            let startup = client.startup_reconcile().await.unwrap();
+            assert_eq!(startup.report.outcome, StartupOutcome::Ready);
+            assert_eq!(core.submissions.load(AtomicOrdering::Acquire), 1);
+
+            let CoreLifecycleClientInner::Actor {
+                actor_ref,
+                startup_recovery_pending,
+                ..
+            } = client.0.as_ref()
+            else {
+                panic!("source recovery test requires the actor");
+            };
+            // Deterministically model the recovery lease in flight so
+            // source messages cannot race an actual OS Service transition.
+            startup_recovery_pending.store(true, Ordering::Release);
+            for version in 1_u64..=2 {
+                let mut latest = manager.snapshot().as_ref().clone();
+                latest
+                    .valid
+                    .push(format!("committed-during-startup-{version}"));
+                manager
+                    .replace_if_version(chimera_core::state::Version::new(version - 1), latest)
+                    .await
+                    .unwrap();
+                actor_ref
+                    .cast(Message::SourceCommitted {
+                        domain: SourceDomain::Profiles,
+                        version,
+                        reconcile_requested: true,
+                        startup_recovery_required: true,
+                    })
+                    .unwrap();
+            }
+            // The actor has processed both messages but no source apply may
+            // run while the caller's Startup owner recovery is unresolved.
+            tokio::time::sleep(DIRTY_WINDOW + Duration::from_millis(70)).await;
+            assert_eq!(core.submissions.load(AtomicOrdering::Acquire), 1);
+            assert_eq!(
+                client
+                    .reconciler_status()
+                    .recent
+                    .iter()
+                    .filter(|round| round.trigger == "SourceCommitted")
+                    .count(),
+                0
+            );
+
+            if stop_before_recovery {
+                client.stop_core().await.unwrap();
+            }
+            startup_recovery_pending.store(false, Ordering::Release);
+            actor_ref.cast(Message::StartupRecoveryFinished).unwrap();
+
+            if stop_before_recovery {
+                tokio::time::sleep(DIRTY_WINDOW + Duration::from_millis(70)).await;
+                assert_eq!(core.submissions.load(AtomicOrdering::Acquire), 1);
+                assert_eq!(
+                    client
+                        .reconciler_status()
+                        .recent
+                        .iter()
+                        .filter(|round| round.trigger == "SourceCommitted")
+                        .count(),
+                    0,
+                    "explicit StopCore must cancel pending source continuation"
+                );
+                client.start_core().await.unwrap();
+                tokio::time::sleep(DIRTY_WINDOW + Duration::from_millis(70)).await;
+                assert_eq!(
+                    client
+                        .reconciler_status()
+                        .recent
+                        .iter()
+                        .filter(|round| round.trigger == "SourceCommitted")
+                        .count(),
+                    0,
+                    "a later Start must not resurrect cancelled source debt"
+                );
+            } else {
+                tokio::time::timeout(Duration::from_secs(4), async {
+                    loop {
+                        let status = client.reconciler_status();
+                        if core.submissions.load(AtomicOrdering::Acquire) == 2
+                            && core.stops.load(AtomicOrdering::Acquire) == 1
+                            && status.seen.version(SourceDomain::Profiles) == Some(2)
+                            && status
+                                .recent
+                                .iter()
+                                .filter(|round| round.trigger == "SourceCommitted")
+                                .count()
+                                == 1
+                            && status.active.is_none()
+                            && matches!(status.conclusion, Conclusion::Converged)
+                        {
+                            break;
+                        }
+                        tokio::task::yield_now().await;
+                    }
+                })
+                .await
+                .expect("latest committed source must replan after startup recovery finishes");
+                tokio::time::sleep(DIRTY_WINDOW + Duration::from_millis(70)).await;
+                assert_eq!(core.submissions.load(AtomicOrdering::Acquire), 2);
+                assert_eq!(
+                    client
+                        .reconciler_status()
+                        .recent
+                        .iter()
+                        .filter(|round| round.trigger == "SourceCommitted")
+                        .count(),
+                    1,
+                    "concurrent source commits should coalesce into one latest round"
+                );
+            }
+            client.shutdown().await.unwrap();
+        }
     }
 
     /// An external Service owner may exit after the S2 transition lease was
