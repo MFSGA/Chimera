@@ -15,7 +15,7 @@
     "test:subscription-url": "tsx --test tests/subscription-url-schema.test.ts",
     "test:connections": "tsx --test tests/connections-model.test.ts",
     "test:proxies": "tsx --test tests/proxies-node-list.test.ts tests/proxies-member-state.test.ts tests/proxy-group-layout.test.ts tests/group-traffic-speed.test.ts",
-    "test:providers": "pnpm generate:i18n && tsx --test tests/providers-subscription.test.tsx",
+    "test:providers": "pnpm generate:i18n && tsx --test tests/providers-subscription.test.tsx tests/providers-actions.test.ts",
     "test:localization": "tsx --test tests/localization.test.ts",
     "test:traffic": "tsx --test tests/traffic-search.test.ts tests/traffic-sankey-layout.test.ts tests/traffic-view-settings.test.ts tests/rule-rank.test.ts ../interface/tests/traffic-report-query.test.ts",
     "test:dashboard-widget-placement": "tsx --test tests/dashboard-widget-placement.test.ts",

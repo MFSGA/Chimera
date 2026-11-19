@@ -13,6 +13,7 @@ import {
 import { useBlockTask } from '@/components/providers/block-task-provider';
 import { formatError } from '@/utils';
 import { message } from '@/utils/notification';
+import { runProviderAction } from './provider-action';
 
 export const useProxiesProviderUpdate = (
   data: ClashProxiesProviderQueryItem,
@@ -20,17 +21,17 @@ export const useProxiesProviderUpdate = (
   const updateProvider = useUpdateClashProxiesProvider();
   const blockTask = useBlockTask(
     `update-proxies-provider-${data.name}`,
-    async () => {
-      try {
-        await updateProvider.mutateAsync(data.name);
-      } catch (error) {
-        console.error('Failed to update proxies provider', error);
-        await message(`Update provider failed: \n ${formatError(error)}`, {
-          title: 'Error',
-          kind: 'error',
-        });
-      }
-    },
+    async () =>
+      runProviderAction(
+        () => updateProvider.mutateAsync(data.name),
+        async (error) => {
+          console.error('Failed to update proxies provider', error);
+          await message(`Update provider failed: \n ${formatError(error)}`, {
+            title: 'Error',
+            kind: 'error',
+          });
+        },
+      ),
   );
 
   return blockTask;
