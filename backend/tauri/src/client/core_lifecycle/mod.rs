@@ -972,6 +972,15 @@ impl ApplicationWorkflowState {
                     | Command::ReconcileProfiles { .. }
                     | Command::RetryDeferredProfiles { .. }
                     | Command::RecoverCore
+                    // A delayed automatic Startup recovery, retry, or
+                    // Service readiness handoff must not implicitly re-start
+                    // Core after StopCore. The initial one-shot
+                    // StartupReconcile remains distinct: its queued result
+                    // must still settle even if a concurrent Stop completed.
+                    // Only StartCore changes RunIntent back to Running.
+                    | Command::RecoverStartup { .. }
+                    | Command::RetryStartup { .. }
+                    | Command::FollowService { .. }
             )
         {
             self.settle(request.response, Ok(()));
@@ -12029,6 +12038,91 @@ mod tests {
         })
         .await
         .expect("automatically recovered owner must replan latest committed source");
+        client.shutdown().await.unwrap();
+    }
+
+    /// A delayed automatic Startup recovery may only obtain its Service
+    /// lease *after* the user explicitly stopped Core. The late recovery
+    /// must not convert Stopped intent into an implicit start.
+    #[tokio::test]
+    async fn late_startup_recovery_after_explicit_stop_cannot_restart_core() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = Utf8PathBuf::from_path_buf(dir.path().join("profiles.yaml")).unwrap();
+        let manager = PersistentStateManagerSetup::<
+            chimera_config::profile::Profiles,
+            crate::core::migration::modules::profiles::ProfilesFormat,
+        >::builder()
+        .config_path(path)
+        .assemble()
+        .from_state(chimera_config::profile::Profiles::default())
+        .await
+        .unwrap();
+        let core = Arc::new(ReceiptProofCore {
+            active: Mutex::new(None),
+            publish_wrong_target: false,
+            change_instance_between_reads: false,
+            status_reads: AtomicUsize::new(0),
+            submissions: AtomicUsize::new(0),
+            stops: AtomicUsize::new(0),
+            service_to_retire: None,
+            retire_calls: AtomicUsize::new(0),
+        });
+        let client = spawn_startup_client_with_profiles(
+            core.clone(),
+            Arc::new(RecordingService {
+                events: Arc::new(Mutex::new(Vec::new())),
+            }),
+            manager.snapshot_handle(),
+        )
+        .await;
+        assert_eq!(
+            client.startup_reconcile().await.unwrap().report.outcome,
+            StartupOutcome::Ready
+        );
+        assert_eq!(core.submissions.load(AtomicOrdering::Acquire), 1);
+        client.stop_core().await.unwrap();
+        assert!(core.active.lock().unwrap().is_none());
+        assert_eq!(core.stops.load(AtomicOrdering::Acquire), 1);
+
+        // Equivalent to an in-flight Startup worker finishing lease
+        // acquisition and enqueuing RecoverStartup after StopCore settled.
+        client.recover_startup().await.unwrap();
+
+        // The delayed startup retry timer and a Service readiness handoff
+        // are also automatic commands, not explicit Start intent.
+        let events = Arc::new(Mutex::new(Vec::new()));
+        client
+            .execute(Command::RetryStartup {
+                operation_id: 1001,
+                identity: "stale-after-stop".into(),
+                transition: Box::new(RecordingServiceTransition {
+                    events: events.clone(),
+                }),
+            })
+            .await
+            .unwrap();
+        client
+            .execute(Command::FollowService {
+                operation_id: 1002,
+                transition: Box::new(RecordingServiceTransition { events }),
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            core.submissions.load(AtomicOrdering::Acquire),
+            1,
+            "late Startup and Service commands must never reapply Core after StopCore"
+        );
+        assert!(core.active.lock().unwrap().is_none());
+        assert_eq!(core.stops.load(AtomicOrdering::Acquire), 1);
+        assert!(matches!(
+            client.reconciler_status().conclusion,
+            chimera_core::client::reconciler::plan::Conclusion::Inactive
+        ));
+
+        // Only an explicit StartCore can resume the stopped runtime.
+        client.start_core().await.unwrap();
+        assert_eq!(core.submissions.load(AtomicOrdering::Acquire), 2);
         client.shutdown().await.unwrap();
     }
 
