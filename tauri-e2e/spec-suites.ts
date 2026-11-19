@@ -51,6 +51,7 @@ export const baseE2eSuites = {
   main: [
     './specs/about-main-layout.e2e.ts',
     './specs/connections-main-layout.e2e.ts',
+    './specs/connections-live-main.e2e.ts',
     './specs/dashboard-main-layout.e2e.ts',
     './specs/logs-main-layout.e2e.ts',
     './specs/main-cache-image.e2e.ts',
