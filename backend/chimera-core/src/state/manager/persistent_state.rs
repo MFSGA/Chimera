@@ -378,6 +378,104 @@ where
         Self::map_conditional_outcome(outcome, config_path, false)
     }
 
+    /// Ref-style source-owned commit with local resource promotion, without a
+    /// runtime participant. The persistence owner survives the waiting caller,
+    /// and compensates any partial local write before publishing an abort.
+    pub async fn replace_if_version_with_local_write<W, WFut, R, RFut>(
+        &mut self,
+        expected_version: Version,
+        next_state: State,
+        local_write: W,
+        local_recovery: R,
+    ) -> Result<ReplaceIfVersionResult, ReplaceIfVersionError>
+    where
+        Formatter: Clone + Send + 'static,
+        W: FnOnce() -> WFut + Send + 'static,
+        WFut: Future<Output = anyhow::Result<()>> + Send + 'static,
+        R: FnOnce() -> RFut + Send + 'static,
+        RFut: Future<Output = anyhow::Result<()>> + Send + 'static,
+    {
+        let config_path = self.config_path.clone();
+        let effect = self.write_config_step(ConfigWriteMode::Inline);
+        let recovery = self.write_config_step(ConfigWriteMode::Inline);
+        let local_write_completed = Arc::new(AtomicBool::new(false));
+        let local_write_flag = Arc::clone(&local_write_completed);
+        let config_written = Arc::new(AtomicBool::new(false));
+        let config_written_effect = Arc::clone(&config_written);
+        let mut owner = self.state_coordinator.persistence_owner();
+        let (completion, result) = tokio::sync::oneshot::channel();
+        let (_caller_lifetime, caller) = tokio::sync::watch::channel(());
+        let mut cancelled = caller.clone();
+        let started = Arc::new(AtomicBool::new(false));
+        let started_effect = Arc::clone(&started);
+        tokio::spawn(async move {
+            let operation = owner.with_pending_state_if_version(
+                expected_version,
+                &next_state,
+                |state| async move {
+                    if caller.has_changed().is_err() {
+                        return Err(ConditionalWriteError::LocalWrite(anyhow::anyhow!(
+                            "caller cancelled before persistence"
+                        )));
+                    }
+                    started_effect.store(true, Ordering::Release);
+                    local_write()
+                        .await
+                        .map_err(ConditionalWriteError::LocalWrite)?;
+                    local_write_flag.store(true, Ordering::SeqCst);
+                    if caller.has_changed().is_err() {
+                        return Err(ConditionalWriteError::LocalWrite(anyhow::anyhow!(
+                            "caller cancelled during persistence"
+                        )));
+                    }
+                    effect(state).await.map_err(ConditionalWriteError::Config)?;
+                    config_written_effect.store(true, Ordering::Release);
+                    Ok(())
+                },
+                |committed| async move {
+                    let local = local_recovery().await;
+                    let config = if config_written.load(Ordering::Acquire) {
+                        recovery(&committed).await
+                    } else {
+                        Ok(())
+                    };
+                    match (local, config) {
+                        (Ok(()), Ok(())) => Ok(()),
+                        (local, config) => Err(ConditionalWriteError::LocalWrite(anyhow::anyhow!(
+                            "local recovery: {local:?}; config recovery: {config:?}"
+                        ))),
+                    }
+                },
+            );
+            let mut operation = Box::pin(operation);
+            let outcome = tokio::select! {
+                biased;
+                outcome = &mut operation => outcome,
+                _ = cancelled.changed() => {
+                    if !started.load(Ordering::Acquire) {
+                        drop(operation);
+                        let _ = completion.send(Err(ReplaceIfVersionError::LocalWrite(
+                            anyhow::anyhow!("caller cancelled before persistence")
+                        )));
+                        return;
+                    }
+                    operation.await
+                }
+            };
+            let outcome = Self::map_conditional_outcome(
+                outcome,
+                config_path,
+                local_write_completed.load(Ordering::SeqCst),
+            );
+            let _ = completion.send(outcome);
+        });
+        result.await.map_err(|error| {
+            ReplaceIfVersionError::LocalWrite(anyhow::anyhow!(
+                "source persistence owner failed: {error}"
+            ))
+        })?
+    }
+
     /// Replace the state only if the store still holds `expected_version`, with
     /// one extra participant taking part in this transaction.
     ///
@@ -971,6 +1069,194 @@ mod tests {
             manager.state_coordinator.snapshot_versioned().version,
             Version::new(2)
         );
+    }
+
+    #[tokio::test]
+    async fn test_local_write_commits_resource_and_document_together() {
+        let dir = tempdir().unwrap();
+        let document = Utf8PathBuf::from_path_buf(dir.path().join("profiles.yaml")).unwrap();
+        let resource = dir.path().join("managed.yaml");
+        fs::write(&resource, "before").await.unwrap();
+        let mut manager = PersistentStateManagerSetup::<TestState>::builder()
+            .config_path(document.clone())
+            .assemble()
+            .from_state(TestState::new("before".into(), 0))
+            .await
+            .unwrap();
+        let write_path = resource.clone();
+        let recovery_path = resource.clone();
+        let result = manager
+            .replace_if_version_with_local_write(
+                Version::new(0),
+                TestState::new("after".into(), 1),
+                move || async move {
+                    tokio::fs::write(write_path, "after").await?;
+                    Ok(())
+                },
+                move || async move {
+                    tokio::fs::write(recovery_path, "before").await?;
+                    Ok(())
+                },
+            )
+            .await
+            .unwrap();
+        assert!(matches!(result, ReplaceIfVersionResult::Replaced));
+        assert_eq!(manager.snapshot_handle().load().version, Version::new(1));
+        assert_eq!(fs::read_to_string(resource).await.unwrap(), "after");
+        assert_eq!(
+            read_yaml::<TestState>(&document).await.unwrap().name,
+            "after"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_local_write_failure_compensates_and_does_not_publish() {
+        let dir = tempdir().unwrap();
+        let document = Utf8PathBuf::from_path_buf(dir.path().join("profiles.yaml")).unwrap();
+        let resource = dir.path().join("managed.yaml");
+        fs::write(&resource, "before").await.unwrap();
+        let mut manager = PersistentStateManagerSetup::<TestState>::builder()
+            .config_path(document)
+            .assemble()
+            .from_state(TestState::new("before".into(), 0))
+            .await
+            .unwrap();
+        let write_path = resource.clone();
+        let recover_path = resource.clone();
+        let result = manager
+            .replace_if_version_with_local_write(
+                Version::new(0),
+                TestState::new("after".into(), 1),
+                move || async move {
+                    tokio::fs::write(write_path, "partial").await?;
+                    anyhow::bail!("promotion failed")
+                },
+                move || async move {
+                    tokio::fs::write(recover_path, "before").await?;
+                    Ok(())
+                },
+            )
+            .await;
+        assert!(matches!(result, Err(ReplaceIfVersionError::LocalWrite(_))));
+        assert_eq!(manager.snapshot_handle().load().version, Version::new(0));
+        assert_eq!(manager.snapshot().name, "before");
+        assert_eq!(fs::read_to_string(resource).await.unwrap(), "before");
+    }
+
+    #[tokio::test]
+    async fn test_local_write_document_failure_restores_the_resource() {
+        let dir = tempdir().unwrap();
+        let document = Utf8PathBuf::from_path_buf(dir.path().join("profiles.yaml")).unwrap();
+        let resource = dir.path().join("managed.yaml");
+        fs::write(&resource, "before").await.unwrap();
+        let mut manager = PersistentStateManagerSetup::<TestState>::builder()
+            .config_path(document)
+            .assemble()
+            .from_state(TestState::new("before".into(), 0))
+            .await
+            .unwrap();
+        manager.config_path =
+            Utf8PathBuf::from_path_buf(dir.path().join("missing").join("profiles.yaml")).unwrap();
+        let write_path = resource.clone();
+        let recovery_path = resource.clone();
+        let result = manager
+            .replace_if_version_with_local_write(
+                Version::new(0),
+                TestState::new("after".into(), 1),
+                move || async move {
+                    tokio::fs::write(write_path, "after").await?;
+                    Ok(())
+                },
+                move || async move {
+                    tokio::fs::write(recovery_path, "before").await?;
+                    Ok(())
+                },
+            )
+            .await;
+        assert!(matches!(result, Err(ReplaceIfVersionError::WriteConfig(_))));
+        assert_eq!(manager.snapshot_handle().load().version, Version::new(0));
+        assert_eq!(manager.snapshot().name, "before");
+        assert_eq!(fs::read_to_string(resource).await.unwrap(), "before");
+    }
+
+    #[tokio::test]
+    async fn test_local_write_caller_cancellation_recovers_before_releasing_source() {
+        let dir = tempdir().unwrap();
+        let document = Utf8PathBuf::from_path_buf(dir.path().join("profiles.yaml")).unwrap();
+        let resource = dir.path().join("managed.yaml");
+        fs::write(&resource, "before").await.unwrap();
+        let mut manager = PersistentStateManagerSetup::<TestState>::builder()
+            .config_path(document)
+            .assemble()
+            .from_state(TestState::new("before".into(), 0))
+            .await
+            .unwrap();
+        let snapshot = manager.snapshot_handle();
+        let write_path = resource.clone();
+        let recovery_path = resource.clone();
+        let (entered, writing) = tokio::sync::oneshot::channel();
+        let (continue_write, resumed) = tokio::sync::oneshot::channel();
+        let (recovered, recovery_done) = tokio::sync::oneshot::channel();
+        let caller = tokio::spawn(async move {
+            manager
+                .replace_if_version_with_local_write(
+                    Version::new(0),
+                    TestState::new("after".into(), 1),
+                    move || async move {
+                        entered.send(()).unwrap();
+                        resumed.await.unwrap();
+                        tokio::fs::write(write_path, "after").await?;
+                        Ok(())
+                    },
+                    move || async move {
+                        tokio::fs::write(recovery_path, "before").await?;
+                        recovered.send(()).unwrap();
+                        Ok(())
+                    },
+                )
+                .await
+        });
+        writing.await.unwrap();
+        caller.abort();
+        assert!(caller.await.unwrap_err().is_cancelled());
+        continue_write.send(()).unwrap();
+        recovery_done.await.unwrap();
+        assert_eq!(snapshot.load().version, Version::new(0));
+        assert_eq!(snapshot.load().state.name, "before");
+        assert_eq!(fs::read_to_string(resource).await.unwrap(), "before");
+    }
+
+    #[tokio::test]
+    async fn test_local_write_stale_version_does_not_touch_resource() {
+        let dir = tempdir().unwrap();
+        let document = Utf8PathBuf::from_path_buf(dir.path().join("profiles.yaml")).unwrap();
+        let mut manager = PersistentStateManagerSetup::<TestState>::builder()
+            .config_path(document)
+            .assemble()
+            .from_state(TestState::default())
+            .await
+            .unwrap();
+        manager
+            .replace_if_version(Version::new(0), TestState::new("winner".into(), 1))
+            .await
+            .unwrap();
+        let writes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let attempts = Arc::clone(&writes);
+        let result = manager
+            .replace_if_version_with_local_write(
+                Version::new(0),
+                TestState::new("stale".into(), 2),
+                move || async move {
+                    attempts.fetch_add(1, Ordering::SeqCst);
+                    Ok(())
+                },
+                || async { Ok(()) },
+            )
+            .await
+            .unwrap();
+        assert!(matches!(result, ReplaceIfVersionResult::Conflict { .. }));
+        assert_eq!(writes.load(Ordering::SeqCst), 0);
+        assert_eq!(manager.snapshot().name, "winner");
     }
 
     #[tokio::test]
