@@ -575,20 +575,13 @@ impl ChimeraClient {
             profiles,
             content,
         };
-        let (app, clash, profiles, content) = inputs.into_parts()?;
-        let run_type = crate::core::RunType::classify(
-            app.enable_service_mode,
-            crate::core::service::ipc::get_ipc_state(),
-        );
-        let result = self
-            .inner
-            .core
-            .validate_profile_runtime(clash, app.core, run_type, profiles, app, content)
-            .await?;
-        match result {
-            crate::client::application_workflow::mutation::CheckRecord::Passed => Ok(()),
-            other => bail!("independent Clash runtime candidate check did not pass: {other:?}"),
-        }
+        let result = super::reconciler::check::check_candidate(
+            self.inner.core.as_ref(),
+            inputs,
+            crate::core::service::ipc::get_ipc_state().is_connected(),
+        )
+        .await?;
+        super::reconciler::check::require_passed(result, "Clash")
     }
 
     pub(crate) fn get_clash_config(&self) -> Result<ClashConfig> {

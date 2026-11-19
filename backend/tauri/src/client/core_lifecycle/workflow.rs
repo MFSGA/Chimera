@@ -1725,25 +1725,13 @@ impl CoreLifecycleWorkflow {
         let inputs = self
             .capture_committed_profile_inputs_for(app, self.clash.get()?)
             .await?;
-        let (app, clash, profiles, content) = inputs.into_parts()?;
-        let run_type = crate::core::RunType::classify(
-            app.enable_service_mode,
-            if service_connected {
-                crate::core::service::ipc::IpcState::Connected
-            } else {
-                crate::core::service::ipc::IpcState::Disconnected
-            },
-        );
-        let check = self
-            .core
-            .validate_profile_runtime(clash, app.core, run_type, profiles, app, content)
-            .await?;
-        match check {
-            crate::client::application_workflow::mutation::CheckRecord::Passed => Ok(()),
-            other => anyhow::bail!(
-                "independent application runtime candidate check did not pass: {other:?}"
-            ),
-        }
+        let check = crate::client::reconciler::check::check_candidate(
+            self.core.as_ref(),
+            inputs,
+            service_connected,
+        )
+        .await?;
+        crate::client::reconciler::check::require_passed(check, "application")
     }
 
     async fn reconcile_application(
@@ -2082,20 +2070,12 @@ impl ProfileRuntime for CoreLifecycleWorkflow {
         &self,
         inputs: crate::client::application_workflow::inputs::RuntimeInputs,
     ) -> anyhow::Result<crate::client::application_workflow::mutation::CheckRecord> {
-        let (app, clash, profiles, profile_content) = inputs.into_parts().map_err(|error| {
-            anyhow::Error::new(
-                crate::client::application_workflow::mutation::RuntimeCheckFailure::
-                    candidate_unavailable(error.to_string()),
-            )
-        })?;
-        let target_core = app.core;
-        let run_type = crate::core::RunType::classify(
-            app.enable_service_mode,
-            crate::core::service::ipc::get_ipc_state(),
-        );
-        self.core
-            .validate_profile_runtime(clash, target_core, run_type, profiles, app, profile_content)
-            .await
+        crate::client::reconciler::check::check_candidate(
+            self.core.as_ref(),
+            inputs,
+            crate::core::service::ipc::get_ipc_state().is_connected(),
+        )
+        .await
     }
 
     async fn prepare_profile_runtime(

@@ -18,6 +18,7 @@ pub(crate) mod hotkey;
 pub(crate) mod jobs;
 pub(crate) mod ports;
 pub(crate) mod profiles;
+pub(crate) mod reconciler;
 pub mod runtime;
 pub(crate) mod runtime_inspection;
 mod service_status;
