@@ -320,6 +320,10 @@ struct ApplicationWorkflowState {
     dirty: bool,
     dirty_tick_scheduled: bool,
     source_dirty: bool,
+    /// A committed target was blocked by a concrete S2 Owner step. After
+    /// the sole lifecycle actor finishes that handoff, replan latest sources
+    /// rather than waiting for another source commit to be delivered.
+    source_after_handoff: bool,
     run_intent: RunIntent,
     seen_sources: SourceVersions,
     service_recovery_inflight: bool,
@@ -801,6 +805,7 @@ impl ApplicationWorkflowState {
         self.shutting_down = true;
         self.dirty = false;
         self.source_dirty = false;
+        self.source_after_handoff = false;
         while let Some(request) = self.pending.pop_front() {
             self.reject(request, anyhow::anyhow!("core lifecycle is shutting down"));
         }
@@ -879,6 +884,7 @@ impl ApplicationWorkflowState {
                 self.run_intent = RunIntent::Stopped;
                 self.dirty = false;
                 self.source_dirty = false;
+                self.source_after_handoff = false;
             }
             Command::StartCore => self.run_intent = RunIntent::Running,
             _ => {}
@@ -1163,6 +1169,7 @@ impl Actor for ApplicationWorkflowActor {
             dirty: false,
             dirty_tick_scheduled: false,
             source_dirty: false,
+            source_after_handoff: false,
             run_intent: RunIntent::Running,
             seen_sources: SourceVersions::default(),
             service_recovery_inflight: false,
@@ -1441,6 +1448,21 @@ impl Actor for ApplicationWorkflowActor {
                     }
 
                     let failed = result.is_err();
+                    let needs_owner_handoff = result
+                        .as_ref()
+                        .err()
+                        .and_then(|error| {
+                            error.downcast_ref::<crate::client::reconciler::attempt::OwnershipTransitionPending>()
+                        })
+                        .is_some_and(|pending| pending.plan.is_some());
+                    if matches!(active.trigger, "SourceCommitted" | "Retry") && needs_owner_handoff
+                    {
+                        // The S2 decision was made inside the latest-source
+                        // round. The single Actor queues its existing leased
+                        // FollowService command; retain a one-shot S3/S4
+                        // continuation even if no new source notification arrives.
+                        state.source_after_handoff = true;
+                    }
                     let source_advanced = result.as_ref().err().is_some_and(|error| {
                         error
                             .downcast_ref::<workflow::ProfilesSourceAdvanced>()
@@ -1568,6 +1590,22 @@ impl Actor for ApplicationWorkflowActor {
                         });
                     }
                     state.follow_service().await;
+                    if active.trigger == "ServiceReadiness"
+                        && !failed
+                        && !state.uncertain
+                        && !state.startup_owner_unproven
+                        && !state.startup_owner_unproven_shared.load(Ordering::Acquire)
+                        && state.run_intent == RunIntent::Running
+                        && !state.shutting_down
+                        && state.source_after_handoff
+                    {
+                        state.source_after_handoff = false;
+                        // FollowService has established ownership under its
+                        // lease. Capture the *latest* committed source in a
+                        // fresh ref Facts round, never replay the old Candidate.
+                        state.source_dirty = true;
+                        state.mark_runtime_dirty(&myself);
+                    }
                     state
                         .schedule_service_release(active.trigger == "Retry")
                         .await;
@@ -4075,6 +4113,8 @@ mod tests {
         status_reads: AtomicUsize,
         submissions: AtomicUsize,
         stops: AtomicUsize,
+        service_to_retire: Option<Arc<AtomicBool>>,
+        retire_calls: AtomicUsize,
     }
 
     /// The Core accepted a committed revision, but publishing the derived
@@ -4211,6 +4251,19 @@ mod tests {
             Ok(())
         }
 
+        async fn retire_service_core(
+            &self,
+            _expected_owner: chimera_core_manager::CoreOwner,
+        ) -> anyhow::Result<()> {
+            let service = self
+                .service_to_retire
+                .as_ref()
+                .ok_or_else(|| anyhow::anyhow!("no owned Service Core in this test endpoint"))?;
+            self.retire_calls.fetch_add(1, AtomicOrdering::AcqRel);
+            service.store(false, AtomicOrdering::Release);
+            Ok(())
+        }
+
         async fn change_core(&self, _: ClashCore) -> anyhow::Result<()> {
             Ok(())
         }
@@ -4242,6 +4295,19 @@ mod tests {
             &self,
         ) -> anyhow::Result<Option<Arc<crate::client::runtime::RuntimeApplyReceipt>>> {
             Ok(self.active.lock().unwrap().clone())
+        }
+
+        async fn observe_runtime_baseline(
+            &self,
+        ) -> anyhow::Result<crate::client::application_workflow::mutation::KnownRuntimeState>
+        {
+            // Startup requires an authoritative stopped-state fixture, not
+            // merely a Stopped status projection with unknown lower outcome.
+            Ok(if self.active.lock().unwrap().is_some() {
+                crate::client::application_workflow::mutation::KnownRuntimeState::NeverApplied
+            } else {
+                crate::client::application_workflow::mutation::KnownRuntimeState::Stopped
+            })
         }
 
         fn recovery_notify(&self) -> Option<Arc<Notify>> {
@@ -11249,6 +11315,8 @@ mod tests {
                 status_reads: AtomicUsize::new(0),
                 submissions: AtomicUsize::new(0),
                 stops: AtomicUsize::new(0),
+                service_to_retire: None,
+                retire_calls: AtomicUsize::new(0),
             }),
             service,
             manager.snapshot_handle(),
@@ -11299,6 +11367,8 @@ mod tests {
                 status_reads: AtomicUsize::new(0),
                 submissions: AtomicUsize::new(0),
                 stops: AtomicUsize::new(0),
+                service_to_retire: None,
+                retire_calls: AtomicUsize::new(0),
             });
             let client =
                 spawn_startup_client_with_profiles(core, service, manager.snapshot_handle()).await;
@@ -11396,6 +11466,8 @@ mod tests {
             status_reads: AtomicUsize::new(0),
             submissions: AtomicUsize::new(0),
             stops: AtomicUsize::new(0),
+            service_to_retire: None,
+            retire_calls: AtomicUsize::new(0),
         });
         let client = spawn_startup_client_with_profiles(
             core.clone(),
@@ -11449,6 +11521,8 @@ mod tests {
             status_reads: AtomicUsize::new(0),
             submissions: AtomicUsize::new(0),
             stops: AtomicUsize::new(0),
+            service_to_retire: None,
+            retire_calls: AtomicUsize::new(0),
         });
         let client = spawn_startup_client_with_profiles(
             core.clone(),
@@ -11483,6 +11557,100 @@ mod tests {
         client.shutdown().await.unwrap();
     }
 
+    /// A concrete ref S2 owner step from SourceCommitted is continued by
+    /// the same serialized CoreLifecycle actor. Once its leased FollowService
+    /// settles, it must re-sample the latest source without a second notice.
+    #[tokio::test]
+    async fn source_owner_handoff_resumes_latest_committed_target_automatically() {
+        use chimera_core::client::reconciler::plan::Conclusion;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = Utf8PathBuf::from_path_buf(dir.path().join("profiles.yaml")).unwrap();
+        let mut manager = PersistentStateManagerSetup::<
+            chimera_config::profile::Profiles,
+            crate::core::migration::modules::profiles::ProfilesFormat,
+        >::builder()
+        .config_path(path)
+        .assemble()
+        .from_state(chimera_config::profile::Profiles::default())
+        .await
+        .unwrap();
+        let other_service_core = Arc::new(AtomicBool::new(false));
+        let service_ready = Arc::new(AtomicBool::new(false));
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let core = Arc::new(ReceiptProofCore {
+            active: Mutex::new(None),
+            publish_wrong_target: false,
+            change_instance_between_reads: false,
+            status_reads: AtomicUsize::new(0),
+            submissions: AtomicUsize::new(0),
+            stops: AtomicUsize::new(0),
+            service_to_retire: Some(other_service_core.clone()),
+            retire_calls: AtomicUsize::new(0),
+        });
+        let client = spawn_startup_client_with_profiles(
+            core.clone(),
+            Arc::new(ToggleStartupServiceProbe {
+                events,
+                ready: service_ready.clone(),
+                core_running: other_service_core.clone(),
+            }),
+            manager.snapshot_handle(),
+        )
+        .await;
+        let startup = client.startup_reconcile().await.unwrap();
+        assert_eq!(startup.report.outcome, StartupOutcome::Ready);
+        assert_eq!(core.submissions.load(AtomicOrdering::Acquire), 1);
+
+        let mut latest = manager.snapshot().as_ref().clone();
+        latest.valid.push("latest-after-s2-handoff".into());
+        manager
+            .replace_if_version(chimera_core::state::Version::new(0), latest)
+            .await
+            .unwrap();
+        service_ready.store(true, AtomicOrdering::Release);
+        other_service_core.store(true, AtomicOrdering::Release);
+        client.source_committed(SourceDomain::Profiles, 1, true);
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let status = client.reconciler_status();
+                let source_rounds = status
+                    .recent
+                    .iter()
+                    .filter(|round| round.trigger == "SourceCommitted")
+                    .count();
+                if core.retire_calls.load(AtomicOrdering::Acquire) == 1
+                    && core.submissions.load(AtomicOrdering::Acquire) >= 2
+                    && source_rounds >= 2
+                    && status.active.is_none()
+                    && matches!(status.conclusion, Conclusion::Converged)
+                {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .unwrap_or_else(|_| {
+            let status = client.reconciler_status();
+            panic!(
+                "S2 handoff stalled: retire={} submits={} stops={} service_running={} active={:?} completed={:?} rounds={:?} maintenance={:?}",
+                core.retire_calls.load(AtomicOrdering::Acquire),
+                core.submissions.load(AtomicOrdering::Acquire),
+                core.stops.load(AtomicOrdering::Acquire),
+                other_service_core.load(AtomicOrdering::Acquire),
+                client.status().active,
+                client.status().completed.iter().map(|item| (&item.id, &item.error)).collect::<Vec<_>>(),
+                status.recent.iter().map(|item| (&item.trigger, &item.conclusion)).collect::<Vec<_>>(),
+                status.maintenance,
+            );
+        });
+        assert!(!other_service_core.load(AtomicOrdering::Acquire));
+        assert_eq!(core.retire_calls.load(AtomicOrdering::Acquire), 1);
+        assert_eq!(core.submissions.load(AtomicOrdering::Acquire), 2);
+        client.shutdown().await.unwrap();
+    }
+
     /// One actual SourceCommitted Actor round must run ref S2 before S3/S4.
     /// Until another owned Service Core is cleared, neither Stop nor Apply
     /// may be submitted to the Local Core, even if the source is newer.
@@ -11508,6 +11676,8 @@ mod tests {
             status_reads: AtomicUsize::new(0),
             submissions: AtomicUsize::new(0),
             stops: AtomicUsize::new(0),
+            service_to_retire: None,
+            retire_calls: AtomicUsize::new(0),
         });
         let other_service_core = Arc::new(AtomicBool::new(false));
         let client = spawn_startup_client_with_profiles(
@@ -11591,6 +11761,8 @@ mod tests {
             status_reads: AtomicUsize::new(0),
             submissions: AtomicUsize::new(0),
             stops: AtomicUsize::new(0),
+            service_to_retire: None,
+            retire_calls: AtomicUsize::new(0),
         });
         let client = spawn_startup_client_with_profiles(
             core.clone(),
@@ -11676,6 +11848,8 @@ mod tests {
                 status_reads: AtomicUsize::new(0),
                 submissions: AtomicUsize::new(0),
                 stops: AtomicUsize::new(0),
+                service_to_retire: None,
+                retire_calls: AtomicUsize::new(0),
             });
             let client = spawn_startup_client_with_profiles(
                 core,

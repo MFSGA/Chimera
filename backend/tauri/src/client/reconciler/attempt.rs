@@ -18,6 +18,27 @@ use chimera_core_manager::{CoreError, CoreErrorKind};
 #[error("runtime ownership is awaiting S2 reconciliation: {reason}")]
 pub(crate) struct OwnershipTransitionPending {
     pub reason: String,
+    /// Only a concrete ref S2 owner step authorizes scheduling a transition.
+    /// A generic Waiting observation must not acquire a Service lease.
+    pub plan: Option<chimera_core::client::reconciler::plan::OwnerPlan>,
+}
+
+impl OwnershipTransitionPending {
+    pub(crate) fn waiting(reason: impl Into<String>) -> Self {
+        Self {
+            reason: reason.into(),
+            plan: None,
+        }
+    }
+
+    pub(crate) fn owner(plan: chimera_core::client::reconciler::plan::OwnerPlan) -> Self {
+        Self {
+            reason: format!(
+                "ref S2 selected {plan:?}; the lifecycle actor must acquire the Service handoff lease"
+            ),
+            plan: Some(plan),
+        }
+    }
 }
 
 /// A rejected Service application can fall back only after the old owner
@@ -204,6 +225,19 @@ mod tests {
         policy
             .allow("current", ExecutionHost::Local, Trigger::SourceCommitted)
             .unwrap();
+    }
+
+    #[test]
+    fn only_concrete_s2_owner_steps_authorize_a_handoff_continuation() {
+        use chimera_core::client::reconciler::plan::OwnerPlan;
+
+        let waiting = OwnershipTransitionPending::waiting("Service probe is unreadable");
+        assert!(waiting.plan.is_none());
+        assert!(waiting_dependency(&anyhow::Error::new(waiting)));
+
+        let handoff = OwnershipTransitionPending::owner(OwnerPlan::RetireServiceThenLocal);
+        assert_eq!(handoff.plan, Some(OwnerPlan::RetireServiceThenLocal));
+        assert!(waiting_dependency(&anyhow::Error::new(handoff)));
     }
 
     #[test]

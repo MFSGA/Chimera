@@ -1324,9 +1324,9 @@ impl CoreLifecycleWorkflow {
             .is_some_and(|current| same_core_status(&observed, current))
         {
             return Ok(Some(Err(
-                crate::client::reconciler::attempt::OwnershipTransitionPending {
-                    reason: "the selected Core changed while sampling Service ownership".into(),
-                }
+                crate::client::reconciler::attempt::OwnershipTransitionPending::waiting(
+                    "the selected Core changed while sampling Service ownership",
+                )
                 .into(),
             )));
         }
@@ -1340,21 +1340,18 @@ impl CoreLifecycleWorkflow {
                 .is_some_and(|current| Arc::ptr_eq(original, &current))
         {
             return Ok(Some(Err(
-                crate::client::reconciler::attempt::OwnershipTransitionPending {
-                    reason: "the accepted Core revision changed while sampling Service ownership"
-                        .into(),
-                }
+                crate::client::reconciler::attempt::OwnershipTransitionPending::waiting(
+                    "the accepted Core revision changed while sampling Service ownership",
+                )
                 .into(),
             )));
         }
         if host == ExecutionHost::Service && matches!(service, ServiceEvidence::ForeignCore { .. })
         {
             return Ok(Some(Err(
-                crate::client::reconciler::attempt::OwnershipTransitionPending {
-                    reason:
-                        "Service belongs to another instance; Local owner selection is required"
-                            .into(),
-                }
+                crate::client::reconciler::attempt::OwnershipTransitionPending::waiting(
+                    "Service belongs to another instance; Local owner selection is required",
+                )
                 .into(),
             )));
         }
@@ -1372,15 +1369,13 @@ impl CoreLifecycleWorkflow {
         match step {
             Some(Step::Idle(Conclusion::Converged)) => Ok(Some(Ok(()))),
             Some(Step::Owner(owner_plan)) => Ok(Some(Err(
-                crate::client::reconciler::attempt::OwnershipTransitionPending {
-                    reason: format!("ref S2 selected {owner_plan:?}; the existing lifecycle actor must acquire the Service handoff lease"),
-                }
-                .into(),
+                crate::client::reconciler::attempt::OwnershipTransitionPending::owner(owner_plan)
+                    .into(),
             ))),
             Some(Step::Idle(Conclusion::Waiting { cause })) => Ok(Some(Err(
-                crate::client::reconciler::attempt::OwnershipTransitionPending {
-                    reason: cause.to_string(),
-                }
+                crate::client::reconciler::attempt::OwnershipTransitionPending::waiting(
+                    cause.to_string(),
+                )
                 .into(),
             ))),
             Some(Step::Stop { intent: false }) => {
