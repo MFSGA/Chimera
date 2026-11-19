@@ -99,6 +99,7 @@
 | LESSON-20261120-001 | 2026-11-20 | Proxies / Delay UI | Native Core 已解析实时测试参数；UI 漏捕获延迟请求失败，沿 ref 五语文案补可见反馈并由真实 WebKitGTK 验证 | Verified |
 | LESSON-20261120-002 | 2026-11-20 | Providers / E2E / Task | 实测 Core SAFE_PATHS 拒绝 config 目录下的 Provider；改用隔离 data，Native 更新失败必须让 Task 保持 rejected | Verified |
 | LESSON-20261120-003 | 2026-11-20 | Providers / HTTP E2E / Dialog | 列表批量更新吞错误成功；真实 loopback HTTP 验证 1→2→3、503 时 Task error，X11 原生弹窗必须先聚焦 | Verified |
+| LESSON-20261120-004 | 2026-11-20 | Connections / Main UI / Legacy E2E | ref DataPage 底部 dock 与虚拟表格留白；Legacy 分离；控件 data-slot、X11 子像素边界按真实 UI 验证 | Verified |
 
 ### LESSON-20261113-001/002：架构迁移要覆盖原生运行时与稀疏配置
 
@@ -1395,3 +1396,11 @@ backend/Cargo.toml -p chimera --lib core::clash::proxies::tests:: -- --nocapture
 - **负向 E2E 与工具限制**：HTTP 503 被真实 Native mutation 拒绝，用户看到 OS 原生错误对话框；必须正确使其关闭才能观察 `useBlockTask` 最终 error。隔离 Xvfb 没有窗口管理器，直接 `xdotool key --window ID Return` 虽然命令退出 0，但实际未关闭对话框，属于测试驱动假操作。改为先查询正确标题的已显示窗口、`windowfocus` 后发 Return，真实业务 Task 随后进入 error，Core 保留上一成功版本。Linux/X11 E2E **5/5**；Native Dialog 关闭测试在非 Linux/X11/无 xdotool 环境显式跳过，未提供跨平台 Dialog 覆盖。切忌把缺少测试驱动能力当作产品拒绝失败或强行模拟成功。
 
 - **2026-11-20 最新 `885fb90b` 复验**：CoreLifecycle 新提交到来后，仅安全 FF Remote Runtime 而不修改业务；完整重新构建 Tauri E2E native binary，真实 HTTP Provider 详情/单项/批量及 HTTP 503 两条失败路径 **5/5** 均通过。旧 SHA 下相邻详情 2/2、空态 2/2 不能冒充新 Runtime 的测试。更新错误 task 状态和缓存回读必须以真实回包/权威 Core 查询/本地 HTTP 请求联合证明。
+
+### LESSON-20261120-004：Main Connections 对齐 ref DataPage 时保留 Legacy 行为
+
+- **组件复用边界**：ref Connections Main 用 DataPage、DataPageSurface、底部浮动 dock 和 SearchField(glass)；Chimera 的 ConnectionsContent 还供 Legacy 使用。为 Main 显式启用 referenceLayout，Legacy 默认保留原有 ConnectionsToolbar 和布局；虚拟表格追加 ref useDataPageBottomInset，Legacy 无 DataPage Provider 时仍为零，避免一次 UI 迁移改变旧版行为。
+- **定位和真实画面**：DataPageSurface 和 GlassControlGroup 的显式 data-slot 会覆盖组件默认 data-slot；应保留必要的默认 ref slot、为 Main 容器另设定位。Linux WebKitGTK 在请求外层 1240px 窗口时实际内容区只有 1189px；原测试固定要求 >=1200 属于无效环境假设，而 dock 实际 y=560、page bottom=612，正确位于底部。用页面相对几何而非屏幕硬编码判断浮动位置。Legacy 相邻 header.bottom/viewport.top 的小数像素误差约为 0.00001px，使用 1px 容差而不放宽高度和工具栏遮挡等其它条件。
+- **发布验证**：Main 4/4、Legacy 3/3、Native detail 1/1 的真实隔离 WebKitGTK E2E 全部通过，Connections model 9/9、全仓 TS、Lint、生产构建通过。Chimera 尚无 ref 的 proxy:write 前端 capability hook，本轮不伪造授权或扩大现有关闭连接操作，另案适配。
+
+- **2026-11-20 最新 fd507823 基线验证**：Runtime 队列提交安全快进后，完整重建 Native E2E 可执行程序，真实 Linux WebKitGTK Main Connections 4/4、Legacy Connections 3/3、Native Detail 1/1，合计 8/8，通过且退出码 0。不能将旧 SHA 的证据冒充最新启动协调版本；不将 Main 浮动 dock 的 UI 合规扩展成 proxy:write 权限契约已经完成的结论。
