@@ -6,7 +6,7 @@ import {
   memberDelay,
   toNodeView,
   visibleMembers,
-} from '../src/pages/(main)/main/proxies/_modules/node-list';
+} from '../src/pages/(main)/main/proxies/group/_modules/node-list';
 
 const group = {
   name: 'Automatic',

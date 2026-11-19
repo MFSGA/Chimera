@@ -1,8 +1,12 @@
-import type {
-  NativeProxies_Serialize,
-  Proxy_Serialize,
-  ProxyGroup,
+import {
+  nativeMemberDelay,
+  type NativeProxies_Serialize,
+  type Proxy_Serialize,
+  type ProxyGroup,
 } from '@chimera/interface';
+
+/** Main Proxies compatibility export with ref's resolved member semantics. */
+export { nativeMemberDelay as memberDelay } from '@chimera/interface';
 
 export const NODE_SORTS = ['default', 'name', 'delay'] as const;
 export type NodeSort = (typeof NODE_SORTS)[number];
@@ -41,18 +45,6 @@ export function matchesNodeSearch(node: Proxy_Serialize, query: string) {
   return searchTerms(query).every((term) => text.includes(term));
 }
 
-/** Use only the existing native snapshot. Undefined is untested, not failed. */
-export function memberDelay(
-  name: string,
-  group: ProxyGroup,
-  proxies: NativeProxies_Serialize,
-) {
-  const node = proxies.nodes[name];
-  if (!node) return undefined;
-  const history = node.extra?.[group.delayKey]?.history ?? node.history;
-  return history.at(-1)?.delay;
-}
-
 const delayRank = (delay: number | undefined) =>
   delay === undefined
     ? Number.MAX_SAFE_INTEGER - 1
@@ -66,11 +58,14 @@ export function visibleMembers({
   proxies,
   query,
   view,
+  delayOf,
 }: {
   group: ProxyGroup;
   proxies: NativeProxies_Serialize;
   query: string;
   view: NodeView;
+  /** Reuse the page's single computed member-state snapshot, like ref. */
+  delayOf?: (name: string) => number | undefined;
 }): string[] {
   const members: { name: string; delay: number | undefined }[] = [];
   const needsDelay = view.hideUnavailable || view.sort === 'delay';
@@ -79,7 +74,11 @@ export function visibleMembers({
     const node = proxies.nodes[name];
     if (!node || !matchesNodeSearch(node, query)) continue;
 
-    const delay = needsDelay ? memberDelay(name, group, proxies) : undefined;
+    const delay = needsDelay
+      ? delayOf
+        ? delayOf(name)
+        : nativeMemberDelay(name, group, proxies)
+      : undefined;
     if (
       view.hideUnavailable &&
       name !== group.now &&

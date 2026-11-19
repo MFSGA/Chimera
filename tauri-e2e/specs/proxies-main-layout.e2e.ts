@@ -7,12 +7,14 @@ const targetPath = '/main/proxies';
 
 describe('main proxies reference layout', () => {
   before(async () => {
-    await browser.setWindowSize(1240, 638);
+    // The desktop window includes GTK decorations; leave enough space for a
+    // >=1200x600 *content viewport*, which is what the assertion measures.
+    await browser.setWindowSize(1270, 700);
     await browser.execute(() => {
       localStorage.setItem(btoa('paraglide-language-cache'), 'zh-cn');
     });
     await openMainRoute(targetPath);
-    await browser.setWindowSize(1240, 638);
+    await browser.setWindowSize(1270, 700);
   });
 
   it('keeps the ref content hierarchy without an extra search toolbar', async () => {

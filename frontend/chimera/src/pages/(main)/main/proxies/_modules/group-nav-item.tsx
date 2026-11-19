@@ -31,13 +31,13 @@ import {
   RegisterContextMenuContent,
   RegisterContextMenuTrigger,
 } from '@/components/providers/context-menu-provider';
+import DelayChip from '@/components/proxies/proxy-delay-chip';
 import { CacheImage } from '@/components/ui/image';
 import * as m from '@/paraglide/messages';
 import { FOLDER_ITEM_DRAG_SENSORS } from '@/utils/dnd-sensors';
-import DelayChip from './delay-chip';
+import { memberDelay } from '../group/_modules/node-list';
 import { locateGroup } from './group-layout';
 import { GroupMoveContextMenu, useGroupMove } from './group-move-menu';
-import { memberDelay } from './node-list';
 import { GROUP_DRAG_TYPE, groupDragId, sectionId } from './resolve-group-drop';
 import { useGroupLayout } from './use-group-layout';
 
@@ -138,7 +138,7 @@ const GroupNavItem = memo(function GroupNavItem({
               // dnd-kit gives its drag source the button role unless one is set.
               role="link"
               aria-current={active ? 'page' : undefined}
-              to="/main/proxies/$name"
+              to="/main/proxies/group/$name"
               params={{ name: group.name }}
               data-group-name={group.name}
               search={(previous) => ({ q: previous.q })}

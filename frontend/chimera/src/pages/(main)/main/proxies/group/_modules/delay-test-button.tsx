@@ -24,6 +24,7 @@ import { Button } from '@chimera/ui/button';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@chimera/ui/tooltip';
 import BoltRounded from '~icons/material-symbols/bolt-rounded';
 import { useState } from 'react';
+import { Notice } from '@/components/base';
 import { useBlockTask } from '@/components/providers/block-task-provider';
 import { useLockFn } from '@/hooks/use-lock-fn';
 import * as m from '@/paraglide/messages';
@@ -50,7 +51,15 @@ export default function DelayTestButton({ groupName }: { groupName?: string }) {
   );
 
   const handleClick = useLockFn(async () => {
-    await blockTask.execute();
+    try {
+      await blockTask.execute();
+    } catch {
+      // The Core may have retired, or the group may no longer exist.
+      // An error is not a completed test: never show the success pulse.
+      setIsSuccess(false);
+      Notice.error(m.error_clash_read_delay_test_failed(), 5000);
+      return;
+    }
 
     // 成功效果：显示 1 秒绿色反馈
     setIsSuccess(true);
@@ -63,6 +72,8 @@ export default function DelayTestButton({ groupName }: { groupName?: string }) {
       data-slot="delay-test-button"
       data-success={String(isSuccess)}
       data-loading={String(blockTask.isPending)}
+      data-completed={String(blockTask.isSuccess)}
+      data-error={String(blockTask.isError)}
       className={cn(
         'absolute right-4 ml-auto w-fit',
         // 按钮位置基于视口高度和其他组件高度计算（匹配 ref）
@@ -78,6 +89,7 @@ export default function DelayTestButton({ groupName }: { groupName?: string }) {
             data-slot="delay-test-button-trigger"
             data-success={String(isSuccess)}
             data-loading={String(blockTask.isPending)}
+            data-error={String(blockTask.isError)}
             className={cn(
               "**:data-[slot='circular-progress']:size-6",
               'transition-colors',

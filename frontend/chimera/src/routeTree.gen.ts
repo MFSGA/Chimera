@@ -58,6 +58,7 @@ import { Route as mainMainProfilesTypeIndexRouteImport } from './pages/(main)/ma
 import { Route as mainMainProfilesFolderIndexRouteImport } from './pages/(main)/main/profiles/folder/index'
 import { Route as mainMainProvidersProxiesKeyRouteImport } from './pages/(main)/main/providers/proxies/$key'
 import { Route as mainMainProvidersRulesKeyRouteImport } from './pages/(main)/main/providers/rules/$key'
+import { Route as mainMainProxiesGroupNameRouteImport } from './pages/(main)/main/proxies/group/$name'
 import { Route as mainMainSettingsDebugIndexRouteImport } from './pages/(main)/main/settings/debug/index'
 import { Route as mainMainTopologyExitIndexRouteImport } from './pages/(main)/main/topology/exit/index'
 import { Route as mainMainTopologyFlowIndexRouteImport } from './pages/(main)/main/topology/flow/index'
@@ -329,6 +330,12 @@ const mainMainProvidersRulesKeyRoute =
     path: '/rules/$key',
     getParentRoute: () => mainMainProvidersRouteRoute,
   } as any)
+const mainMainProxiesGroupNameRoute =
+  mainMainProxiesGroupNameRouteImport.update({
+    id: '/group/$name',
+    path: '/group/$name',
+    getParentRoute: () => mainMainProxiesRouteRoute,
+  } as any)
 const mainMainSettingsDebugIndexRoute =
   mainMainSettingsDebugIndexRouteImport.update({
     id: '/',
@@ -436,6 +443,7 @@ export interface FileRoutesByFullPath {
   '/main/topology/': typeof mainMainTopologyIndexRoute
   '/main/providers/proxies/$key': typeof mainMainProvidersProxiesKeyRoute
   '/main/providers/rules/$key': typeof mainMainProvidersRulesKeyRoute
+  '/main/proxies/group/$name': typeof mainMainProxiesGroupNameRoute
   '/main/profiles/$type/': typeof mainMainProfilesTypeIndexRoute
   '/main/profiles/folder/': typeof mainMainProfilesFolderIndexRoute
   '/main/settings/debug/': typeof mainMainSettingsDebugIndexRoute
@@ -485,6 +493,7 @@ export interface FileRoutesByTo {
   '/main/topology': typeof mainMainTopologyIndexRoute
   '/main/providers/proxies/$key': typeof mainMainProvidersProxiesKeyRoute
   '/main/providers/rules/$key': typeof mainMainProvidersRulesKeyRoute
+  '/main/proxies/group/$name': typeof mainMainProxiesGroupNameRoute
   '/main/profiles/$type': typeof mainMainProfilesTypeIndexRoute
   '/main/profiles/folder': typeof mainMainProfilesFolderIndexRoute
   '/main/settings/debug': typeof mainMainSettingsDebugIndexRoute
@@ -547,6 +556,7 @@ export interface FileRoutesById {
   '/(main)/main/topology/': typeof mainMainTopologyIndexRoute
   '/(main)/main/providers/proxies/$key': typeof mainMainProvidersProxiesKeyRoute
   '/(main)/main/providers/rules/$key': typeof mainMainProvidersRulesKeyRoute
+  '/(main)/main/proxies/group/$name': typeof mainMainProxiesGroupNameRoute
   '/(main)/main/profiles/$type/': typeof mainMainProfilesTypeIndexRoute
   '/(main)/main/profiles/folder/': typeof mainMainProfilesFolderIndexRoute
   '/(main)/main/settings/debug/': typeof mainMainSettingsDebugIndexRoute
@@ -608,6 +618,7 @@ export interface FileRouteTypes {
     | '/main/topology/'
     | '/main/providers/proxies/$key'
     | '/main/providers/rules/$key'
+    | '/main/proxies/group/$name'
     | '/main/profiles/$type/'
     | '/main/profiles/folder/'
     | '/main/settings/debug/'
@@ -657,6 +668,7 @@ export interface FileRouteTypes {
     | '/main/topology'
     | '/main/providers/proxies/$key'
     | '/main/providers/rules/$key'
+    | '/main/proxies/group/$name'
     | '/main/profiles/$type'
     | '/main/profiles/folder'
     | '/main/settings/debug'
@@ -718,6 +730,7 @@ export interface FileRouteTypes {
     | '/(main)/main/topology/'
     | '/(main)/main/providers/proxies/$key'
     | '/(main)/main/providers/rules/$key'
+    | '/(main)/main/proxies/group/$name'
     | '/(main)/main/profiles/$type/'
     | '/(main)/main/profiles/folder/'
     | '/(main)/main/settings/debug/'
@@ -1083,6 +1096,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof mainMainProvidersRulesKeyRouteImport
       parentRoute: typeof mainMainProvidersRouteRoute
     }
+    '/(main)/main/proxies/group/$name': {
+      id: '/(main)/main/proxies/group/$name'
+      path: '/group/$name'
+      fullPath: '/main/proxies/group/$name'
+      preLoaderRoute: typeof mainMainProxiesGroupNameRouteImport
+      parentRoute: typeof mainMainProxiesRouteRoute
+    }
     '/(main)/main/settings/debug/': {
       id: '/(main)/main/settings/debug/'
       path: '/'
@@ -1272,11 +1292,13 @@ const mainMainProvidersRouteRouteWithChildren =
 interface mainMainProxiesRouteRouteChildren {
   mainMainProxiesNameRoute: typeof mainMainProxiesNameRoute
   mainMainProxiesIndexRoute: typeof mainMainProxiesIndexRoute
+  mainMainProxiesGroupNameRoute: typeof mainMainProxiesGroupNameRoute
 }
 
 const mainMainProxiesRouteRouteChildren: mainMainProxiesRouteRouteChildren = {
   mainMainProxiesNameRoute: mainMainProxiesNameRoute,
   mainMainProxiesIndexRoute: mainMainProxiesIndexRoute,
+  mainMainProxiesGroupNameRoute: mainMainProxiesGroupNameRoute,
 }
 
 const mainMainProxiesRouteRouteWithChildren =
