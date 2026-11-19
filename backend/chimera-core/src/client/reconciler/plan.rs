@@ -20,6 +20,15 @@ pub struct RuntimeError {
     reason: String,
 }
 
+impl RuntimeError {
+    /// Preserve a typed reconciler conclusion without exposing planner fields.
+    pub fn new(reason: impl Into<String>) -> Self {
+        Self {
+            reason: reason.into(),
+        }
+    }
+}
+
 /// The single Reconciler's proof, distinct from a requested host.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Ownership {
@@ -53,7 +62,7 @@ impl Conclusion {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum RunIntent {
+pub enum RunIntent {
     Running,
     Stopped,
 }

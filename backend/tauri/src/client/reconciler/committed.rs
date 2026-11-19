@@ -37,7 +37,18 @@ impl SourceVersions {
         }
     }
 
-    #[cfg(test)]
+    pub(crate) fn merge(&mut self, other: &Self) {
+        for domain in [
+            SourceDomain::Application,
+            SourceDomain::Clash,
+            SourceDomain::Profiles,
+        ] {
+            if let Some(version) = other.version(domain) {
+                self.observe(domain, version);
+            }
+        }
+    }
+
     pub(crate) fn version(&self, domain: SourceDomain) -> Option<u64> {
         match domain {
             SourceDomain::Application => self.application,

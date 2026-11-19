@@ -5,3 +5,4 @@
 
 pub(crate) mod check;
 pub(crate) mod committed;
+pub(crate) mod status;
