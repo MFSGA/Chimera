@@ -11,6 +11,19 @@ use chimera_core::{
 };
 use chimera_core_manager::{CoreError, CoreErrorKind};
 
+/// A rejected Service application can fall back only after the old owner
+/// has been safely released. This is a dependency wait, not a refused Local
+/// target and not a reason to undo a durable source commit.
+#[derive(Debug, thiserror::Error)]
+#[error("Service-to-Local fallback is waiting for ownership proof: {reason}")]
+pub(crate) struct ServiceFallbackDeferred {
+    pub reason: String,
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("committed runtime target changed while releasing Service; reconcile the latest source")]
+pub(crate) struct CommittedTargetAdvanced;
+
 /// A target refusal is not a request to roll back its durable source commit.
 #[derive(Debug, thiserror::Error)]
 #[error(
@@ -81,6 +94,11 @@ impl AttemptPolicy {
 }
 
 pub(crate) fn waiting_dependency(error: &anyhow::Error) -> bool {
+    if error.downcast_ref::<ServiceFallbackDeferred>().is_some()
+        || error.downcast_ref::<CommittedTargetAdvanced>().is_some()
+    {
+        return true;
+    }
     error.downcast_ref::<CoreError>().is_some_and(|error| {
         matches!(
             error.kind,
@@ -170,6 +188,18 @@ mod tests {
         policy
             .allow("current", ExecutionHost::Local, Trigger::SourceCommitted)
             .unwrap();
+    }
+
+    #[test]
+    fn service_release_and_source_supersession_are_waiting_dependencies() {
+        let owner_error = anyhow::Error::new(ServiceFallbackDeferred {
+            reason: "the shared Service lease is busy".into(),
+        });
+        assert!(waiting_dependency(&owner_error));
+        assert!(owner_error.to_string().contains("ownership proof"));
+        assert!(waiting_dependency(&anyhow::Error::new(
+            CommittedTargetAdvanced
+        )));
     }
 
     #[test]

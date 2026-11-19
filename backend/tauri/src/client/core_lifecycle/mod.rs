@@ -1386,7 +1386,25 @@ impl Actor for ApplicationWorkflowActor {
                         error
                             .downcast_ref::<workflow::ProfilesSourceAdvanced>()
                             .is_some()
+                            || error
+                                .downcast_ref::<crate::client::reconciler::attempt::CommittedTargetAdvanced>()
+                                .is_some()
                     });
+                    if let Some(error) = result.as_ref().err().and_then(|error| {
+                        error.downcast_ref::<crate::client::reconciler::attempt::ServiceFallbackDeferred>()
+                    }) {
+                        state.service_handoff_maintenance = Some(error.to_string());
+                        state.publish_maintenance();
+                    } else if reconciled
+                        && result.is_ok()
+                        && state
+                            .service_handoff_maintenance
+                            .as_deref()
+                            .is_some_and(|reason| reason.starts_with("Service-to-Local fallback"))
+                    {
+                        state.service_handoff_maintenance = None;
+                        state.publish_maintenance();
+                    }
                     state.reconciler.send_modify(|status| {
                         status.finish(
                             active.response.id,
@@ -4216,6 +4234,113 @@ mod tests {
         reconciles: AtomicU8,
         stopped: AtomicBool,
         selected: Mutex<RunType>,
+    }
+
+    /// Simulates a Service application whose operation returned a refusal and
+    /// whose Core status has settled to Stopped; the independent Service probe
+    /// may still observe an owned daemon Core until its conditional retirement.
+    struct PostcommitServiceFallbackCore {
+        events: Arc<Mutex<Vec<&'static str>>>,
+        service_running: Arc<AtomicBool>,
+        selected: Mutex<RunType>,
+        local_running: AtomicBool,
+        refused_service: AtomicBool,
+        forbid_local: AtomicBool,
+    }
+
+    #[async_trait]
+    impl CoreLifecyclePort for PostcommitServiceFallbackCore {
+        async fn reconcile(
+            &self,
+            _: ClashConfig,
+            _: ClashCore,
+            run_type: RunType,
+        ) -> anyhow::Result<()> {
+            *self.selected.lock().unwrap() = run_type;
+            match run_type {
+                RunType::Service => {
+                    self.events.lock().unwrap().push("service-apply-refused");
+                    self.refused_service.store(true, AtomicOrdering::Release);
+                    anyhow::bail!("injected Service Core apply refusal")
+                }
+                RunType::Normal => {
+                    anyhow::ensure!(
+                        !self.forbid_local.load(AtomicOrdering::Acquire)
+                            && !self.service_running.load(AtomicOrdering::Acquire),
+                        "unsafe Local start while Service still owns a Core"
+                    );
+                    self.local_running.store(true, AtomicOrdering::Release);
+                    self.events.lock().unwrap().push("rebuild-local");
+                    Ok(())
+                }
+                RunType::Elevated => anyhow::bail!("unexpected elevated fallback"),
+            }
+        }
+
+        async fn reconcile_after_service_release(
+            &self,
+            _: ClashConfig,
+            _: ClashCore,
+        ) -> anyhow::Result<()> {
+            anyhow::ensure!(
+                !self.forbid_local.load(AtomicOrdering::Acquire)
+                    && !self.service_running.load(AtomicOrdering::Acquire),
+                "Local fallback must not start while an owned Service Core remains"
+            );
+            *self.selected.lock().unwrap() = RunType::Normal;
+            self.local_running.store(true, AtomicOrdering::Release);
+            self.events
+                .lock()
+                .unwrap()
+                .push("rebuild-after-service-release");
+            Ok(())
+        }
+
+        async fn retire_service_core(
+            &self,
+            _: chimera_core_manager::CoreOwner,
+        ) -> anyhow::Result<()> {
+            self.events.lock().unwrap().push("service-core-retire");
+            self.service_running.store(false, AtomicOrdering::Release);
+            Ok(())
+        }
+
+        async fn stop(&self) -> anyhow::Result<()> {
+            self.local_running.store(false, AtomicOrdering::Release);
+            Ok(())
+        }
+
+        async fn change_core(&self, _: ClashCore) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        async fn status(&self) -> anyhow::Result<CoreStatusSnapshot> {
+            let run_type = *self.selected.lock().unwrap();
+            let running = match run_type {
+                RunType::Service => {
+                    self.service_running.load(AtomicOrdering::Acquire)
+                        && !self.refused_service.load(AtomicOrdering::Acquire)
+                }
+                RunType::Normal => self.local_running.load(AtomicOrdering::Acquire),
+                RunType::Elevated => false,
+            };
+            Ok(CoreStatusSnapshot {
+                instance_id: Some("service-fallback-test-instance".into()),
+                state: if running {
+                    CoreState::Running
+                } else {
+                    CoreState::Stopped(None)
+                },
+                state_changed_at: if running { 1 } else { 2 },
+                run_type,
+            })
+        }
+
+        fn recovery_notify(&self) -> Option<Arc<Notify>> {
+            None
+        }
+
+        async fn on_profile_change(&self, _: bool) {}
     }
 
     struct StartupTransientCore {
@@ -7768,6 +7893,169 @@ mod tests {
         }
         assert!(!recent.contains(&"select-service"));
         client.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn postcommit_service_refusal_retires_owned_core_before_local_apply() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let service_running = Arc::new(AtomicBool::new(true));
+        let core = Arc::new(PostcommitServiceFallbackCore {
+            events: events.clone(),
+            service_running: service_running.clone(),
+            selected: Mutex::new(RunType::Service),
+            local_running: AtomicBool::new(false),
+            refused_service: AtomicBool::new(false),
+            forbid_local: AtomicBool::new(false),
+        });
+        let app = chimera_config::application::ChimeraAppConfig {
+            enable_service_mode: true,
+            ..Default::default()
+        };
+        let service = Arc::new(ToggleStartupServiceProbe {
+            events: events.clone(),
+            ready: Arc::new(AtomicBool::new(true)),
+            core_running: service_running.clone(),
+        });
+        let workflow = CoreLifecycleWorkflow::new(
+            ApplicationClient::static_state(app.clone()),
+            ClashConfigClient::legacy().unwrap(),
+            None,
+            core.clone(),
+            Arc::new(RecordingInstaller {
+                events: events.clone(),
+            }),
+            RuntimePaths::from_config_root(std::path::PathBuf::from("test-runtime-root")),
+            service,
+        );
+        let target = workflow.startup_target_identity().await.unwrap();
+        let refusal = core
+            .reconcile(ClashConfig::default(), app.core, RunType::Service)
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            core.status().await.unwrap().state,
+            CoreState::Stopped(_)
+        ));
+        workflow
+            .fallback_after_service_refusal(&target, refusal)
+            .await
+            .expect("a safely retired Service owner allows one Local application");
+
+        let trace = events.lock().unwrap();
+        let failed = trace
+            .iter()
+            .position(|event| *event == "service-apply-refused")
+            .unwrap();
+        let retired = trace
+            .iter()
+            .position(|event| *event == "service-core-retire")
+            .unwrap();
+        let local = trace
+            .iter()
+            .position(|event| *event == "rebuild-after-service-release")
+            .unwrap();
+        assert!(failed < retired && retired < local);
+        assert!(!service_running.load(AtomicOrdering::Acquire));
+        assert!(core.local_running.load(AtomicOrdering::Acquire));
+        assert_eq!(core.status().await.unwrap().run_type, RunType::Normal);
+    }
+
+    #[tokio::test]
+    async fn postcommit_service_fallback_waits_on_lease_without_starting_local() {
+        use crate::client::reconciler::attempt::{ServiceFallbackDeferred, waiting_dependency};
+
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let service_running = Arc::new(AtomicBool::new(true));
+        let core = Arc::new(PostcommitServiceFallbackCore {
+            events: events.clone(),
+            service_running: service_running.clone(),
+            selected: Mutex::new(RunType::Service),
+            local_running: AtomicBool::new(false),
+            refused_service: AtomicBool::new(false),
+            forbid_local: AtomicBool::new(false),
+        });
+        let app = chimera_config::application::ChimeraAppConfig {
+            enable_service_mode: true,
+            ..Default::default()
+        };
+        let service = Arc::new(LeaseBlockedToggleService {
+            inner: ToggleStartupServiceProbe {
+                events: events.clone(),
+                ready: Arc::new(AtomicBool::new(true)),
+                core_running: service_running.clone(),
+            },
+            block_next: AtomicBool::new(true),
+        });
+        let workflow = CoreLifecycleWorkflow::new(
+            ApplicationClient::static_state(app.clone()),
+            ClashConfigClient::legacy().unwrap(),
+            None,
+            core.clone(),
+            Arc::new(RecordingInstaller {
+                events: events.clone(),
+            }),
+            RuntimePaths::from_config_root(std::path::PathBuf::from("test-runtime-root")),
+            service,
+        );
+        let target = workflow.startup_target_identity().await.unwrap();
+        let refusal = core
+            .reconcile(ClashConfig::default(), app.core, RunType::Service)
+            .await
+            .unwrap_err();
+        let error = workflow
+            .fallback_after_service_refusal(&target, refusal)
+            .await
+            .expect_err("fallback must wait while the Service owner lease is unavailable");
+        assert!(error.downcast_ref::<ServiceFallbackDeferred>().is_some());
+        assert!(waiting_dependency(&error));
+        assert!(service_running.load(AtomicOrdering::Acquire));
+        assert!(!core.local_running.load(AtomicOrdering::Acquire));
+        assert!(!events.lock().unwrap().contains(&"service-core-retire"));
+
+        workflow
+            .fallback_after_service_refusal(&target, anyhow::anyhow!("same refused Service target"))
+            .await
+            .expect("another event can safely retry the owner release");
+        assert!(!service_running.load(AtomicOrdering::Acquire));
+        assert!(core.local_running.load(AtomicOrdering::Acquire));
+    }
+
+    #[tokio::test]
+    async fn service_failure_with_still_running_core_never_falls_back() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let service_running = Arc::new(AtomicBool::new(true));
+        let core = Arc::new(PostcommitServiceFallbackCore {
+            events: events.clone(),
+            service_running: service_running.clone(),
+            selected: Mutex::new(RunType::Service),
+            local_running: AtomicBool::new(false),
+            refused_service: AtomicBool::new(false),
+            forbid_local: AtomicBool::new(false),
+        });
+        let workflow = CoreLifecycleWorkflow::new(
+            ApplicationClient::static_state(Default::default()),
+            ClashConfigClient::legacy().unwrap(),
+            None,
+            core.clone(),
+            Arc::new(RecordingInstaller {
+                events: events.clone(),
+            }),
+            RuntimePaths::from_config_root(std::path::PathBuf::from("test-runtime-root")),
+            Arc::new(ToggleStartupServiceProbe {
+                events: events.clone(),
+                ready: Arc::new(AtomicBool::new(true)),
+                core_running: service_running.clone(),
+            }),
+        );
+        let target = workflow.startup_target_identity().await.unwrap();
+        let error = workflow
+            .fallback_after_service_refusal(&target, anyhow::anyhow!("application rejected"))
+            .await
+            .expect_err("still-running Service Core must not be retired on an unproven failure");
+        assert!(error.to_string().contains("application rejected"));
+        assert!(service_running.load(AtomicOrdering::Acquire));
+        assert!(!core.local_running.load(AtomicOrdering::Acquire));
+        assert!(!events.lock().unwrap().contains(&"service-core-retire"));
     }
 
     #[tokio::test]

@@ -26,7 +26,9 @@ use crate::client::application_workflow::{
     inputs::{FrozenProfileContent, RuntimeInputs},
     workflow::ProfileRuntime,
 };
-use crate::client::reconciler::attempt::AttemptPolicy;
+use crate::client::reconciler::attempt::{
+    AttemptPolicy, CommittedTargetAdvanced, ServiceFallbackDeferred, waiting_dependency,
+};
 use crate::config::chimera::ClashCore;
 use crate::core::actor_v2::control_endpoint::ExecutionHost;
 use crate::enhance::FsProfileContentSource;
@@ -1104,14 +1106,117 @@ impl CoreLifecycleWorkflow {
         self.reconcile_with_trigger(Trigger::ServiceOperation).await
     }
 
+    /// Upstream Step::FallBackToLocal, adapted to Chimera's existing host
+    /// transition owner. A rejected Service target may fall back only after a
+    /// stable Stopped observation and an instance-bound Service release. The
+    /// Local apply re-captures committed inputs rather than replaying the old
+    /// pre-commit candidate. No second host controller is created here.
+    pub(super) async fn fallback_after_service_refusal(
+        &self,
+        target: &str,
+        refusal: anyhow::Error,
+    ) -> anyhow::Result<()> {
+        if self.core.outcome_uncertain() || waiting_dependency(&refusal) {
+            return Err(refusal);
+        }
+        let observed = match self.core.status().await {
+            Ok(observed) => observed,
+            Err(_) => return Err(refusal),
+        };
+        if observed.run_type != crate::core::RunType::Service
+            || !matches!(observed.state, CoreState::Stopped(_))
+        {
+            return Err(refusal);
+        }
+
+        // Keep the nonblocking Service transition lease across both release
+        // and the Local apply. Dropping it between those operations would let
+        // another owner start Service after the release proof but before Local
+        // finished, violating ref's single-owner handoff ordering.
+        let _transition =
+            self.try_begin_service_transition()
+                .await
+                .map_err(|error| ServiceFallbackDeferred {
+                    reason: format!(
+                        "{refusal}; cannot acquire Service transition lease: {error:#}"
+                    ),
+                })?;
+        let (_, generation) = self.service_evidence().await;
+        let released =
+            self.release_service_owner()
+                .await
+                .map_err(|reason| ServiceFallbackDeferred {
+                    reason: format!("{refusal}; {reason}"),
+                })?;
+        if !released.proves_no_owned_core() {
+            return Err(ServiceFallbackDeferred {
+                reason: format!(
+                    "{refusal}; no fresh evidence that Service released its owned Core"
+                ),
+            }
+            .into());
+        }
+        // Only suppress Service for this readiness generation after its Core
+        // release has been proved. A failed or unknown release MUST NOT make
+        // an ordinary Local start eligible.
+        if generation != 0 {
+            self.set_startup_failed_generation(generation);
+        }
+        if !self
+            .startup_target_identity()
+            .await
+            .is_ok_and(|current| current == target)
+        {
+            return Err(CommittedTargetAdvanced.into());
+        }
+
+        let local = self
+            .reconcile_application_after_service_release(self.application.get_typed())
+            .await;
+        self.refresh_service_recovery_host().await;
+        self.attempt_policy.lock().record(
+            target.to_owned(),
+            ExecutionHost::Local,
+            &local,
+            self.core.outcome_uncertain(),
+        );
+        if !self
+            .startup_target_identity()
+            .await
+            .is_ok_and(|current| current == target)
+        {
+            return Err(CommittedTargetAdvanced.into());
+        }
+        local
+    }
+
+    /// Treat Service failure for one readiness generation as a Local
+    /// preference only after the previous Service Core was safely released.
+    async fn committed_run_type(&self, enable_service_mode: bool) -> crate::core::RunType {
+        let preferred = crate::core::RunType::classify(
+            enable_service_mode,
+            crate::core::service::ipc::get_ipc_state(),
+        );
+        if preferred != crate::core::RunType::Service {
+            return preferred;
+        }
+        let failed_generation = self.startup_failed_generation();
+        if failed_generation == 0 {
+            return preferred;
+        }
+        let (_, current_generation) = self.service_evidence().await;
+        if failed_generation == current_generation {
+            crate::core::RunType::Normal
+        } else {
+            preferred
+        }
+    }
+
     async fn reconcile_with_trigger(&self, trigger: Trigger) -> anyhow::Result<()> {
         let clash = self.clash.get()?;
         let app = self.application.get_typed();
         let target_core = app.core;
-        let run_type = crate::core::RunType::classify(
-            app.enable_service_mode,
-            crate::core::service::ipc::get_ipc_state(),
-        );
+        let run_type = self.committed_run_type(app.enable_service_mode).await;
         if let Some(profiles) = &self.profiles {
             let before = *profiles.load().version.as_ref();
             // Capture both the authoritative committed document and its managed
@@ -1126,35 +1231,46 @@ impl CoreLifecycleWorkflow {
                 }
                 .into());
             }
-            let run_type = crate::core::RunType::classify(
-                app.enable_service_mode,
-                crate::core::service::ipc::get_ipc_state(),
-            );
+            let run_type = self.committed_run_type(app.enable_service_mode).await;
             let host = match run_type {
                 crate::core::RunType::Service => ExecutionHost::Service,
                 crate::core::RunType::Normal | crate::core::RunType::Elevated => {
                     ExecutionHost::Local
                 }
             };
-            self.attempt_policy.lock().allow(&target, host, trigger)?;
-            let applied = self
-                .core
-                .reconcile_profiles(
-                    clash,
-                    app.core,
-                    run_type,
-                    current,
-                    app,
-                    content,
-                    Some(target.clone()),
-                )
-                .await;
-            self.attempt_policy.lock().record(
-                target,
-                host,
-                &applied,
-                self.core.outcome_uncertain(),
-            );
+            let admitted = self.attempt_policy.lock().allow(&target, host, trigger);
+            let applied = match admitted {
+                Ok(()) => {
+                    let applied = self
+                        .core
+                        .reconcile_profiles(
+                            clash,
+                            app.core,
+                            run_type,
+                            current,
+                            app,
+                            content,
+                            Some(target.clone()),
+                        )
+                        .await;
+                    self.attempt_policy.lock().record(
+                        target.clone(),
+                        host,
+                        &applied,
+                        self.core.outcome_uncertain(),
+                    );
+                    applied
+                }
+                Err(previous_refusal) => Err(previous_refusal.into()),
+            };
+            let applied = if host == ExecutionHost::Service {
+                match applied {
+                    Ok(()) => Ok(()),
+                    Err(refusal) => self.fallback_after_service_refusal(&target, refusal).await,
+                }
+            } else {
+                applied
+            };
             let after = *profiles.load().version.as_ref();
             if after != captured {
                 return Err(ProfilesSourceAdvanced {
@@ -1172,12 +1288,28 @@ impl CoreLifecycleWorkflow {
                     ExecutionHost::Local
                 }
             };
-            self.attempt_policy.lock().allow(&target, host, trigger)?;
-            let result = self.core.reconcile(clash, target_core, run_type).await;
-            self.attempt_policy
-                .lock()
-                .record(target, host, &result, self.core.outcome_uncertain());
-            result
+            let admitted = self.attempt_policy.lock().allow(&target, host, trigger);
+            let result = match admitted {
+                Ok(()) => {
+                    let result = self.core.reconcile(clash, target_core, run_type).await;
+                    self.attempt_policy.lock().record(
+                        target.clone(),
+                        host,
+                        &result,
+                        self.core.outcome_uncertain(),
+                    );
+                    result
+                }
+                Err(previous_refusal) => Err(previous_refusal.into()),
+            };
+            if host == ExecutionHost::Service {
+                match result {
+                    Ok(()) => Ok(()),
+                    Err(refusal) => self.fallback_after_service_refusal(&target, refusal).await,
+                }
+            } else {
+                result
+            }
         }
     }
 
