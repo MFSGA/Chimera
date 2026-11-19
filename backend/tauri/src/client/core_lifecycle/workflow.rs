@@ -53,7 +53,8 @@ pub(crate) struct ProfilesSourceAdvanced {
 pub(in crate::client) enum Command {
     ProfileMutation(Box<crate::client::application_workflow::mutation::MutationRequest>),
     Shutdown,
-    #[cfg(test)]
+    /// Explicit user intent, distinct from automatic reconciliation.
+    StartCore,
     StopCore,
     PatchApplicationConfig {
         patch: ChimeraAppConfigPatch,
@@ -102,6 +103,8 @@ pub(in crate::client) enum Command {
         reason: String,
     },
     Reconcile,
+    /// One source notification requests a latest-committed-target round.
+    ReconcileSource,
     RetryDeferredProfiles {
         digest: String,
     },
@@ -659,6 +662,7 @@ impl CoreLifecycleWorkflow {
         #[cfg(test)]
         let refresh_startup_target = match &command {
             Command::Reconcile
+            | Command::ReconcileSource
             | Command::RecoverCore
             | Command::RetryDeferredProfiles { .. }
             | Command::ReconcileProfiles { .. } => true,
@@ -678,7 +682,10 @@ impl CoreLifecycleWorkflow {
             Command::ProfileMutation(_) => {
                 anyhow::bail!("Profile mutations must run through ApplicationWorkflowActor")
             }
-            Command::RecoverCore | Command::Reconcile => self.reconcile().await,
+            Command::RecoverCore
+            | Command::Reconcile
+            | Command::ReconcileSource
+            | Command::StartCore => self.reconcile().await,
             #[cfg(test)]
             Command::StartupReconcile {
                 operation_id,
@@ -744,7 +751,6 @@ impl CoreLifecycleWorkflow {
                 self.service_recovery.lock().suppress();
                 self.core.stop().await
             }
-            #[cfg(test)]
             Command::StopCore => self.core.stop().await,
             Command::PatchApplicationConfig {
                 patch,

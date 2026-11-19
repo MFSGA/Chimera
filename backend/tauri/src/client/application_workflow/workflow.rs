@@ -281,10 +281,20 @@ impl ApplicationWorkflow {
         }
         match &attempt.origin {
             AttemptOrigin::SourceDecision { .. } => {
-                matches!(command, CoreCommand::RecoverCore | CoreCommand::Reconcile)
+                matches!(
+                    command,
+                    CoreCommand::RecoverCore
+                        | CoreCommand::Reconcile
+                        | CoreCommand::ReconcileSource
+                )
             }
             AttemptOrigin::CommittedTarget(target) if target.is_mutation() => {
-                matches!(command, CoreCommand::RecoverCore | CoreCommand::Reconcile)
+                matches!(
+                    command,
+                    CoreCommand::RecoverCore
+                        | CoreCommand::Reconcile
+                        | CoreCommand::ReconcileSource
+                )
             }
             AttemptOrigin::CommittedTarget(target)
                 if matches!(target.origin, TargetOrigin::Reestablish(_)) =>
@@ -292,7 +302,12 @@ impl ApplicationWorkflow {
                 matches!(command, CoreCommand::RecoverStartup { .. })
             }
             AttemptOrigin::Lifecycle => {
-                matches!(command, CoreCommand::RecoverCore | CoreCommand::Reconcile)
+                matches!(
+                    command,
+                    CoreCommand::RecoverCore
+                        | CoreCommand::Reconcile
+                        | CoreCommand::ReconcileSource
+                )
             }
             AttemptOrigin::CommittedTarget(_) => false,
         }
@@ -516,7 +531,9 @@ impl ApplicationWorkflow {
                 self.recover_after_reconcile(lifecycle.as_ref()).await?;
                 Ok(false)
             }
-            CoreCommand::Reconcile if self.has_unresolved_attempt() => {
+            CoreCommand::Reconcile | CoreCommand::ReconcileSource
+                if self.has_unresolved_attempt() =>
+            {
                 let lifecycle = self.lifecycle_handle();
                 #[cfg(test)]
                 {
@@ -578,6 +595,7 @@ impl ApplicationWorkflow {
                     matches!(&command, CoreCommand::ServiceEndpointDown(_));
                 let refresh_startup_target = match &command {
                     CoreCommand::Reconcile
+                    | CoreCommand::ReconcileSource
                     | CoreCommand::RecoverCore
                     | CoreCommand::RetryDeferredProfiles { .. }
                     | CoreCommand::ReconcileProfiles { .. }

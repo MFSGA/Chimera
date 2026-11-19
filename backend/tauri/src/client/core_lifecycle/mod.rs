@@ -18,7 +18,11 @@ use std::{
     time::Duration,
 };
 
-use super::reconciler::committed::{SourceDomain, SourceVersions};
+use super::reconciler::{
+    committed::{SourceDomain, SourceVersions},
+    status::ReconcilerStatus,
+};
+use chimera_core::client::reconciler::plan::RunIntent;
 use futures_util::FutureExt;
 use ractor::{Actor, ActorProcessingErr, ActorRef, RpcReplyPort, rpc::CallResult};
 use tokio_util::{sync::CancellationToken, task::TaskTracker};
@@ -26,8 +30,11 @@ use tokio_util::{sync::CancellationToken, task::TaskTracker};
 #[cfg(test)]
 use super::application_workflow::startup::{StartupOutcome, StartupWorkflowState};
 use super::{
-    ChimeraClient, application::ApplicationClient, application_workflow::startup::StartupReport,
-    application_workflow::workflow::ApplicationWorkflow, clash_config::ClashConfigClient,
+    ChimeraClient,
+    application::ApplicationClient,
+    application_workflow::startup::StartupReport,
+    application_workflow::workflow::{ApplicationWorkflow, ProfileRuntime},
+    clash_config::ClashConfigClient,
     runtime::RuntimePaths,
 };
 pub(in crate::client) use workflow::{Command, CoreLifecycleWorkflow};
@@ -291,6 +298,7 @@ enum Message {
 struct ApplicationWorkflowActor;
 
 struct ApplicationWorkflowState {
+    reconciler: tokio::sync::watch::Sender<ReconcilerStatus>,
     workflow: Option<ApplicationWorkflow>,
     pending_mutation_connection: Option<(ApplicationWorkflow, RpcReplyPort<anyhow::Result<()>>)>,
     active: Option<ActiveOperation>,
@@ -310,6 +318,8 @@ struct ApplicationWorkflowState {
     shutdown_waiters: Vec<Response>,
     dirty: bool,
     dirty_tick_scheduled: bool,
+    source_dirty: bool,
+    run_intent: RunIntent,
     seen_sources: SourceVersions,
     service_recovery_inflight: bool,
     service_recovery_timer: tokio::task::JoinHandle<()>,
@@ -342,6 +352,7 @@ fn apply_pending_startup_retry_lease_failures(
 }
 
 struct ApplicationWorkflowArgs {
+    reconciler: tokio::sync::watch::Sender<ReconcilerStatus>,
     workflow: ApplicationWorkflow,
     next_id: Arc<AtomicU64>,
     status: Arc<parking_lot::Mutex<CoreLifecycleStatus>>,
@@ -366,6 +377,26 @@ struct ActiveOperation {
     response: Response,
     task: tokio::task::JoinHandle<()>,
     shutdown: bool,
+    trigger: &'static str,
+    observed_sources: SourceVersions,
+}
+
+fn runtime_trigger(command: &Command) -> &'static str {
+    match command {
+        Command::StartCore => "Start",
+        Command::StopCore => "Stop",
+        Command::Shutdown => "Shutdown",
+        Command::Reconcile => "Retry",
+        Command::ReconcileSource => "SourceCommitted",
+        Command::StartupReconcile { .. } => "Startup",
+        Command::RetryStartup { .. } => "Retry",
+        Command::FollowService { .. } => "ServiceReadiness",
+        Command::ReplaceCoreBinary(_) => "BinaryReplaced",
+        Command::ProfileMutation(_) => "Mutation",
+        Command::RecoverCore => "CoreChanged",
+        Command::RetryDeferredProfiles { .. } => "Tick",
+        _ => "ServiceOperation",
+    }
 }
 
 impl ApplicationWorkflowState {
@@ -437,7 +468,7 @@ impl ApplicationWorkflowState {
     }
 
     fn mark_runtime_dirty(&mut self, myself: &ActorRef<Message>) {
-        if self.uncertain || self.shutting_down {
+        if self.run_intent == RunIntent::Stopped || self.uncertain || self.shutting_down {
             return;
         }
         self.dirty = true;
@@ -504,7 +535,8 @@ impl ApplicationWorkflowState {
     }
 
     async fn follow_service(&mut self) {
-        if self.active.is_some()
+        if self.run_intent == RunIntent::Stopped
+            || self.active.is_some()
             || self.uncertain
             || self.shutting_down
             || self.startup_owner_unproven
@@ -695,6 +727,7 @@ impl ApplicationWorkflowState {
     fn close(&mut self) {
         self.shutting_down = true;
         self.dirty = false;
+        self.source_dirty = false;
         while let Some(request) = self.pending.pop_front() {
             self.reject(request, anyhow::anyhow!("core lifecycle is shutting down"));
         }
@@ -764,6 +797,34 @@ impl ApplicationWorkflowState {
             return;
         };
 
+        // Upstream RunIntent survives source commits and readiness signals.
+        // An explicit StopCore latches Stopped before the command starts;
+        // only StartCore can resume runtime application. Retry/rebuild and
+        // automatic source recovery are not implicit start requests.
+        match &request.command {
+            Command::StopCore => {
+                self.run_intent = RunIntent::Stopped;
+                self.dirty = false;
+                self.source_dirty = false;
+            }
+            Command::StartCore => self.run_intent = RunIntent::Running,
+            _ => {}
+        }
+        if self.run_intent == RunIntent::Stopped
+            && matches!(
+                &request.command,
+                Command::Reconcile
+                    | Command::ReconcileSource
+                    | Command::ReconcileProfiles { .. }
+                    | Command::RetryDeferredProfiles { .. }
+                    | Command::RecoverCore
+            )
+        {
+            self.settle(request.response, Ok(()));
+            self.drive(myself);
+            return;
+        }
+
         let Some(mut workflow) = self.workflow.take() else {
             tracing::error!("core lifecycle workflow missing without an active operation");
             self.reject(
@@ -786,6 +847,9 @@ impl ApplicationWorkflowState {
         }
 
         let id = request.response.id;
+        let trigger = runtime_trigger(&request.command);
+        let observed_sources = self.seen_sources.clone();
+        self.reconciler.send_modify(|status| status.begin(id));
         let shutdown = matches!(&request.command, Command::Shutdown);
         let deferred_retry = request.deferred_retry.clone();
         let runtime_converged = match &request.command {
@@ -809,6 +873,8 @@ impl ApplicationWorkflowState {
         let reconciled = matches!(
             &request.command,
             Command::Reconcile
+                | Command::ReconcileSource
+                | Command::StartCore
                 | Command::StartupReconcile { .. }
                 | Command::FollowService { .. }
                 | Command::RecoverStartup { .. }
@@ -983,6 +1049,8 @@ impl ApplicationWorkflowState {
             response: request.response,
             task,
             shutdown,
+            trigger,
+            observed_sources,
         });
         self.publish();
     }
@@ -1001,6 +1069,7 @@ impl Actor for ApplicationWorkflowActor {
         let service_recovery_timer =
             myself.send_interval(RECOVERY_INTERVAL, || Message::ServiceRecoveryTick);
         Ok(ApplicationWorkflowState {
+            reconciler: args.reconciler,
             workflow: Some(args.workflow),
             pending_mutation_connection: None,
             active: None,
@@ -1020,6 +1089,8 @@ impl Actor for ApplicationWorkflowActor {
             shutdown_waiters: Vec::new(),
             dirty: false,
             dirty_tick_scheduled: false,
+            source_dirty: false,
+            run_intent: RunIntent::Running,
             seen_sources: SourceVersions::default(),
             service_recovery_inflight: false,
             service_recovery_timer,
@@ -1173,6 +1244,26 @@ impl Actor for ApplicationWorkflowActor {
                         .expect("matched active lifecycle operation");
                     debug_assert_eq!(active.shutdown, shutdown);
                     let _ = active.task.await;
+                    // A successful command alone is not proof that the Core
+                    // reached Running or Stopped. Publish Converged/Inactive
+                    // only after sampling the runtime owner.
+                    let observed_core =
+                        if result.is_ok() && (reconciled || active.trigger == "Stop") {
+                            workflow.lifecycle().core_status().await.ok()
+                        } else {
+                            None
+                        };
+                    let verified_running = reconciled
+                        && observed_core.as_ref().is_some_and(|snapshot| {
+                            matches!(snapshot.state, chimera_ipc::api::status::CoreState::Running)
+                        });
+                    let verified_stopped = active.trigger == "Stop"
+                        && observed_core.as_ref().is_some_and(|snapshot| {
+                            matches!(
+                                snapshot.state,
+                                chimera_ipc::api::status::CoreState::Stopped(_)
+                            )
+                        });
                     state.workflow = Some(workflow);
                     if service_endpoint_recovery {
                         state.service_recovery_inflight = false;
@@ -1247,6 +1338,20 @@ impl Actor for ApplicationWorkflowActor {
                         error
                             .downcast_ref::<workflow::ProfilesSourceAdvanced>()
                             .is_some()
+                    });
+                    state.reconciler.send_modify(|status| {
+                        status.finish(
+                            active.response.id,
+                            active.trigger,
+                            &active.observed_sources,
+                            state.run_intent,
+                            &result,
+                            reconciled,
+                            verified_running,
+                            verified_stopped,
+                            state.uncertain,
+                            source_advanced,
+                        );
                     });
                     let deferred_retry_error = result.as_ref().err().map(ToString::to_string);
                     let deferred_retry_retryable = result.as_ref().err().is_some_and(
@@ -1420,22 +1525,34 @@ impl Actor for ApplicationWorkflowActor {
                 // round; legacy inline domains pass false to avoid a second apply.
                 // Always load the latest source, not the notification payload.
                 state.seen_sources.observe(domain, version);
-                if reconcile_requested && !state.uncertain && !state.shutting_down {
+                if !reconcile_requested || state.run_intent == RunIntent::Stopped {
+                    state.reconciler.send_modify(|status| {
+                        status.observe_source_only(domain, version);
+                    });
+                }
+                if reconcile_requested
+                    && state.run_intent == RunIntent::Running
+                    && !state.uncertain
+                    && !state.shutting_down
+                {
                     if state.startup_owner_unproven
                         || state.startup_owner_unproven_shared.load(Ordering::Acquire)
                     {
                         state.request_startup_recovery(&myself);
                     } else {
+                        state.source_dirty = true;
                         state.mark_runtime_dirty(&myself);
                     }
                 }
             }
             Message::RuntimeDirty => {
-                if state.uncertain || state.shutting_down {
+                if state.run_intent == RunIntent::Stopped || state.uncertain || state.shutting_down
+                {
                     tracing::debug!(
+                        ?state.run_intent,
                         uncertain = state.uncertain,
                         shutting_down = state.shutting_down,
-                        "ignoring runtime dirty signal because lifecycle is unavailable"
+                        "ignoring runtime dirty signal while stopped or unavailable"
                     );
                 } else {
                     state.mark_runtime_dirty(&myself);
@@ -1447,11 +1564,17 @@ impl Actor for ApplicationWorkflowActor {
             }
             Message::DirtyTick => {
                 state.dirty_tick_scheduled = false;
-                if state.uncertain || state.shutting_down {
+                if state.run_intent == RunIntent::Stopped || state.uncertain || state.shutting_down
+                {
                     state.dirty = false;
                 } else if state.dirty {
                     state.dirty = false;
-                    state.push_background(Command::Reconcile);
+                    let source_round = std::mem::take(&mut state.source_dirty);
+                    state.push_background(if source_round {
+                        Command::ReconcileSource
+                    } else {
+                        Command::Reconcile
+                    });
                 }
             }
             Message::StartupRetryDue { identity } => {
@@ -1692,6 +1815,7 @@ impl Actor for ApplicationWorkflowActor {
         state: &mut Self::State,
     ) -> Result<(), ActorProcessingErr> {
         state.service_recovery_timer.abort();
+        state.reconciler.send_modify(ReconcilerStatus::close);
         Ok(())
     }
 }
@@ -1701,6 +1825,7 @@ enum CoreLifecycleClientInner {
         actor_ref: ActorRef<Message>,
         next_id: Arc<AtomicU64>,
         status: Arc<parking_lot::Mutex<CoreLifecycleStatus>>,
+        reconciler: tokio::sync::watch::Receiver<ReconcilerStatus>,
         service_status: tokio::sync::watch::Receiver<ServiceHostStatus>,
         service: Arc<dyn ports::ServiceLifecyclePort>,
         core: Arc<dyn CoreLifecyclePort>,
@@ -1845,11 +1970,13 @@ impl CoreLifecycleClient {
         let workflow = ApplicationWorkflow::with_lifecycle(lifecycle);
         let startup_recovery_pending = Arc::new(AtomicBool::new(false));
         let status = Arc::new(parking_lot::Mutex::new(CoreLifecycleStatus::default()));
+        let (reconciler_tx, reconciler) = tokio::sync::watch::channel(ReconcilerStatus::default());
         let next_id = Arc::new(AtomicU64::new(1));
         let (actor_ref, _handle) = Actor::spawn(
             None,
             ApplicationWorkflowActor,
             ApplicationWorkflowArgs {
+                reconciler: reconciler_tx,
                 workflow,
                 next_id: next_id.clone(),
                 status: status.clone(),
@@ -1884,6 +2011,7 @@ impl CoreLifecycleClient {
             actor_ref,
             next_id,
             status,
+            reconciler,
             service_status: service_status_rx.clone(),
             service,
             core,
@@ -2555,6 +2683,40 @@ impl CoreLifecycleClient {
         }
     }
 
+    /// Ref-shaped outcome projection; unlike the legacy lifecycle status,
+    /// this carries the last sampled source versions and runtime conclusion.
+    pub(crate) fn reconciler_status(&self) -> ReconcilerStatus {
+        match self.0.as_ref() {
+            CoreLifecycleClientInner::Actor { reconciler, .. } => reconciler.borrow().clone(),
+            #[cfg(test)]
+            CoreLifecycleClientInner::Direct { .. } => ReconcilerStatus::default(),
+        }
+    }
+
+    pub(crate) async fn settled(&self, domain: SourceDomain, version: u64) -> ReconcilerStatus {
+        let CoreLifecycleClientInner::Actor { reconciler, .. } = self.0.as_ref() else {
+            return ReconcilerStatus::default();
+        };
+        let mut watch = reconciler.clone();
+        loop {
+            let current = watch.borrow_and_update().clone();
+            if matches!(
+                current.conclusion,
+                chimera_core::client::reconciler::plan::Conclusion::Closed
+            ) || (current.active.is_none()
+                && current
+                    .seen
+                    .version(domain)
+                    .is_some_and(|seen| seen >= version))
+            {
+                return current;
+            }
+            if watch.changed().await.is_err() {
+                return watch.borrow().clone();
+            }
+        }
+    }
+
     /// Observe a source-owned durable commit in the single lifecycle mailbox.
     /// `reconcile_requested` asks the one runtime owner to apply the latest
     /// committed snapshots. Already-applied legacy domains pass false.
@@ -2737,7 +2899,12 @@ impl CoreLifecycleClient {
         }
     }
 
-    #[cfg(test)]
+    /// Explicitly resume core execution; retrying a source while stopped
+    /// never implicitly changes this intent.
+    pub(super) async fn start_core(&self) -> anyhow::Result<()> {
+        self.execute(Command::StartCore).await
+    }
+
     pub(super) async fn stop_core(&self) -> anyhow::Result<()> {
         self.execute(Command::StopCore).await
     }
@@ -2972,7 +3139,10 @@ impl ChimeraClient {
         .await
     }
 
-    #[cfg(test)]
+    pub(crate) async fn start_core(&self) -> anyhow::Result<()> {
+        self.inner.core_lifecycle.start_core().await
+    }
+
     pub(crate) async fn stop_core(&self) -> anyhow::Result<()> {
         self.inner.core_lifecycle.stop_core().await
     }
@@ -7362,10 +7532,87 @@ mod tests {
         client.shutdown().await.unwrap();
     }
 
+    #[tokio::test]
+    async fn stop_returning_ok_without_stopped_proof_remains_waiting() {
+        use chimera_core::client::reconciler::plan::Conclusion;
+
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let mut fake = startup_owner_core(
+            events.clone(),
+            (CoreState::Running, 1),
+            Arc::new(AtomicBool::new(false)),
+        );
+        fake.stop_confirms = false;
+        let client =
+            spawn_startup_client(Arc::new(fake), Arc::new(RecordingService { events })).await;
+        client.stop_core().await.unwrap();
+        let status = client.reconciler_status();
+        assert!(
+            matches!(status.conclusion, Conclusion::Waiting { .. }),
+            "a successful stop call is not evidence that Core actually stopped"
+        );
+        client.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn service_readiness_does_not_restart_core_after_explicit_stop() {
+        use chimera_core::client::reconciler::plan::Conclusion;
+
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let service_ready = Arc::new(AtomicBool::new(false));
+        let service_running = Arc::new(AtomicBool::new(false));
+        let core = Arc::new(startup_owner_core(
+            events.clone(),
+            (CoreState::Running, 1),
+            service_running.clone(),
+        ));
+        let service = Arc::new(ToggleStartupServiceProbe {
+            events: events.clone(),
+            ready: service_ready.clone(),
+            core_running: service_running,
+        });
+        let app = chimera_config::application::ChimeraAppConfig {
+            enable_service_mode: true,
+            ..Default::default()
+        };
+        let client = spawn_startup_client_with_application(
+            core.clone(),
+            service,
+            ApplicationClient::static_state(app),
+        )
+        .await;
+
+        let startup = client.startup_reconcile().await.unwrap();
+        assert_eq!(startup.report.outcome, StartupOutcome::Ready);
+        client.stop_core().await.unwrap();
+        let before = core.reconciles.load(AtomicOrdering::SeqCst);
+        assert!(matches!(
+            client.reconciler_status().conclusion,
+            Conclusion::Inactive
+        ));
+        service_ready.store(true, AtomicOrdering::Release);
+        signal_service_readiness_change(&client);
+        tokio::time::sleep(DIRTY_WINDOW + Duration::from_millis(70)).await;
+        assert_eq!(
+            core.reconciles.load(AtomicOrdering::SeqCst),
+            before,
+            "service readiness is not an explicit Start request"
+        );
+        assert!(
+            !events
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|event| *event == "rebuild-service"),
+            "stopped intent must prohibit a Service Core restart"
+        );
+        client.shutdown().await.unwrap();
+    }
+
     /// Contract: a stopped Local snapshot without explicit stop intent still
     /// follows Service readiness, as ref does when `stop_requested` is false.
-    /// The fixture mutates only its in-memory status to represent an external
-    /// runtime stop; production has no StopCore command or stop-intent signal.
+    /// This fixture mutates only its in-memory status to represent an external
+    /// runtime stop, unlike an explicit StopCore command.
     #[tokio::test]
     async fn service_readiness_follows_after_local_core_stops_without_explicit_intent() {
         let events = Arc::new(Mutex::new(Vec::new()));
@@ -9797,6 +10044,135 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn explicit_stop_intent_survives_profiles_source_and_runtime_dirty_until_start() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = Utf8PathBuf::from_path_buf(directory.path().join("profiles.yaml")).unwrap();
+        let mut manager = PersistentStateManagerSetup::<
+            chimera_config::profile::Profiles,
+            crate::core::migration::modules::profiles::ProfilesFormat,
+        >::builder()
+        .config_path(path)
+        .assemble()
+        .from_state(chimera_config::profile::Profiles::default())
+        .await
+        .unwrap();
+        let core = Arc::new(ProfileTccCore {
+            validations: AtomicUsize::new(0),
+            stops: AtomicUsize::new(0),
+            fail_next_reconcile: AtomicBool::new(false),
+            active_profiles: Mutex::new(None),
+        });
+        let client = spawn_startup_client_with_profiles(
+            core.clone(),
+            Arc::new(RecordingService {
+                events: Arc::new(Mutex::new(Vec::new())),
+            }),
+            manager.snapshot_handle(),
+        )
+        .await;
+        client.stop_core().await.unwrap();
+        assert_eq!(core.stops.load(AtomicOrdering::SeqCst), 1);
+        let mut candidate = manager.snapshot().as_ref().clone();
+        candidate
+            .valid
+            .push("committed-while-explicitly-stopped".into());
+        manager
+            .replace_if_version(chimera_core::state::Version::new(0), candidate.clone())
+            .await
+            .unwrap();
+        client.source_committed(
+            crate::client::reconciler::committed::SourceDomain::Profiles,
+            1,
+            true,
+        );
+        client.request_runtime_rebuild();
+        tokio::time::sleep(DIRTY_WINDOW + Duration::from_millis(70)).await;
+        assert!(
+            core.active_profiles.lock().unwrap().is_none(),
+            "source notifications and dirty ticks must not undo explicit stop"
+        );
+        assert_eq!(core.stops.load(AtomicOrdering::SeqCst), 1);
+        client.start_core().await.unwrap();
+        assert_eq!(
+            core.active_profiles.lock().unwrap().as_ref().unwrap().valid,
+            candidate.valid
+        );
+        client.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn reconciler_status_waits_for_committed_version_and_keeps_stop_inactive() {
+        use chimera_core::client::reconciler::plan::Conclusion;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = Utf8PathBuf::from_path_buf(dir.path().join("profiles.yaml")).unwrap();
+        let mut manager = PersistentStateManagerSetup::<
+            chimera_config::profile::Profiles,
+            crate::core::migration::modules::profiles::ProfilesFormat,
+        >::builder()
+        .config_path(path)
+        .assemble()
+        .from_state(chimera_config::profile::Profiles::default())
+        .await
+        .unwrap();
+        let core = Arc::new(ProfileTccCore {
+            validations: AtomicUsize::new(0),
+            stops: AtomicUsize::new(0),
+            fail_next_reconcile: AtomicBool::new(false),
+            active_profiles: Mutex::new(None),
+        });
+        let client = spawn_startup_client_with_profiles(
+            core,
+            Arc::new(RecordingService {
+                events: Arc::new(Mutex::new(Vec::new())),
+            }),
+            manager.snapshot_handle(),
+        )
+        .await;
+        client.stop_core().await.unwrap();
+        let stopped = client.reconciler_status();
+        assert!(matches!(stopped.conclusion, Conclusion::Inactive));
+        assert_eq!(stopped.recent.back().unwrap().trigger, "Stop");
+
+        let mut next = manager.snapshot().as_ref().clone();
+        next.valid.push("saved-after-stop".into());
+        manager
+            .replace_if_version(chimera_core::state::Version::new(0), next)
+            .await
+            .unwrap();
+        client.source_committed(
+            crate::client::reconciler::committed::SourceDomain::Profiles,
+            1,
+            true,
+        );
+        let settled = tokio::time::timeout(
+            Duration::from_secs(2),
+            client.settled(
+                crate::client::reconciler::committed::SourceDomain::Profiles,
+                1,
+            ),
+        )
+        .await
+        .expect("stopped runtime must still acknowledge a durable source version");
+        assert_eq!(
+            settled
+                .seen
+                .version(crate::client::reconciler::committed::SourceDomain::Profiles),
+            Some(1)
+        );
+        assert!(matches!(settled.conclusion, Conclusion::Inactive));
+        assert!(settled.active.is_none());
+        client.start_core().await.unwrap();
+        let resumed = client.reconciler_status();
+        assert!(
+            matches!(resumed.conclusion, Conclusion::Waiting { .. }),
+            "a successful apply without an observed Running state is not Converged"
+        );
+        assert_eq!(resumed.recent.back().unwrap().trigger, "Start");
+        client.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
     async fn profiles_source_commit_applies_latest_document_not_notified_version() {
         let dir = tempfile::tempdir().unwrap();
         let path = Utf8PathBuf::from_path_buf(dir.path().join("profiles.yaml")).unwrap();
@@ -9861,6 +10237,20 @@ mod tests {
         .await
         .expect("a source notification should apply the latest committed profiles");
         assert_eq!(core.validations.load(AtomicOrdering::SeqCst), 0);
+        let settled = tokio::time::timeout(
+            Duration::from_secs(2),
+            client.settled(
+                crate::client::reconciler::committed::SourceDomain::Profiles,
+                1,
+            ),
+        )
+        .await
+        .expect("committed source round must publish its sampled version");
+        assert_eq!(
+            settled.recent.back().unwrap().trigger,
+            "SourceCommitted",
+            "source-driven work should be distinct from explicit retry"
+        );
         client.shutdown().await.unwrap();
     }
 
