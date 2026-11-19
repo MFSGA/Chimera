@@ -9,6 +9,8 @@ pub(crate) mod committed;
 pub(crate) mod decision;
 pub(in crate::client) mod inputs;
 pub(crate) mod mutation;
+pub(in crate::client) mod ports;
+pub(in crate::client) mod preparation;
 pub(crate) mod proof;
 pub(crate) mod release;
 pub(crate) mod status;

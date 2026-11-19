@@ -8,11 +8,9 @@
 use anyhow::{Result, bail};
 
 use crate::client::{
-    application_workflow::{
-        inputs::RuntimeInputs,
-        mutation::{CheckRecord, RuntimeCheckFailure},
-    },
+    application_workflow::mutation::{CheckRecord, RuntimeCheckFailure},
     core_lifecycle::ports::CoreLifecyclePort,
+    reconciler::{inputs::RuntimeInputs, preparation::RuntimePreparation},
 };
 
 /// Freeze the full candidate input *before* invoking the independent Core
@@ -78,22 +76,14 @@ impl crate::state::mutation::RuntimeGate for CandidateCheck {
     async fn check(&self, candidate: crate::state::mutation::RuntimeCandidate) -> Result<()> {
         let profiles_dir = crate::utils::dirs::app_profiles_dir()?;
         let source = crate::enhance::FsProfileContentSource::new(profiles_dir);
-        let content = self
-            .profile_content
-            .candidate(async {
-                chimera_core::client::runtime_build_port::FrozenProfileContent::capture_content(
-                    &candidate.profiles,
-                    &source,
-                    candidate.staged,
-                )
-            })
-            .await;
-        let inputs = RuntimeInputs {
-            app: self.application.get_typed(),
-            clash: self.clash.get()?,
-            profiles: candidate.profiles,
-            content,
-        };
+        let inputs = RuntimePreparation::new(Some(&self.profile_content), None, &source)
+            .capture_inputs(
+                self.application.get_typed(),
+                self.clash.get()?,
+                candidate.profiles,
+                candidate.staged,
+            )
+            .await?;
         let checked = check_candidate(
             self.core.as_ref(),
             inputs,

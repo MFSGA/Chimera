@@ -26,7 +26,7 @@ use crate::client::application_workflow::workflow::ProfileRuntime;
 use crate::client::reconciler::attempt::{
     AttemptPolicy, CommittedTargetAdvanced, ServiceFallbackDeferred, waiting_dependency,
 };
-use crate::client::reconciler::inputs::{FrozenProfileContent, RuntimeInputs};
+use crate::client::reconciler::{inputs::RuntimeInputs, preparation::RuntimePreparation};
 use crate::config::chimera::ClashCore;
 use crate::core::actor_v2::control_endpoint::ExecutionHost;
 use crate::enhance::FsProfileContentSource;
@@ -1879,24 +1879,14 @@ impl CoreLifecycleWorkflow {
         profiles: Arc<chimera_config::profile::Profiles>,
         staged_content: std::collections::BTreeMap<String, String>,
     ) -> anyhow::Result<RuntimeInputs> {
-        let profiles_dir = crate::utils::dirs::app_profiles_dir()?;
-        let source = FsProfileContentSource::new(profiles_dir);
-        let content = match &self.content_reader {
-            Some(reader) => {
-                reader
-                    .candidate(async {
-                        FrozenProfileContent::capture_content(&profiles, &source, staged_content)
-                    })
-                    .await
-            }
-            None => FrozenProfileContent::capture_content(&profiles, &source, staged_content),
-        };
-        Ok(RuntimeInputs {
-            app,
-            clash,
-            profiles,
-            content,
-        })
+        let source = FsProfileContentSource::new(crate::utils::dirs::app_profiles_dir()?);
+        RuntimePreparation::new(
+            self.content_reader.as_ref(),
+            self.profiles.as_ref(),
+            &source,
+        )
+        .capture_inputs(app, clash, profiles, staged_content)
+        .await
     }
 
     /// Ref: sample committed Profiles and capture all managed file inputs
@@ -1907,35 +1897,16 @@ impl CoreLifecycleWorkflow {
         app: ChimeraAppConfig,
         clash: chimera_config::clash::config::ClashConfig,
     ) -> anyhow::Result<RuntimeInputs> {
-        if let Some(reader) = &self.content_reader {
-            let profiles_dir = crate::utils::dirs::app_profiles_dir()?;
-            return reader
-                .committed(|versioned| async move {
-                    let profiles = Arc::new(versioned.state.clone());
-                    let source = FsProfileContentSource::new(profiles_dir);
-                    let content = FrozenProfileContent::capture_content(
-                        &profiles,
-                        &source,
-                        Default::default(),
-                    );
-                    Ok(RuntimeInputs {
-                        app,
-                        clash,
-                        profiles,
-                        content,
-                    })
-                })
-                .await;
+        if self.content_reader.is_none() && self.profiles.is_none() {
+            anyhow::bail!("Profile state is unavailable for committed runtime capture");
         }
-        let profiles = self.profiles.as_ref().ok_or_else(|| {
-            anyhow::anyhow!("Profile state is unavailable for committed runtime capture")
-        })?;
-        self.capture_profile_inputs_for(
-            app,
-            clash,
-            Arc::new(profiles.load().state.clone()),
-            Default::default(),
+        let source = FsProfileContentSource::new(crate::utils::dirs::app_profiles_dir()?);
+        RuntimePreparation::new(
+            self.content_reader.as_ref(),
+            self.profiles.as_ref(),
+            &source,
         )
+        .capture_committed_inputs(app, clash)
         .await
     }
 
