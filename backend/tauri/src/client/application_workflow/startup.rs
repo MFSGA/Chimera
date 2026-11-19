@@ -685,6 +685,21 @@ pub(crate) fn plan_owner(
     reconcile_plan_owner(desired, owner, &reconciler_service_evidence(service))
 }
 
+/// A readiness change only starts ownership work if ref's S2 planner found a
+/// concrete, safe host transition. Importantly, an already selected Local
+/// Core may still owe retirement of a second *owned* Service Core: checking
+/// only `desired != owner` would silently leave both owners running.
+fn owner_followup_required(
+    desired: ExecutionHost,
+    owner: ExecutionHost,
+    service: &ServiceEvidence,
+) -> bool {
+    matches!(
+        plan_owner(desired, owner, service),
+        OwnerPlan::RetireServiceThenLocal | OwnerPlan::HandBackToLocal | OwnerPlan::AdoptService
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use std::borrow::Cow;
@@ -698,8 +713,56 @@ mod tests {
         types::ServiceStatus,
     };
 
-    use super::{OwnerPlan, ServiceEvidence, effective_host, plan_owner};
+    use super::{OwnerPlan, ServiceEvidence, effective_host, owner_followup_required, plan_owner};
     use crate::core::actor_v2::control_endpoint::ExecutionHost::{Local, Service};
+
+    #[test]
+    fn ref_s2_followup_retirement_is_required_even_with_local_already_selected() {
+        use ServicePhase::{DaemonStopped, Ready, Unknown};
+
+        let owned_service_core = ServiceEvidence::CoreRunning {
+            ready: true,
+            phase: Ready,
+            instance: Some("owned".into()),
+            revision: None,
+        };
+        assert!(owner_followup_required(Local, Local, &owned_service_core));
+        assert!(owner_followup_required(Local, Service, &owned_service_core));
+        assert!(owner_followup_required(Service, Local, &owned_service_core));
+
+        for service in [
+            ServiceEvidence::Absent {
+                phase: DaemonStopped,
+            },
+            ServiceEvidence::CoreStopped {
+                ready: true,
+                phase: Ready,
+                runtime_owned: true,
+            },
+            ServiceEvidence::ForeignCore {
+                ready: true,
+                phase: Ready,
+            },
+            ServiceEvidence::Unreadable { phase: Unknown },
+        ] {
+            assert!(
+                !owner_followup_required(Local, Local, &service),
+                "an absent, stopped, foreign or unreadable Service Core must not be retired: {service:?}"
+            );
+        }
+        assert!(!owner_followup_required(
+            Service,
+            Local,
+            &ServiceEvidence::Absent {
+                phase: DaemonStopped
+            }
+        ));
+        assert!(!owner_followup_required(
+            Service,
+            Local,
+            &ServiceEvidence::Unreadable { phase: Unknown }
+        ));
+    }
 
     fn evidence(
         status: ServiceStatus,
@@ -1887,18 +1950,16 @@ impl ApplicationWorkflow {
             return false;
         }
         let app = lifecycle.startup_application_config();
-        if !app.enable_service_mode {
-            return false;
-        }
         let Ok(current) = lifecycle.startup_core_status().await else {
             return false;
         };
         if self.service_recovery_blocks_handoff() {
             return false;
         }
-        // Unlike ref's `stop_requested`, Chimera currently has no production
-        // StopCore command or persisted stop intent. Once startup proved an
-        // owner, follow Service preference from current readiness evidence.
+        // Explicit RunIntent is already enforced by CoreLifecycle's sole
+        // mailbox before this method. Here the ref S2 planner decides whether
+        // a host transition is owed; ready Service evidence can require
+        // retiring another owned Core even when Local is already selected.
         let owner = host_for_run_type(current.run_type);
         let (service, generation) = lifecycle.service_evidence().await;
         let failed_generation = lifecycle.startup_failed_generation();
@@ -1912,7 +1973,7 @@ impl ApplicationWorkflow {
         } else {
             effective_host(app.enable_service_mode, readiness, owner)
         };
-        desired != owner
+        owner_followup_required(desired, owner, &service)
     }
 
     pub(in crate::client) async fn follow_service(

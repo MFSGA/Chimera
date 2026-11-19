@@ -68,6 +68,16 @@ impl Default for ReconcilerStatus {
 }
 
 impl ReconcilerStatus {
+    /// Maintenance is independent of the last runtime conclusion. A Core may
+    /// be Converged while an owned Service still needs safe retirement; neither
+    /// a successful source commit nor a recorded retry can clear that debt.
+    pub(crate) fn set_maintenance(&mut self, reason: Option<String>) {
+        if self.maintenance != reason {
+            self.seq = self.seq.saturating_add(1);
+            self.maintenance = reason;
+        }
+    }
+
     pub(crate) fn close(&mut self) {
         self.seq = self.seq.saturating_add(1);
         self.active = None;
@@ -156,6 +166,27 @@ impl ReconcilerStatus {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn maintenance_changes_do_not_assert_runtime_convergence_or_advance_sources() {
+        let mut status = ReconcilerStatus::default();
+        status.conclusion = Conclusion::Converged;
+        status.observe_source_only(SourceDomain::Profiles, 4);
+        let initial = status.seq;
+        status.set_maintenance(Some("Service owner release is pending".into()));
+        assert_eq!(status.seq, initial + 1);
+        assert!(matches!(status.conclusion, Conclusion::Converged));
+        assert_eq!(status.seen.version(SourceDomain::Profiles), Some(4));
+        status.set_maintenance(Some("Service owner release is pending".into()));
+        assert_eq!(
+            status.seq,
+            initial + 1,
+            "duplicate maintenance does not republish"
+        );
+        status.set_maintenance(None);
+        assert!(status.maintenance.is_none());
+        assert_eq!(status.seq, initial + 2);
+    }
 
     #[test]
     fn source_only_version_keeps_prior_conclusion_and_round_history_bounded() {

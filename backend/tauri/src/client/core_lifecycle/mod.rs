@@ -322,6 +322,8 @@ struct ApplicationWorkflowState {
     run_intent: RunIntent,
     seen_sources: SourceVersions,
     service_recovery_inflight: bool,
+    service_handoff_maintenance: Option<String>,
+    service_recovery_maintenance: Option<String>,
     service_recovery_timer: tokio::task::JoinHandle<()>,
     startup_recovery_pending: Arc<AtomicBool>,
 }
@@ -534,6 +536,21 @@ impl ApplicationWorkflowState {
         );
     }
 
+    /// A handoff failure and a degraded Service endpoint are independent
+    /// maintenance debts; keep both even when a Core round converged.
+    fn publish_maintenance(&self) {
+        let details: Vec<_> = [
+            self.service_handoff_maintenance.as_deref(),
+            self.service_recovery_maintenance.as_deref(),
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
+        let reason = (!details.is_empty()).then(|| details.join("; "));
+        self.reconciler
+            .send_modify(|status| status.set_maintenance(reason));
+    }
+
     async fn follow_service(&mut self) {
         if self.run_intent == RunIntent::Stopped
             || self.active.is_some()
@@ -554,6 +571,10 @@ impl ApplicationWorkflowState {
             Ok(transition) => transition,
             Err(error) => {
                 tracing::debug!(%error, "Service owner follow-up deferred while a transition is active");
+                self.service_handoff_maintenance = Some(format!(
+                    "Service ownership transition is waiting for its lease: {error:#}"
+                ));
+                self.publish_maintenance();
                 return;
             }
         };
@@ -562,8 +583,13 @@ impl ApplicationWorkflowState {
         }
         if self.pending.len() >= MAX_PENDING {
             tracing::warn!("dropping Service owner follow-up because the lifecycle queue is full");
+            self.service_handoff_maintenance =
+                Some("Service owner handoff is waiting for lifecycle queue capacity".into());
+            self.publish_maintenance();
             return;
         }
+        self.service_handoff_maintenance = Some("Service owner handoff is pending".into());
+        self.publish_maintenance();
         let operation_id = self.allocate_operation_id();
         // Run this post-command owner reconciliation before requests already
         // queued behind the event that observed the readiness change. The
@@ -1093,6 +1119,8 @@ impl Actor for ApplicationWorkflowActor {
             run_intent: RunIntent::Running,
             seen_sources: SourceVersions::default(),
             service_recovery_inflight: false,
+            service_handoff_maintenance: None,
+            service_recovery_maintenance: None,
             service_recovery_timer,
             startup_recovery_pending: args.startup_recovery_pending,
         })
@@ -1275,6 +1303,18 @@ impl Actor for ApplicationWorkflowActor {
                     state.workflow = Some(workflow);
                     if service_endpoint_recovery {
                         state.service_recovery_inflight = false;
+                        state.service_recovery_maintenance = result.as_ref().err().map(|error| {
+                            format!("Service endpoint recovery is pending: {error:#}")
+                        });
+                    }
+                    if active.trigger == "ServiceReadiness" {
+                        state.service_handoff_maintenance = result
+                            .as_ref()
+                            .err()
+                            .map(|error| format!("Service owner handoff is pending: {error:#}"));
+                    }
+                    if service_endpoint_recovery || active.trigger == "ServiceReadiness" {
+                        state.publish_maintenance();
                     }
                     state.startup_owner_unproven = startup_owner_unproven;
                     state
@@ -1482,6 +1522,9 @@ impl Actor for ApplicationWorkflowActor {
                 };
                 if recovery_due {
                     state.service_recovery_inflight = true;
+                    state.service_recovery_maintenance =
+                        Some("Service endpoint recovery is in progress".into());
+                    state.publish_maintenance();
                     let service = state.service.clone();
                     let actor = myself.clone();
                     let operation_id = state.allocate_operation_id();
@@ -1510,6 +1553,9 @@ impl Actor for ApplicationWorkflowActor {
             }
             Message::ServiceRecoveryLeaseFailed => {
                 state.service_recovery_inflight = false;
+                state.service_recovery_maintenance =
+                    Some("Service endpoint recovery is waiting for a transition lease".into());
+                state.publish_maintenance();
             }
             Message::RecoverCore => {
                 if state.uncertain || state.shutting_down {
@@ -4066,6 +4112,12 @@ mod tests {
         core_running: Arc<AtomicBool>,
     }
 
+    /// Inject one transient lease refusal on the post-startup S2 handoff.
+    struct LeaseBlockedToggleService {
+        inner: ToggleStartupServiceProbe,
+        block_next: AtomicBool,
+    }
+
     struct TransitionUnavailableService {
         inner: RecordingService,
     }
@@ -5528,6 +5580,28 @@ mod tests {
             Ok(Box::new(RecordingServiceTransition {
                 events: self.events.clone(),
             }))
+        }
+    }
+
+    #[async_trait]
+    impl ServiceLifecyclePort for LeaseBlockedToggleService {
+        async fn probe(&self) -> anyhow::Result<chimera_ipc::types::StatusInfo<'static>> {
+            self.inner.probe().await
+        }
+
+        fn runtime_owned(&self, info: &chimera_ipc::types::StatusInfo<'_>) -> bool {
+            self.inner.runtime_owned(info)
+        }
+
+        async fn begin_transition(&self) -> anyhow::Result<Box<dyn ServiceTransitionLease>> {
+            self.inner.begin_transition().await
+        }
+
+        async fn try_begin_transition(&self) -> anyhow::Result<Box<dyn ServiceTransitionLease>> {
+            if self.block_next.swap(false, AtomicOrdering::AcqRel) {
+                anyhow::bail!("injected Service transition lease busy");
+            }
+            self.inner.try_begin_transition().await
         }
     }
 
@@ -7620,6 +7694,165 @@ mod tests {
                 .expect("the committed runtime should be re-established locally");
             assert!(rebuild_service < select_local && select_local < rebuild_local);
         }
+        client.shutdown().await.unwrap();
+    }
+
+    /// Ref S2: an already selected Local host still owes retirement of a
+    /// second owned Service Core. A mere desired!=current-host check misses it.
+    #[tokio::test]
+    async fn service_readiness_retires_second_owned_core_while_local_is_preferred() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let service_ready = Arc::new(AtomicBool::new(false));
+        let service_running = Arc::new(AtomicBool::new(false));
+        let core = Arc::new(startup_owner_core(
+            events.clone(),
+            (CoreState::Running, 1),
+            service_running.clone(),
+        ));
+        let service = Arc::new(ToggleStartupServiceProbe {
+            events: events.clone(),
+            ready: service_ready.clone(),
+            core_running: service_running.clone(),
+        });
+        let app = chimera_config::application::ChimeraAppConfig {
+            enable_service_mode: false,
+            ..Default::default()
+        };
+        let client = spawn_startup_client_with_application(
+            core.clone(),
+            service,
+            ApplicationClient::static_state(app),
+        )
+        .await;
+        let startup = client.startup_reconcile().await.unwrap();
+        assert_eq!(startup.report.outcome, StartupOutcome::Ready);
+        let baseline = events.lock().unwrap().len();
+        // Simulate a previously owned daemon Core becoming visible while
+        // Local remains the user's selected host.
+        service_ready.store(true, AtomicOrdering::Release);
+        service_running.store(true, AtomicOrdering::Release);
+        signal_service_readiness_change(&client);
+        tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                if events
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .skip(baseline)
+                    .any(|event| *event == "service-core-retire")
+                    && !service_running.load(AtomicOrdering::Acquire)
+                    && client.status().active.is_none()
+                {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("ref S2 must retire the unexpected owned Service Core");
+        assert_eq!(
+            client.core_status().await.unwrap().run_type,
+            RunType::Normal
+        );
+        let trace = events.lock().unwrap().clone();
+        let recent = &trace[baseline..];
+        let retire = recent
+            .iter()
+            .position(|event| *event == "service-core-retire")
+            .unwrap();
+        if let Some(local_rebuild) = recent.iter().position(|event| *event == "rebuild-local") {
+            assert!(
+                retire < local_rebuild,
+                "the Service Core must retire before Local is rebuilt"
+            );
+        }
+        assert!(!recent.contains(&"select-service"));
+        client.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn service_handoff_lease_failure_is_visible_and_clears_after_retry() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let ready = Arc::new(AtomicBool::new(false));
+        let service_running = Arc::new(AtomicBool::new(false));
+        let core = Arc::new(startup_owner_core(
+            events.clone(),
+            (CoreState::Running, 1),
+            service_running.clone(),
+        ));
+        let service = Arc::new(LeaseBlockedToggleService {
+            inner: ToggleStartupServiceProbe {
+                events: events.clone(),
+                ready: ready.clone(),
+                core_running: service_running.clone(),
+            },
+            block_next: AtomicBool::new(true),
+        });
+        let client = spawn_startup_client_with_application(
+            core,
+            service,
+            ApplicationClient::static_state(chimera_config::application::ChimeraAppConfig {
+                enable_service_mode: false,
+                ..Default::default()
+            }),
+        )
+        .await;
+        assert_eq!(
+            client.startup_reconcile().await.unwrap().report.outcome,
+            StartupOutcome::Ready
+        );
+
+        ready.store(true, AtomicOrdering::Release);
+        service_running.store(true, AtomicOrdering::Release);
+        signal_service_readiness_change(&client);
+        tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                if client
+                    .reconciler_status()
+                    .maintenance
+                    .as_deref()
+                    .is_some_and(|reason| reason.contains("injected Service transition lease busy"))
+                {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("a failed owner lease must be published as pending maintenance");
+        assert!(
+            service_running.load(AtomicOrdering::Acquire),
+            "the ownership lease failure must not stop the daemon's Core"
+        );
+
+        signal_service_readiness_change(&client);
+        tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                if !service_running.load(AtomicOrdering::Acquire)
+                    && client.reconciler_status().maintenance.is_none()
+                    && client.status().active.is_none()
+                {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("a successful subsequent owner transition should settle maintenance");
+        assert_eq!(
+            client.core_status().await.unwrap().run_type,
+            RunType::Normal
+        );
+        assert_eq!(
+            events
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|event| **event == "service-core-retire")
+                .count(),
+            1,
+            "only the successful owner transition may retire Service"
+        );
         client.shutdown().await.unwrap();
     }
 
