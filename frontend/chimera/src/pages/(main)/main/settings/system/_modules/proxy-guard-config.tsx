@@ -1,64 +1,180 @@
 import { useSetting } from '@chimera/interface';
 import { Button } from '@chimera/ui/button';
+import { Card, CardContent, CardFooter, CardHeader } from '@chimera/ui/card';
 import { NumericInput } from '@chimera/ui/input';
+import {
+  Modal,
+  ModalClose,
+  ModalContent,
+  ModalTitle,
+  ModalTrigger,
+  useModal,
+} from '@chimera/ui/modal';
+import { zodResolver } from '@hookform/resolvers/zod';
+import ArrowForwardIosRounded from '~icons/material-symbols/arrow-forward-ios-rounded';
 import { AnimatePresence } from 'motion/react';
-import { useEffect, useState } from 'react';
+import { useId } from 'react';
+import { Controller, useForm } from 'react-hook-form';
+import { z } from 'zod';
+import { useLockFn } from '@/hooks/use-lock-fn';
 import * as m from '@/paraglide/messages';
 import { formatError } from '@/utils';
 import { message } from '@/utils/notification';
-import { SettingsCardAnimatedItem } from '../../_modules/settings-card';
+import {
+  ItemContainer,
+  ItemLabel,
+  ItemLabelDescription,
+  ItemLabelText,
+  SettingsCardAnimatedItem,
+} from '../../_modules/settings-card';
+
+const formSchema = z.object({
+  proxyGuardInterval: z.number().int().min(1),
+});
 
 export default function ProxyGuardConfig() {
+  return (
+    <Modal>
+      <ProxyGuardConfigForm />
+    </Modal>
+  );
+}
+
+function ProxyGuardConfigForm() {
+  const { setOpen } = useModal();
+  const errorId = useId();
   const proxyGuardInterval = useSetting('proxy_guard_interval');
-  const savedValue = proxyGuardInterval.value ?? 1;
-  const [draft, setDraft] = useState<number | null>(savedValue);
 
-  useEffect(() => setDraft(savedValue), [savedValue]);
+  const form = useForm<z.infer<typeof formSchema>>({
+    resolver: zodResolver(formSchema),
+    defaultValues: {
+      proxyGuardInterval: proxyGuardInterval.value || 1,
+    },
+  });
 
-  const isDirty = draft !== savedValue;
-  const isValid = draft != null && Number.isInteger(draft) && draft >= 1;
+  const handleSubmit = useLockFn(
+    form.handleSubmit(async (data) => {
+      try {
+        await proxyGuardInterval.upsert(data.proxyGuardInterval);
 
-  const handleApply = async () => {
-    if (!isValid || draft == null) return;
+        setOpen(false);
+      } catch (error) {
+        message(formatError(error), {
+          title: m.common_error(),
+          kind: 'error',
+        });
+      }
+    }),
+  );
 
-    try {
-      await proxyGuardInterval.upsert(draft);
-    } catch (error) {
-      message(formatError(error), { title: m.common_error(), kind: 'error' });
-    }
+  const handleReset = () => {
+    form.reset({
+      proxyGuardInterval: proxyGuardInterval.value || 1,
+    });
   };
 
-  return (
-    <div className="flex flex-col gap-2">
-      <NumericInput
-        variant="outlined"
-        label={m.settings_system_proxy_proxy_guard_interval_label()}
-        value={draft}
-        min={1}
-        allowNegative={false}
-        decimalScale={0}
-        onChange={setDraft}
-      />
+  const { isDirty, isSubmitting } = form.formState;
 
-      <AnimatePresence initial={false}>
-        {isDirty && (
-          <SettingsCardAnimatedItem>
-            <div className="flex justify-end gap-2 pt-1">
-              <Button type="button" onClick={() => setDraft(savedValue)}>
-                {m.common_reset()}
-              </Button>
+  return (
+    <>
+      <ModalTrigger asChild onClick={handleReset}>
+        <Button className="text-on-surface! h-auto w-full text-left text-base">
+          <ItemContainer>
+            <ItemLabel>
+              <ItemLabelText>
+                {m.settings_system_proxy_proxy_guard_interval_label()}
+              </ItemLabelText>
+              <ItemLabelDescription>
+                {proxyGuardInterval.value || 1}
+              </ItemLabelDescription>
+            </ItemLabel>
+            <ArrowForwardIosRounded />
+          </ItemContainer>
+        </Button>
+      </ModalTrigger>
+      <ModalContent dismissible={!isSubmitting}>
+        <Card className="flex min-w-96 flex-col">
+          <CardHeader>
+            <ModalTitle>
+              {m.settings_system_proxy_proxy_guard_interval_label()}
+            </ModalTitle>
+          </CardHeader>
+          <form
+            data-slot="proxy-guard-form"
+            onSubmit={(event) => {
+              event.preventDefault();
+              handleSubmit(event);
+            }}
+          >
+            <CardContent className="flex flex-col gap-2">
+              <Controller
+                name="proxyGuardInterval"
+                control={form.control}
+                render={({ field }) => {
+                  const handleChange = (value: number | null) => {
+                    field.onChange(value);
+                  };
+
+                  return (
+                    <>
+                      <NumericInput
+                        variant="outlined"
+                        label={m.settings_system_proxy_proxy_guard_interval_label()}
+                        value={field.value}
+                        min={1}
+                        allowNegative={false}
+                        decimalScale={0}
+                        disabled={isSubmitting}
+                        aria-label={m.settings_system_proxy_proxy_guard_interval_label()}
+                        aria-invalid={
+                          !!form.formState.errors.proxyGuardInterval
+                        }
+                        aria-describedby={
+                          form.formState.errors.proxyGuardInterval
+                            ? errorId
+                            : undefined
+                        }
+                        onChange={handleChange}
+                      />
+
+                      <AnimatePresence initial={false}>
+                        {form.formState.errors.proxyGuardInterval && (
+                          <SettingsCardAnimatedItem
+                            id={errorId}
+                            className="text-error"
+                          >
+                            {form.formState.errors.proxyGuardInterval.message}
+                          </SettingsCardAnimatedItem>
+                        )}
+                      </AnimatePresence>
+                    </>
+                  );
+                }}
+              />
+            </CardContent>
+            <CardFooter className="gap-2">
               <Button
-                variant="raised"
-                disabled={!isValid}
-                loading={proxyGuardInterval.isPending}
-                onClick={() => void handleApply()}
+                type="submit"
+                variant="flat"
+                loading={isSubmitting}
+                disabled={!isDirty || isSubmitting}
               >
                 {m.common_apply()}
               </Button>
-            </div>
-          </SettingsCardAnimatedItem>
-        )}
-      </AnimatePresence>
-    </div>
+              <Button
+                type="button"
+                onClick={handleReset}
+                disabled={!isDirty || isSubmitting}
+              >
+                {m.common_reset()}
+              </Button>
+              <ModalClose type="button" disabled={isSubmitting}>
+                {m.common_close()}
+              </ModalClose>
+            </CardFooter>
+          </form>
+        </Card>
+      </ModalContent>
+    </>
   );
 }
