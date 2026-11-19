@@ -7,6 +7,46 @@
 //! if an apply or version observation fails.
 use std::future::Future;
 
+/// The three source domains whose durable commits the runtime owner observes.
+/// Like ref's ConfigDomain, this is source identity, not a Core command.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SourceDomain {
+    Application,
+    Clash,
+    Profiles,
+}
+
+/// The reconciler mailbox's monotonic view of source publications. Never use
+/// this view as a substitute for reading fresh source snapshots during apply.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct SourceVersions {
+    application: Option<u64>,
+    clash: Option<u64>,
+    profiles: Option<u64>,
+}
+
+impl SourceVersions {
+    pub(crate) fn observe(&mut self, domain: SourceDomain, version: u64) {
+        let seen = match domain {
+            SourceDomain::Application => &mut self.application,
+            SourceDomain::Clash => &mut self.clash,
+            SourceDomain::Profiles => &mut self.profiles,
+        };
+        if seen.is_none_or(|previous| version > previous) {
+            *seen = Some(version);
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn version(&self, domain: SourceDomain) -> Option<u64> {
+        match domain {
+            SourceDomain::Application => self.application,
+            SourceDomain::Clash => self.clash,
+            SourceDomain::Profiles => self.profiles,
+        }
+    }
+}
+
 use anyhow::Result;
 
 use crate::client::{
@@ -108,6 +148,22 @@ mod tests {
     };
 
     use super::*;
+
+    #[test]
+    fn committed_sources_are_monotonic_and_domain_scoped() {
+        let mut seen = SourceVersions::default();
+        seen.observe(SourceDomain::Clash, 4);
+        seen.observe(SourceDomain::Application, 2);
+        seen.observe(SourceDomain::Profiles, 9);
+        seen.observe(SourceDomain::Clash, 3);
+        seen.observe(SourceDomain::Application, 1);
+        seen.observe(SourceDomain::Profiles, 9);
+        assert_eq!(seen.version(SourceDomain::Clash), Some(4));
+        assert_eq!(seen.version(SourceDomain::Application), Some(2));
+        assert_eq!(seen.version(SourceDomain::Profiles), Some(9));
+        seen.observe(SourceDomain::Clash, 5);
+        assert_eq!(seen.version(SourceDomain::Clash), Some(5));
+    }
 
     #[tokio::test]
     async fn superseded_commit_never_applies_a_stale_runtime_target() {

@@ -145,13 +145,19 @@ impl ChimeraClient {
     ) -> Result<super::MutationOutcome<()>> {
         let _guard = self.inner.hotkey_mutation.lock().await;
         validate_bindings(&hotkeys, self.inner.accelerators.as_ref())?;
-        self.inner
+        let snapshot = self
+            .inner
             .application
             .patch_typed(chimera_config::application::ChimeraAppConfigPatch {
                 hotkeys: Some(hotkeys),
                 ..Default::default()
             })
             .await?;
+        self.inner.core_lifecycle.source_committed(
+            crate::client::reconciler::committed::SourceDomain::Application,
+            snapshot.version,
+            false,
+        );
         let mut degradations = Vec::new();
         if let Err(error) = crate::config::core::Config::verge().data().save_file() {
             degradations.push(super::Degradation {

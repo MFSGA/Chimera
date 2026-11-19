@@ -97,6 +97,22 @@ impl ApplicationWorkflowClient {
         Ok(Self(ApplicationWorkflowClientInner::TestActor(actor_ref)))
     }
 
+    /// The legacy Profiles participant still owns its transaction, but the
+    /// durable version is also observed by the one lifecycle mailbox.
+    /// Profile runtime retries are already scheduled by the participant;
+    /// notifying here must not schedule a duplicate reconcile.
+    pub(crate) fn profiles_source_committed(&self, version: u64) {
+        match &self.0 {
+            ApplicationWorkflowClientInner::CoreLifecycle(core) => core.source_committed(
+                crate::client::reconciler::committed::SourceDomain::Profiles,
+                version,
+                false,
+            ),
+            #[cfg(test)]
+            ApplicationWorkflowClientInner::TestActor(_) => {}
+        }
+    }
+
     pub(crate) fn begin_mutation(&self, request: MutationRequest) -> anyhow::Result<()> {
         match &self.0 {
             ApplicationWorkflowClientInner::CoreLifecycle(core) => {

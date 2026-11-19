@@ -511,13 +511,17 @@ impl ClashConfigClient {
             )
             .await?;
 
-        if report
-            .degradations
-            .iter()
-            .any(|item| item.code == "clash_runtime_deferred" && item.retryable)
-        {
-            owner.inner.core_lifecycle.request_runtime_rebuild();
-        }
+        // Raw, override and running-override mutations share one source
+        // notification; deferred retries are admitted by CoreLifecycle's
+        // existing coalesced mailbox, not by a second runtime writer.
+        owner.inner.core_lifecycle.source_committed(
+            super::reconciler::committed::SourceDomain::Clash,
+            report.snapshot.version,
+            report
+                .degradations
+                .iter()
+                .any(|item| item.code == "clash_runtime_deferred" && item.retryable),
+        );
         Ok(report)
     }
 }

@@ -18,6 +18,7 @@ use std::{
     time::Duration,
 };
 
+use super::reconciler::committed::{SourceDomain, SourceVersions};
 use futures_util::FutureExt;
 use ractor::{Actor, ActorProcessingErr, ActorRef, RpcReplyPort, rpc::CallResult};
 use tokio_util::{sync::CancellationToken, task::TaskTracker};
@@ -220,8 +221,20 @@ enum Message {
     ServiceRecoveryTick,
     ServiceRecoveryLeaseFailed,
     RecoverCore,
+    /// Ref RuntimeGate::committed: observe the source version once durable.
+    /// The compatibility owner still applies successful mutations inline;
+    /// only retryable deferred outcomes schedule its existing dirty loop.
+    SourceCommitted {
+        domain: SourceDomain,
+        version: u64,
+        retryable_deferred: bool,
+    },
     RuntimeDirty,
     DirtyTick,
+    #[cfg(test)]
+    ReadSourceVersionsForTest {
+        reply: RpcReplyPort<SourceVersions>,
+    },
     StartupRetryDue {
         identity: String,
     },
@@ -297,6 +310,7 @@ struct ApplicationWorkflowState {
     shutdown_waiters: Vec<Response>,
     dirty: bool,
     dirty_tick_scheduled: bool,
+    seen_sources: SourceVersions,
     service_recovery_inflight: bool,
     service_recovery_timer: tokio::task::JoinHandle<()>,
     startup_recovery_pending: Arc<AtomicBool>,
@@ -1006,6 +1020,7 @@ impl Actor for ApplicationWorkflowActor {
             shutdown_waiters: Vec::new(),
             dirty: false,
             dirty_tick_scheduled: false,
+            seen_sources: SourceVersions::default(),
             service_recovery_inflight: false,
             service_recovery_timer,
             startup_recovery_pending: args.startup_recovery_pending,
@@ -1389,6 +1404,26 @@ impl Actor for ApplicationWorkflowActor {
                     state.push_background(Command::RecoverCore);
                 }
             }
+            Message::SourceCommitted {
+                domain,
+                version,
+                retryable_deferred,
+            } => {
+                // Domain owners have already published the source version.
+                // Never run a second apply for the successful inline path.
+                // A deferred old version must still trigger convergence:
+                // the latest source may be ahead of the last runtime receipt.
+                state.seen_sources.observe(domain, version);
+                if retryable_deferred && !state.uncertain && !state.shutting_down {
+                    if state.startup_owner_unproven
+                        || state.startup_owner_unproven_shared.load(Ordering::Acquire)
+                    {
+                        state.request_startup_recovery(&myself);
+                    } else {
+                        state.mark_runtime_dirty(&myself);
+                    }
+                }
+            }
             Message::RuntimeDirty => {
                 if state.uncertain || state.shutting_down {
                     tracing::debug!(
@@ -1399,6 +1434,10 @@ impl Actor for ApplicationWorkflowActor {
                 } else {
                     state.mark_runtime_dirty(&myself);
                 }
+            }
+            #[cfg(test)]
+            Message::ReadSourceVersionsForTest { reply } => {
+                let _ = reply.send(state.seen_sources.clone());
             }
             Message::DirtyTick => {
                 state.dirty_tick_scheduled = false;
@@ -2507,6 +2546,46 @@ impl CoreLifecycleClient {
             CoreLifecycleClientInner::Actor { status, .. } => status.lock().clone(),
             #[cfg(test)]
             CoreLifecycleClientInner::Direct { .. } => CoreLifecycleStatus::default(),
+        }
+    }
+
+    /// Observe a source-owned durable commit in the single lifecycle mailbox.
+    /// A normal successful apply is *not* replayed by this notification.
+    /// Deferred commits request reconciliation of the latest source snapshots
+    /// (never of the older notification's payload).
+    pub(crate) fn source_committed(
+        &self,
+        domain: SourceDomain,
+        version: u64,
+        retryable_deferred: bool,
+    ) {
+        // Preserve request_runtime_rebuild's Service-generation fence: a
+        // failed startup generation may require owner recovery even when the
+        // generic "owner unproven" flag has already cleared. Reconcile must
+        // not race that host transition.
+        let recover_startup = retryable_deferred && self.startup_recovery_needed();
+        if recover_startup {
+            self.request_startup_recovery();
+        }
+        match self.0.as_ref() {
+            CoreLifecycleClientInner::Actor { actor_ref, .. } => {
+                if actor_ref
+                    .cast(Message::SourceCommitted {
+                        domain,
+                        version,
+                        retryable_deferred: retryable_deferred && !recover_startup,
+                    })
+                    .is_err()
+                {
+                    tracing::warn!(
+                        ?domain,
+                        version,
+                        "failed to notify lifecycle of source commit"
+                    );
+                }
+            }
+            #[cfg(test)]
+            CoreLifecycleClientInner::Direct { .. } => {}
         }
     }
 
@@ -9426,6 +9505,73 @@ mod tests {
             events.lock().unwrap().as_slice(),
             ["stop-start", "stop-end", "select"]
         );
+    }
+
+    #[tokio::test]
+    async fn committed_source_versions_share_one_mailbox_without_replaying_success() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let client = CoreLifecycleClient::spawn(
+            Arc::new(RecordingCore {
+                events: events.clone(),
+                stop_started: Arc::new(Notify::new()),
+                release_stop: Arc::new(Notify::new()),
+                recovery_notify: Arc::new(Notify::new()),
+                run_type: RunType::Normal,
+            }),
+            ApplicationClient::legacy().unwrap(),
+            ClashConfigClient::legacy().unwrap(),
+            RuntimePaths::from_config_root(std::path::PathBuf::from("test-runtime-root")),
+        )
+        .await
+        .unwrap();
+
+        use crate::client::reconciler::committed::SourceDomain;
+        client.source_committed(SourceDomain::Application, 4, false);
+        client.source_committed(SourceDomain::Clash, 8, false);
+        client.source_committed(SourceDomain::Profiles, 2, false);
+        client.source_committed(SourceDomain::Clash, 7, false);
+
+        let CoreLifecycleClientInner::Actor { actor_ref, .. } = client.0.as_ref() else {
+            panic!("this test requires the live lifecycle actor");
+        };
+        let seen = match actor_ref
+            .call(
+                |reply| Message::ReadSourceVersionsForTest { reply },
+                Some(Duration::from_secs(1)),
+            )
+            .await
+            .unwrap()
+        {
+            ractor::rpc::CallResult::Success(seen) => seen,
+            other => panic!("failed to read source versions: {other:?}"),
+        };
+        assert_eq!(seen.version(SourceDomain::Application), Some(4));
+        assert_eq!(seen.version(SourceDomain::Clash), Some(8));
+        assert_eq!(seen.version(SourceDomain::Profiles), Some(2));
+        assert!(
+            events.lock().unwrap().is_empty(),
+            "a commit notice is not an extra Core apply"
+        );
+
+        // An older retryable notification still owes convergence of the
+        // latest target; never drop it simply because a newer version was
+        // already observed. The dirty window coalesces the repeated signals.
+        client.source_committed(SourceDomain::Clash, 7, true);
+        client.source_committed(SourceDomain::Application, 4, true);
+        client.source_committed(SourceDomain::Clash, 8, true);
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                if events.lock().unwrap().contains(&"rebuild") {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("a deferred source must request the existing runtime owner");
+        tokio::time::sleep(DIRTY_WINDOW + Duration::from_millis(50)).await;
+        assert_eq!(events.lock().unwrap().as_slice(), ["rebuild"]);
+        assert_eq!(client.status().completed.len(), 1);
     }
 
     #[tokio::test]

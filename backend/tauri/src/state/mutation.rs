@@ -122,6 +122,12 @@ impl MutationCoordinator {
         source_version: u64,
     ) -> (CommitReceipt, Vec<Degradation>) {
         let connection = self.connection.borrow().clone();
+        let committed_workflow = match &connection {
+            Connection::Ready(workflow) => Some(workflow.clone()),
+            Connection::Pending => None,
+            #[cfg(test)]
+            Connection::Isolated => None,
+        };
         let (runtime, mut degradations) = match connection {
             #[cfg(test)]
             Connection::Isolated => (RuntimeCommitStatus::Unchanged, Vec::new()),
@@ -142,6 +148,14 @@ impl MutationCoordinator {
             source_version,
             runtime,
         };
+        // Called only after the Profiles source actor committed its document
+        // and finished its participant decision. The participant still owns
+        // retry policy until its runtime mutation path is migrated to ref.
+        if domain == "profiles"
+            && let Some(workflow) = committed_workflow
+        {
+            workflow.profiles_source_committed(source_version);
+        }
         if degradations.is_empty() {
             degradations = match receipt.runtime {
                 RuntimeCommitStatus::Deferred => vec![Degradation {

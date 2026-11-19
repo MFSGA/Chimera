@@ -639,16 +639,17 @@ impl ChimeraClient {
                 self.inner.application.patch_typed(patch).await?;
                 Vec::new()
             };
-        // The one existing lifecycle actor retries a newly committed target;
-        // there is still no second runtime controller. Deterministic Core
-        // refusal remains deferred without consuming an automatic retry loop.
-        if degradations
-            .iter()
-            .any(|item| item.code == "application_runtime_deferred" && item.retryable)
-        {
-            self.inner.core_lifecycle.request_runtime_rebuild();
-        }
         let snapshot = self.inner.application.get().await?;
+        // Ref RuntimeGate::committed: durable source publication is observed
+        // by the one lifecycle mailbox. The successful inline apply is not
+        // replayed; only retryable postcommit failures request convergence.
+        self.inner.core_lifecycle.source_committed(
+            super::reconciler::committed::SourceDomain::Application,
+            snapshot.version,
+            degradations
+                .iter()
+                .any(|item| item.code == "application_runtime_deferred" && item.retryable),
+        );
         self.configure_app_update(&snapshot.state);
 
         // Keep the legacy Verge file current while existing service and agent
@@ -763,12 +764,13 @@ impl ChimeraClient {
         let runtime_deferred = degradations
             .iter()
             .any(|item| item.code == "clash_runtime_deferred");
-        if degradations
-            .iter()
-            .any(|item| item.code == "clash_runtime_deferred" && item.retryable)
-        {
-            self.inner.core_lifecycle.request_runtime_rebuild();
-        }
+        self.inner.core_lifecycle.source_committed(
+            super::reconciler::committed::SourceDomain::Clash,
+            snapshot.version,
+            degradations
+                .iter()
+                .any(|item| item.code == "clash_runtime_deferred" && item.retryable),
+        );
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
         {
             let app = self.get_app_config()?;
@@ -1337,6 +1339,33 @@ async fn patch_legacy_uncoordinated(client: &ChimeraClient, patch: IVerge) -> Re
             legacy_finalize_error(error.context("failed to finalize legacy verge patch")),
         )
         .await);
+    }
+
+    // Legacy multi-domain patches still have a compensating transaction.
+    // Notify only after every domain and the legacy finalize step succeeded;
+    // an aborted attempt must not advertise its rolled-back versions.
+    for domain in &committed {
+        match domain {
+            CommittedLegacyDomain::Application {
+                committed_version, ..
+            } => {
+                client.inner.core_lifecycle.source_committed(
+                    super::reconciler::committed::SourceDomain::Application,
+                    *committed_version,
+                    false,
+                );
+            }
+            CommittedLegacyDomain::Clash {
+                committed_version, ..
+            } => {
+                client.inner.core_lifecycle.source_committed(
+                    super::reconciler::committed::SourceDomain::Clash,
+                    *committed_version,
+                    false,
+                );
+            }
+            CommittedLegacyDomain::Session { .. } => {}
+        }
     }
 
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
