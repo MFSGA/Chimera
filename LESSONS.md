@@ -100,6 +100,7 @@
 | LESSON-20261120-002 | 2026-11-20 | Providers / E2E / Task | 实测 Core SAFE_PATHS 拒绝 config 目录下的 Provider；改用隔离 data，Native 更新失败必须让 Task 保持 rejected | Verified |
 | LESSON-20261120-003 | 2026-11-20 | Providers / HTTP E2E / Dialog | 列表批量更新吞错误成功；真实 loopback HTTP 验证 1→2→3、503 时 Task error，X11 原生弹窗必须先聚焦 | Verified |
 | LESSON-20261120-004 | 2026-11-20 | Connections / Main UI / Legacy E2E | ref DataPage 底部 dock 与虚拟表格留白；Legacy 分离；控件 data-slot、X11 子像素边界按真实 UI 验证 | Verified |
+| LESSON-20261120-005 | 2026-11-20 | Connections / Core / Virtualization E2E | ref 44px + 物理 spacer；48 条真实 Core 长流；Guard 有效 mixed-port 与 WebKit 双击驱动限制 | Verified |
 
 ### LESSON-20261113-001/002：架构迁移要覆盖原生运行时与稀疏配置
 
@@ -1404,3 +1405,10 @@ backend/Cargo.toml -p chimera --lib core::clash::proxies::tests:: -- --nocapture
 - **发布验证**：Main 4/4、Legacy 3/3、Native detail 1/1 的真实隔离 WebKitGTK E2E 全部通过，Connections model 9/9、全仓 TS、Lint、生产构建通过。Chimera 尚无 ref 的 proxy:write 前端 capability hook，本轮不伪造授权或扩大现有关闭连接操作，另案适配。
 
 - **2026-11-20 最新 fd507823 基线验证**：Runtime 队列提交安全快进后，完整重建 Native E2E 可执行程序，真实 Linux WebKitGTK Main Connections 4/4、Legacy Connections 3/3、Native Detail 1/1，合计 8/8，通过且退出码 0。不能将旧 SHA 的证据冒充最新启动协调版本；不将 Main 浮动 dock 的 UI 合规扩展成 proxy:write 权限契约已经完成的结论。
+
+### LESSON-20261120-005：Connections 真实虚拟表格、有效 Core 监听端口和 WebKit 输入边界
+
+- 仅迁移 DataPageBottomInset 不代表 ref 的 Connections 虚拟表格已全面对齐：上游为 44px 真实物理 tr、上下 spacer 和 40px 表头，本地原为 36px 加每行 CSS translateY。已按 ref 迁移，并在真实 Linux WebKitGTK 下用 48 条实际代理长流滚动、检查 DOM 可见子集和 top spacer；最后通过 Close All UI 真实关闭全部流，保留 Legacy 共用表格兼容。
+- 受管理 Clash Guard mixed_port.fixed 会覆盖 Profile 字面 mixed-port；Core Running 时测试直连 Profile 申请的 27897 报 ECONNREFUSED，实际生效端口是 7890。正确做法是经 Native clash_api_get_configs 查询真实监听端口，等待有效监听，然后连接，禁止为测试放宽 Guard。
+- WebKitGTK WebDriver doubleClick 返回后没有实际派发 DOM dblclick，不可认定产品行双击已坏，也不可通过 dispatchEvent 合成事件假装真人点击。改用 ref 的真实右键菜单入口，确认详情 UI、关闭单条 Native 连接与关闭全部连接都实际终止了 HTTP 流；双击需要有合适驱动时另测。
+- 本轮原生非空 4/4、Main 4/4、Legacy 3/3、Native Detail 1/1 合计 12/12 通过，单元 9/9、Harness 44/44，全仓 TS、Lint、构建通过。不得扩大为跨平台权限、性能或长期网络验收结论。
