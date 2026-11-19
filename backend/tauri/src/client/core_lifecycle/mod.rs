@@ -125,9 +125,13 @@ fn schedule_startup_recovery(
         .await;
         startup_recovery_pending.store(false, Ordering::Release);
         // A source commit may reach the mailbox after RecoverStartup has
-        // already completed but before the caller's source observation. Wake
-        // the retained latest-source intent once the recovery lease is gone.
-        let _ = actor_ref.cast(Message::StartupRecoveryFinished);
+        // settled but before the caller's source observation. Only a
+        // successfully resolved Startup dependency can wake its retained
+        // source: a lease failure or timed-out recovery grants no authority
+        // to proceed, even if the shared owner flag changed meanwhile.
+        let _ = actor_ref.cast(Message::StartupRecoveryFinished {
+            succeeded: result.is_ok(),
+        });
         if let Err(error) = result {
             tracing::warn!(%error, "automatic startup owner recovery did not complete");
         }
@@ -251,7 +255,9 @@ enum Message {
     ReadSourceVersionsForTest {
         reply: RpcReplyPort<SourceVersions>,
     },
-    StartupRecoveryFinished,
+    StartupRecoveryFinished {
+        succeeded: bool,
+    },
     StartupRetryDue {
         identity: String,
     },
@@ -1831,8 +1837,10 @@ impl Actor for ApplicationWorkflowActor {
                     });
                 }
             }
-            Message::StartupRecoveryFinished => {
-                state.replan_retained_source_on_service_change(&myself);
+            Message::StartupRecoveryFinished { succeeded } => {
+                if succeeded {
+                    state.replan_retained_source_on_service_change(&myself);
+                }
             }
             Message::StartupRetryDue { identity } => {
                 if !state.uncertain && !state.shutting_down {
@@ -12069,7 +12077,27 @@ mod tests {
                 client.stop_core().await.unwrap();
             }
             startup_recovery_pending.store(false, Ordering::Release);
-            actor_ref.cast(Message::StartupRecoveryFinished).unwrap();
+            // A failed lease or recovery completion must not turn a retained
+            // source into an unauthorized Core Stop/Apply, even when the
+            // shared owner flag currently appears settled.
+            actor_ref
+                .cast(Message::StartupRecoveryFinished { succeeded: false })
+                .unwrap();
+            tokio::time::sleep(DIRTY_WINDOW + Duration::from_millis(70)).await;
+            assert_eq!(core.submissions.load(AtomicOrdering::Acquire), 1);
+            assert_eq!(
+                client
+                    .reconciler_status()
+                    .recent
+                    .iter()
+                    .filter(|round| round.trigger == "SourceCommitted")
+                    .count(),
+                0,
+                "failed recovery must retain source debt without applying"
+            );
+            actor_ref
+                .cast(Message::StartupRecoveryFinished { succeeded: true })
+                .unwrap();
 
             if stop_before_recovery {
                 tokio::time::sleep(DIRTY_WINDOW + Duration::from_millis(70)).await;
