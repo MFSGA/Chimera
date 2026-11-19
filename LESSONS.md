@@ -98,6 +98,7 @@
 | LESSON-20261119-004 | 2026-11-19 | E2E / Router | 点击导航后漏等嵌套动画导致几何和 Tooltip 误失败；旧路径重定向不能用 pathname 恒等辅助函数验证 | Verified |
 | LESSON-20261120-001 | 2026-11-20 | Proxies / Delay UI | Native Core 已解析实时测试参数；UI 漏捕获延迟请求失败，沿 ref 五语文案补可见反馈并由真实 WebKitGTK 验证 | Verified |
 | LESSON-20261120-002 | 2026-11-20 | Providers / E2E / Task | 实测 Core SAFE_PATHS 拒绝 config 目录下的 Provider；改用隔离 data，Native 更新失败必须让 Task 保持 rejected | Verified |
+| LESSON-20261120-003 | 2026-11-20 | Providers / HTTP E2E / Dialog | 列表批量更新吞错误成功；真实 loopback HTTP 验证 1→2→3、503 时 Task error，X11 原生弹窗必须先聚焦 | Verified |
 
 ### LESSON-20261113-001/002：架构迁移要覆盖原生运行时与稀疏配置
 
@@ -1386,3 +1387,11 @@ backend/Cargo.toml -p chimera --lib core::clash::proxies::tests:: -- --nocapture
 - **反例二（UI Task 误成功）**：三个 Provider mutation Hook 原先 `catch` 中显示失败对话框后直接返回；`BlockTaskProvider.run()` 认为 Promise fulfilled，给真实拒绝的 Native 操作写入 `success`。现在三条 Hook 通过统一 `runProviderAction` 报错并保留原始 rejected Promise，即使错误对话框自身失败也保持原始拒绝；卡片 click handler 捕获已通知的错误，避免未处理异步异常。纯单元测试覆盖操作成功/失败/通知失败，且详情 UI 按 ref 恢复专用健康检查文案和当前语言相对时间。未把请求成功视为资源肯定更新；其网络/文件持久化结果需另行验收。
 
 - **2026-11-20 后续最新 SHA 桌面复验**：CoreLifecycle 新增启动协调提交后同步本地到 `7b61f150`，完整重构原生测试应用，真正隔离 WebKitGTK/Mihomo `providers-detail-main.e2e.ts` **2/2**、`providers-main-layout.e2e.ts` **2/2**，合计 **4/4**。新 Runtime 的启动等待较长、存在一次 mixed port 未确认的警告，但随后 Core Running、Profile/Provider UI 正确、清理成功；保留为另案性能与启动时序排查，不从 UI 测试反推出 Runtime 无性能问题。
+
+### LESSON-20261120-003：Providers 列表批量更新必须保留失败，真实网络资源才是 UI 刷新的证据
+
+- **问题**：详情卡片的 Native 更新失败已经通过 `runProviderAction` 保留拒绝，列表单项/分组 `Update All` 却仍存在未处理 Promise 或 `catch` 吞错，让失败的 `useBlockTask` 最后显示成功。现复用同一纯操作边界，并在点击入口处理已向用户报告的错误。API 本身由 Chimera Native Interface 发起并继续维护既有查询缓存失效。
+- **正向 E2E**：启动受控环回 HTTP Server（不依赖互联网），让真正的 Mihomo 加载 HTTP Proxy 和 Rule Provider。通过前端可见按钮请求不同版本 YAML，服务端记录请求，Core 查询权威数量从 1→2→3，页面无需刷新自行显示更新值。这样可抓到“按钮触发了但下载未发生”、“Core 已更新但 React Query 缓存没刷新”和“内层刷新误跳转”三类回归。
+- **负向 E2E 与工具限制**：HTTP 503 被真实 Native mutation 拒绝，用户看到 OS 原生错误对话框；必须正确使其关闭才能观察 `useBlockTask` 最终 error。隔离 Xvfb 没有窗口管理器，直接 `xdotool key --window ID Return` 虽然命令退出 0，但实际未关闭对话框，属于测试驱动假操作。改为先查询正确标题的已显示窗口、`windowfocus` 后发 Return，真实业务 Task 随后进入 error，Core 保留上一成功版本。Linux/X11 E2E **5/5**；Native Dialog 关闭测试在非 Linux/X11/无 xdotool 环境显式跳过，未提供跨平台 Dialog 覆盖。切忌把缺少测试驱动能力当作产品拒绝失败或强行模拟成功。
+
+- **2026-11-20 最新 `885fb90b` 复验**：CoreLifecycle 新提交到来后，仅安全 FF Remote Runtime 而不修改业务；完整重新构建 Tauri E2E native binary，真实 HTTP Provider 详情/单项/批量及 HTTP 503 两条失败路径 **5/5** 均通过。旧 SHA 下相邻详情 2/2、空态 2/2 不能冒充新 Runtime 的测试。更新错误 task 状态和缓存回读必须以真实回包/权威 Core 查询/本地 HTTP 请求联合证明。
