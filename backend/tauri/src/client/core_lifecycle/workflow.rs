@@ -4,7 +4,9 @@ use std::sync::{
 };
 
 use chimera_config::application::{ChimeraAppConfig, ChimeraAppConfigPatch};
-use chimera_core::actor_v2::service_status::ServiceHostStatus;
+use chimera_core::{
+    actor_v2::service_status::ServiceHostStatus, client::reconciler::plan::Trigger,
+};
 use chimera_core_manager::CoreKind;
 use chimera_ipc::api::status::CoreState;
 use struct_patch::Patch;
@@ -24,6 +26,7 @@ use crate::client::application_workflow::{
     inputs::{FrozenProfileContent, RuntimeInputs},
     workflow::ProfileRuntime,
 };
+use crate::client::reconciler::attempt::AttemptPolicy;
 use crate::config::chimera::ClashCore;
 use crate::core::actor_v2::control_endpoint::ExecutionHost;
 use crate::enhance::FsProfileContentSource;
@@ -155,6 +158,7 @@ pub(in crate::client) struct CoreLifecycleWorkflow {
     service_failed_generation_shared: Arc<AtomicU64>,
     service_status: Option<watch::Receiver<ServiceHostStatus>>,
     service_recovery: Arc<parking_lot::Mutex<ServiceRecovery>>,
+    attempt_policy: Arc<parking_lot::Mutex<AttemptPolicy>>,
     service_recovery_reconnected: Arc<AtomicBool>,
     shutdown: CancellationToken,
 }
@@ -242,6 +246,7 @@ impl CoreLifecycleWorkflow {
             service_failed_generation_shared: Arc::new(AtomicU64::new(0)),
             service_status: None,
             service_recovery: Arc::new(parking_lot::Mutex::new(ServiceRecovery::default())),
+            attempt_policy: Arc::new(parking_lot::Mutex::new(AttemptPolicy::default())),
             service_recovery_reconnected: Arc::new(AtomicBool::new(false)),
             shutdown: CancellationToken::new(),
         }
@@ -682,10 +687,10 @@ impl CoreLifecycleWorkflow {
             Command::ProfileMutation(_) => {
                 anyhow::bail!("Profile mutations must run through ApplicationWorkflowActor")
             }
-            Command::RecoverCore
-            | Command::Reconcile
-            | Command::ReconcileSource
-            | Command::StartCore => self.reconcile().await,
+            Command::RecoverCore => self.reconcile_with_trigger(Trigger::CoreChanged).await,
+            Command::Reconcile => self.reconcile_with_trigger(Trigger::Retry).await,
+            Command::ReconcileSource => self.reconcile_with_trigger(Trigger::SourceCommitted).await,
+            Command::StartCore => self.reconcile_with_trigger(Trigger::Start).await,
             #[cfg(test)]
             Command::StartupReconcile {
                 operation_id,
@@ -1048,6 +1053,10 @@ impl CoreLifecycleWorkflow {
     }
 
     async fn reconcile(&self) -> anyhow::Result<()> {
+        self.reconcile_with_trigger(Trigger::ServiceOperation).await
+    }
+
+    async fn reconcile_with_trigger(&self, trigger: Trigger) -> anyhow::Result<()> {
         let clash = self.clash.get()?;
         let app = self.application.get_typed();
         let target_core = app.core;
@@ -1069,21 +1078,35 @@ impl CoreLifecycleWorkflow {
                 }
                 .into());
             }
+            let run_type = crate::core::RunType::classify(
+                app.enable_service_mode,
+                crate::core::service::ipc::get_ipc_state(),
+            );
+            let host = match run_type {
+                crate::core::RunType::Service => ExecutionHost::Service,
+                crate::core::RunType::Normal | crate::core::RunType::Elevated => {
+                    ExecutionHost::Local
+                }
+            };
+            self.attempt_policy.lock().allow(&target, host, trigger)?;
             let applied = self
                 .core
                 .reconcile_profiles(
                     clash,
                     app.core,
-                    crate::core::RunType::classify(
-                        app.enable_service_mode,
-                        crate::core::service::ipc::get_ipc_state(),
-                    ),
+                    run_type,
                     current,
                     app,
                     content,
-                    Some(target),
+                    Some(target.clone()),
                 )
                 .await;
+            self.attempt_policy.lock().record(
+                target,
+                host,
+                &applied,
+                self.core.outcome_uncertain(),
+            );
             let after = *profiles.load().version.as_ref();
             if after != captured {
                 return Err(ProfilesSourceAdvanced {
@@ -1094,7 +1117,19 @@ impl CoreLifecycleWorkflow {
             }
             applied
         } else {
-            self.core.reconcile(clash, target_core, run_type).await
+            let target = self.startup_source_identity(None)?;
+            let host = match run_type {
+                crate::core::RunType::Service => ExecutionHost::Service,
+                crate::core::RunType::Normal | crate::core::RunType::Elevated => {
+                    ExecutionHost::Local
+                }
+            };
+            self.attempt_policy.lock().allow(&target, host, trigger)?;
+            let result = self.core.reconcile(clash, target_core, run_type).await;
+            self.attempt_policy
+                .lock()
+                .record(target, host, &result, self.core.outcome_uncertain());
+            result
         }
     }
 

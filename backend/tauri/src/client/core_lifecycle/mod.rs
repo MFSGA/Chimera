@@ -3695,6 +3695,7 @@ mod tests {
         let events = Arc::new(Mutex::new(Vec::new()));
         let core = Arc::new(ProfileTccCore {
             validations: AtomicUsize::new(0),
+            attempts: AtomicUsize::new(0),
             stops: AtomicUsize::new(0),
             fail_next_reconcile: AtomicBool::new(false),
             active_profiles: Mutex::new(None),
@@ -3879,6 +3880,7 @@ mod tests {
 
     struct ProfileTccCore {
         validations: AtomicUsize,
+        attempts: AtomicUsize,
         stops: AtomicUsize,
         fail_next_reconcile: AtomicBool,
         active_profiles: Mutex<Option<chimera_config::profile::Profiles>>,
@@ -6141,6 +6143,7 @@ mod tests {
             _staged_content: std::collections::BTreeMap<String, String>,
             _target: Option<String>,
         ) -> anyhow::Result<()> {
+            self.attempts.fetch_add(1, AtomicOrdering::AcqRel);
             if self.fail_next_reconcile.swap(false, AtomicOrdering::AcqRel) {
                 anyhow::bail!("injected current Profiles reconcile failure");
             }
@@ -8805,6 +8808,7 @@ mod tests {
         let profile_snapshot = manager.snapshot_handle();
         let core = Arc::new(ProfileTccCore {
             validations: AtomicUsize::new(0),
+            attempts: AtomicUsize::new(0),
             stops: AtomicUsize::new(0),
             fail_next_reconcile: AtomicBool::new(false),
             active_profiles: Mutex::new(None),
@@ -8937,6 +8941,7 @@ mod tests {
             .push("resource-recovery-failure-test".into());
         let core = Arc::new(ProfileTccCore {
             validations: AtomicUsize::new(0),
+            attempts: AtomicUsize::new(0),
             stops: AtomicUsize::new(0),
             fail_next_reconcile: AtomicBool::new(false),
             active_profiles: Mutex::new(None),
@@ -9978,6 +9983,159 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_new_committed_target_unblocks_a_previous_core_refusal() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = Utf8PathBuf::from_path_buf(dir.path().join("profiles.yaml")).unwrap();
+        let mut manager = PersistentStateManagerSetup::<
+            chimera_config::profile::Profiles,
+            crate::core::migration::modules::profiles::ProfilesFormat,
+        >::builder()
+        .config_path(path)
+        .assemble()
+        .from_state(chimera_config::profile::Profiles::default())
+        .await
+        .unwrap();
+        let mut first = manager.snapshot().as_ref().clone();
+        first.valid.push("initial-refused-target".into());
+        manager
+            .replace_if_version(chimera_core::state::Version::new(0), first.clone())
+            .await
+            .unwrap();
+        let core = Arc::new(ProfileTccCore {
+            validations: AtomicUsize::new(0),
+            attempts: AtomicUsize::new(0),
+            stops: AtomicUsize::new(0),
+            fail_next_reconcile: AtomicBool::new(true),
+            active_profiles: Mutex::new(None),
+        });
+        let client = spawn_startup_client_with_profiles(
+            core.clone(),
+            Arc::new(RecordingService {
+                events: Arc::new(Mutex::new(Vec::new())),
+            }),
+            manager.snapshot_handle(),
+        )
+        .await;
+        client.source_committed(SourceDomain::Profiles, 1, true);
+        tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                if core.attempts.load(AtomicOrdering::Acquire) == 1
+                    && client.status().active.is_none()
+                {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("the first target must be refused");
+
+        let mut second = first;
+        second.valid.push("changed-target-is-eligible".into());
+        manager
+            .replace_if_version(chimera_core::state::Version::new(1), second.clone())
+            .await
+            .unwrap();
+        client.source_committed(SourceDomain::Profiles, 2, true);
+        tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                if core.attempts.load(AtomicOrdering::Acquire) >= 2
+                    && core
+                        .active_profiles
+                        .lock()
+                        .unwrap()
+                        .as_ref()
+                        .is_some_and(|profiles| profiles.valid == second.valid)
+                {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("a genuinely changed target must not inherit the old refusal");
+        assert_eq!(core.attempts.load(AtomicOrdering::Acquire), 2);
+        client.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn refused_committed_target_waits_until_explicit_retry_without_repeating_core_apply() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = Utf8PathBuf::from_path_buf(dir.path().join("profiles.yaml")).unwrap();
+        let mut manager = PersistentStateManagerSetup::<
+            chimera_config::profile::Profiles,
+            crate::core::migration::modules::profiles::ProfilesFormat,
+        >::builder()
+        .config_path(path)
+        .assemble()
+        .from_state(chimera_config::profile::Profiles::default())
+        .await
+        .unwrap();
+        let mut committed = manager.snapshot().as_ref().clone();
+        committed.valid.push("rejected-runtime-target".into());
+        manager
+            .replace_if_version(chimera_core::state::Version::new(0), committed.clone())
+            .await
+            .unwrap();
+        let core = Arc::new(ProfileTccCore {
+            validations: AtomicUsize::new(0),
+            attempts: AtomicUsize::new(0),
+            stops: AtomicUsize::new(0),
+            fail_next_reconcile: AtomicBool::new(true),
+            active_profiles: Mutex::new(None),
+        });
+        let client = spawn_startup_client_with_profiles(
+            core.clone(),
+            Arc::new(RecordingService {
+                events: Arc::new(Mutex::new(Vec::new())),
+            }),
+            manager.snapshot_handle(),
+        )
+        .await;
+        client.source_committed(SourceDomain::Profiles, 1, true);
+        tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                if core.attempts.load(AtomicOrdering::Acquire) == 1
+                    && client.status().active.is_none()
+                {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("initial committed target should be attempted and refused");
+        assert!(core.active_profiles.lock().unwrap().is_none());
+
+        // A second publication of the exact same target is not an
+        // instruction to repeatedly hammer a Core that already refused it.
+        client.source_committed(SourceDomain::Profiles, 1, true);
+        tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                if client.status().completed.iter().any(|round| {
+                    round
+                        .error
+                        .as_deref()
+                        .is_some_and(|message| message.contains("previously refused"))
+                }) {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("second source notification should report a blocked attempt");
+        assert_eq!(core.attempts.load(AtomicOrdering::Acquire), 1);
+        client.reconcile().await.unwrap();
+        assert_eq!(core.attempts.load(AtomicOrdering::Acquire), 2);
+        assert_eq!(
+            core.active_profiles.lock().unwrap().as_ref().unwrap().valid,
+            committed.valid
+        );
+        client.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
     async fn failed_postcommit_profiles_apply_preserves_the_source_document() {
         let dir = tempfile::tempdir().unwrap();
         let path = Utf8PathBuf::from_path_buf(dir.path().join("profiles.yaml")).unwrap();
@@ -9999,6 +10157,7 @@ mod tests {
             .unwrap();
         let core = Arc::new(ProfileTccCore {
             validations: AtomicUsize::new(0),
+            attempts: AtomicUsize::new(0),
             stops: AtomicUsize::new(0),
             fail_next_reconcile: AtomicBool::new(true),
             active_profiles: Mutex::new(None),
@@ -10058,6 +10217,7 @@ mod tests {
         .unwrap();
         let core = Arc::new(ProfileTccCore {
             validations: AtomicUsize::new(0),
+            attempts: AtomicUsize::new(0),
             stops: AtomicUsize::new(0),
             fail_next_reconcile: AtomicBool::new(false),
             active_profiles: Mutex::new(None),
@@ -10117,6 +10277,7 @@ mod tests {
         .unwrap();
         let core = Arc::new(ProfileTccCore {
             validations: AtomicUsize::new(0),
+            attempts: AtomicUsize::new(0),
             stops: AtomicUsize::new(0),
             fail_next_reconcile: AtomicBool::new(false),
             active_profiles: Mutex::new(None),
@@ -10201,6 +10362,7 @@ mod tests {
 
         let core = Arc::new(ProfileTccCore {
             validations: AtomicUsize::new(0),
+            attempts: AtomicUsize::new(0),
             stops: AtomicUsize::new(0),
             fail_next_reconcile: AtomicBool::new(false),
             active_profiles: Mutex::new(None),

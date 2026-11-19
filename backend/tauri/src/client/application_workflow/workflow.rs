@@ -531,19 +531,22 @@ impl ApplicationWorkflow {
                 self.recover_after_reconcile(lifecycle.as_ref()).await?;
                 Ok(false)
             }
-            CoreCommand::Reconcile | CoreCommand::ReconcileSource
+            command @ (CoreCommand::Reconcile | CoreCommand::ReconcileSource)
                 if self.has_unresolved_attempt() =>
             {
+                // Preserve the original ref trigger when recovering a legacy
+                // committed target: explicit Retry is forced, whereas a
+                // SourceCommitted notice must not replay a known refusal.
                 let lifecycle = self.lifecycle_handle();
                 #[cfg(test)]
                 {
                     let mut no_startup_retry_target = None;
                     lifecycle
-                        .execute(CoreCommand::RecoverCore, &mut no_startup_retry_target)
+                        .execute(command, &mut no_startup_retry_target)
                         .await?;
                 }
                 #[cfg(not(test))]
-                lifecycle.execute(CoreCommand::RecoverCore).await?;
+                lifecycle.execute(command).await?;
                 self.recover_after_reconcile(lifecycle.as_ref()).await?;
                 Ok(false)
             }
