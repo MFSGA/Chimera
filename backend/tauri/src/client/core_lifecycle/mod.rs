@@ -4041,6 +4041,8 @@ mod tests {
         publish_wrong_target: bool,
         change_instance_between_reads: bool,
         status_reads: AtomicUsize,
+        submissions: AtomicUsize,
+        stops: AtomicUsize,
     }
 
     /// The Core accepted a committed revision, but publishing the derived
@@ -4160,6 +4162,7 @@ mod tests {
             _: std::collections::BTreeMap<String, String>,
             target: Option<String>,
         ) -> anyhow::Result<()> {
+            self.submissions.fetch_add(1, AtomicOrdering::AcqRel);
             let mut receipt = crate::client::ports::test_runtime_receipt(Default::default());
             receipt.target = if self.publish_wrong_target {
                 Some("an-older-committed-target".into())
@@ -4171,6 +4174,7 @@ mod tests {
         }
 
         async fn stop(&self) -> anyhow::Result<()> {
+            self.stops.fetch_add(1, AtomicOrdering::AcqRel);
             *self.active.lock().unwrap() = None;
             Ok(())
         }
@@ -11211,6 +11215,8 @@ mod tests {
                 publish_wrong_target: false,
                 change_instance_between_reads: false,
                 status_reads: AtomicUsize::new(0),
+                submissions: AtomicUsize::new(0),
+                stops: AtomicUsize::new(0),
             }),
             service,
             manager.snapshot_handle(),
@@ -11259,6 +11265,8 @@ mod tests {
                 publish_wrong_target: false,
                 change_instance_between_reads: false,
                 status_reads: AtomicUsize::new(0),
+                submissions: AtomicUsize::new(0),
+                stops: AtomicUsize::new(0),
             });
             let client =
                 spawn_startup_client_with_profiles(core, service, manager.snapshot_handle()).await;
@@ -11334,6 +11342,93 @@ mod tests {
         }
     }
 
+    /// Ref S3/S4 is now called from the real committed-source actor route:
+    /// the same proven target is a no-op; a different accepted target requires
+    /// stopping the old Core before a single fresh application.
+    #[tokio::test]
+    async fn ref_plan_skips_identical_commits_and_stops_outdated_accepted_core() {
+        use chimera_core::client::reconciler::plan::Conclusion;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = Utf8PathBuf::from_path_buf(dir.path().join("profiles.yaml")).unwrap();
+        let mut manager = PersistentStateManagerSetup::<
+            chimera_config::profile::Profiles,
+            crate::core::migration::modules::profiles::ProfilesFormat,
+        >::builder()
+        .config_path(path)
+        .assemble()
+        .from_state(chimera_config::profile::Profiles::default())
+        .await
+        .unwrap();
+        let core = Arc::new(ReceiptProofCore {
+            active: Mutex::new(None),
+            publish_wrong_target: false,
+            change_instance_between_reads: false,
+            status_reads: AtomicUsize::new(0),
+            submissions: AtomicUsize::new(0),
+            stops: AtomicUsize::new(0),
+        });
+        let client = spawn_startup_client_with_profiles(
+            core.clone(),
+            Arc::new(RecordingService {
+                events: Arc::new(Mutex::new(Vec::new())),
+            }),
+            manager.snapshot_handle(),
+        )
+        .await;
+
+        client.start_core().await.unwrap();
+        assert_eq!(core.submissions.load(AtomicOrdering::Acquire), 1);
+        let round_count = client.reconciler_status().recent.len();
+
+        // A duplicate notification of the same durable revision should not
+        // restart an already proven, unchanged runtime.
+        client.source_committed(SourceDomain::Profiles, 0, true);
+        tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                let status = client.reconciler_status();
+                if status.recent.len() > round_count && status.active.is_none() {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("duplicate source notification must finish a planned round");
+        assert_eq!(core.submissions.load(AtomicOrdering::Acquire), 1);
+        assert_eq!(core.stops.load(AtomicOrdering::Acquire), 0);
+        assert!(matches!(
+            client.reconciler_status().conclusion,
+            Conclusion::Converged
+        ));
+
+        let mut latest = manager.snapshot().as_ref().clone();
+        latest.valid.push("next-committed-target".into());
+        manager
+            .replace_if_version(chimera_core::state::Version::new(0), latest)
+            .await
+            .unwrap();
+        client.source_committed(SourceDomain::Profiles, 1, true);
+        tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                if core.submissions.load(AtomicOrdering::Acquire) == 2
+                    && core.stops.load(AtomicOrdering::Acquire) == 1
+                    && client.status().active.is_none()
+                {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("changed committed target must stop old Core and apply once");
+        assert!(matches!(
+            client.reconciler_status().conclusion,
+            Conclusion::Converged
+        ));
+        client.shutdown().await.unwrap();
+    }
+
     #[tokio::test]
     async fn running_core_only_converges_when_receipt_proves_exact_committed_target() {
         use chimera_core::client::reconciler::plan::Conclusion;
@@ -11355,6 +11450,8 @@ mod tests {
                 publish_wrong_target: wrong_target,
                 change_instance_between_reads: changed_instance,
                 status_reads: AtomicUsize::new(0),
+                submissions: AtomicUsize::new(0),
+                stops: AtomicUsize::new(0),
             });
             let client = spawn_startup_client_with_profiles(
                 core,

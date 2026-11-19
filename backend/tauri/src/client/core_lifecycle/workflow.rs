@@ -1280,6 +1280,65 @@ impl CoreLifecycleWorkflow {
         }
     }
 
+    /// Execute only those decisions of ref's S3/S4 plan for which Chimera
+    /// has established the selected host and has a live runtime receipt.
+    /// Ownership moves continue through the single startup handoff actor.
+    /// Returning Some means this round has already been handled; None means
+    /// the existing Core submission path should execute.
+    async fn planned_committed_round(
+        &self,
+        target: &str,
+        host: ExecutionHost,
+        trigger: Trigger,
+    ) -> anyhow::Result<Option<anyhow::Result<()>>> {
+        use chimera_core::client::reconciler::plan::{Conclusion, Step};
+
+        // Do not turn a possibly unknown in-flight Core operation into a
+        // second stop or submit. The actor's uncertain gate remains in charge.
+        if self.core.outcome_uncertain()
+            || !matches!(trigger, Trigger::SourceCommitted | Trigger::Retry)
+        {
+            return Ok(None);
+        }
+        let observed = match self.core.status().await {
+            Ok(observed) => observed,
+            Err(_) => return Ok(None),
+        };
+        let receipt = self.core.active_runtime_receipt().await.ok().flatten();
+        let verified = if receipt.is_some() && matches!(observed.state, CoreState::Running) {
+            self.verified_applied_runtime(&observed).await
+        } else {
+            false
+        };
+        let previous = self.attempt_policy.lock().snapshot();
+        let step = crate::client::reconciler::decision::plan_established_target(
+            target,
+            host,
+            &observed,
+            receipt.as_deref(),
+            verified,
+            previous,
+            trigger,
+        );
+        match step {
+            Some(Step::Idle(Conclusion::Converged)) => Ok(Some(Ok(()))),
+            Some(Step::Stop { intent: false }) => {
+                // A live Core with the wrong accepted revision must stop
+                // before we submit this different committed target.
+                self.core.stop().await?;
+                Ok(None)
+            }
+            Some(Step::FallBackToLocal) => {
+                let refusal =
+                    anyhow::anyhow!("previously refused committed Service target: {target}");
+                Ok(Some(
+                    self.fallback_after_service_refusal(target, refusal).await,
+                ))
+            }
+            _ => Ok(None),
+        }
+    }
+
     async fn reconcile_with_trigger(&self, trigger: Trigger) -> anyhow::Result<()> {
         // Ref pending-product maintenance happens before rebuilding the target.
         // A manual Retry may repair the *same* confirmed runtime publication
@@ -1324,32 +1383,38 @@ impl CoreLifecycleWorkflow {
                     ExecutionHost::Local
                 }
             };
-            let admitted = self.attempt_policy.lock().allow(&target, host, trigger);
-            let applied = match admitted {
-                Ok(()) => {
-                    let applied = self
-                        .core
-                        .reconcile_profiles(
-                            clash,
-                            app.core,
-                            run_type,
-                            current,
-                            app,
-                            content,
-                            Some(target.clone()),
-                        )
-                        .await;
-                    self.attempt_policy.lock().record(
-                        target.clone(),
-                        host,
-                        &applied,
-                        self.core.outcome_uncertain(),
-                    );
-                    applied
+            let planned = self.planned_committed_round(&target, host, trigger).await?;
+            let handled_by_plan = planned.is_some();
+            let applied = if let Some(result) = planned {
+                result
+            } else {
+                let admitted = self.attempt_policy.lock().allow(&target, host, trigger);
+                match admitted {
+                    Ok(()) => {
+                        let applied = self
+                            .core
+                            .reconcile_profiles(
+                                clash,
+                                app.core,
+                                run_type,
+                                current,
+                                app,
+                                content,
+                                Some(target.clone()),
+                            )
+                            .await;
+                        self.attempt_policy.lock().record(
+                            target.clone(),
+                            host,
+                            &applied,
+                            self.core.outcome_uncertain(),
+                        );
+                        applied
+                    }
+                    Err(previous_refusal) => Err(previous_refusal.into()),
                 }
-                Err(previous_refusal) => Err(previous_refusal.into()),
             };
-            let applied = if host == ExecutionHost::Service {
+            let applied = if host == ExecutionHost::Service && !handled_by_plan {
                 match applied {
                     Ok(()) => Ok(()),
                     Err(refusal) => self.fallback_after_service_refusal(&target, refusal).await,
@@ -1374,21 +1439,27 @@ impl CoreLifecycleWorkflow {
                     ExecutionHost::Local
                 }
             };
-            let admitted = self.attempt_policy.lock().allow(&target, host, trigger);
-            let result = match admitted {
-                Ok(()) => {
-                    let result = self.core.reconcile(clash, target_core, run_type).await;
-                    self.attempt_policy.lock().record(
-                        target.clone(),
-                        host,
-                        &result,
-                        self.core.outcome_uncertain(),
-                    );
-                    result
+            let planned = self.planned_committed_round(&target, host, trigger).await?;
+            let handled_by_plan = planned.is_some();
+            let result = if let Some(result) = planned {
+                result
+            } else {
+                let admitted = self.attempt_policy.lock().allow(&target, host, trigger);
+                match admitted {
+                    Ok(()) => {
+                        let result = self.core.reconcile(clash, target_core, run_type).await;
+                        self.attempt_policy.lock().record(
+                            target.clone(),
+                            host,
+                            &result,
+                            self.core.outcome_uncertain(),
+                        );
+                        result
+                    }
+                    Err(previous_refusal) => Err(previous_refusal.into()),
                 }
-                Err(previous_refusal) => Err(previous_refusal.into()),
             };
-            if host == ExecutionHost::Service {
+            if host == ExecutionHost::Service && !handled_by_plan {
                 match result {
                     Ok(()) => Ok(()),
                     Err(refusal) => self.fallback_after_service_refusal(&target, refusal).await,

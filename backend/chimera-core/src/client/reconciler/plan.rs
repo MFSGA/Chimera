@@ -121,13 +121,13 @@ pub struct Attempt {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub(super) enum CoreFact {
+pub enum CoreFact {
     Stopped { failed: bool },
     Running { verified: bool },
     Transitional,
     Unreadable,
 }
-pub(super) struct Facts {
+pub struct Facts {
     pub trigger: Trigger,
     /// The degraded service owner still has an armed endpoint recovery.
     pub recovering: bool,
@@ -142,7 +142,7 @@ pub(super) struct Facts {
     pub attempt: Option<Attempt>,
 }
 #[derive(Debug)]
-pub(super) enum Step {
+pub enum Step {
     Idle(Conclusion),
     Owner(OwnerPlan),
     FallBackToLocal,
@@ -157,7 +157,7 @@ fn waiting(reason: String) -> Step {
 }
 
 #[must_use]
-pub(super) fn plan(facts: &Facts) -> Step {
+pub fn plan(facts: &Facts) -> Step {
     if facts.recovering {
         return waiting("the service endpoint is being recovered".to_owned());
     }

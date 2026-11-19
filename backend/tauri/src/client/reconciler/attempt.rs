@@ -40,6 +40,12 @@ pub(crate) struct AttemptPolicy {
 }
 
 impl AttemptPolicy {
+    /// Snapshot the previous target attempt without holding the policy lock
+    /// across Core status or owner-proof await points.
+    pub(crate) fn snapshot(&self) -> Option<Attempt> {
+        self.last.clone()
+    }
+
     pub(crate) fn allow(
         &self,
         target: &str,
