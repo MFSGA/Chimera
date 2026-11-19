@@ -49,6 +49,61 @@ pub(crate) fn require_passed(record: CheckRecord, domain: &str) -> Result<()> {
     }
 }
 
+/// Ref CandidateCheck boundary adapted to Chimera's typed source clients.
+pub(crate) struct CandidateCheck {
+    core: std::sync::Arc<dyn CoreLifecyclePort>,
+    application: super::super::application::ApplicationClient,
+    clash: super::super::clash_config::ClashConfigClient,
+    profile_content: crate::state::mutation::ProfileContentReader,
+}
+
+impl CandidateCheck {
+    pub(crate) fn new(
+        core: std::sync::Arc<dyn CoreLifecyclePort>,
+        application: super::super::application::ApplicationClient,
+        clash: super::super::clash_config::ClashConfigClient,
+        profile_content: crate::state::mutation::ProfileContentReader,
+    ) -> Self {
+        Self {
+            core,
+            application,
+            clash,
+            profile_content,
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl crate::state::mutation::RuntimeGate for CandidateCheck {
+    async fn check(&self, candidate: crate::state::mutation::RuntimeCandidate) -> Result<()> {
+        let profiles_dir = crate::utils::dirs::app_profiles_dir()?;
+        let source = crate::enhance::FsProfileContentSource::new(profiles_dir);
+        let content = self
+            .profile_content
+            .candidate(async {
+                chimera_core::client::runtime_build_port::FrozenProfileContent::capture_content(
+                    &candidate.profiles,
+                    &source,
+                    candidate.staged,
+                )
+            })
+            .await;
+        let inputs = RuntimeInputs {
+            app: self.application.get_typed(),
+            clash: self.clash.get()?,
+            profiles: candidate.profiles,
+            content,
+        };
+        let checked = check_candidate(
+            self.core.as_ref(),
+            inputs,
+            crate::core::service::ipc::get_ipc_state().is_connected(),
+        )
+        .await?;
+        require_passed(checked, "profiles")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::{

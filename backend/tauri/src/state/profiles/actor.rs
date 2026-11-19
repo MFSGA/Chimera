@@ -73,6 +73,8 @@ pub enum ProfilesError {
     ImportFailed { message: String },
     #[error("failed to persist profiles: {0}")]
     Persist(String),
+    #[error("Profiles runtime candidate check failed: {0}")]
+    RuntimeCheck(String),
     #[error("profiles source transaction failed: {source}; staging cleanup: {cleanup:?}")]
     SourceTransaction {
         #[source]
@@ -475,8 +477,19 @@ impl ProfilesActor {
             };
         }
 
-        // Runtime-affecting changes retain the legacy participant until
-        // the full ref RuntimeGate check/apply workflow owns them.
+        // Ref CandidateCheck runs outside the runtime-mutation mailbox and
+        // precedes any source publication. The legacy participant still owns
+        // the apply step until the postcommit reconciler is migrated.
+        state
+            .mutations
+            .runtime_gate()
+            .map_err(|error| ProfilesError::RuntimeCheck(error.to_string()))?
+            .check(crate::state::mutation::RuntimeCandidate {
+                profiles: Arc::new(next.clone()),
+                staged: hints.staged_content.clone(),
+            })
+            .await
+            .map_err(|error| ProfilesError::RuntimeCheck(error.to_string()))?;
         let operation = OperationId::generate();
         let participant = state
             .mutations
@@ -818,8 +831,8 @@ impl ProfilesActor {
             .map_err(|error| ProfilesError::Persist(error.to_string()))?;
         let operation = OperationId::generate();
         let (mut hints, class) = Self::mutation_hints(&affects, &candidate);
-        let prepared = if let Some((path, resource)) = resource {
-            let content = match &resource {
+        if let Some((path, resource)) = &resource {
+            let content = match resource {
                 MaterializationResource::File { content } => Some(content.clone()),
                 MaterializationResource::Symlink { .. }
                     if !Self::current_closure(&candidate).iter().any(|uid| {
@@ -827,7 +840,7 @@ impl ProfilesActor {
                             .items
                             .get(uid)
                             .and_then(|item| item.definition.source())
-                            .is_some_and(|source| source.materialized().file == path)
+                            .is_some_and(|source| source.materialized().file == *path)
                     }) =>
                 {
                     None
@@ -846,7 +859,7 @@ impl ProfilesActor {
                 }
             };
             hints.touched.push(TouchedContent {
-                path: path.clone(),
+                path: (*path).clone(),
                 content_digest: content.as_ref().map(|content| {
                     ContentDigest::new(crate::state::profiles::payload_digest(content.as_bytes()))
                 }),
@@ -855,6 +868,24 @@ impl ProfilesActor {
             if let Some(content) = content {
                 hints.staged_content.insert(path.to_string(), content);
             }
+        }
+        // Complete the full candidate check before preparing a file/journal.
+        let source_only = class == CommandClass::Save
+            && !hints.names_runtime_field()
+            && impact::classify_profiles(&before, &candidate, &hints) == RuntimeImpact::None;
+        if !source_only {
+            state
+                .mutations
+                .runtime_gate()
+                .map_err(|error| ProfilesError::RuntimeCheck(error.to_string()))?
+                .check(crate::state::mutation::RuntimeCandidate {
+                    profiles: Arc::new(candidate.clone()),
+                    staged: hints.staged_content.clone(),
+                })
+                .await
+                .map_err(|error| ProfilesError::RuntimeCheck(error.to_string()))?;
+        }
+        let prepared = if let Some((path, resource)) = resource {
             Some(
                 Self::materialization_call(state, move |port| {
                     port.prepare_file_first(&path, resource, expected_revision)
@@ -886,16 +917,23 @@ impl ProfilesActor {
         } else {
             None
         };
-        let participant = state
-            .mutations
-            .participant(operation.clone(), hints, class)
-            .map_err(|error| ProfilesError::Persist(error.to_string()))?;
+        // The postcheck runtime apply remains with the compatibility
+        // participant until the committed-target reconciler owns it.
+        let participant = if source_only {
+            None
+        } else {
+            Some(
+                state
+                    .mutations
+                    .participant(operation.clone(), hints, class)
+                    .map_err(|error| ProfilesError::Persist(error.to_string()))?,
+            )
+        };
         let write_lock = state.content_lock.clone();
-        // The manager runs local_write after the legacy participant's preflight.
-        // It then commits/compensates and acknowledges the participant before
-        // returning. Keep the write fence in a shared owner slot for *that*
-        // entire phase, including config publication and recovery. This slot
-        // is empty for preflight refusals, which never promoted a source file.
+        // Ref local-write and legacy participant commits both own file
+        // promotion, document publication and recovery under one fence. Keep
+        // the guard in the detached source owner if the waiting actor is dropped.
+        // Pre-write conflicts never promote any source file.
         let fence = Arc::new(std::sync::Mutex::new(None));
         let write_fence = Arc::clone(&fence);
         // Retain the fence in the detached persistence owner even when the
@@ -907,49 +945,66 @@ impl ProfilesActor {
         let recover_port = state.materialization.clone();
         let recover_resource = prepared.clone();
         let recover_cleanup = cleanup.clone();
-        let result = state
-            .manager
-            .replace_if_version_with_participant(
-                expected_version,
-                candidate.clone(),
-                participant,
-                move || async move {
-                    if write_resource.is_some() {
-                        let guard = write_lock.write().await;
-                        *write_fence
-                            .lock()
-                            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(guard);
-                    }
-                    tokio::task::spawn_blocking(move || {
-                        if let Some(prepared) = write_resource {
-                            write_port.promote(&prepared)?;
-                        }
-                        anyhow::Ok(())
-                    })
-                    .await?
-                },
-                move || async move {
-                    let _owner_fence = recovery_fence;
-                    tokio::task::spawn_blocking(move || {
-                        let resource = recover_resource
-                            .as_ref()
-                            .map(|p| recover_port.compensate(p))
-                            .transpose();
-                        let cleanup = recover_cleanup
-                            .as_ref()
-                            .map(|c| recover_port.cancel_cleanup(c))
-                            .transpose();
-                        match (resource, cleanup) {
-                            (Ok(_), Ok(_)) => Ok(()),
-                            (resource, cleanup) => anyhow::bail!(
-                                "resource recovery: {resource:?}; cleanup recovery: {cleanup:?}"
-                            ),
-                        }
-                    })
-                    .await?
-                },
-            )
-            .await;
+        let write = move || async move {
+            if source_only || write_resource.is_some() {
+                let guard = write_lock.write().await;
+                *write_fence
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(guard);
+            }
+            tokio::task::spawn_blocking(move || {
+                if let Some(prepared) = write_resource {
+                    write_port.promote(&prepared)?;
+                }
+                anyhow::Ok(())
+            })
+            .await?
+        };
+        let recover = move || async move {
+            let _owner_fence = recovery_fence;
+            tokio::task::spawn_blocking(move || {
+                let resource = recover_resource
+                    .as_ref()
+                    .map(|p| recover_port.compensate(p))
+                    .transpose();
+                let cleanup = recover_cleanup
+                    .as_ref()
+                    .map(|c| recover_port.cancel_cleanup(c))
+                    .transpose();
+                match (resource, cleanup) {
+                    (Ok(_), Ok(_)) => Ok(()),
+                    (resource, cleanup) => anyhow::bail!(
+                        "resource recovery: {resource:?}; cleanup recovery: {cleanup:?}"
+                    ),
+                }
+            })
+            .await?
+        };
+        let result = match participant {
+            Some(participant) => {
+                state
+                    .manager
+                    .replace_if_version_with_participant(
+                        expected_version,
+                        candidate.clone(),
+                        participant,
+                        write,
+                        recover,
+                    )
+                    .await
+            }
+            None => {
+                state
+                    .manager
+                    .replace_if_version_with_local_write(
+                        expected_version,
+                        candidate.clone(),
+                        write,
+                        recover,
+                    )
+                    .await
+            }
+        };
         // Publication/compensation and the participant's settlement have
         // completed. Do not hold the file fence for later job reconciliation.
         drop(
@@ -1023,14 +1078,20 @@ impl ProfilesActor {
                 });
             }
         }
-        let (receipt, runtime_degradations) = state
-            .mutations
-            .finish(
-                operation,
-                "profiles",
-                *state.manager.snapshot_handle().load().version.as_ref(),
+        let version = *state.manager.snapshot_handle().load().version.as_ref();
+        let (receipt, runtime_degradations) = if source_only {
+            let files = match &affects {
+                AffectsRule::Touched(uid) => vec![uid.clone()],
+                _ => created.iter().cloned().collect(),
+            };
+            state.mutations.profiles_committed(files);
+            (
+                state.mutations.committed_without_runtime(version),
+                Vec::new(),
             )
-            .await;
+        } else {
+            state.mutations.finish(operation, "profiles", version).await
+        };
         let snapshot = Arc::new(candidate);
         Self::reconcile_committed(myself, state, &snapshot).await;
         let mut degradations = Vec::new();

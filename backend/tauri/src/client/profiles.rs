@@ -3510,6 +3510,89 @@ mod tests {
         );
     }
 
+    struct RejectingRuntimeGate;
+
+    #[async_trait::async_trait]
+    impl crate::state::mutation::RuntimeGate for RejectingRuntimeGate {
+        async fn check(
+            &self,
+            candidate: crate::state::mutation::RuntimeCandidate,
+        ) -> anyhow::Result<()> {
+            assert_eq!(
+                candidate.staged.get("cfg1.yaml").map(String::as_str),
+                Some("proxies: []\n"),
+                "ref CandidateCheck must receive the frozen proposed bytes"
+            );
+            anyhow::bail!("Core rejected candidate");
+        }
+    }
+
+    #[tokio::test]
+    async fn candidate_rejection_precedes_file_preparation_and_source_publication() {
+        let dir = tempdir().unwrap();
+        let mutations = MutationCoordinator::isolated();
+        let mut materialization = MockProfileMaterializationPort::new();
+        materialization
+            .expect_reconcile()
+            .returning(|_| Ok(MaterializationReconcileReport::default()));
+        materialization.expect_prepare_file_first().never();
+        let client = ProfilesClient::new(
+            mutations.clone(),
+            temp_profiles_path(&dir),
+            Arc::new(MockProfileFsPort::new()),
+            Arc::new(MockSubscriptionFetcher::new()),
+            Arc::new(materialization),
+        )
+        .await
+        .unwrap();
+        client.replace(seeded_profiles()).await.unwrap();
+        client
+            .set_current(Some(ProfileId("cfg1".into())))
+            .await
+            .unwrap();
+        let before = client.snapshot();
+        let document = std::fs::read(temp_profiles_path(&dir)).unwrap();
+        mutations.install_test_runtime_gate(Arc::new(RejectingRuntimeGate));
+        let error = client
+            .save_file(ProfileId("cfg1".into()), "proxies: []\n".into())
+            .await
+            .unwrap_err();
+        assert!(matches!(error, ProfilesError::RuntimeCheck(_)));
+        assert!(error.to_string().contains("Core rejected candidate"));
+        assert_eq!(client.snapshot().revision(), before.revision());
+        assert_eq!(std::fs::read(temp_profiles_path(&dir)).unwrap(), document);
+    }
+
+    #[tokio::test]
+    async fn inactive_managed_file_uses_source_only_commit_but_active_file_keeps_participant() {
+        let (client, dir) = seeded_client().await;
+        let selected = client
+            .set_current(Some(ProfileId("cfg1".into())))
+            .await
+            .unwrap();
+        let inactive = client
+            .save_file(ProfileId("cfg2".into()), "proxies: []\n".into())
+            .await
+            .unwrap();
+        assert!(inactive.receipt.operation_id.is_none());
+        assert_eq!(
+            inactive.receipt.runtime,
+            crate::client::runtime::RuntimeCommitStatus::Unchanged
+        );
+        assert!(inactive.receipt.source_version > selected.receipt.source_version);
+        assert!(!inactive.affects_current);
+        let persisted: Profiles =
+            serde_yaml_ng::from_slice(&std::fs::read(temp_profiles_path(&dir)).unwrap()).unwrap();
+        assert_eq!(persisted.revision(), inactive.snapshot.revision());
+
+        let active = client
+            .save_file(ProfileId("cfg1".into()), "proxies: []\n".into())
+            .await
+            .unwrap();
+        assert!(active.receipt.operation_id.is_some());
+        assert!(active.affects_current);
+    }
+
     #[tokio::test]
     async fn patch_metadata_and_remote_options() {
         let (client, _dir) = seeded_client().await;

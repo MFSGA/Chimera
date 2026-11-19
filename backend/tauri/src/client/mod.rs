@@ -325,7 +325,15 @@ impl ChimeraClient {
                 shutdown.clone(),
                 &tasks,
             ))?;
-        tauri::async_runtime::block_on(mutations.connect(core_lifecycle.clone()))?;
+        let profile_gate = Arc::new(reconciler::check::CandidateCheck::new(
+            core.clone(),
+            typed.application.clone(),
+            typed.clash_config.clone(),
+            typed_profiles.content_reader(),
+        ));
+        tauri::async_runtime::block_on(
+            mutations.connect_with_runtime_gate(core_lifecycle.clone(), profile_gate),
+        )?;
         let streams_shutdown = shutdown.child_token();
         let streams =
             tauri::async_runtime::block_on(chimera_core::clash::ws::StreamsClient::spawn(

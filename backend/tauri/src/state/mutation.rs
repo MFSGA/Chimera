@@ -3,12 +3,15 @@
 mod profile_content;
 pub(crate) use profile_content::{ProfileContentLock, ProfileContentReader};
 
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::{BTreeMap, HashMap},
+    sync::Arc,
+};
 
 use chimera_config::profile::Profiles;
 use chimera_core::state::{DecisionHandle, StateParticipant};
 use chimera_core_manager::OperationId;
-use tokio::sync::{Mutex, watch};
+use tokio::sync::{Mutex, OnceCell, watch};
 
 use crate::client::{
     application_workflow::{
@@ -20,6 +23,18 @@ use crate::client::{
     effects::ports::CommitNotifications,
     runtime::{CommitReceipt, Degradation, DegradationPhase, RuntimeCommitStatus},
 };
+
+/// Source-owned candidate validation is independent of the Core lifecycle's
+/// mutating mailbox. Its runtime check never applies the candidate.
+pub(crate) struct RuntimeCandidate {
+    pub profiles: Arc<Profiles>,
+    pub staged: BTreeMap<String, String>,
+}
+
+#[async_trait::async_trait]
+pub(crate) trait RuntimeGate: Send + Sync + 'static {
+    async fn check(&self, candidate: RuntimeCandidate) -> anyhow::Result<()>;
+}
 
 #[derive(Clone)]
 enum Connection {
@@ -35,6 +50,7 @@ pub(crate) struct MutationCoordinator {
     outcomes: Arc<Mutex<HashMap<OperationId, MutationReceipt>>>,
     recovery_required: Arc<Mutex<Option<RecoveryContext>>>,
     notifications: Option<Arc<dyn CommitNotifications>>,
+    runtime_gate: Arc<OnceCell<Arc<dyn RuntimeGate>>>,
 }
 
 impl Default for MutationCoordinator {
@@ -50,6 +66,7 @@ impl MutationCoordinator {
             outcomes: Arc::new(Mutex::new(HashMap::new())),
             recovery_required: Arc::new(Mutex::new(None)),
             notifications: None,
+            runtime_gate: Arc::new(OnceCell::new()),
         }
     }
 
@@ -65,6 +82,22 @@ impl MutationCoordinator {
         let coordinator = Self::pending();
         coordinator.connection.send_replace(Connection::Isolated);
         coordinator
+    }
+
+    /// Production connects the checker before making Profiles writes ready.
+    pub(crate) async fn connect_with_runtime_gate(
+        &self,
+        core: CoreLifecycleClient,
+        gate: Arc<dyn RuntimeGate>,
+    ) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            matches!(*self.connection.borrow(), Connection::Pending),
+            "Profiles mutation workflow is already connected"
+        );
+        self.runtime_gate
+            .set(gate)
+            .map_err(|_| anyhow::anyhow!("Profiles RuntimeGate was already connected"))?;
+        self.connect(core).await
     }
 
     pub async fn connect(&self, core: CoreLifecycleClient) -> anyhow::Result<()> {
@@ -88,12 +121,35 @@ impl MutationCoordinator {
         Ok(())
     }
 
+    pub(crate) fn runtime_gate(&self) -> anyhow::Result<Arc<dyn RuntimeGate>> {
+        match self.connection.borrow().clone() {
+            Connection::Pending => anyhow::bail!("Profiles RuntimeGate is not ready"),
+            #[cfg(test)]
+            Connection::Isolated => Ok(self
+                .runtime_gate
+                .get()
+                .cloned()
+                .unwrap_or_else(|| Arc::new(IsolatedRuntimeGate))),
+            Connection::Ready(_) => self
+                .runtime_gate
+                .get()
+                .cloned()
+                .ok_or_else(|| anyhow::anyhow!("Profiles RuntimeGate is unavailable")),
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn install_test_runtime_gate(&self, gate: Arc<dyn RuntimeGate>) {
+        assert!(matches!(*self.connection.borrow(), Connection::Isolated));
+        assert!(self.runtime_gate.set(gate).is_ok());
+    }
+
     pub fn participant(
         &self,
         operation_id: OperationId,
         hints: MutationHints,
         class: CommandClass,
-    ) -> anyhow::Result<impl FnOnce(DecisionHandle) -> StateParticipant<Profiles>> {
+    ) -> anyhow::Result<impl FnOnce(DecisionHandle) -> StateParticipant<Profiles> + use<>> {
         let connection = self.connection.borrow().clone();
         anyhow::ensure!(
             !matches!(&connection, Connection::Pending),
@@ -133,6 +189,14 @@ impl MutationCoordinator {
             domain: "profiles".into(),
             source_version,
             runtime: RuntimeCommitStatus::Unchanged,
+        }
+    }
+
+    /// A source-only Profiles file commit still publishes its changed content
+    /// to the shared UI/effects owner after the durable source CAS.
+    pub(crate) fn profiles_committed(&self, files: Vec<chimera_config::profile::ProfileId>) {
+        if let Some(notifications) = &self.notifications {
+            notifications.profiles_committed(files);
         }
     }
 
@@ -202,6 +266,17 @@ impl MutationCoordinator {
             };
         }
         (receipt, degradations)
+    }
+}
+
+#[cfg(test)]
+struct IsolatedRuntimeGate;
+
+#[cfg(test)]
+#[async_trait::async_trait]
+impl RuntimeGate for IsolatedRuntimeGate {
+    async fn check(&self, _: RuntimeCandidate) -> anyhow::Result<()> {
+        Ok(())
     }
 }
 
