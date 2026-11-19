@@ -52,8 +52,8 @@ describe('main providers reference layout', () => {
           '[data-slot="providers-group-title"]',
         ) ?? [],
       );
-      const emptyCards = groups.map((group) =>
-        group.querySelector<HTMLElement>('[data-slot="card"]'),
+      const emptyStates = groups.map((group) =>
+        group.querySelector<HTMLElement>('[data-slot="empty-state"]'),
       );
 
       const rect = (element: HTMLElement | null) =>
@@ -100,7 +100,14 @@ describe('main providers reference layout', () => {
         groupStyles: groups.map(style),
         titles: titles.map(rect),
         titleStyles: titles.map(style),
-        emptyCards: emptyCards.map(rect),
+        emptyStates: emptyStates.map((empty) => ({
+          rect: rect(empty),
+          role: empty?.getAttribute('role') ?? null,
+          message:
+            empty
+              ?.querySelector('[data-slot="empty-state-message"]')
+              ?.textContent?.trim() ?? '',
+        })),
         groupContentStyles: groupContents.map(style),
         viewport: { width: window.innerWidth, height: window.innerHeight },
       };
@@ -118,10 +125,16 @@ describe('main providers reference layout', () => {
       true,
     );
     assert.equal(
-      state.emptyCards.every(
-        (card) => !card || (card.height >= 150 && card.width > 700),
+      state.emptyStates.every((empty, index) =>
+        state.groupContentStyles[index]
+          ? empty.rect == null
+          : (empty.rect?.height ?? 0) >= 150 &&
+            (empty.rect?.width ?? 0) > 700 &&
+            empty.role === 'status' &&
+            empty.message.length > 0,
       ),
       true,
+      `Providers must show the ref empty state or an actual grid: ${JSON.stringify(state, null, 2)}`,
     );
     assert.equal((state.groups[0]?.x ?? 0) - (state.content?.x ?? 0), 16);
     assert.deepEqual(state.contentStyle, {
@@ -175,5 +188,34 @@ describe('main providers reference layout', () => {
       fs.mkdirSync(path.dirname(evidencePath), { recursive: true });
       await browser.saveScreenshot(evidencePath);
     }
+  });
+
+  it('keeps empty-section refresh controls clickable without changing routes', async () => {
+    const providerActions = [
+      '[data-slot="providers-update-all-proxies"]',
+      '[data-slot="providers-update-all-rules"]',
+    ];
+    const actions = await Promise.all(
+      providerActions.map((selector) => $(selector)),
+    );
+    for (const action of actions) {
+      await action.waitForDisplayed({ timeout: 15_000 });
+    }
+
+    // Fresh isolated E2E state has no subscription or rules provider to
+    // mutate. Test the actual UI click path without requesting a network update.
+    const groups = await $$('[data-slot="providers-group-content"]');
+    assert.equal(
+      groups.length,
+      0,
+      'The empty-state fixture unexpectedly contains providers.',
+    );
+    const before = new URL(await browser.getUrl());
+    for (const action of actions) {
+      await action.click();
+      assert.equal(new URL(await browser.getUrl()).pathname, before.pathname);
+    }
+    const statuses = await $$('[data-slot="empty-state"][role="status"]');
+    assert.equal(statuses.length, 2);
   });
 });
