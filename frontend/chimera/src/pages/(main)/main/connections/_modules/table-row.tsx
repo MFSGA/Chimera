@@ -9,7 +9,6 @@ import ChatInfoRounded from '~icons/material-symbols/chat-info-rounded';
 import CloseRounded from '~icons/material-symbols/close-rounded';
 import { sentenceCase } from 'change-case';
 import dayjs from 'dayjs';
-import { filesize } from 'filesize';
 import { ComponentProps, memo } from 'react';
 import {
   RegisterContextMenu,
@@ -18,6 +17,7 @@ import {
 } from '@/components/providers/context-menu-provider';
 import { useLockFn } from '@/hooks/use-lock-fn';
 import * as m from '@/paraglide/messages';
+import { formatBytes } from '@/utils/format-bytes';
 import { ruleLabel } from '../../_modules/traffic-filters';
 import { RelativeTimeCell } from './cells';
 import type { ConnectionRow } from './use-connection-rows';
@@ -93,11 +93,11 @@ function formatValue(key: string, value: any): React.ReactNode {
   const k = key.toLowerCase();
 
   if (k.includes('speed')) {
-    return <span>{filesize(value, { standard: 'iec' })}/s</span>;
+    return <span>{formatBytes(value)}/s</span>;
   }
 
   if (k.includes('download') || k.includes('upload')) {
-    return <span>{filesize(value, { standard: 'iec' })}</span>;
+    return <span>{formatBytes(value)}</span>;
   }
 
   if (k.includes('port') || k === 'id' || k.includes('ip')) {
