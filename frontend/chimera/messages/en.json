@@ -499,6 +499,8 @@
   "providers_rules_rule_count_label": "{count} Rules",
   "providers_info_title": "Resource Info",
   "providers_subscription_title": "Subscription Info",
+  "providers_healthcheck_provider": "Health Check",
+  "providers_healthcheck_failed_message": "Health check failed for {name}",
   "providers_update_provider": "Update",
   "dashboard_context_menu_edit_widgets": "Edit Widgets",
   "dashboard_context_menu_add_widgets": "Add Widgets",

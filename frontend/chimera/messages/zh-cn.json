@@ -481,6 +481,8 @@
   "providers_rules_rule_count_label": "{count}个规则",
   "providers_info_title": "资源信息",
   "providers_subscription_title": "订阅信息",
+  "providers_healthcheck_provider": "健康检查",
+  "providers_healthcheck_failed_message": "{name} 健康检查失败",
   "providers_update_provider": "更新资源",
   "dashboard_context_menu_edit_widgets": "编辑组件",
   "dashboard_context_menu_add_widgets": "添加组件",

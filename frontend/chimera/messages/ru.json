@@ -503,6 +503,8 @@
   "providers_rules_rule_count_label": "{count} правил",
   "providers_info_title": "Информация о ресурсах",
   "providers_subscription_title": "Информация о подписке",
+  "providers_healthcheck_provider": "Проверка состояния",
+  "providers_healthcheck_failed_message": "Не удалось проверить состояние {name}",
   "providers_update_provider": "Обновить ресурсы",
   "dashboard_context_menu_edit_widgets": "Редактировать компоненты",
   "dashboard_context_menu_add_widgets": "Добавить компоненты",
