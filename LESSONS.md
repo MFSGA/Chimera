@@ -101,6 +101,7 @@
 | LESSON-20261120-003 | 2026-11-20 | Providers / HTTP E2E / Dialog | 列表批量更新吞错误成功；真实 loopback HTTP 验证 1→2→3、503 时 Task error，X11 原生弹窗必须先聚焦 | Verified |
 | LESSON-20261120-004 | 2026-11-20 | Connections / Main UI / Legacy E2E | ref DataPage 底部 dock 与虚拟表格留白；Legacy 分离；控件 data-slot、X11 子像素边界按真实 UI 验证 | Verified |
 | LESSON-20261120-005 | 2026-11-20 | Connections / Core / Virtualization E2E | ref 44px + 物理 spacer；48 条真实 Core 长流；Guard 有效 mixed-port 与 WebKit 双击驱动限制 | Verified |
+| LESSON-20261120-006 | 2026-11-20 | Connections / RPC Auth / Closed History | 不伪造 ref RPC proxy:write；详情本地化 formatBytes；真实 48 流归档 Closed/All 只读 E2E | Verified |
 
 ### LESSON-20261113-001/002：架构迁移要覆盖原生运行时与稀疏配置
 
@@ -1412,3 +1413,11 @@ backend/Cargo.toml -p chimera --lib core::clash::proxies::tests:: -- --nocapture
 - 受管理 Clash Guard mixed_port.fixed 会覆盖 Profile 字面 mixed-port；Core Running 时测试直连 Profile 申请的 27897 报 ECONNREFUSED，实际生效端口是 7890。正确做法是经 Native clash_api_get_configs 查询真实监听端口，等待有效监听，然后连接，禁止为测试放宽 Guard。
 - WebKitGTK WebDriver doubleClick 返回后没有实际派发 DOM dblclick，不可认定产品行双击已坏，也不可通过 dispatchEvent 合成事件假装真人点击。改用 ref 的真实右键菜单入口，确认详情 UI、关闭单条 Native 连接与关闭全部连接都实际终止了 HTTP 流；双击需要有合适驱动时另测。
 - 本轮原生非空 4/4、Main 4/4、Legacy 3/3、Native Detail 1/1 合计 12/12 通过，单元 9/9、Harness 44/44，全仓 TS、Lint、构建通过。不得扩大为跨平台权限、性能或长期网络验收结论。
+
+### LESSON-20261120-006：ref RPC capability 不能伪造成 Chimera Tauri 授权；历史记录测试须用真正的 Core
+
+- ref 的 proxy:write 来自 RPC describe Principal/Permissions/Commands、AuthBootstrapGate，而 Chimera 当前只有本地 Tauri IPC；不应创建硬编码 true 的授权 Hook。前端按钮显隐也不是服务端权限拒绝。需在引入远程/多主体 RPC 的后端契约后再迁完整 capability。
+- 详情字节与速度需要通过共享 formatBytes 和 informationUnitSymbols 适配语言，仅对直接 filesize 的单位做等价显示不代表已对齐上游。
+- 真实 48 条 Core TCP/HTTP 流关闭后从原生 Traffic Store 查询 Close history，实际点击 Closed/All 标签、右键 View Details，并验证历史行无 Close Connection 能力。Linux E2E 本轮 5+4+3+1=13/13；未执行跨平台 Native 授权或双击验证。
+
+- **最新 Reconciler 基线回归**：安全快进至 0f838d75 后重新构建 Tauri Native E2E，真实 live 5/5、Main 4/4、Legacy 3/3、detail subscription 1/1 总共 13/13 通过。跨模块重构后需验证 Profile 激活与真实 Core 流程，而非沿用旧版 SHA 的截图或测试结果。
