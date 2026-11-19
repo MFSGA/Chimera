@@ -114,6 +114,16 @@ export type CreateParams =
       };
     };
 
+/** The active config's uid; subscribes to the shared Profiles query cache. */
+export const useCurrentProfileUid = () => {
+  const profilesOptions = queries.getProfiles();
+  return useQuery({
+    queryKey: profilesOptions.queryKey,
+    queryFn: async () => unwrapResult(await invokeQuery(profilesOptions)),
+    select: (data) => data?.current,
+  }).data;
+};
+
 export const useProfile = (options?: { without_helper_fn?: boolean }) => {
   const queryClient = useQueryClient();
   const profilesOptions = queries.getProfiles();
