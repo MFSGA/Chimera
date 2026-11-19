@@ -18,8 +18,8 @@ use ractor::{Actor, ActorProcessingErr, ActorRef, RpcReplyPort};
 use crate::{
     client::application_workflow::{
         impact::{
-            ActivationIntent, ContentDigest, MutationHints, RequestedRuntimeFields,
-            StagedResourceToken, TouchedContent,
+            self, ActivationIntent, ContentDigest, MutationHints, RequestedRuntimeFields,
+            RuntimeImpact, StagedResourceToken, TouchedContent,
         },
         policy::CommandClass,
     },
@@ -398,10 +398,28 @@ impl ProfilesActor {
         Ok(next)
     }
 
+    /// Pure document edits follow ref's direct versioned source commit,
+    /// without invoking the old Profile runtime participant. Every source
+    /// mutation still must pass the actual closure comparison; an AffectsRule
+    /// alone is not proof that a current dependency is unchanged.
+    fn source_only_document_change(
+        before: &Profiles,
+        next: &Profiles,
+        hints: &MutationHints,
+        class: CommandClass,
+    ) -> bool {
+        class == CommandClass::Save
+            && !hints.names_runtime_field()
+            && hints.touched.is_empty()
+            && hints.staged_content.is_empty()
+            && impact::classify_profiles(before, next, hints) == RuntimeImpact::None
+    }
+
     /// Persist an already validated, revision-bumped candidate exactly as prepared.
     async fn persist_candidate(
         state: &mut ProfilesActorState,
         expected_version: Version,
+        before: &Profiles,
         next: Profiles,
         hints: MutationHints,
         class: CommandClass,
@@ -415,6 +433,50 @@ impl ProfilesActor {
         ),
         ProfilesError,
     > {
+        if Self::source_only_document_change(before, &next, &hints, class) {
+            state
+                .mutations
+                .ensure_ready()
+                .map_err(|error| ProfilesError::Persist(error.to_string()))?;
+            // Use the same publication fence as ref's Profile source actor.
+            // A concurrent committed-content reader cannot observe a mixed
+            // Profiles document and managed-file generation during the write.
+            let fence = state.content_lock.write().await;
+            let result = state
+                .manager
+                .replace_if_version(expected_version, next.clone())
+                .await;
+            drop(fence);
+            return match result {
+                Ok(ReplaceIfVersionResult::Replaced) => {
+                    let version = *state.manager.snapshot_handle().load().version.as_ref();
+                    let receipt = state.mutations.committed_without_runtime(version);
+                    Ok((Arc::new(next), (receipt, Vec::new())))
+                }
+                Ok(ReplaceIfVersionResult::Conflict { actual_version }) => {
+                    Err(ProfilesError::VersionConflict {
+                        expected: *expected_version.as_ref(),
+                        actual: *actual_version.as_ref(),
+                    })
+                }
+                Err(chimera_core::state::ReplaceIfVersionError::State(
+                    chimera_core::state::error::StateChangedError::StateCasMismatch {
+                        expected,
+                        actual,
+                    },
+                )) => Err(ProfilesError::VersionConflict {
+                    expected: *expected.as_ref(),
+                    actual: *actual.as_ref(),
+                }),
+                Err(source) => Err(ProfilesError::SourceTransaction {
+                    source,
+                    cleanup: None,
+                }),
+            };
+        }
+
+        // Runtime-affecting changes retain the legacy participant until
+        // the full ref RuntimeGate check/apply workflow owns them.
         let operation = OperationId::generate();
         let participant = state
             .mutations
@@ -526,7 +588,8 @@ impl ProfilesActor {
         let candidate = Self::prepare_candidate(next)?;
         let (hints, class) = Self::mutation_hints(&affects, &candidate);
         let (snapshot, (receipt, runtime_degradations)) =
-            Self::persist_candidate(state, expected_version, candidate, hints, class).await?;
+            Self::persist_candidate(state, expected_version, &before, candidate, hints, class)
+                .await?;
         Self::reconcile_committed(myself, state, &snapshot).await;
         Ok(CommitReport {
             affects_current: Self::evaluate_affects(&affects, &before, &snapshot),

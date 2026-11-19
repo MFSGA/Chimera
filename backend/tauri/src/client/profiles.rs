@@ -3435,6 +3435,82 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn metadata_and_order_commit_source_only_while_active_changes_keep_runtime_participant() {
+        let (client, dir) = seeded_client().await;
+        let selected = client
+            .set_current(Some(ProfileId("cfg1".into())))
+            .await
+            .unwrap();
+        assert!(
+            selected.receipt.operation_id.is_some(),
+            "explicit activation still owes a runtime participant"
+        );
+        let initial_version = selected.receipt.source_version;
+        let reselected = client
+            .set_current(Some(ProfileId("cfg1".into())))
+            .await
+            .unwrap();
+        assert!(
+            reselected.receipt.operation_id.is_some(),
+            "reselecting the same active profile must retain explicit activation intent"
+        );
+
+        let mut patch = ProfileMetadata::new_empty_patch();
+        patch.name = Some("Active but renamed".into());
+        let metadata = client
+            .patch_metadata(ProfileId("cfg1".into()), patch)
+            .await
+            .unwrap();
+        assert_eq!(
+            metadata.receipt.runtime,
+            crate::client::runtime::RuntimeCommitStatus::Unchanged
+        );
+        assert!(
+            metadata.receipt.operation_id.is_none(),
+            "metadata is a direct source commit, not a runtime transaction"
+        );
+        assert!(metadata.receipt.source_version > initial_version);
+        assert!(!metadata.affects_current);
+
+        let reordered = client
+            .reorder(ReorderOp::Move {
+                active: ProfileId("cfg2".into()),
+                over: ProfileId("cfg1".into()),
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            reordered.receipt.runtime,
+            crate::client::runtime::RuntimeCommitStatus::Unchanged
+        );
+        assert!(reordered.receipt.operation_id.is_none());
+        assert!(reordered.receipt.source_version > metadata.receipt.source_version);
+
+        let persisted: Profiles =
+            serde_yaml_ng::from_slice(&std::fs::read(temp_profiles_path(&dir)).unwrap()).unwrap();
+        assert_eq!(
+            persisted.items[&ProfileId("cfg1".into())].metadata.name,
+            "Active but renamed"
+        );
+        assert_eq!(
+            profile_order(&persisted),
+            profile_order(&reordered.snapshot)
+        );
+
+        let definition = seeded_profiles().items[&ProfileId("cfg1".into())]
+            .definition
+            .clone();
+        let replaced = client
+            .replace_definition(ProfileId("cfg1".into()), definition)
+            .await
+            .unwrap();
+        assert!(
+            replaced.receipt.operation_id.is_some(),
+            "active definition is still guarded by the legacy runtime participant"
+        );
+    }
+
+    #[tokio::test]
     async fn patch_metadata_and_remote_options() {
         let (client, _dir) = seeded_client().await;
         let mut patch = ProfileMetadata::new_empty_patch();

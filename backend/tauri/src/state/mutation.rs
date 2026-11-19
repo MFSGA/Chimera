@@ -115,6 +115,27 @@ impl MutationCoordinator {
         })
     }
 
+    /// Ref Profiles source-only path: after an ordinary versioned document
+    /// commit, publish its version without creating a TCC participant or
+    /// attempting to start/reconcile the Core. The domain actor has already
+    /// proved that no runtime target or explicit activation was requested.
+    pub(crate) fn committed_without_runtime(&self, source_version: u64) -> CommitReceipt {
+        match self.connection.borrow().clone() {
+            Connection::Ready(workflow) => workflow.profiles_source_committed(source_version),
+            #[cfg(test)]
+            Connection::Isolated => {}
+            Connection::Pending => {
+                tracing::error!("Profiles source commit was published before mutation readiness");
+            }
+        }
+        CommitReceipt {
+            operation_id: None,
+            domain: "profiles".into(),
+            source_version,
+            runtime: RuntimeCommitStatus::Unchanged,
+        }
+    }
+
     pub async fn finish(
         &self,
         operation_id: OperationId,
