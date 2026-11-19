@@ -602,6 +602,31 @@ impl ApplicationWorkflowState {
         self.publish_maintenance();
     }
 
+    /// A Service readiness update can itself resolve a previously blocked
+    /// S2 owner step (for example, the other daemon stopped externally). If
+    /// no leased handoff is queued, ask the *existing* source planner to check
+    /// the latest committed target again. Keep the continuation latched until
+    /// a verified round succeeds. Unreadable or still-owned Service evidence
+    /// is rejected by S2; this is not permission to start Core.
+    fn replan_retained_source_on_service_change(&mut self, myself: &ActorRef<Message>) {
+        if !self.source_after_handoff
+            || self.run_intent != RunIntent::Running
+            || self.uncertain
+            || self.shutting_down
+            || self.startup_owner_unproven
+            || self.startup_owner_unproven_shared.load(Ordering::Acquire)
+            || self.active.is_some()
+            || self
+                .pending
+                .iter()
+                .any(|request| matches!(&request.command, Command::FollowService { .. }))
+        {
+            return;
+        }
+        self.source_dirty = true;
+        self.mark_runtime_dirty(myself);
+    }
+
     async fn follow_service(&mut self) {
         if self.run_intent == RunIntent::Stopped
             || self.active.is_some()
@@ -1607,8 +1632,19 @@ impl Actor for ApplicationWorkflowActor {
                         && !state.shutting_down
                     {
                         state.source_after_handoff = false;
-                        state.source_dirty = true;
-                        state.mark_runtime_dirty(&myself);
+                        if active.trigger == "SourceCommitted" {
+                            // A new latest-source round has *already* passed
+                            // S2 and proved the current target. Do not enqueue
+                            // an identical third round or leave a stale lease
+                            // maintenance warning after external recovery.
+                            state.service_handoff_maintenance = None;
+                            state.publish_maintenance();
+                        } else {
+                            // A successful Start, FollowService or startup
+                            // recovery needs one new committed-source round.
+                            state.source_dirty = true;
+                            state.mark_runtime_dirty(&myself);
+                        }
                     }
                     state
                         .schedule_service_release(active.trigger == "Retry")
@@ -1631,10 +1667,12 @@ impl Actor for ApplicationWorkflowActor {
             Message::ObserveService { info } => {
                 state.publish_service_status(info);
                 state.follow_service().await;
+                state.replan_retained_source_on_service_change(&myself);
                 state.schedule_service_release(false).await;
             }
             Message::ServiceReadiness => {
                 state.follow_service().await;
+                state.replan_retained_source_on_service_change(&myself);
                 state.schedule_service_release(false).await;
             }
             Message::ServiceProbeFailed => {
@@ -11781,6 +11819,148 @@ mod tests {
         });
         assert!(!other_service_core.load(AtomicOrdering::Acquire));
         assert_eq!(core.retire_calls.load(AtomicOrdering::Acquire), 0);
+        assert_eq!(core.submissions.load(AtomicOrdering::Acquire), 2);
+        client.shutdown().await.unwrap();
+    }
+
+    /// An external Service owner may exit after the S2 transition lease was
+    /// refused. A *readiness update alone* must wake the retained committed
+    /// source without a new command, speculative Core stop or polling loop.
+    #[tokio::test]
+    async fn source_handoff_lease_wait_resumes_on_service_readiness_change() {
+        use chimera_core::client::reconciler::plan::Conclusion;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = Utf8PathBuf::from_path_buf(dir.path().join("profiles.yaml")).unwrap();
+        let mut manager = PersistentStateManagerSetup::<
+            chimera_config::profile::Profiles,
+            crate::core::migration::modules::profiles::ProfilesFormat,
+        >::builder()
+        .config_path(path)
+        .assemble()
+        .from_state(chimera_config::profile::Profiles::default())
+        .await
+        .unwrap();
+        let other_service_core = Arc::new(AtomicBool::new(false));
+        let service_ready = Arc::new(AtomicBool::new(false));
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let core = Arc::new(ReceiptProofCore {
+            active: Mutex::new(None),
+            publish_wrong_target: false,
+            change_instance_between_reads: false,
+            status_reads: AtomicUsize::new(0),
+            submissions: AtomicUsize::new(0),
+            stops: AtomicUsize::new(0),
+            service_to_retire: None,
+            retire_calls: AtomicUsize::new(0),
+        });
+        let client = spawn_startup_client_with_profiles(
+            core.clone(),
+            Arc::new(LeaseBlockedToggleService {
+                inner: ToggleStartupServiceProbe {
+                    events,
+                    ready: service_ready.clone(),
+                    core_running: other_service_core.clone(),
+                },
+                block_next: AtomicBool::new(true),
+            }),
+            manager.snapshot_handle(),
+        )
+        .await;
+        let startup = client.startup_reconcile().await.unwrap();
+        assert_eq!(startup.report.outcome, StartupOutcome::Ready);
+        assert_eq!(core.submissions.load(AtomicOrdering::Acquire), 1);
+
+        let mut latest = manager.snapshot().as_ref().clone();
+        latest
+            .valid
+            .push("latest-after-service-status-change".into());
+        manager
+            .replace_if_version(chimera_core::state::Version::new(0), latest)
+            .await
+            .unwrap();
+        service_ready.store(true, AtomicOrdering::Release);
+        other_service_core.store(true, AtomicOrdering::Release);
+        client.source_committed(SourceDomain::Profiles, 1, true);
+        // S2 is actionable but the nonblocking transition lease was busy.
+        // No unproven host may stop or restart the current Core.
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let status = client.reconciler_status();
+                if matches!(status.conclusion, Conclusion::Waiting { .. })
+                    && status
+                        .maintenance
+                        .as_deref()
+                        .is_some_and(|text| text.contains("lease"))
+                    && client.status().active.is_none()
+                {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("an unavailable S2 lease must retain its source continuation");
+        assert_eq!(core.submissions.load(AtomicOrdering::Acquire), 1);
+        assert_eq!(core.stops.load(AtomicOrdering::Acquire), 0);
+        assert_eq!(core.retire_calls.load(AtomicOrdering::Acquire), 0);
+
+        // The other Service owner stops externally. No operation completes
+        // here and no second source notification is sent; the ServiceActor's
+        // readiness signal must request a fail-closed S2/S3/S4 replan.
+        other_service_core.store(false, AtomicOrdering::Release);
+        service_ready.store(false, AtomicOrdering::Release);
+        signal_service_readiness_change(&client);
+
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let status = client.reconciler_status();
+                let source_rounds = status
+                    .recent
+                    .iter()
+                    .filter(|round| round.trigger == "SourceCommitted")
+                    .count();
+                if core.retire_calls.load(AtomicOrdering::Acquire) == 0
+                    && core.submissions.load(AtomicOrdering::Acquire) >= 2
+                    && source_rounds >= 2
+                    && status.active.is_none()
+                    && matches!(status.conclusion, Conclusion::Converged)
+                {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .unwrap_or_else(|_| {
+            let status = client.reconciler_status();
+            panic!(
+                "S2 handoff stalled: retire={} submits={} stops={} service_running={} active={:?} completed={:?} rounds={:?} maintenance={:?}",
+                core.retire_calls.load(AtomicOrdering::Acquire),
+                core.submissions.load(AtomicOrdering::Acquire),
+                core.stops.load(AtomicOrdering::Acquire),
+                other_service_core.load(AtomicOrdering::Acquire),
+                client.status().active,
+                client.status().completed.iter().map(|item| (&item.id, &item.error)).collect::<Vec<_>>(),
+                status.recent.iter().map(|item| (&item.trigger, &item.conclusion)).collect::<Vec<_>>(),
+                status.maintenance,
+            );
+        });
+        assert!(!other_service_core.load(AtomicOrdering::Acquire));
+        assert_eq!(core.retire_calls.load(AtomicOrdering::Acquire), 0);
+        assert_eq!(core.submissions.load(AtomicOrdering::Acquire), 2);
+        assert_eq!(core.stops.load(AtomicOrdering::Acquire), 1);
+        assert!(client.reconciler_status().maintenance.is_none());
+        // A successful latest-source round already consumed the continuation.
+        // It must not schedule a redundant third SourceCommitted after 500ms.
+        tokio::time::sleep(DIRTY_WINDOW + Duration::from_millis(70)).await;
+        let source_rounds = client
+            .reconciler_status()
+            .recent
+            .iter()
+            .filter(|round| round.trigger == "SourceCommitted")
+            .count();
+        assert_eq!(source_rounds, 2);
         assert_eq!(core.submissions.load(AtomicOrdering::Acquire), 2);
         client.shutdown().await.unwrap();
     }
