@@ -78,7 +78,7 @@ describe('main connections reference layout', () => {
         '[data-slot="connections-layout"]',
       );
       const container = document.querySelector<HTMLElement>(
-        '[data-slot="connections-container"]',
+        '[data-connections-container="true"]',
       );
       const scroll = document.querySelector<HTMLElement>(
         '[data-slot="connections-scroll-wrapper"]',
@@ -86,9 +86,22 @@ describe('main connections reference layout', () => {
       const toolbar = document.querySelector<HTMLElement>(
         '[data-slot="connections-toolbar"]',
       );
-      const toolbarContent = document.querySelector<HTMLElement>(
-        '[data-slot="connections-toolbar-content"]',
+      const page = document.querySelector<HTMLElement>(
+        '[data-slot="data-page"]',
       );
+      const surface = document.querySelector<HTMLElement>(
+        '[data-slot="data-page-surface"]',
+      );
+      const dock = document.querySelector<HTMLElement>(
+        '[data-slot="data-page-dock"]',
+      );
+      const actions = document.querySelector<HTMLElement>(
+        '[data-slot="connections-actions"]',
+      );
+      const scopeControls = document.querySelector<HTMLElement>(
+        '[data-slot="data-page-controls"]',
+      );
+      const toolbarContent = toolbar;
       const empty = document.querySelector<HTMLElement>(
         '[data-slot="connections-no-connections"]',
       );
@@ -111,13 +124,22 @@ describe('main connections reference layout', () => {
       const toolbarStyle = toolbarContent
         ? getComputedStyle(toolbarContent)
         : null;
-      const searchStyle = search ? getComputedStyle(search) : null;
+      const searchField = search?.closest<HTMLElement>(
+        '[data-slot="search-field"]',
+      );
+      const searchStyle = searchField ? getComputedStyle(searchField) : null;
       const closeButtonStyle = closeButton
         ? getComputedStyle(closeButton)
         : null;
 
       return {
         layout: rect(layout),
+        page: rect(page),
+        surface: rect(surface),
+        dock: rect(dock),
+        actions: rect(actions),
+        searchField: rect(searchField),
+        scopeControls: rect(scopeControls),
         container: rect(container),
         scroll: rect(scroll),
         toolbar: rect(toolbar),
@@ -129,22 +151,46 @@ describe('main connections reference layout', () => {
         emptyText: empty?.innerText ?? '',
         toolbarDisplay: toolbarStyle?.display ?? '',
         toolbarGap: toolbarStyle?.gap ?? '',
-        toolbarPaddingInline: toolbarStyle?.paddingInline ?? '',
         searchBorderRadius: searchStyle?.borderRadius ?? '',
         closeButtonBorderRadius: closeButtonStyle?.borderRadius ?? '',
         viewport: { width: window.innerWidth, height: window.innerHeight },
       };
     });
 
-    assert.ok(state.viewport.width >= 1200, JSON.stringify(state, null, 2));
+    // X11 window decoration reduces the WebKit content viewport below the
+    // requested outer 1240px. The reference dock still uses its real bounds.
+    assert.ok(state.viewport.width >= 1100, JSON.stringify(state, null, 2));
     assert.ok(state.layout, JSON.stringify(state, null, 2));
     assert.ok(state.container, JSON.stringify(state, null, 2));
-    assert.equal(state.toolbar?.height, 64, JSON.stringify(state, null, 2));
+    assert.ok(state.page, JSON.stringify(state, null, 2));
+    assert.ok(state.surface, JSON.stringify(state, null, 2));
+    assert.ok(state.dock, JSON.stringify(state, null, 2));
+    assert.ok(state.toolbar, JSON.stringify(state, null, 2));
+    assert.ok(state.actions, JSON.stringify(state, null, 2));
+    assert.ok(state.scopeControls, JSON.stringify(state, null, 2));
+    // ref floating DataPage toolbar is docked above the page bottom, not
+    // inserted into the scrollable table or laid out above it.
+    assert.ok(
+      state.dock.y >= state.page.y + state.page.height - 140,
+      JSON.stringify(state, null, 2),
+    );
+    assert.ok(
+      state.dock.y + state.dock.height <= state.page.y + state.page.height,
+      JSON.stringify(state, null, 2),
+    );
+    assert.ok(state.toolbar.y >= state.dock.y, JSON.stringify(state, null, 2));
     assert.ok(
       (state.scroll?.height ?? 0) > 400,
       JSON.stringify(state, null, 2),
     );
-    assert.ok((state.search?.width ?? 0) > 700, JSON.stringify(state, null, 2));
+    assert.ok(
+      (state.search?.width ?? 0) >= 190,
+      JSON.stringify(state, null, 2),
+    );
+    assert.ok(
+      (state.searchField?.height ?? 0) >= 40,
+      JSON.stringify(state, null, 2),
+    );
     assert.ok(
       (state.closeButton?.width ?? 0) >= 32,
       JSON.stringify(state, null, 2),
@@ -156,10 +202,8 @@ describe('main connections reference layout', () => {
     );
     assert.ok(state.emptyText.length > 0, JSON.stringify(state, null, 2));
     assert.equal(state.toolbarDisplay, 'flex', JSON.stringify(state, null, 2));
-    assert.equal(state.toolbarGap, '12px', JSON.stringify(state, null, 2));
-    assert.equal(
-      state.toolbarPaddingInline,
-      '16px',
+    assert.ok(
+      Number.parseFloat(state.toolbarGap) >= 8,
       JSON.stringify(state, null, 2),
     );
     assert.ok(
@@ -176,6 +220,34 @@ describe('main connections reference layout', () => {
       fs.mkdirSync(path.dirname(evidencePath), { recursive: true });
       await browser.saveScreenshot(evidencePath);
     }
+  });
+
+  it('uses the ref glass SearchField clear action and synchronizes the route', async () => {
+    const search = await displayedElement('[data-slot="connections-search"]');
+    await focusElement(search);
+    await browser.keys('__chimera_ref_search_clear__');
+
+    const clearButton = await displayedElement(
+      '[data-slot="data-page-dock"] [data-slot="search-field-clear"]',
+    );
+    await clearButton.waitForClickable({ timeout: 10_000 });
+    await browser.waitUntil(
+      async () => new URL(await browser.getUrl()).searchParams.has('q'),
+      {
+        timeout: 10_000,
+        timeoutMsg: 'Connections search did not synchronize to the router.',
+      },
+    );
+
+    await clearButton.click();
+    assert.equal(await search.getValue(), '');
+    await browser.waitUntil(
+      async () => !new URL(await browser.getUrl()).searchParams.has('q'),
+      {
+        timeout: 10_000,
+        timeoutMsg: 'Clearing the reference search did not remove q from URL.',
+      },
+    );
   });
 
   /* Contract CONN-URL-SCOPE: selecting a scope tab updates router state. */
@@ -221,5 +293,26 @@ describe('main connections reference layout', () => {
         timeoutMsg: 'Active scope was not written to the route.',
       },
     );
+  });
+
+  it('opens the reference column-settings dialog from the floating actions', async () => {
+    const button = await displayedElement(
+      '[data-slot="data-page-dock"] [data-slot="connections-column-settings"]',
+    );
+    await button.waitForClickable({ timeout: 15_000 });
+    await button.click();
+    const first = await displayedElement(
+      '[data-slot="connections-column-settings-item"]:first-child',
+    );
+    assert.ok(await first.isDisplayed());
+
+    const state = await browser.execute(() => ({
+      dialog: Boolean(document.querySelector('[data-slot="modal-content"]')),
+      columns: document.querySelectorAll(
+        '[data-slot="connections-column-settings-item"]',
+      ).length,
+    }));
+    assert.equal(state.dialog, true, JSON.stringify(state));
+    assert.ok(state.columns >= 8, JSON.stringify(state));
   });
 });

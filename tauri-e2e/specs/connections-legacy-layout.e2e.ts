@@ -205,7 +205,9 @@ describe('legacy connections shared layout', () => {
     assert.ok(layout.viewport, JSON.stringify(layout));
     assert.ok((layout.viewport?.height ?? 0) > 180, JSON.stringify(layout));
     assert.ok(
-      (layout.viewport?.top ?? 0) >= (layout.header?.bottom ?? 0),
+      // WebKit can round adjacent fractional-pixel edges in opposite
+      // directions; keep a 1px tolerance without allowing header overlap.
+      (layout.viewport?.top ?? 0) >= (layout.header?.bottom ?? 0) - 1,
       JSON.stringify(layout),
     );
     assert.ok(
