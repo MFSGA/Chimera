@@ -20,8 +20,13 @@ use crate::client::{
     convergence::ConvergenceHealth,
     core_lifecycle::{CoreLifecycleWorkflow, ServiceTransitionLease, ports::CoreStatusSnapshot},
 };
-use chimera_core::actor_v2::{
-    endpoint::ExecutionHost, service_policy::ServicePhase, service_status::ServiceHostStatus,
+use chimera_core::{
+    actor_v2::{
+        endpoint::ExecutionHost, service_policy::ServicePhase, service_status::ServiceHostStatus,
+    },
+    client::reconciler::plan::{
+        OwnerPlan, ServiceEvidence as ReconcilerServiceEvidence, plan_owner as reconcile_plan_owner,
+    },
 };
 use chimera_core_manager::{CoreError, CoreErrorKind, CoreOwner, Epoch, OperationId, RevisionId};
 use chimera_ipc::{
@@ -621,17 +626,6 @@ impl ServiceEvidence {
     }
 }
 
-/// What should own the runtime, and what the current evidence permits.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum OwnerPlan {
-    Owned,
-    AdoptService,
-    HandBackToLocal,
-    RetireServiceThenLocal,
-    WaitForService { phase: ServicePhase },
-    Unproven { phase: ServicePhase },
-}
-
 /// The shared startup rule: Service Mode is a preference. An unusable
 /// Service falls back to Local; an unknown transition stays with the current
 /// host until the next observation.
@@ -647,33 +641,48 @@ pub(crate) fn effective_host(
     }
 }
 
-/// Pure S2 decision table copied from ref `startup.rs::plan_owner`.
+/// Adapt Chimera's quarantine evidence into ref's runtime ownership planner.
+/// A stopped Core with an error reason may still own quarantined processes:
+/// it must never be presented to the planner as an ordinary stopped Core.
+fn reconciler_service_evidence(service: &ServiceEvidence) -> ReconcilerServiceEvidence {
+    match service {
+        ServiceEvidence::Absent { phase } => ReconcilerServiceEvidence::Absent { phase: *phase },
+        ServiceEvidence::CoreStopped { ready, phase, .. } => {
+            ReconcilerServiceEvidence::CoreStopped {
+                ready: *ready,
+                phase: *phase,
+            }
+        }
+        ServiceEvidence::CoreStoppedWithReason { phase, .. }
+        | ServiceEvidence::Unreadable { phase } => {
+            ReconcilerServiceEvidence::Unreadable { phase: *phase }
+        }
+        ServiceEvidence::CoreRunning {
+            ready,
+            phase,
+            instance,
+            revision,
+        } => ReconcilerServiceEvidence::CoreRunning {
+            ready: *ready,
+            phase: *phase,
+            instance: instance.clone(),
+            revision: revision.clone(),
+        },
+        ServiceEvidence::ForeignCore { ready, phase } => ReconcilerServiceEvidence::ForeignCore {
+            ready: *ready,
+            phase: *phase,
+        },
+    }
+}
+
+/// Production startup uses ref's RuntimeReconciler ownership planner.
+/// CoreLifecycle still executes the chosen transition until its actor is ported.
 pub(crate) fn plan_owner(
     desired: ExecutionHost,
     owner: ExecutionHost,
     service: &ServiceEvidence,
 ) -> OwnerPlan {
-    use ExecutionHost::{Local, Service};
-    use ServiceEvidence::{Absent, CoreRunning, CoreStopped, ForeignCore};
-    let phase = service.phase();
-    match (desired, owner, service) {
-        (Local, Local, Absent { .. } | CoreStopped { .. } | ForeignCore { .. }) => OwnerPlan::Owned,
-        (Local, Local, CoreRunning { ready: true, .. }) => OwnerPlan::RetireServiceThenLocal,
-        (Local, Local, _) => OwnerPlan::Unproven { phase },
-        (Local, Service, _) => OwnerPlan::HandBackToLocal,
-        (Service, Service, _) => OwnerPlan::Owned,
-        (
-            Service,
-            Local,
-            CoreStopped { ready: true, .. }
-            | CoreRunning { ready: true, .. }
-            | ForeignCore { ready: true, .. },
-        ) => OwnerPlan::AdoptService,
-        (Service, Local, Absent { .. } | CoreStopped { ready: false, .. }) => {
-            OwnerPlan::WaitForService { phase }
-        }
-        (Service, Local, _) => OwnerPlan::Unproven { phase },
-    }
+    reconcile_plan_owner(desired, owner, &reconciler_service_evidence(service))
 }
 
 #[cfg(test)]

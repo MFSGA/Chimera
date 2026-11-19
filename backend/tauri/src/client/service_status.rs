@@ -3,28 +3,13 @@
 //! The typed ServiceClient owns the daemon phase, retry budget and readiness
 //! generation; Chimera only adds its installation-directory ownership proof.
 
+#[cfg(test)]
+use chimera_core::actor_v2::service_router::ServicePhase as ActorServicePhase;
 use chimera_core::actor_v2::{
-    service_policy::ServicePhase,
-    service_router::{ServiceHostStatus as ActorServiceStatus, ServicePhase as ActorServicePhase},
+    service_policy::ServicePhase, service_router::ServiceHostStatus as ActorServiceStatus,
     service_status::ServiceHostStatus,
 };
 use chimera_ipc::types::{ServiceStatus, StatusInfo};
-
-fn map_actor_phase(phase: ActorServicePhase) -> ServicePhase {
-    match phase {
-        ActorServicePhase::Probing => ServicePhase::Probing,
-        ActorServicePhase::NotInstalled => ServicePhase::NotInstalled,
-        ActorServicePhase::DaemonStopped => ServicePhase::DaemonStopped,
-        ActorServicePhase::Installing => ServicePhase::Installing,
-        ActorServicePhase::StartingDaemon => ServicePhase::StartingDaemon,
-        ActorServicePhase::Ready => ServicePhase::Ready,
-        ActorServicePhase::Incompatible => ServicePhase::Incompatible,
-        ActorServicePhase::Restarting => ServicePhase::Restarting,
-        ActorServicePhase::Exhausted => ServicePhase::Exhausted,
-        ActorServicePhase::Uninstalling => ServicePhase::Uninstalling,
-        ActorServicePhase::Unknown => ServicePhase::Unknown,
-    }
-}
 
 pub(super) fn project_actor_service_status(actor: &ActorServiceStatus) -> ServiceHostStatus {
     let info = StatusInfo {
@@ -46,7 +31,7 @@ fn project_actor_service_status_with_ownership(
     actor: &ActorServiceStatus,
     runtime_owned: bool,
 ) -> ServiceHostStatus {
-    let phase = match (map_actor_phase(actor.phase), runtime_owned) {
+    let phase = match (actor.phase, runtime_owned) {
         // ref ServiceActor gates on daemon compatibility. Chimera additionally
         // requires that the daemon's runtime directories match this instance.
         (ServicePhase::Ready, false) => ServicePhase::Incompatible,
