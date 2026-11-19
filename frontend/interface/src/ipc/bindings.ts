@@ -18,6 +18,11 @@ export const commands = {
     typedError<ProfileSyncStatus, string>(
       __TAURI_INVOKE('get_profile_sync_status', { uid }),
     ),
+  /**  Dashboard-safe status: do not expose registration errors containing profile URLs. */
+  getProfileSyncStatusSummary: (uid: string) =>
+    typedError<ProfileSyncSummary, string>(
+      __TAURI_INVOKE('get_profile_sync_status_summary', { uid }),
+    ),
   getProfileSyncRuns: (
     uid: string,
     after: {
@@ -27,6 +32,17 @@ export const commands = {
   ) =>
     typedError<RunPageDto, string>(
       __TAURI_INVOKE('get_profile_sync_runs', { uid, after }),
+    ),
+  /**  Dashboard-safe history: omit failure text, outputs and job identifiers. */
+  getProfileSyncRunsSummary: (
+    uid: string,
+    after: {
+      sequence: string;
+      id: string;
+    } | null,
+  ) =>
+    typedError<SyncRunPageSummary, string>(
+      __TAURI_INVOKE('get_profile_sync_runs_summary', { uid, after }),
     ),
   getProfileSyncLogs: (uid: string, run: string, after: string | null) =>
     typedError<LogPageDto, string>(
@@ -3008,6 +3024,19 @@ export type ProfileSyncStatus = {
   history_limit: number;
 };
 
+/**
+ *  Secret-free status for ordinary UI surfaces. Registration errors may carry
+ *  subscription URLs, so expose only their presence.
+ */
+export type ProfileSyncSummary = {
+  scheduled: boolean;
+  next_run_at: string | null;
+  active: SyncRunSummary[];
+  journal_degraded: boolean;
+  has_registration_error: boolean;
+  history_limit: number;
+};
+
 export type ProviderName = string;
 
 export type ProviderType = 'Proxy' | 'Rule' | string;
@@ -3652,6 +3681,32 @@ export type SubscriptionInfo_Serialize = {
   Download: number;
   Total: number;
   Expire: number;
+};
+
+export type SyncOutcomeKind =
+  'succeeded' | 'failed' | 'cancelled' | 'interrupted' | 'skipped';
+
+export type SyncRunPageSummary = {
+  items: SyncRunSummary[];
+  next: RunCursorDto | null;
+};
+
+export type SyncRunStateSummary =
+  | { kind: 'admitted' }
+  | { kind: 'running' }
+  | { kind: 'cancelling' }
+  | { kind: 'finalizing' }
+  | { kind: 'finished'; outcome: SyncOutcomeKind; journal_degraded: boolean };
+
+/**  A sync run without job keys, output, failure text, or log counters. */
+export type SyncRunSummary = {
+  id: string;
+  admission_sequence: string;
+  trigger: string;
+  scheduled_at: string | null;
+  admitted_at: string;
+  finished_at: string | null;
+  state: SyncRunStateSummary;
 };
 
 export type ThemeMode = 'light' | 'dark' | 'system';

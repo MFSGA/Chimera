@@ -9,6 +9,7 @@ import { unwrapResult } from '../utils';
 import {
   commands,
   type ProfileSyncStatus,
+  type ProfileSyncSummary,
   type RunCursorDto,
 } from './bindings';
 import { mutations } from './query-bindings';
@@ -17,7 +18,7 @@ const LIVE_INTERVAL = 2_000;
 const IDLE_INTERVAL = 60_000;
 
 const statusInterval = (
-  status: ProfileSyncStatus | undefined,
+  status: ProfileSyncStatus | ProfileSyncSummary | undefined,
   refreshing: boolean,
 ) => {
   if (refreshing || (status?.active.length ?? 0) > 0) return LIVE_INTERVAL;
@@ -119,6 +120,22 @@ export function useProfileSyncStatus(uid: string) {
   return status;
 }
 
+/** Ref-aligned secret-free status for dashboard cards, with independent cache. */
+export function useProfileSyncStatusSummary(uid: string) {
+  const refreshing =
+    useIsMutating({
+      mutationKey: mutations.updateProfile.mutationKey,
+      predicate: (mutation) =>
+        (mutation.state.variables as { uid?: string } | undefined)?.uid === uid,
+    }) > 0;
+  return useQuery({
+    queryKey: ['profile-sync-status-summary', uid],
+    queryFn: async () =>
+      unwrapResult(await commands.getProfileSyncStatusSummary(uid)),
+    refetchInterval: (query) => statusInterval(query.state.data, refreshing),
+  });
+}
+
 /** Run history is stable except when a run enters or leaves the active set. */
 export function useProfileSyncRuns(uid: string) {
   return useInfiniteQuery({
@@ -127,6 +144,21 @@ export function useProfileSyncRuns(uid: string) {
     queryFn: async ({ pageParam }) =>
       unwrapResult(await commands.getProfileSyncRuns(uid, pageParam)),
     getNextPageParam: (page) => page.next ?? undefined,
+  });
+}
+
+/** Redacted history for dashboard cards; keep detailed logs on the owner view. */
+export function useProfileSyncRunsSummary(
+  uid: string,
+  options: { refetchInterval?: number | false } = {},
+) {
+  return useInfiniteQuery({
+    queryKey: ['profile-sync-runs-summary', uid],
+    initialPageParam: null as RunCursorDto | null,
+    queryFn: async ({ pageParam }) =>
+      unwrapResult(await commands.getProfileSyncRunsSummary(uid, pageParam)),
+    getNextPageParam: (page) => page.next ?? undefined,
+    refetchInterval: options.refetchInterval,
   });
 }
 

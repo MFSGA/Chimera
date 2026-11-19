@@ -161,6 +161,20 @@ pub async fn get_profile_sync_status(
         .await?)
 }
 
+/// Dashboard-safe status: do not expose registration errors containing profile URLs.
+#[tauri::command]
+#[specta::specta]
+pub async fn get_profile_sync_status_summary(
+    client: State<'_, ChimeraClient>,
+    uid: ProfileUid,
+) -> Result<crate::client::jobs::ProfileSyncSummary> {
+    let status = client
+        .profile_sync_status(chimera_config::profile::ProfileId(uid))
+        .await
+        .map_err(|_| IpcError::Custom("profile sync summary unavailable".into()))?;
+    Ok((&status).into())
+}
+
 #[tauri::command]
 #[specta::specta]
 pub async fn get_profile_sync_runs(
@@ -171,6 +185,21 @@ pub async fn get_profile_sync_runs(
     Ok(client
         .profile_sync_runs(chimera_config::profile::ProfileId(uid), after)
         .await?)
+}
+
+/// Dashboard-safe history: omit failure text, outputs and job identifiers.
+#[tauri::command]
+#[specta::specta]
+pub async fn get_profile_sync_runs_summary(
+    client: State<'_, ChimeraClient>,
+    uid: ProfileUid,
+    after: Option<chimera_jobs::dto::RunCursorDto>,
+) -> Result<crate::client::jobs::SyncRunPageSummary> {
+    let page = client
+        .profile_sync_runs(chimera_config::profile::ProfileId(uid), after)
+        .await
+        .map_err(|_| IpcError::Custom("profile sync summary unavailable".into()))?;
+    Ok((&page).into())
 }
 
 #[tauri::command]
