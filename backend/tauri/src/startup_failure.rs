@@ -188,6 +188,7 @@ impl StartupFailure {
             if let Some(error) = error.downcast_ref::<BackupError>() {
                 match error {
                     BackupError::Io { path: actual, .. }
+                    | BackupError::Snapshot { path: actual, .. }
                     | BackupError::InvalidNode { path: actual } => path = Some(actual.clone()),
                     BackupError::Manifest(_) | BackupError::Verification(_) => {}
                 }

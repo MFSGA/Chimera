@@ -1,5 +1,15 @@
 # ref 对齐进度
 
+## DIFF-088：Storage 共享所有权及 Live Snapshot / Hotkey Port（2026-11-19）
+
+- **基线与范围**：以 `ref@c4b35e048` 的 `nyanpasu-runtime-values/src/storage.rs`、`nyanpasu-core/src/storage.rs`、`nyanpasu-migration/{backup.rs,modules/storage.rs}` 为准迁移；不改变 `ref` 或 Runtime gitlink，不访问用户实际数据库与系统配置。重点消除 Tauri 持有的 redb 数据所有权和重复的错误分类实现。
+- **共享数据所有权**：`chimera-contracts/src/storage.rs` 定义上游同形的 `StorageRevision` / `StorageItem`（含 `INITIAL`、`checked_next`）及 `StorageSnapshot`、`HotkeyStore`、`HotkeyStoreOpener` 端口。`chimera-core/src/{storage.rs,redb_ext.rs}` 接管 redb 打开、恢复、条件提交、变更广播、错误分类及原有 Storage 测试；Tauri 仅保留路径注入、typed/legacy 窗口事件和现有 IPC 的兼容重导出，不复制 Core 的数据库算法。
+- **上游快照/Hotkey API**：共享 Core `Storage::export_to` 从一个 redb 读事务复制全部键值到新的数据库文件，禁止覆盖已有目标；为 `StorageSnapshot` 实现动态端口。`RedbHotkeyStoreOpener` 与 `HotkeyStore` 支持按 key `hotkeys` 的缺省读取、持久写入和删除，遵循短生命周期迁移句柄语义；尚未接入完整的上游 Storage Migrator。
+- **备份生产 API**：Tauri `StorageSource::Live(&dyn StorageSnapshot)` 使 `create_backup` 能在源数据库仍打开时导出一致性快照。原有 `StorageSource::File` 继续为启动前 Migration 复制关闭的文件，不能在打开的 redb 数据库上当作安全快照。Live 失败以 `BackupError::Snapshot` 保留原始错误，启动诊断保留失败路径，备份仅清理本次预留的 `.partial`。现有项目尚未从用户可见的手动备份按钮调用 Live 分支。
+- **兼容与非目标**：保留 Chimera 原有的 Revision CAS、Legacy WebStorage key fallback、广播顺序、旧 Tauri 事件名称和 JSON 形状、redb 4.3 兼容分类；未引入上游完整的 snafu/specta StorageOperationError，也未宣称所有 Migration/Backup UI 已对齐。原有 Storage 数据不会自动迁移或被清理。
+- **验证**：`chimera-core storage::tests` **17/17**、`chimera-core redb_ext::tests` **6/6**、Tauri 启动 Storage **2/2**、Backup **22/22**（含 Live 一致性、原文件不覆盖、失败后清理）、Migration **88/88**，IPC Storage 定向测试通过；`cargo check --locked -p chimera --all-features --tests`、Rustfmt、差异检查通过。只验证本机 macOS，Windows/Linux、用户真实热键迁移、桌面 E2E 与发布流程仍未验收。
+- **后续**：完整对齐上游 `nyanpasu-migration` Storage Migrator 与 typed 错误合同，并在有完整 UI/备份边界测试后接入 Live Backup 到真正的手动备份入口。若回滚本轮，应先取消 Live 备份接线再恢复 Tauri Storage owner，不能删除已有的 `.corrupt-*` 证据。
+
 ## DIFF-087：Core Storage 启动恢复对齐 ref（2026-11-19）
 
 - **目标与基线**：以 `ref@c4b35e048` 的 `backend/nyanpasu-core/src/storage.rs` 为准，将 `StorageInner::{try_new_with_open,open_database,create_and_init_database}` 与 `transient_database_error`、`confirmed_database_problem`、`preserve_database` 的启动恢复语义迁入 `backend/tauri/src/core/storage.rs`；风险 L2（数据库恢复与旧用户数据）。本轮不更新 `ref`、Runtime gitlink，不直接访问用户数据库，也不修改系统代理/服务。

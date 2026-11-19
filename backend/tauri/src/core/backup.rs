@@ -4,11 +4,11 @@
 //! the request, so migrations and [`ChimeraClient`](crate::client::ChimeraClient)
 //! share it.
 //!
-//! Chimera currently uses this module only for pre-client migration snapshots.
-//! Its storage owner lacks the ref live snapshot API, so live/manual backups
-//! remain unconnected; migration snapshots use a closed storage file.
+//! Migration snapshots copy a closed database; live snapshots export a read
+//! transaction from the shared core storage owner without copying a locked file.
 
 use crate::utils::path::PathResolver;
+use chimera_contracts::storage::StorageSnapshot;
 use semver::Version;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -47,6 +47,12 @@ pub enum BackupError {
     Verification(#[from] verify::VerificationError),
     #[error("failed to encode the backup manifest")]
     Manifest(#[source] serde_json::Error),
+    #[error("failed to export live storage snapshot at {}", path.display())]
+    Snapshot {
+        path: PathBuf,
+        #[source]
+        source: chimera_contracts::BoxedCause,
+    },
 }
 
 pub enum BackupKind<'a> {
@@ -61,6 +67,8 @@ pub enum BackupKind<'a> {
 pub enum StorageSource<'a> {
     /// No process has the file open (the migration subprocess): copy it.
     File(&'a Path),
+    /// Open store owned by the running app; export a consistent read transaction.
+    Live(&'a dyn StorageSnapshot),
 }
 
 pub struct BackupRequest<'a> {
@@ -356,6 +364,15 @@ fn backup_storage(req: &BackupRequest<'_>, data_dir: &Path) -> Result<(), Backup
             fs::create_dir_all(data_dir).map_err(io_error(data_dir))?;
             fs::copy(source, &dest).map_err(io_error(source))?;
         }
+        StorageSource::Live(source) => {
+            fs::create_dir_all(data_dir).map_err(io_error(data_dir))?;
+            source
+                .export_to(&dest)
+                .map_err(|source| BackupError::Snapshot {
+                    path: dest.clone(),
+                    source,
+                })?;
+        }
     }
     Ok(())
 }
@@ -458,6 +475,67 @@ mod tests {
             .collect();
         names.sort();
         names
+    }
+
+    #[test]
+    fn failed_live_snapshot_keeps_error_source_and_removes_only_its_partial() {
+        struct FailingSnapshot;
+        impl StorageSnapshot for FailingSnapshot {
+            fn export_to(&self, _path: &Path) -> Result<(), chimera_contracts::BoxedCause> {
+                Err(Box::new(io::Error::from(io::ErrorKind::PermissionDenied)))
+            }
+        }
+        let temp = tempfile::tempdir().unwrap();
+        let paths = paths(temp.path());
+        fs::create_dir_all(paths.app_config_dir()).unwrap();
+        let error =
+            create_backup(&manual(&paths, StorageSource::Live(&FailingSnapshot))).unwrap_err();
+        assert!(matches!(
+            &error,
+            BackupError::Snapshot { source, .. }
+                if source.downcast_ref::<io::Error>().is_some_and(|source| source.kind() == io::ErrorKind::PermissionDenied)
+        ));
+        let backups = paths.backups_dir();
+        assert_eq!(fs::read_dir(backups).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn live_snapshot_exports_one_consistent_database_without_copying_locked_file() {
+        use crate::core::storage::{Storage, WebStorage};
+        let temp = tempfile::tempdir().unwrap();
+        let paths = paths(temp.path());
+        fs::create_dir_all(paths.app_config_dir()).unwrap();
+        let storage_path = paths.storage_path();
+        fs::create_dir_all(storage_path.parent().unwrap()).unwrap();
+        let storage = Storage::try_new(&storage_path).unwrap();
+        storage.set_item("web:layout", &"before-snapshot").unwrap();
+
+        let backup = create_backup(&manual(&paths, StorageSource::Live(&storage))).unwrap();
+        assert!(backup.is_available());
+        storage.set_item("web:layout", &"after-snapshot").unwrap();
+
+        let exported_path = backup.path.join("data/storage.db");
+        let exported = Storage::try_new(&exported_path).unwrap();
+        assert_eq!(
+            exported
+                .get_item::<String>("web:layout")
+                .unwrap()
+                .value
+                .as_deref(),
+            Some("before-snapshot")
+        );
+        assert_eq!(
+            storage
+                .get_item::<String>("web:layout")
+                .unwrap()
+                .value
+                .as_deref(),
+            Some("after-snapshot")
+        );
+        assert_eq!(
+            read_manifest(&backup)["format_version"],
+            verify::FORMAT_VERSION
+        );
     }
 
     #[test]
