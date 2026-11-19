@@ -1,38 +1,31 @@
 import { useClashRules } from '@chimera/interface';
-import { cn } from '@chimera/ui';
-import { Button } from '@chimera/ui/button';
-import { ScrollArea } from '@chimera/ui/scroll-area';
 import {
-  Sidebar,
-  SidebarLabelItem,
-  SidebarProvider,
-  SidebarToggleButton,
-  useSidebar,
-} from '@chimera/ui/slider-sidebar';
-import { Tooltip, TooltipContent, TooltipTrigger } from '@chimera/ui/tooltip';
+  NavigationSidebar,
+  NavigationSidebarContent,
+  NavigationSidebarItem,
+  NavigationSidebarToggle,
+} from '@chimera/ui/navigation-sidebar';
+import { ScrollArea } from '@chimera/ui/scroll-area';
+import { SidebarProvider } from '@chimera/ui/slider-sidebar';
 import { createFileRoute, Link, Outlet } from '@tanstack/react-router';
 import ListRounded from '~icons/material-symbols/lists-rounded';
-import {
-  useMemo,
-  type ComponentProps,
-  type PropsWithChildren,
-  type ReactNode,
-} from 'react';
+import { useMemo, type PropsWithChildren, type ReactNode } from 'react';
 import z from 'zod';
-import { useIsMobileOrTablet } from '@/hooks/use-is-moblie';
+import { keepReturn } from '@/components/router/cross-navigation';
 import * as m from '@/paraglide/messages';
+import { dataPageLayoutVariants } from '../_modules/data-page';
 import ProxyIcon from './_modules/proxy-icon';
+import { RULE_SORTS } from './_modules/rule-row';
 
 export const Route = createFileRoute('/(main)/main/rules')({
   component: RouteComponent,
   validateSearch: z.object({
     proxy: z.string().optional().nullable(),
+    q: z.string().optional(),
+    // The rule order is the default, so it is never written.
+    sort: z.enum(RULE_SORTS).exclude(['index']).optional(),
   }),
 });
-
-const SidebarContent = ({ className, ...props }: ComponentProps<'div'>) => {
-  return <div className={cn('p-2', className)} {...props} />;
-};
 
 const Item = ({
   item,
@@ -40,58 +33,30 @@ const Item = ({
   icon,
 }: PropsWithChildren<{
   item?: string;
-  icon?: ReactNode;
+  icon: ReactNode;
 }>) => {
   const { proxy } = Route.useSearch();
-  const { open, setOpen } = useSidebar();
-  const isMobileOrTablet = useIsMobileOrTablet();
-
-  const handleClick = () => {
-    if (isMobileOrTablet) {
-      setOpen(false);
-    }
-  };
 
   return (
-    <Tooltip open={open ? false : undefined}>
-      <TooltipTrigger asChild>
-        <Button
-          variant="fab"
-          data-active={String(item === proxy)}
-          className={cn(
-            'h-12 min-w-0 px-3',
-            'flex items-center gap-2',
-            'data-[active=true]:bg-surface-variant/50',
-            'data-[active=false]:bg-transparent',
-            'data-[active=false]:shadow-none',
-            'data-[active=false]:hover:shadow-none',
-            'data-[active=false]:hover:bg-surface-variant/30',
-          )}
-          onClick={handleClick}
-          asChild
+    <NavigationSidebarItem
+      active={(item ?? null) === (proxy ?? null)}
+      icon={icon}
+      renderLink={(content) => (
+        <Link
+          from={Route.fullPath}
+          to="."
+          search={(previous) => ({
+            ...previous,
+            proxy: item,
+          })}
+          state={keepReturn}
         >
-          <Link
-            to="."
-            data-slot="rules-proxy-item"
-            data-proxy-item-kind={item === undefined ? 'all' : 'named'}
-            data-proxy-item={item}
-            search={{
-              proxy: item,
-            }}
-          >
-            <div className="text-md grid size-6 shrink-0 place-content-center">
-              {icon}
-            </div>
-
-            <SidebarLabelItem>{children}</SidebarLabelItem>
-          </Link>
-        </Button>
-      </TooltipTrigger>
-
-      <TooltipContent side="right">
-        <p>{children}</p>
-      </TooltipContent>
-    </Tooltip>
+          {content}
+        </Link>
+      )}
+    >
+      {children}
+    </NavigationSidebarItem>
   );
 };
 
@@ -108,7 +73,7 @@ const ProxySelector = () => {
   }, [data]);
 
   return (
-    <SidebarContent className="flex flex-col gap-2">
+    <NavigationSidebarContent className="pb-16">
       <Item icon={<ListRounded />}>{m.rules_list_all_proxies()}</Item>
 
       {allProxy.map((item) => (
@@ -116,27 +81,23 @@ const ProxySelector = () => {
           {item}
         </Item>
       ))}
-    </SidebarContent>
+    </NavigationSidebarContent>
   );
 };
 
 function RouteComponent() {
   return (
     <SidebarProvider defaultOpen={false}>
-      <div
-        className={cn(
-          'divide-outline-variant relative flex min-h-0 w-full divide-x overflow-hidden',
-        )}
-      >
-        <Sidebar className="divide-outline-variant z-10 flex h-full min-h-0 flex-col divide-y">
+      <div className={dataPageLayoutVariants()}>
+        <NavigationSidebar>
           <ScrollArea className="min-h-0 w-full flex-1 [&>div>div]:block!">
             <ProxySelector />
           </ScrollArea>
 
-          <SidebarContent className="flex h-16 justify-end">
-            <SidebarToggleButton />
-          </SidebarContent>
-        </Sidebar>
+          <NavigationSidebarToggle aria-label={m.rules_list_all_proxies()}>
+            {m.navigation_sidebar_collapse()}
+          </NavigationSidebarToggle>
+        </NavigationSidebar>
 
         <Outlet />
       </div>
