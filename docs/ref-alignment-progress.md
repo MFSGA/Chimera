@@ -1,5 +1,13 @@
 # ref 对齐进度
 
+## DIFF-087：Core Storage 启动恢复对齐 ref（2026-11-19）
+
+- **目标与基线**：以 `ref@c4b35e048` 的 `backend/nyanpasu-core/src/storage.rs` 为准，将 `StorageInner::{try_new_with_open,open_database,create_and_init_database}` 与 `transient_database_error`、`confirmed_database_problem`、`preserve_database` 的启动恢复语义迁入 `backend/tauri/src/core/storage.rs`；风险 L2（数据库恢复与旧用户数据）。本轮不更新 `ref`、Runtime gitlink，不直接访问用户数据库，也不修改系统代理/服务。
+- **实现与上游映射**：对齐上游的 `symlink_metadata`、`chimera_persistence::{retry_io,retry_with_delay,retry,is_link,preserve}`，沿用 `utils/redb_ext::{RedbFailure,find_failure}` 分类；只对明确损坏、不兼容或缺失表的数据库保留原节点并重建。暂态 IO/文件锁按上游 50/100/200 ms 重试，其他未确认失败直接返回而不改动原文件；目录与符号链接保留为 `.corrupt-*` 证据，不再递归删除。打开已有库还要验证预期 `clash-nyanpasu` 表存在。
+- **必要兼容差异**：上游已将 Storage 归属 `nyanpasu-core`，Chimera 本轮仍在 `tauri/src/core/storage.rs`，保留现有 `StorageRevision` 条件提交、namespaced/legacy fallback、typed/legacy 事件和 IPC 契约；错误类型仍是本地 `thiserror` 结构而非上游的完整 `snafu`/`specta` 类型。当前 redb 是 4.3 系列，而上游版本可能不同；剩余迁移需结合迁移/备份 ports 与前端 wire 合同统一收敛，不能宣称 Storage 已完全对齐。
+- **验证与失败历史**：macOS 本机 `core::storage::tests` **17/17**（损坏文件证据、缺失表、目录、链接、异常上级路径、暂态重试耗尽、未确认错误保留原始字节、现有 revision/Legacy 行为）；`core::backup::tests` **20/20**；`core::migration::` **88/88**。全 feature Tauri 测试目标编译检查及 Rustfmt/diff check 通过。一轮按 `ipc::tests` 过滤的测试额外命中 Service IPC 时序用例，其中 **1/23** 失败；该用例隔离重跑 **3/3** 通过，未修改测试或关闭断言，独立并发不稳定性尚需调查。未执行 Windows/Linux、真实用户数据库升级、全量 E2E，不能将定向验证视为发布验收。
+- **回滚与后续**：如出现不兼容，可回滚本轮 Storage 修改；已产生的 `.corrupt-*` 文件必须由用户明确处理，不允许清理脚本自动删除。下一批优先搬迁共享 Core Storage 所有权和细粒度错误合同，并对上游 `StorageSnapshot`、HotkeyStore / Migration ports 建立完整路径映射与回归。
+
 ## DIFF-086：ProfileFsPort 文件操作的精准类型化错误映射（2026-11-13）
 
 - **基线与范围**：在固定 `ref@59724e85c`、`backend/chimera-runtime@d56b083` 和本地 `codex/ref-os-dns-20261112` 上继续承接 DIFF-085。只改 `backend/tauri/src/service/profile_file.rs` 文件 I/O 失败的错误映射与对应测试，不改 App/Profiles 配置、文件事务算法、IPC 错误协议或生产行为；未合并、未推送。此轮风险为文件操作错误来源和日志文本的变化。
