@@ -577,6 +577,24 @@ impl ApplicationWorkflowState {
             .send_modify(|status| status.set_maintenance(reason));
     }
 
+    /// Shared S2 admission barrier. A Startup recovery worker may hold the
+    /// Service transition lease *outside* the CoreLifecycle mailbox; startup
+    /// and follow-up owner commands may also be queued behind another action.
+    /// Neither a readiness event nor a source notification can infer an
+    /// established owner before those transitions have settled.
+    fn owner_transition_pending(&self) -> bool {
+        self.startup_recovery_pending.load(Ordering::Acquire)
+            || self.pending.iter().any(|request| {
+                matches!(
+                    &request.command,
+                    Command::FollowService { .. }
+                        | Command::StartupReconcile { .. }
+                        | Command::RecoverStartup { .. }
+                        | Command::RetryStartup { .. }
+                )
+            })
+    }
+
     /// Evaluate release debt after a proven runtime round or a Service
     /// observation. This never starts a second Core controller: the actual
     /// daemon stop is admitted as its own serialized lifecycle command.
@@ -587,6 +605,7 @@ impl ApplicationWorkflowState {
             || self.active.is_some()
             || self.startup_owner_unproven
             || self.startup_owner_unproven_shared.load(Ordering::Acquire)
+            || self.owner_transition_pending()
             || !matches!(
                 self.reconciler.borrow().conclusion,
                 chimera_core::client::reconciler::plan::Conclusion::Converged
@@ -631,15 +650,30 @@ impl ApplicationWorkflowState {
             || self.startup_owner_unproven
             || self.startup_owner_unproven_shared.load(Ordering::Acquire)
             || self.active.is_some()
-            || self
-                .pending
-                .iter()
-                .any(|request| matches!(&request.command, Command::FollowService { .. }))
+            || self.owner_transition_pending()
         {
             return;
         }
         self.source_dirty = true;
         self.mark_runtime_dirty(myself);
+    }
+
+    /// DirtyTick may have fired while an independently acquired Startup
+    /// transition lease was still outstanding. Keep its latest-target intent
+    /// rather than dropping it or submitting Core early; a successful owner
+    /// recovery or later independent Service evidence rearms one coalesced tick.
+    fn rearm_deferred_dirty_after_owner(&mut self, myself: &ActorRef<Message>) {
+        if self.dirty
+            && self.run_intent == RunIntent::Running
+            && !self.uncertain
+            && !self.shutting_down
+            && !self.startup_owner_unproven
+            && !self.startup_owner_unproven_shared.load(Ordering::Acquire)
+            && self.active.is_none()
+            && !self.owner_transition_pending()
+        {
+            self.mark_runtime_dirty(myself);
+        }
     }
 
     async fn follow_service(&mut self) {
@@ -649,6 +683,7 @@ impl ApplicationWorkflowState {
             || self.shutting_down
             || self.startup_owner_unproven
             || self.startup_owner_unproven_shared.load(Ordering::Acquire)
+            || self.owner_transition_pending()
         {
             return;
         }
@@ -1630,6 +1665,7 @@ impl Actor for ApplicationWorkflowActor {
                         });
                     }
                     state.follow_service().await;
+                    state.rearm_deferred_dirty_after_owner(&myself);
                     // A failed S2 owner move retains the committed-source
                     // continuation. It may be repaired by a later startup
                     // recovery or explicit Start, not only FollowService.
@@ -1683,11 +1719,13 @@ impl Actor for ApplicationWorkflowActor {
                 state.publish_service_status(info);
                 state.follow_service().await;
                 state.replan_retained_source_on_service_change(&myself);
+                state.rearm_deferred_dirty_after_owner(&myself);
                 state.schedule_service_release(false).await;
             }
             Message::ServiceReadiness => {
                 state.follow_service().await;
                 state.replan_retained_source_on_service_change(&myself);
+                state.rearm_deferred_dirty_after_owner(&myself);
                 state.schedule_service_release(false).await;
             }
             Message::ServiceProbeFailed => {
@@ -1782,6 +1820,7 @@ impl Actor for ApplicationWorkflowActor {
                     if startup_recovery_required
                         || state.startup_owner_unproven
                         || state.startup_owner_unproven_shared.load(Ordering::Acquire)
+                        || state.owner_transition_pending()
                     {
                         // Ref's source commit stays durable even when S2 must
                         // recover the initial owner first. Coalesce concurrent
@@ -1792,7 +1831,7 @@ impl Actor for ApplicationWorkflowActor {
                             || state.startup_owner_unproven_shared.load(Ordering::Acquire)
                         {
                             state.request_startup_recovery(&myself);
-                        } else if !state.startup_recovery_pending.load(Ordering::Acquire) {
+                        } else if !state.owner_transition_pending() {
                             // The externally requested recovery may have
                             // settled before this source message was read.
                             // Replan through S2 rather than dropping its
@@ -1827,6 +1866,10 @@ impl Actor for ApplicationWorkflowActor {
                 if state.run_intent == RunIntent::Stopped || state.uncertain || state.shutting_down
                 {
                     state.dirty = false;
+                } else if state.owner_transition_pending() {
+                    // Do not consume dirty/source_dirty or dispatch a runtime
+                    // submit while Startup or FollowService owns the host.
+                    // A resolved transition will rearm this same dirty state.
                 } else if state.dirty {
                     state.dirty = false;
                     let source_round = std::mem::take(&mut state.source_dirty);
@@ -1840,6 +1883,7 @@ impl Actor for ApplicationWorkflowActor {
             Message::StartupRecoveryFinished { succeeded } => {
                 if succeeded {
                     state.replan_retained_source_on_service_change(&myself);
+                    state.rearm_deferred_dirty_after_owner(&myself);
                 }
             }
             Message::StartupRetryDue { identity } => {
@@ -11988,6 +12032,113 @@ mod tests {
         client.shutdown().await.unwrap();
     }
 
+    /// A source dirty tick can be scheduled before Startup recovery obtains
+    /// its owner lease. If the lease becomes pending before that tick fires,
+    /// the tick must not dispatch S3/S4 against an unproven transition.
+    #[tokio::test]
+    async fn queued_source_dirty_tick_waits_for_startup_owner_recovery() {
+        use chimera_core::client::reconciler::plan::Conclusion;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = Utf8PathBuf::from_path_buf(dir.path().join("profiles.yaml")).unwrap();
+        let mut manager = PersistentStateManagerSetup::<
+            chimera_config::profile::Profiles,
+            crate::core::migration::modules::profiles::ProfilesFormat,
+        >::builder()
+        .config_path(path)
+        .assemble()
+        .from_state(chimera_config::profile::Profiles::default())
+        .await
+        .unwrap();
+        let core = Arc::new(ReceiptProofCore {
+            active: Mutex::new(None),
+            publish_wrong_target: false,
+            change_instance_between_reads: false,
+            status_reads: AtomicUsize::new(0),
+            submissions: AtomicUsize::new(0),
+            stops: AtomicUsize::new(0),
+            service_to_retire: None,
+            retire_calls: AtomicUsize::new(0),
+        });
+        let client = spawn_startup_client_with_profiles(
+            core.clone(),
+            Arc::new(RecordingService {
+                events: Arc::new(Mutex::new(Vec::new())),
+            }),
+            manager.snapshot_handle(),
+        )
+        .await;
+        assert_eq!(
+            client.startup_reconcile().await.unwrap().report.outcome,
+            StartupOutcome::Ready
+        );
+        assert_eq!(core.submissions.load(AtomicOrdering::Acquire), 1);
+        let CoreLifecycleClientInner::Actor {
+            actor_ref,
+            startup_recovery_pending,
+            ..
+        } = client.0.as_ref()
+        else {
+            panic!("dirty-tick gate test requires the actor");
+        };
+
+        let mut next = manager.snapshot().as_ref().clone();
+        next.valid.push("dirty-tick-crosses-startup-lease".into());
+        manager
+            .replace_if_version(chimera_core::state::Version::new(0), next)
+            .await
+            .unwrap();
+        client.source_committed(SourceDomain::Profiles, 1, true);
+        let seen = match actor_ref
+            .call(
+                |reply| Message::ReadSourceVersionsForTest { reply },
+                Some(Duration::from_secs(1)),
+            )
+            .await
+            .unwrap()
+        {
+            ractor::rpc::CallResult::Success(seen) => seen,
+            other => panic!("failed to observe queued source: {other:?}"),
+        };
+        assert_eq!(seen.version(SourceDomain::Profiles), Some(1));
+
+        startup_recovery_pending.store(true, Ordering::Release);
+        tokio::time::sleep(DIRTY_WINDOW + Duration::from_millis(70)).await;
+        assert_eq!(
+            core.submissions.load(AtomicOrdering::Acquire),
+            1,
+            "a scheduled dirty tick cannot bypass an outstanding Startup owner lease"
+        );
+        assert_eq!(core.stops.load(AtomicOrdering::Acquire), 0);
+
+        startup_recovery_pending.store(false, Ordering::Release);
+        actor_ref
+            .cast(Message::StartupRecoveryFinished { succeeded: true })
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(4), async {
+            loop {
+                let status = client.reconciler_status();
+                if core.submissions.load(AtomicOrdering::Acquire) == 2
+                    && core.stops.load(AtomicOrdering::Acquire) == 1
+                    && status
+                        .recent
+                        .iter()
+                        .filter(|round| round.trigger == "SourceCommitted")
+                        .count()
+                        == 1
+                    && status.active.is_none()
+                    && matches!(status.conclusion, Conclusion::Converged)
+                {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("pending latest-source dirty must resume after verified owner recovery");
+        client.shutdown().await.unwrap();
+    }
+
     /// Source commits are durable even if the caller has already requested
     /// a Startup owner recovery. The two notifications must coalesce behind
     /// its lease, then re-read the latest Profiles generation after recovery
@@ -12071,6 +12222,30 @@ mod tests {
                     .filter(|round| round.trigger == "SourceCommitted")
                     .count(),
                 0
+            );
+
+            // A readiness change and even a stale successful completion from
+            // another generation must NOT bypass an active Startup recovery
+            // lease. They can wake the source only after this gate clears.
+            signal_service_readiness_change(&client);
+            actor_ref
+                .cast(Message::StartupRecoveryFinished { succeeded: true })
+                .unwrap();
+            tokio::time::sleep(DIRTY_WINDOW + Duration::from_millis(70)).await;
+            assert_eq!(
+                core.submissions.load(AtomicOrdering::Acquire),
+                1,
+                "readiness/stale success must not apply while Startup recovery is pending"
+            );
+            assert_eq!(
+                client
+                    .reconciler_status()
+                    .recent
+                    .iter()
+                    .filter(|round| round.trigger == "SourceCommitted")
+                    .count(),
+                0,
+                "Startup recovery must finish before the latest source is admitted"
             );
 
             if stop_before_recovery {
