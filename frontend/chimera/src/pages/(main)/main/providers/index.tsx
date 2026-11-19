@@ -22,6 +22,7 @@ import { formatError } from '@/utils';
 import { formatRelativeTime } from '@/utils/date';
 import { formatBytes } from '@/utils/format-bytes';
 import { message } from '@/utils/notification';
+import { runProviderAction } from './_modules/provider-action';
 import { useProxiesProviderUpdate } from './_modules/use-proxies-provider-update';
 import { useProxiesSubscription } from './_modules/use-proxies-subscription';
 import { useRulesProviderUpdate } from './_modules/use-rules-provider-update';
@@ -91,7 +92,13 @@ const Proxies = ({ data }: { data: ClashProxiesProviderQueryItem }) => {
 
   const blockTask = useProxiesProviderUpdate(data);
 
-  const handleClick = useLockFn(blockTask.execute);
+  const handleClick = useLockFn(async () => {
+    try {
+      await blockTask.execute();
+    } catch {
+      // The provider action already displayed its failure notification.
+    }
+  });
 
   return (
     <NavigateButton className="flex flex-col gap-2">
@@ -143,6 +150,10 @@ const Proxies = ({ data }: { data: ClashProxiesProviderQueryItem }) => {
             icon
             loading={blockTask.isPending}
             aria-label={data.name}
+            data-slot="providers-item-update"
+            data-provider-name={data.name}
+            data-error={String(blockTask.isError)}
+            data-loading={String(blockTask.isPending)}
             onClick={(e) => {
               e.preventDefault();
               e.stopPropagation();
@@ -160,7 +171,13 @@ const Proxies = ({ data }: { data: ClashProxiesProviderQueryItem }) => {
 const Rules = ({ data }: { data: ClashRulesProviderQueryItem }) => {
   const blockTask = useRulesProviderUpdate(data);
 
-  const handleClick = useLockFn(blockTask.execute);
+  const handleClick = useLockFn(async () => {
+    try {
+      await blockTask.execute();
+    } catch {
+      // The provider action already displayed its failure notification.
+    }
+  });
 
   return (
     <NavigateButton className="flex flex-col gap-2">
@@ -194,6 +211,10 @@ const Rules = ({ data }: { data: ClashRulesProviderQueryItem }) => {
             icon
             loading={blockTask.isPending}
             aria-label={data.name}
+            data-slot="providers-item-update"
+            data-provider-name={data.name}
+            data-error={String(blockTask.isError)}
+            data-loading={String(blockTask.isPending)}
             onClick={(e) => {
               e.preventDefault();
               e.stopPropagation();
@@ -222,20 +243,28 @@ function RouteComponent() {
       return;
     }
 
-    try {
-      await Promise.all(
-        proxies.map(([_, data]) => updateProxies.mutateAsync(data.name)),
-      );
-    } catch (error) {
-      console.error('Failed to update proxies provider', error);
-      await message(`Update provider failed: \n ${formatError(error)}`, {
-        title: 'Error',
-        kind: 'error',
-      });
-    }
+    await runProviderAction(
+      () =>
+        Promise.all(
+          proxies.map(([_, data]) => updateProxies.mutateAsync(data.name)),
+        ),
+      async (error) => {
+        console.error('Failed to update proxies provider', error);
+        await message(`Update provider failed: \n ${formatError(error)}`, {
+          title: 'Error',
+          kind: 'error',
+        });
+      },
+    );
   });
 
-  const handleUpdateProxies = useLockFn(proxiesBlockTask.execute);
+  const handleUpdateProxies = useLockFn(async () => {
+    try {
+      await proxiesBlockTask.execute();
+    } catch {
+      // A rejected native update is already reported by the task.
+    }
+  });
 
   const rulesProvider = useClashRulesProvider();
 
@@ -248,20 +277,28 @@ function RouteComponent() {
       return;
     }
 
-    try {
-      await Promise.all(
-        rules.map(([_, data]) => updateRules.mutateAsync(data.name)),
-      );
-    } catch (error) {
-      console.error('Failed to update rules provider', error);
-      await message(`Update provider failed: \n ${formatError(error)}`, {
-        title: 'Error',
-        kind: 'error',
-      });
-    }
+    await runProviderAction(
+      () =>
+        Promise.all(
+          rules.map(([_, data]) => updateRules.mutateAsync(data.name)),
+        ),
+      async (error) => {
+        console.error('Failed to update rules provider', error);
+        await message(`Update provider failed: \n ${formatError(error)}`, {
+          title: 'Error',
+          kind: 'error',
+        });
+      },
+    );
   });
 
-  const handleUpdateRules = useLockFn(rulesBlockTask.execute);
+  const handleUpdateRules = useLockFn(async () => {
+    try {
+      await rulesBlockTask.execute();
+    } catch {
+      // A rejected native update is already reported by the task.
+    }
+  });
 
   return (
     <div
@@ -277,6 +314,8 @@ function RouteComponent() {
             onClick={handleUpdateProxies}
             loading={proxiesBlockTask.isPending}
             data-slot="providers-update-all-proxies"
+            data-error={String(proxiesBlockTask.isError)}
+            data-loading={String(proxiesBlockTask.isPending)}
             aria-label={m.providers_proxies_title()}
           >
             <RefreshRounded />
@@ -306,6 +345,8 @@ function RouteComponent() {
             onClick={handleUpdateRules}
             loading={rulesBlockTask.isPending}
             data-slot="providers-update-all-rules"
+            data-error={String(rulesBlockTask.isError)}
+            data-loading={String(rulesBlockTask.isPending)}
             aria-label={m.providers_rules_title()}
           >
             <RefreshRounded />
