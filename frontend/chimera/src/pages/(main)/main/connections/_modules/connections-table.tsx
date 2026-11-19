@@ -33,6 +33,7 @@ import {
   type ReactNode,
 } from 'react';
 import { useLocalStorage } from '@/hooks/use-local-storage';
+import { useDataPageBottomInset } from '../../_modules/data-page';
 import {
   focusHighlightStyle,
   useFocusHighlight,
@@ -226,8 +227,14 @@ function ConnectionsTable<TRow extends RowData>({
 
   const { rows } = table.getRowModel();
 
+  // Same as ref: keep the last virtual row clear of the floating toolbar.
+  // The Legacy route has no DataPage and inherits the default zero inset.
+  const bottomInset = useDataPageBottomInset();
+
   const rowVirtualizer = useVirtualizer({
     count: rows.length,
+    paddingEnd: bottomInset,
+    scrollPaddingEnd: bottomInset,
     getScrollElement: () => viewportElement,
     estimateSize: () => ROW_HEIGHT,
     overscan: 10,

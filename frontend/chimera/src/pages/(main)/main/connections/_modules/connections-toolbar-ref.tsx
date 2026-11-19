@@ -1,0 +1,115 @@
+import { Button } from '@chimera/ui/button';
+import {
+  GlassControlGroup,
+  glassControlGroupVariants,
+} from '@chimera/ui/glass-control-group';
+import { ModalTrigger } from '@chimera/ui/modal';
+import { SearchField } from '@chimera/ui/search-field';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@chimera/ui/tooltip';
+import { cn } from '@chimera/utils';
+import CloseRounded from '~icons/material-symbols/close-rounded';
+import ViewColumnRounded from '~icons/material-symbols/view-column-rounded';
+import type { ReactNode } from 'react';
+import * as m from '@/paraglide/messages';
+import { DataPageToolbar } from '../../_modules/data-page';
+import ConnectionsFilters from './connections-filters';
+import { isFiltered, type ConnectionsSelection } from './use-connection-rows';
+
+export default function ConnectionsToolbar({
+  start,
+  tabs,
+  selection,
+  onSelectionChange,
+  search,
+  onSearchChange,
+  onCloseAll,
+}: {
+  /** Rendered before every control, such as the way back after a jump. */
+  start?: ReactNode;
+  tabs?: ReactNode;
+  selection: ConnectionsSelection;
+  onSelectionChange: (selection: ConnectionsSelection) => void;
+  search: string;
+  onSearchChange: (search: string) => void;
+  /** Absent while no live connection is listed. */
+  onCloseAll?: () => void;
+}) {
+  const filtered = isFiltered(selection);
+
+  // Removable filters have their own floating row beneath the controls.
+  return (
+    <DataPageToolbar className="@container" data-slot="connections-toolbar">
+      {start}
+
+      {filtered && (
+        <ConnectionsFilters
+          className={cn(glassControlGroupVariants(), 'order-last basis-full')}
+          selection={selection}
+          onSelectionChange={onSelectionChange}
+        />
+      )}
+
+      <SearchField
+        variant="glass"
+        // Too narrow to read a term, it wraps instead of squeezing.
+        className="min-w-[min(12rem,100%)] flex-1 basis-48"
+        data-slot="connections-search"
+        placeholder={m.connections_search_placeholder()}
+        value={search}
+        onValueChange={onSearchChange}
+        clearLabel={m.common_clear()}
+      />
+
+      {tabs && (
+        <GlassControlGroup
+          className="max-w-full overflow-x-auto"
+          data-slot="data-page-controls"
+        >
+          {tabs}
+        </GlassControlGroup>
+      )}
+
+      <GlassControlGroup
+        className="ml-auto shrink-0"
+        data-slot="connections-actions"
+      >
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <ModalTrigger asChild>
+              <Button
+                variant="glass"
+                aria-label={m.connections_column_settings()}
+                data-slot="connections-column-settings"
+                icon
+              >
+                <ViewColumnRounded />
+              </Button>
+            </ModalTrigger>
+          </TooltipTrigger>
+
+          <TooltipContent>{m.connections_column_settings()}</TooltipContent>
+        </Tooltip>
+
+        {onCloseAll && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="glass"
+                onClick={onCloseAll}
+                aria-label={m.connections_close_all_connections()}
+                data-slot="connections-close-all"
+                icon
+              >
+                <CloseRounded />
+              </Button>
+            </TooltipTrigger>
+
+            <TooltipContent>
+              {m.connections_close_all_connections()}
+            </TooltipContent>
+          </Tooltip>
+        )}
+      </GlassControlGroup>
+    </DataPageToolbar>
+  );
+}
