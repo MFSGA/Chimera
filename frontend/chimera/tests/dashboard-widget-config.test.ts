@@ -86,6 +86,36 @@ test('normalizes persisted widget settings and rejects invalid values', () => {
   assert.equal('unknown-0' in normalized.byInstance, false);
 });
 
+test('normalizes Proxy Mode layout without changing Proxy Shortcuts semantics', () => {
+  const stored = normalizeWidgetConfigStorage({
+    version: 1,
+    byInstance: {
+      'proxy-mode-0': { type: WidgetId.ProxyMode, layout: 'focus' },
+      'proxy-mode-1': { type: WidgetId.ProxyMode, layout: 'equal' },
+      'proxy-shortcuts-0': {
+        type: WidgetId.ProxyShortcuts,
+        layout: 'equal',
+        buttons: 'both',
+        order: 'system-first',
+      },
+    },
+  });
+
+  assert.equal(
+    getWidgetConfig(stored, 'proxy-mode-0', WidgetId.ProxyMode).layout,
+    'focus',
+  );
+  assert.equal(
+    getWidgetConfig(stored, 'proxy-mode-1', WidgetId.ProxyMode).layout,
+    'flex',
+  );
+  assert.equal(
+    getWidgetConfig(stored, 'proxy-shortcuts-0', WidgetId.ProxyShortcuts)
+      .layout,
+    'equal',
+  );
+});
+
 test('rejects unknown versions and defaults malformed storage and mismatches', () => {
   for (const version of [2, '2']) {
     assert.throws(

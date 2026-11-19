@@ -39,7 +39,11 @@ function Choice<T extends string>({
   onChange,
 }: {
   field:
-    'speed-unit' | 'shortcut-layout' | 'shortcut-buttons' | 'shortcut-order';
+    | 'speed-unit'
+    | 'shortcut-layout'
+    | 'shortcut-buttons'
+    | 'shortcut-order'
+    | 'proxy-mode-layout';
   label: string;
   value: T;
   options: ChoiceOption<T>[];
@@ -152,6 +156,28 @@ function ConfigFieldRows({
   onChange: (config: WidgetConfig) => void;
 }) {
   switch (config.type) {
+    case WidgetId.ProxyMode:
+      return (
+        <ConfigGroup>
+          <Choice
+            field="proxy-mode-layout"
+            label={m.dashboard_widget_proxy_mode_config_layout()}
+            value={config.layout}
+            disabled={disabled}
+            options={[
+              {
+                value: 'focus',
+                label: m.dashboard_widget_proxy_mode_config_focus(),
+              },
+              {
+                value: 'flex',
+                label: m.dashboard_widget_proxy_mode_config_flex(),
+              },
+            ]}
+            onChange={(layout) => onChange({ ...config, layout })}
+          />
+        </ConfigGroup>
+      );
     case WidgetId.TrafficDown:
     case WidgetId.TrafficUp:
       return (

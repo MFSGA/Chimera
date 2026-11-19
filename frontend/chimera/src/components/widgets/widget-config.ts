@@ -6,6 +6,7 @@ export enum WidgetId {
   Memory = 'memory',
   ProxyShortcuts = 'proxy-shortcuts',
   CoreShortcuts = 'core-shortcuts',
+  ProxyMode = 'proxy-mode',
 }
 
 type TrafficConfig = {
@@ -36,6 +37,10 @@ export type WidgetConfigs = {
   [WidgetId.CoreShortcuts]: {
     type: WidgetId.CoreShortcuts;
     showVersion: boolean;
+  };
+  [WidgetId.ProxyMode]: {
+    type: WidgetId.ProxyMode;
+    layout: 'focus' | 'flex';
   };
 };
 
@@ -73,6 +78,10 @@ export const DEFAULT_WIDGET_CONFIGS: WidgetConfigs = {
   [WidgetId.CoreShortcuts]: {
     type: WidgetId.CoreShortcuts,
     showVersion: true,
+  },
+  [WidgetId.ProxyMode]: {
+    type: WidgetId.ProxyMode,
+    layout: 'flex',
   },
 };
 
@@ -129,7 +138,11 @@ export function normalizeWidgetConfigStorage(
         }
       } else if (
         (key === 'unit' && (candidate === 'bytes' || candidate === 'bits')) ||
-        (key === 'layout' && (candidate === 'equal' || candidate === 'flex')) ||
+        (key === 'layout' &&
+          ((config.type === WidgetId.ProxyMode &&
+            (candidate === 'focus' || candidate === 'flex')) ||
+            (config.type === WidgetId.ProxyShortcuts &&
+              (candidate === 'equal' || candidate === 'flex')))) ||
         (key === 'buttons' &&
           (candidate === 'both' ||
             candidate === 'system' ||
