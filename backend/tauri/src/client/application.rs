@@ -45,7 +45,9 @@ enum ApplicationClientInner {
     },
     #[cfg(test)]
     Static {
-        state: parking_lot::RwLock<ChimeraAppConfig>,
+        // Keep the test document and its version under the same lock so the
+        // compatibility backend exercises the real source actor's CAS fence.
+        state: parking_lot::RwLock<(ChimeraAppConfig, u64)>,
     },
 }
 
@@ -59,7 +61,7 @@ impl ApplicationClient {
     pub(crate) fn static_state(state: ChimeraAppConfig) -> Self {
         Self {
             inner: Arc::new(ApplicationClientInner::Static {
-                state: parking_lot::RwLock::new(state),
+                state: parking_lot::RwLock::new((state, 0)),
             }),
         }
     }
@@ -162,7 +164,7 @@ impl ApplicationClient {
         match self.inner.as_ref() {
             ApplicationClientInner::Actor { snapshot, .. } => snapshot.load().state.clone(),
             #[cfg(test)]
-            ApplicationClientInner::Static { state } => state.read().clone(),
+            ApplicationClientInner::Static { state } => state.read().0.clone(),
         }
     }
 
@@ -190,10 +192,13 @@ impl ApplicationClient {
                     .await
             }
             #[cfg(test)]
-            ApplicationClientInner::Static { state } => Ok(ApplicationSnapshot {
-                state: state.read().clone(),
-                version: 0,
-            }),
+            ApplicationClientInner::Static { state } => {
+                let source = state.read();
+                Ok(ApplicationSnapshot {
+                    state: source.0.clone(),
+                    version: source.1,
+                })
+            }
         }
     }
 
@@ -211,11 +216,16 @@ impl ApplicationClient {
             }
             #[cfg(test)]
             ApplicationClientInner::Static { state } => {
-                let mut state = state.write();
-                state.apply(patch);
+                let mut source = state.write();
+                let next_version = source
+                    .1
+                    .checked_add(1)
+                    .context("test application version overflow")?;
+                source.0.apply(patch);
+                source.1 = next_version;
                 Ok(ApplicationSnapshot {
-                    state: state.clone(),
-                    version: 0,
+                    state: source.0.clone(),
+                    version: source.1,
                 })
             }
         }
@@ -272,12 +282,25 @@ impl ApplicationClient {
             }
             #[cfg(test)]
             ApplicationClientInner::Static { state } => {
+                let mut source = state.write();
+                if source.1 != expected_version {
+                    return Ok(ConditionalReplaceResult::Conflict {
+                        actual_version: source.1,
+                    });
+                }
+                let next_version = source
+                    .1
+                    .checked_add(1)
+                    .context("test application version overflow")?;
                 let (next, mirror) = prepared.into_parts();
-                *state.write() = next.clone();
+                source.0 = next.clone();
+                source.1 = next_version;
+                let version = source.1;
+                drop(source);
                 mirror.apply();
                 Ok(ConditionalReplaceResult::Replaced(ApplicationSnapshot {
                     state: next,
-                    version: expected_version + 1,
+                    version,
                 }))
             }
         }

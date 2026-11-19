@@ -4,3 +4,4 @@
 //! check boundary can migrate before its postcommit reconcile mailbox.
 
 pub(crate) mod check;
+pub(crate) mod committed;

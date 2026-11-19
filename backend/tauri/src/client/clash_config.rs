@@ -52,7 +52,9 @@ enum ClashConfigStateBackend {
     },
     #[cfg(test)]
     Static {
-        state: parking_lot::RwLock<ClashConfig>,
+        // The compatibility fixture must expose real monotonic versions or
+        // the committed-version fence mistakes a successful write for a race.
+        state: parking_lot::RwLock<(ClashConfig, u64)>,
     },
 }
 
@@ -80,7 +82,7 @@ impl ClashConfigClient {
     #[cfg(test)]
     pub(crate) fn legacy_with(config: ClashConfig) -> anyhow::Result<Self> {
         Ok(Self::with_state(ClashConfigStateBackend::Static {
-            state: parking_lot::RwLock::new(config),
+            state: parking_lot::RwLock::new((config, 0)),
         }))
     }
 
@@ -137,7 +139,7 @@ impl ClashConfigClient {
         match self.state.as_ref() {
             ClashConfigStateBackend::Actor { snapshot, .. } => snapshot.load().state.clone(),
             #[cfg(test)]
-            ClashConfigStateBackend::Static { state } => state.read().clone(),
+            ClashConfigStateBackend::Static { state } => state.read().0.clone(),
         }
     }
 
@@ -155,10 +157,13 @@ impl ClashConfigClient {
                 .await
             }
             #[cfg(test)]
-            ClashConfigStateBackend::Static { state } => Ok(ClashConfigSnapshot {
-                state: state.read().clone(),
-                version: 0,
-            }),
+            ClashConfigStateBackend::Static { state } => {
+                let source = state.read();
+                Ok(ClashConfigSnapshot {
+                    state: source.0.clone(),
+                    version: source.1,
+                })
+            }
         }
     }
 
@@ -213,12 +218,25 @@ impl ClashConfigClient {
             }
             #[cfg(test)]
             ClashConfigStateBackend::Static { state } => {
+                let mut source = state.write();
+                if source.1 != expected_version {
+                    return Ok(ConditionalReplaceResult::Conflict {
+                        actual_version: source.1,
+                    });
+                }
+                let next_version = source
+                    .1
+                    .checked_add(1)
+                    .context("test Clash version overflow")?;
                 let (next, mirror) = prepared.into_parts();
-                *state.write() = next.clone();
+                source.0 = next.clone();
+                source.1 = next_version;
+                let version = source.1;
+                drop(source);
                 mirror.apply();
                 Ok(ConditionalReplaceResult::Replaced(ClashConfigSnapshot {
                     state: next,
-                    version: expected_version + 1,
+                    version,
                 }))
             }
         }
@@ -368,45 +386,18 @@ impl ClashConfigClient {
 
         let mut degradations = Vec::new();
         if reaches_runtime {
-            // Source is already committed. Even a failed Core operation must
-            // not turn this successful source mutation into a rollback.
-            if let Err(error) = apply().await {
-                let retryable =
-                    crate::client::application_workflow::tcc::safe_to_retry_deferred_runtime(
-                        &error,
-                    );
-                degradations.push(Degradation {
-                    phase: DegradationPhase::RuntimeApply,
-                    code: "clash_runtime_deferred".into(),
-                    message: format!(
-                        "Clash config was saved, but runtime reconciliation failed: {error:#}"
-                    ),
-                    retryable,
-                });
-            }
-            // A second source actor write may advance Clash while the Core
-            // apply waits. Never label the superseded target as converged.
-            match self.get_snapshot().await {
-                Ok(latest) if latest.version != snapshot.version => {
-                    degradations.push(Degradation {
-                        phase: DegradationPhase::RuntimeApply,
-                        code: "clash_runtime_deferred".into(),
-                        message: format!(
-                            "Clash source advanced from version {} to {} during runtime apply; the latest committed target needs reconciliation",
-                            snapshot.version, latest.version,
-                        ),
-                        retryable: true,
-                    });
-                }
-                Err(error) => degradations.push(Degradation {
-                    phase: DegradationPhase::RuntimeApply,
-                    code: "clash_runtime_deferred".into(),
-                    message: format!(
-                        "Clash source was saved, but latest version could not be verified after runtime apply: {error:#}"
-                    ),
-                    retryable: true,
-                }),
-                _ => {}
+            // The source is durable now. A newer source version prevents an
+            // obsolete Core apply, and a concurrent advance during apply
+            // remains deferred for the existing lifecycle owner to reconcile.
+            if let Some(degradation) = super::reconciler::committed::apply_committed(
+                "clash",
+                snapshot.version,
+                || async { self.get_snapshot().await.map(|latest| latest.version) },
+                apply,
+            )
+            .await
+            {
+                degradations.push(degradation);
             }
         }
         if let Err(error) = save_legacy() {

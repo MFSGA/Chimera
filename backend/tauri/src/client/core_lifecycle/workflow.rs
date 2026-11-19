@@ -1665,48 +1665,26 @@ impl CoreLifecycleWorkflow {
             }
         };
 
-        // The source is now committed; a subsequent Core or Service failure
-        // must not be reported as a failed source write or roll it back.
-        let applied = self
-            .reconcile_application(candidate, service_connected)
-            .await;
-        // An independent source actor may commit a newer version while the
-        // endpoint operation awaits. Do not claim the outdated application
-        // target converged merely because that old operation returned success.
-        let latest = self.application.get().await?;
-        if latest.version != committed_version {
-            return Ok(vec![crate::client::runtime::Degradation {
-                phase: crate::client::runtime::DegradationPhase::RuntimeApply,
-                code: "application_runtime_deferred".into(),
-                message: format!(
-                    "application source advanced from version {committed_version} to {} during runtime apply; the latest committed target needs reconciliation{}",
-                    latest.version,
-                    applied.err().map_or_else(String::new, |error| format!(
-                        "; previous attempt failed: {error:#}"
-                    )),
-                ),
-                retryable: true,
-            }]);
-        }
-        match applied {
-            Ok(()) => Ok(Vec::new()),
-            Err(error) => {
-                tracing::warn!(
-                    %error,
-                    "application source committed; runtime reconcile deferred"
-                );
-                Ok(vec![crate::client::runtime::Degradation {
-                    phase: crate::client::runtime::DegradationPhase::RuntimeApply,
-                    code: "application_runtime_deferred".into(),
-                    message: format!(
-                        "application config was saved, but runtime reconciliation failed: {error:#}"
-                    ),
-                    retryable:
-                        crate::client::application_workflow::tcc::safe_to_retry_deferred_runtime(
-                            &error,
-                        ),
-                }])
-            }
+        // Source publication is complete. Ref's committed-target reconciler
+        // always consumes the latest version; until the full actor is ported,
+        // fence this compatibility apply before and after CoreLifecycle work.
+        // Failure to read the source after commit is deferred, not rolled back.
+        let degradation = crate::client::reconciler::committed::apply_committed(
+            "application",
+            committed_version,
+            || async { self.application.get().await.map(|latest| latest.version) },
+            || self.reconcile_application(candidate, service_connected),
+        )
+        .await;
+        if let Some(degradation) = degradation {
+            tracing::warn!(
+                code = %degradation.code,
+                message = %degradation.message,
+                "application source committed; runtime reconcile deferred"
+            );
+            Ok(vec![degradation])
+        } else {
+            Ok(Vec::new())
         }
     }
 
