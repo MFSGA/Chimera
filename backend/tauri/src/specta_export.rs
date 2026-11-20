@@ -39,6 +39,7 @@ macro_rules! build_builder {
                 crate::ipc::get_postprocessing_output,
                 crate::ipc::flush_system_dns_cache,
                 crate::ipc::probe_network,
+                crate::ipc::probe_direct_egress,
                 crate::ipc::get_pending_deep_links,
                 crate::ipc::claim_pending_deep_link,
                 crate::ipc::import_profile,

@@ -7,6 +7,7 @@ export * from './proxy-group-layout';
 export * from './native-proxy-delay';
 export * from './use-profile';
 export * from './use-profile-sync';
+export * from './use-local-ip-probe';
 export * from './use-runtime-transform-diagnostics';
 export * from './consts';
 

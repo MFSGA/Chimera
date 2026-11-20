@@ -111,6 +111,12 @@ export const commands = {
     typedError<NetworkProbeResult, string>(
       __TAURI_INVOKE('probe_network', { request }),
     ),
+  /**
+   *  An explicitly opted-in STUN probe of the OS direct route. Never uses an
+   *  HTTP proxy, and refuses to probe while TUN or local capture is active.
+   */
+  probeDirectEgress: () =>
+    typedError<DirectEgress, string>(__TAURI_INVOKE('probe_direct_egress')),
   /**  later: check in the frontend */
   getPendingDeepLinks: () =>
     typedError<PendingDeepLinkEntry[], string>(
@@ -1128,6 +1134,8 @@ export type ChimeraAppConfigPatch_Deserialize = {
   app_log_level?: LoggingLevel_Deserialize | null;
   language?: I18nLanguage_Deserialize | null;
   theme_mode?: ThemeMode | null;
+  enable_local_ip_probe?: boolean | null;
+  stun_servers?: StunServer[] | null;
   traffic_graph?: boolean | null;
   enable_memory_usage?: boolean | null;
   lighten_animation_effects?: boolean | null;
@@ -1168,6 +1176,8 @@ export type ChimeraAppConfigPatch_Serialize = {
   app_log_level?: LoggingLevel_Serialize | null;
   language?: I18nLanguage_Serialize | null;
   theme_mode?: ThemeMode | null;
+  enable_local_ip_probe?: boolean | null;
+  stun_servers?: StunServer[] | null;
   traffic_graph?: boolean | null;
   enable_memory_usage?: boolean | null;
   lighten_animation_effects?: boolean | null;
@@ -1215,6 +1225,10 @@ export type ChimeraAppConfig_Deserialize = {
   app_log_level?: LoggingLevel_Deserialize;
   language?: I18nLanguage_Deserialize;
   theme_mode?: ThemeMode;
+  /**  Public-IP discovery requires explicit opt-in (ref defaults to false). */
+  enable_local_ip_probe?: boolean;
+  /**  STUN destinations, with no HTTP fallback unless separately consented to. */
+  stun_servers?: StunServer[];
   /**  enable traffic graph */
   traffic_graph?: boolean;
   /**  show memory info (only for Clash Meta) */
@@ -1273,6 +1287,10 @@ export type ChimeraAppConfig_Serialize = {
   app_log_level: LoggingLevel_Serialize;
   language: I18nLanguage_Serialize;
   theme_mode: ThemeMode;
+  /**  Public-IP discovery requires explicit opt-in (ref defaults to false). */
+  enable_local_ip_probe: boolean;
+  /**  STUN destinations, with no HTTP fallback unless separately consented to. */
+  stun_servers: StunServer[];
   /**  enable traffic graph */
   traffic_graph: boolean;
   /**  show memory info (only for Clash Meta) */
@@ -2133,6 +2151,12 @@ export type Dimensions = {
   destination_basis?: GeoBasis | null;
 };
 
+export type DirectEgress =
+  | { kind: 'disabled' }
+  | { kind: 'tun_enabled' }
+  | { kind: 'transparent_proxy_enabled' }
+  | { kind: 'probed'; ipv4: EgressAddress | null; ipv6: EgressAddress | null };
+
 export type DnsMode = 'normal' | 'fake-ip' | 'redir-host' | 'hosts' | 'Unknown';
 
 /**  A snapshot of a download session's progress, polled by IPC. */
@@ -2148,6 +2172,19 @@ export type DownloaderState =
   'idle' | 'downloading' | { failed: string } | 'finished';
 
 export type EditorWindowType = 'profile' | 'css-editor';
+
+export type EgressAddress = {
+  address: string;
+  country: string | null;
+  source: EgressSource;
+};
+
+export type EgressSource = {
+  kind: 'stun';
+  host: string;
+  port: number;
+  transport: StunTransport;
+};
 
 export type EndpointConnectivity =
   | { kind: 'connected' }
@@ -3649,6 +3686,15 @@ export type StorageValueChangedEvent = {
   value: string | null;
   revision: StorageRevision;
 };
+
+/**  STUN endpoint for explicitly enabled public-IP detection. */
+export type StunServer = {
+  host: string;
+  port: number;
+  enabled: boolean;
+};
+
+export type StunTransport = 'udp';
 
 export type SubscriptionInfo =
   SubscriptionInfo_Serialize | SubscriptionInfo_Deserialize;

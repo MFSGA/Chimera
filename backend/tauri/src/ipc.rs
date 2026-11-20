@@ -434,6 +434,16 @@ pub async fn patch_verge_config(
     Ok(())
 }
 
+/// An explicitly opted-in STUN probe of the OS direct route. Never uses an
+/// HTTP proxy, and refuses to probe while TUN or local capture is active.
+#[tauri::command]
+#[specta::specta]
+pub async fn probe_direct_egress(
+    client: State<'_, ChimeraClient>,
+) -> Result<crate::network_info::DirectEgress> {
+    Ok(crate::network_info::probe_direct_egress(&client).await?)
+}
+
 #[tauri::command]
 #[specta::specta]
 pub async fn get_app_config(

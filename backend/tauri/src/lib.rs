@@ -12,6 +12,7 @@ use crate::utils::{init, path::PathResolver, resolve};
 #[cfg(feature = "e2e")]
 mod e2e_test;
 mod ipc;
+mod network_info;
 mod network_probe;
 
 mod adapters;
