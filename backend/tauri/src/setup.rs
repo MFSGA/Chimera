@@ -34,13 +34,31 @@ use crate::client::hotkey::{
     ports::{HotkeyAction, WindowControl},
 };
 
-/// Migration is the first writer of config documents. This follows ref's
-/// "migrate before initial defaults and runtime owners" ordering without
-/// changing Chimera's platform-specific verified backup adapter.
-fn migrate_before_legacy_defaults(
+/// The main process waits for the migration-only child before constructing
+/// Core/Service/Jobs owners or creating compatibility defaults. The child is
+/// launched only after Tauri's single-instance plugin claimed the primary.
+fn finish_migration_startup(
     paths: &PathResolver,
     capture: &parking_lot::Mutex<Option<crate::startup_failure::Report>>,
-) -> anyhow::Result<crate::core::migration::Runner> {
+    migrated: anyhow::Result<Option<crate::core::backup::BackupInfo>>,
+) -> anyhow::Result<Option<crate::core::backup::BackupInfo>> {
+    let backup = migrated?;
+    crate::startup_failure::report_boundary_with_backup_and_capture(
+        init::initialize_post_migration_defaults(paths)
+            .context("failed to initialize post-migration compatibility defaults"),
+        crate::startup_failure::StartupStage::Setup,
+        paths,
+        backup.as_ref(),
+        Some(capture),
+    )?;
+    Ok(backup)
+}
+
+#[cfg(any(test, target_os = "android", target_os = "ios"))]
+fn migrate_in_process(
+    paths: &PathResolver,
+    capture: &parking_lot::Mutex<Option<crate::startup_failure::Report>>,
+) -> anyhow::Result<Option<crate::core::backup::BackupInfo>> {
     let mut migrations = crate::startup_failure::report_boundary_with_backup_and_capture(
         crate::core::migration::Runner::with_paths(paths.clone(), false)
             .context("failed to setup config migrations"),
@@ -58,15 +76,15 @@ fn migrate_before_legacy_defaults(
         migrations.backup_info(),
         Some(capture),
     )?;
-    crate::startup_failure::report_boundary_with_backup_and_capture(
-        init::initialize_post_migration_defaults(paths)
-            .context("failed to initialize post-migration compatibility defaults"),
-        crate::startup_failure::StartupStage::Setup,
-        paths,
-        migrations.backup_info(),
-        Some(capture),
-    )?;
-    Ok(migrations)
+    Ok(migrations.backup_info().cloned())
+}
+
+#[cfg(test)]
+fn migrate_before_legacy_defaults(
+    paths: &PathResolver,
+    capture: &parking_lot::Mutex<Option<crate::startup_failure::Report>>,
+) -> anyhow::Result<Option<crate::core::backup::BackupInfo>> {
+    finish_migration_startup(paths, capture, migrate_in_process(paths, capture))
 }
 
 struct LegacySelfProxyPort;
@@ -104,7 +122,14 @@ pub fn setup(
     );
 
     let runtime_paths = RuntimePaths::from_resolver(&paths)?;
-    let migrations = migrate_before_legacy_defaults(&paths, startup_failure_capture)?;
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    let migrated = crate::migration_child::run_subprocess(&paths, startup_failure_capture);
+    // Mobile targets have no standalone desktop executable to spawn. Retain
+    // the original in-process migration owner there instead of launching an
+    // unsupported child and losing typed config initialization.
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    let migrated = migrate_in_process(&paths, startup_failure_capture);
+    let migrations = finish_migration_startup(&paths, startup_failure_capture, migrated)?;
     init::refresh_migrated_logging();
 
     // ref initializes bundled resources before constructing runtime owners.
@@ -142,7 +167,7 @@ pub fn setup(
         })(),
         crate::startup_failure::StartupStage::CoreHost,
         &paths,
-        migrations.backup_info(),
+        migrations.as_ref(),
         Some(startup_failure_capture),
     )?;
     startup_owners.legacy_core = Some(local_control.clone());
@@ -156,7 +181,7 @@ pub fn setup(
         .context("failed to spawn ref Core Actor"),
         crate::startup_failure::StartupStage::CoreHost,
         &paths,
-        migrations.backup_info(),
+        migrations.as_ref(),
         Some(startup_failure_capture),
     )?;
     startup_owners.legacy_core = None;
@@ -191,7 +216,7 @@ pub fn setup(
         .context("failed to start ref Service Actor"),
         crate::startup_failure::StartupStage::CoreHost,
         &paths,
-        migrations.backup_info(),
+        migrations.as_ref(),
         Some(startup_failure_capture),
     )?;
     // Tauri calls setup on its synchronous main thread. The ref
@@ -237,7 +262,7 @@ pub fn setup(
         .context("failed to start the jobs owner"),
         crate::startup_failure::StartupStage::Jobs,
         &paths,
-        migrations.backup_info(),
+        migrations.as_ref(),
         Some(startup_failure_capture),
     )?;
 
@@ -345,7 +370,7 @@ pub fn setup(
         crate::core::storage::setup(app, &paths),
         crate::startup_failure::StartupStage::Storage,
         &paths,
-        migrations.backup_info(),
+        migrations.as_ref(),
         Some(startup_failure_capture),
     )?;
 
@@ -387,7 +412,7 @@ pub fn setup(
         }),
         crate::startup_failure::StartupStage::TypedClient,
         &paths,
-        migrations.backup_info(),
+        migrations.as_ref(),
         Some(startup_failure_capture),
     )?;
     rust_i18n::set_locale(client.get_app_config()?.language.as_str());

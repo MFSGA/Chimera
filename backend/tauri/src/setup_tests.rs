@@ -168,7 +168,7 @@ fn startup_migrates_a_fresh_install_before_creating_stamped_profile_defaults() {
 
     let runner = super::migrate_before_legacy_defaults(&paths, &capture).unwrap();
     assert!(
-        runner.backup_info().is_none(),
+        runner.is_none(),
         "no fake pre-step snapshot for a fresh install"
     );
     assert!(capture.lock().is_none());
@@ -189,7 +189,7 @@ fn startup_migrates_a_fresh_install_before_creating_stamped_profile_defaults() {
 
     // A later startup must accept the stamped default and leave content unchanged.
     let restarted = super::migrate_before_legacy_defaults(&paths, &capture).unwrap();
-    assert!(restarted.backup_info().is_none());
+    assert!(restarted.is_none());
     assert_eq!(std::fs::read(paths.profiles_path()).unwrap(), first);
     assert_eq!(
         std::fs::read(paths.application_config_path()).unwrap(),
