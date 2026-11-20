@@ -1,5 +1,13 @@
 # ref 对齐进度
 
+## DIFF-098：Migration 修订状态不一致结构化错误与启动诊断对齐（2026-11-20）
+
+- **上游来源及风险**：对照固定 `ref@c4b35e048` 的 `backend/nyanpasu-migration/src/runner.rs::Error::{DocumentBehindState,MissingDocumentStamp,FilesBehindState}` 与 Tauri `startup_failure`/子进程错误分层，风险 **L2**（升级数据与启动失败报告）。前轮已结构化 `NewerDocument`、`NewerAppliedModule`，但三种状态不一致仍使用纯字符串 `bail!`，无法按原因、文件路径和已应用 revision 精确呈现。此轮不修改 `migration-state.yaml` schema 2、Stamp、备份或文件恢复行为，不改 git submodule。
+- **共享 Runner 错误合同**：`chimera-migration::runner::RevisionError` 新增 `DocumentBehindState {path,state_path,module,read,applied}`、`MissingDocumentStamp {path,state_path}` 和 `FilesBehindState {state_path,module,applied,reason}`，用 `thiserror` 保留以前错误说明及原始参数。`reconcile_documents` 与 `verify_applied_revisions` 现在返回可 `anyhow::downcast_ref` 的结构化错误，而不是拼接文本；判断与阻断时机完全不变，既不会重写有问题的文档，也不会自行清理 `migration-state.yaml`。
+- **Tauri 启动失败映射**：`startup_failure::RevisionFailure` 以附加、`snake_case` 序列化变体接收上述三类错误，保留源文件与迁移状态路径、模块、revision 和原因；修正 `RevisionFailure::is_newer` 仅匹配真正的较新 schema/document/module，避免把文件回退、Stamp 丢失误判为 `NewerVersion`。三类不一致继续归类为 `MigrationFailed`，原有 `NewerVersion`、`Permission`、`Busy` 优先级不变。报告仅从原始 `std::error::Error::source` 链读取，不自动运行修复、删除数据或伪造可用备份。
+- **验证**：共享 Migration 单元测试 **81/81**，含新增 `FilesBehindState` 真实核验路径及落盘内容不变测试；Tauri 原有 Stamp 丢失、Stamp 落后测试扩展为对结构化错误字段精确检查；Tauri 启动报告新增三类不一致、路径、序列化 roundtrip 与非 `NewerVersion` 校验，Tauri 全库 **1029/1029**、1 项既有忽略测试。`cargo check --locked -p chimera --all-features --tests`、Rustfmt、提交 Clippy、diff check 通过。尚未执行 Windows/Linux 实机、历史用户全量升级、桌面 GUI E2E 或 GitHub CI 最终状态。
+- **剩余差异/回滚**：上游完整 `snafu::Error` 尚有 `CheckStep`、`RunStep`、`RecordFailure`、`InspectModule` 等逐项错误合同，而本地保留 `anyhow` 链和具体模块的错误类型；迁移子进程/独立崩溃报告器也未实现。本轮仅收敛影响启动诊断的修订不一致三项；若需回滚，只回滚本轮 typed error 与报告映射，不移除原始配置、迁移状态、备份或 `.corrupt-*` 证据。
+
 ## DIFF-097：共享 Migration Runner 完整编排与新版状态写前拒绝（2026-11-20）
 
 - **上游基线与目标**：参考固定 `ref@c4b35e048` 的 `backend/nyanpasu-migration/src/runner.rs` 中 `Runner::run_pending` 和 `Runner::run_migration` 顺序。上一轮已将步骤执行、Document 检查、状态落盘及 Stamp 等函数下沉共享，但 Tauri 仍串联“校验版本 → 备份 → 模块执行 → 文件核验 → Stamp → `last_succeeded`”，易在两套宿主之间发生语义漂移。本轮风险 **L2**（启动迁移、备份保障、成功状态），目标是让共享 `chimera-migration::runner` 持有完整生产调用顺序；保留原有 YAML、Revision、Legacy IPC 和 git submodule 指针。
