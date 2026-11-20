@@ -15,6 +15,7 @@ import PublicRounded from '~icons/material-symbols/public-rounded';
 import RefreshRounded from '~icons/material-symbols/refresh-rounded';
 import type { ReactNode } from 'react';
 import * as m from '@/paraglide/messages';
+import { IP_LOOKUP_PROVIDER_NAMES } from '@/utils/ip-lookup-provider';
 import { regionName } from '@/utils/traffic-usage';
 import type { WidgetComponentProps } from './consts';
 import { maskAddress } from './network-info-utils';
@@ -51,10 +52,14 @@ const PREVIEW_EGRESS: Record<Family, EgressAddress> = {
 };
 
 function sourceLabel(source: EgressSource) {
-  return m.dashboard_widget_network_info_via_stun({
-    server: `${source.host}:${source.port}`,
-    transport: source.transport.toUpperCase(),
-  });
+  return source.kind === 'stun'
+    ? m.dashboard_widget_network_info_via_stun({
+        server: `${source.host}:${source.port}`,
+        transport: source.transport.toUpperCase(),
+      })
+    : m.dashboard_widget_network_info_via_lookup({
+        provider: IP_LOOKUP_PROVIDER_NAMES[source.provider],
+      });
 }
 
 function EgressRow({
