@@ -1,5 +1,14 @@
 # ref 对齐进度
 
+## DIFF-097：共享 Migration Runner 完整编排与新版状态写前拒绝（2026-11-20）
+
+- **上游基线与目标**：参考固定 `ref@c4b35e048` 的 `backend/nyanpasu-migration/src/runner.rs` 中 `Runner::run_pending` 和 `Runner::run_migration` 顺序。上一轮已将步骤执行、Document 检查、状态落盘及 Stamp 等函数下沉共享，但 Tauri 仍串联“校验版本 → 备份 → 模块执行 → 文件核验 → Stamp → `last_succeeded`”，易在两套宿主之间发生语义漂移。本轮风险 **L2**（启动迁移、备份保障、成功状态），目标是让共享 `chimera-migration::runner` 持有完整生产调用顺序；保留原有 YAML、Revision、Legacy IPC 和 git submodule 指针。
+- **共享 Runner 完整编排**：新增 `runner::run_pending<C: AsRef<Ctx>, P: BackupPort>`，按上游次序检查已记录模块版本，确认有 pending 时经注入 BackupPort 创建已验证备份，逐模块执行步骤并隔离独立模块失败，核验文件实际 revision，补 Stamp（缺失快照时先备份），最后才写入 `last_succeeded`。新增 `runner::run_selected_migration`，单独执行指定步骤也沿用共享的版本检查/备份/执行事务，但不声称其他模块完成，也不修剪备份。共享 Ctx/Registry/Module/Document 不新增对 Tauri 的反向依赖。
+- **Tauri 宿主收敛**：`backend/tauri/src/core/migration/runner.rs` 去除独立的 `ensure_backup`、`ensure_known_revisions`、`stamp_adopted_documents` 和 `verify_applied_revisions` 调度包装；Runner 仍向启动失败报告暴露 `backup_info`，仅把宿主 PathResolver/最后成功版本/目标版本交给 `TauriBackupPort`，继续提供真实备份的 manifest/验证/完整提交和成功后按保留策略修剪。成功创建完整快照时才记日志，旧错误上下文和从备份来源查找的诊断路径保留。保留在 Tauri 的 `run_step` 仅供现有 Runner 集成/错误回归测试。
+- **安全修复**：在 `runner::ensure_baselines` 开头加入 `ensure_known_revisions`，严格在所有内存基线插入、reconcile 或状态 `flush_atomic` 前拒绝高于本构建支持的已记录修订；此前 `ensure_known_revisions` 仅在 Runner 构建完成之后运行，可能使其它模块的新增 baseline 写盘先于旧模块高版本拒绝。对比完整状态文件字节并断言未添加其它模块。新增共享编排失败注入测试：迁移前备份失败不得执行步骤/写成功状态；重试成功后只提交一次、重启不重复备份；单步选定迁移不得写全局升级成功版本。
+- **验证及兼容**：共享 Migration 单元测试 **80/80**，Tauri Migration **61/61**，Tauri 全库 **1028/1028**（另有 1 项原有忽略），`cargo check --locked -p chimera --all-features --tests`、Rustfmt、提交 Clippy、Git diff 检查通过。上游的“失败模块先记录错误并继续其他独立模块、最终返回首个错误”以及备份失败阻止写入、成功后修剪等语义不变。未更改 `migration-state.yaml` schema 2、Stamp 文档格式、原有 Profiles/Typed Config/Storage 业务迁移 ID 或引入版本。
+- **剩余差异及回滚**：Tauri 仍负责 Session 损坏恢复、Legacy Verge/Clash 转换、宿主路径/备份/启动注入和集成验证；共享 Runner 的错误合同目前是 `anyhow` + `thiserror`，未与上游全部 `snafu::OperationError` 逐项同型。尚未验证 Windows/Linux 实机、真实旧用户数据、桌面 UI E2E 或 GitHub CI 最终结果。若出现生产回归，回滚本轮编排委托与前置拒绝检查，不删除迁移前备份、旧配置及 `.corrupt-*` 证据。
+
 ## DIFF-096：Profiles Migrator 完整生产模块迁入共享 crate（2026-11-20）
 
 - **上游来源与目标**：参照固定 `ref@c4b35e048` 的 `backend/nyanpasu-migration/src/modules/profiles.rs`，将 Tauri 原 `modules/profiles.rs` 中约 1,000 行生产逻辑完整迁入 `backend/chimera-migration/src/modules/profiles.rs`。本轮风险 **L2**（历史 profiles.yaml 升级、文档 stamp/回滚）；保持旧 `migration-state.yaml` schema 2、Chimera 专属 profiles domain schema、`0.24.1` 引入版本、现有四个步骤 ID 和 revision，不修改 ref / Runtime gitlink，不操作用户实际配置和系统代理。
