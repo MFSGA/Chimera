@@ -44,6 +44,9 @@ mod shutdown_hook;
 mod single_instance_activation;
 mod specta_export;
 mod startup_failure;
+// Standalone desktop panic dialog, dispatched before Tauri and storage setup.
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+pub mod panic_reporter;
 // The reporter is a separate desktop process, not a Tauri window/owner.
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub mod startup_reporter;
@@ -121,6 +124,11 @@ fn setup_frontend_console_bridge(app: &mut tauri::App) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() -> std::process::ExitCode {
+    // Install after internal child-command dispatch in main(): reporter and
+    // migration subprocesses never recursively register this panic hook.
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    panic_reporter::install_main_thread_hook();
+
     // Nothing before the logger reaches a trace, so its share is logged.
     let started = std::time::Instant::now();
     rust_i18n::set_locale(utils::help::detect_system_i18n_key());
