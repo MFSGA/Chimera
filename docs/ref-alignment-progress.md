@@ -1,5 +1,13 @@
 # ref 对齐进度
 
+## DIFF-099：共享 Runner 步骤执行结构化错误合同对齐（2026-11-20）
+
+- **上游来源与目标**：参考 `ref@c4b35e048` 的 `backend/nyanpasu-migration/src/runner.rs::Error::{DetectBaseline,InspectModule,InspectDocument,CheckStep,RunStep,VerifyDocumentStamp,VerifyStep,RecordFailure}`。本轮风险 **L2**（迁移失败状态/启动恢复诊断），目标是让共享 Runner 生产调用路径直接返回可 downcast 的执行错误类型，而非只用 `anyhow::context` 拼接步骤或模块错误字符串。继续保留 `anyhow::Result` 对现有 `MigrationStep`、`ModuleMigrator`、Tauri BackupPort 的兼容接口，不在本轮统一替换全部底层模块为 `snafu::OperationError`。
+- **实际生产执行错误合同**：新增 `chimera-migration::runner::ExecutionError`，将模块基线识别、模块/带 stamp 文档检查、步骤 `check`/`run`、执行后校验、失败状态 `flush_atomic` 等八类错误包装成 `thiserror` 结构化变体。每类记录原有 `module` 或 `step` ID，并通过 `#[source]` 保留 `MigrationCheckError` / `anyhow::Error` 原始来源；`VerifyDocumentStamp` 和 `VerifyStep` 保留上游代表性文本与缺陷语义。步骤执行失败仍 best-effort 调用 rollback，回滚失败只记录日志而不覆盖最初的步骤异常。
+- **双重故障与持久化安全**：失败步骤标记落盘再次失败时，`ExecutionError::RecordFailure {step, source, persistence}` 同时保存**原始步骤错误**和**独立持久化错误**，前者继续是可追踪 source、后者是可检查的独立字段且显示于错误文本；不能把状态文件写入失败误认为步骤成功，也不会跟随迁移状态的软链接写向外部配置。保留原有 `mark_in_progress → flush → run → check → mark_failed/completed → flush` 顺序、迁移前备份保护、模块隔离和重试语义；`migration-state.yaml` schema 2、Stamp、原有步骤 ID/revision、备份格式均不改变。
+- **Tauri 启动失败报告**：保留原来的 `StartupFailure` JSON 格式和类型分类逻辑；通过既有 `std::error::Error::source()` 链访问嵌套的步骤检查 IO 原因、具体配置路径和权限信息。`startup_failure` 的新增测试验证 `CheckStep` 穿透权限分类、`RecordFailure` 同时展示原始 KV/状态写盘错误；真实 Tauri Runner 的 `VerifyDocumentStamp`、`InspectDocument` 测试也验证结构化类型。此轮未增加自动恢复行为，未伪造备份路径或删除任何旧配置与 `.corrupt-*` 数据证据。
+- **验证范围与限制**：共享 Migration **84/84**（新增步骤检查、步骤运行、后置条件、基线/模块检查、`RecordFailure` 双错误和软链接保护测试），Tauri 完整库 **1030/1030**、1 项原有忽略；后端 `cargo check --locked -p chimera --all-features --tests`、Rustfmt、Git diff check、提交 Clippy 钩子均通过。未执行 Windows/Linux 实机、真实历史用户目录升级、完整桌面 E2E 或 GitHub CI 最终核验。下一轮可对齐残余 `PersistState/CreateBackup/StampDocument` 的结构化包装及独立崩溃报告/启动边界；若出现生产回归，仅回滚本轮错误包装，保留旧数据、状态和备份。
+
 ## DIFF-098：Migration 修订状态不一致结构化错误与启动诊断对齐（2026-11-20）
 
 - **上游来源及风险**：对照固定 `ref@c4b35e048` 的 `backend/nyanpasu-migration/src/runner.rs::Error::{DocumentBehindState,MissingDocumentStamp,FilesBehindState}` 与 Tauri `startup_failure`/子进程错误分层，风险 **L2**（升级数据与启动失败报告）。前轮已结构化 `NewerDocument`、`NewerAppliedModule`，但三种状态不一致仍使用纯字符串 `bail!`，无法按原因、文件路径和已应用 revision 精确呈现。此轮不修改 `migration-state.yaml` schema 2、Stamp、备份或文件恢复行为，不改 git submodule。
