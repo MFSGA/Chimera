@@ -780,7 +780,9 @@ impl ApplicationWorkflowState {
         }
         if let Command::ReplaceCoreBinary(artifact) = &request.command {
             let message = error.to_string();
-            if std::panic::catch_unwind(AssertUnwindSafe(|| {
+            // A UI progress observer is allowed to fail without making the
+            // core mutation's result uncertain. This closure is synchronous.
+            if chimera_panics::catch_recoverable(AssertUnwindSafe(|| {
                 artifact.progress.finished(Some(&message));
             }))
             .is_err()
@@ -1148,7 +1150,9 @@ impl ApplicationWorkflowState {
             };
             if let Some(progress) = progress {
                 let error = result.as_ref().err().map(ToString::to_string);
-                if std::panic::catch_unwind(AssertUnwindSafe(|| {
+                // Do not let a synchronous notification callback override
+                // the actual lifecycle outcome or trigger fatal panic UI.
+                if chimera_panics::catch_recoverable(AssertUnwindSafe(|| {
                     progress.finished(error.as_deref())
                 }))
                 .is_err()

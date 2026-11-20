@@ -12,6 +12,7 @@ redb-store = ["dep:redb"]
 specta = ["dep:specta"]
 
 [dependencies]
+chimera-panics = { path = "../chimera-panics" }
 jiff = { version = "0.2", features = ["serde"] }
 jiff-cron = "=0.3.0"
 futures-util.workspace = true

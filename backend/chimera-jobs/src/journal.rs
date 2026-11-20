@@ -48,8 +48,11 @@ impl Journal {
         let (send, recv) = oneshot::channel();
         self.sender
             .send(Work::Call(Box::new(move |store| {
-                let value = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(store)))
-                    .unwrap_or_else(|_| Err(Error::Journal("store_panicked".into())));
+                // This callback has no await; protect the journal worker's
+                // request/response contract with ref's recoverable panic scope.
+                let value =
+                    chimera_panics::catch_recoverable(std::panic::AssertUnwindSafe(|| f(store)))
+                        .unwrap_or_else(|_| Err(Error::Journal("store_panicked".into())));
                 let _ = send.send(value);
             })))
             .await

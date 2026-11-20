@@ -162,7 +162,9 @@ impl Job {
             log_capture: LogCaptureMode::default(),
             input,
             validate: Arc::new(|text| {
-                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                // Input deserialization is synchronous and expected to report
+                // invalid data rather than terminate the Jobs actor.
+                chimera_panics::catch_recoverable(std::panic::AssertUnwindSafe(|| {
                     serde_json::from_str::<I>(text)
                 }))
                 .map_err(|_| Error::Invalid("input decoder panicked".into()))?

@@ -1374,6 +1374,7 @@ dependencies = [
 name = "chimera-jobs"
 version = "0.1.1-rc.5"
 dependencies = [
+ "chimera-panics",
  "futures-util",
  "jiff",
  "jiff-cron",

@@ -24,7 +24,10 @@ pub(crate) fn json<T: serde::Serialize>(value: &T, limit: usize) -> Result<Strin
         limit,
         overflow: false,
     };
-    let encoded = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+    // The serializer is a synchronous, intentionally recoverable user-data
+    // boundary. Upstream's panic policy must not terminate the application
+    // while this bounded encoder converts a panic into OutputUnavailable.
+    let encoded = chimera_panics::catch_recoverable(std::panic::AssertUnwindSafe(|| {
         serde_json::to_writer(&mut output, value)
     }));
     match encoded {
