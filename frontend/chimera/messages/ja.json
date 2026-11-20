@@ -1453,5 +1453,7 @@
   "dashboard_widget_config_range_30days": "過去 30 日間",
   "dashboard_widget_config_range_all": "利用可能なすべての記録",
   "dashboard_widget_config_directions": "上り・下りを表示",
-  "dashboard_widget_config_hide_names": "名前を非表示"
+  "dashboard_widget_config_hide_names": "名前を非表示",
+  "dashboard_widget_core_shortcuts_config_channel": "制御チャネルを表示",
+  "settings_clash_control_channel_label": "制御チャネル"
 }

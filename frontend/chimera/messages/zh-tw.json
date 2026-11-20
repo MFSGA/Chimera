@@ -1454,5 +1454,7 @@
   "dashboard_widget_config_range_30days": "近 30 天",
   "dashboard_widget_config_range_all": "全部可用記錄",
   "dashboard_widget_config_directions": "顯示上行與下行",
-  "dashboard_widget_config_hide_names": "隱藏名稱"
+  "dashboard_widget_config_hide_names": "隱藏名稱",
+  "dashboard_widget_core_shortcuts_config_channel": "顯示控制管道",
+  "settings_clash_control_channel_label": "控制管道"
 }

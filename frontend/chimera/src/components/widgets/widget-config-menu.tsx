@@ -33,7 +33,11 @@ import {
   WidgetOptionSelect,
 } from './widget-reference-fields';
 
-type ChoiceOption<T extends string> = { value: T; label: string };
+type ChoiceOption<T extends string> = {
+  value: T;
+  label: string;
+  disabled?: boolean;
+};
 
 function Choice<T extends string>({
   field,
@@ -68,8 +72,10 @@ function Choice<T extends string>({
           data-slot="widget-config-choice"
           data-config-field={field}
           aria-label={`${label}: ${selected?.label ?? value}`}
-          disabled={disabled || !other}
-          onClick={() => other && onChange(other.value)}
+          disabled={disabled || !other || other.disabled === true}
+          onClick={() => {
+            if (other && !other.disabled) onChange(other.value);
+          }}
         >
           <span className="truncate">{selected?.label ?? value}</span>
           <SwapHorizRounded className="size-4 shrink-0" aria-hidden="true" />
@@ -87,7 +93,7 @@ function Choice<T extends string>({
       disabled={disabled}
       onChange={(next) => {
         const option = options.find((item) => item.value === next);
-        if (option) onChange(option.value);
+        if (option && !option.disabled) onChange(option.value);
       }}
     />
   );
@@ -562,6 +568,12 @@ function ConfigFieldRows({
             checked={config.showVersion}
             disabled={disabled}
             onChange={(showVersion) => onChange({ ...config, showVersion })}
+          />
+          <Toggle
+            label={m.dashboard_widget_core_shortcuts_config_channel()}
+            checked={config.showChannel}
+            disabled={disabled}
+            onChange={(showChannel) => onChange({ ...config, showChannel })}
           />
         </ConfigGroup>
       );

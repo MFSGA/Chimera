@@ -14,6 +14,7 @@ import { Card, CardContent, CardHeader } from '@chimera/ui/card';
 import { useDndGridContext } from '@chimera/ui/dnd-grid';
 import TextMarquee from '@chimera/ui/text-marquee';
 import { Link } from '@tanstack/react-router';
+import ChevronRightRounded from '~icons/material-symbols/chevron-right-rounded';
 import NetworkPingRounded from '~icons/material-symbols/network-ping-rounded';
 import SettingsEthernetRounded from '~icons/material-symbols/settings-ethernet-rounded';
 import { useMemo } from 'react';
@@ -30,6 +31,7 @@ import { getProxyStatus } from '@/features/dashboard/proxy-status';
 import useCoreIcon from '@/hooks/use-core-icon';
 import * as m from '@/paraglide/messages';
 import type { WidgetComponentProps } from './consts';
+import { coreControllerChannel } from './dashboard-core-channel';
 import { useWidgetConfig } from './provider';
 import { WidgetId, type WidgetConfigs } from './widget-config';
 import WidgetItem from './widget-item';
@@ -241,6 +243,7 @@ const CurrentCoreCard = ({
   const actorStatusQuery = useCoreActorStatus();
   const coreStatusQuery = useCoreStatus({ enabled: !actorStatusQuery.data });
   const actorStatus = actorStatusQuery.data;
+  const channel = coreControllerChannel(actorStatus?.controller);
   const isRunning = actorStatus
     ? isRoutedCoreRunning(actorStatus)
     : coreStatusQuery.data?.status === 'Running';
@@ -257,7 +260,9 @@ const CurrentCoreCard = ({
       variant="raised"
       className={cn(
         'group grid h-auto min-w-0 flex-1 gap-2 rounded-2xl px-3 py-2 text-left',
-        'grid-rows-1',
+        config.showChannel
+          ? 'grid-rows-[minmax(3.5rem,1fr)_minmax(2rem,0.6fr)]'
+          : 'grid-rows-1',
         'bg-surface-variant/30 hover:bg-surface-variant',
       )}
       data-running={String(isRunning)}
@@ -307,6 +312,23 @@ const CurrentCoreCard = ({
             />
           </div>
         </div>
+        {config.showChannel && (
+          <div
+            className="border-outline-variant/40 text-on-surface-variant flex min-w-0 items-center gap-2 border-t text-xs leading-4 font-normal"
+            data-slot="core-control-channel"
+          >
+            <span className="min-w-0 truncate">
+              {m.settings_clash_control_channel_label()}
+            </span>
+            <span className="text-on-surface ml-auto shrink-0 font-medium">
+              {channel}
+            </span>
+            <ChevronRightRounded
+              className="size-4 shrink-0"
+              aria-hidden="true"
+            />
+          </div>
+        )}
       </Link>
     </Button>
   );

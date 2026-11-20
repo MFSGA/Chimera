@@ -82,8 +82,36 @@ test('normalizes persisted widget settings and rejects invalid values', () => {
   assert.deepEqual(normalized.byInstance['core-shortcuts-0'], {
     type: WidgetId.CoreShortcuts,
     showVersion: false,
+    showChannel: true,
   });
   assert.equal('unknown-0' in normalized.byInstance, false);
+});
+
+test('Core Shortcuts retains the channel toggle and rejects invalid saved values', () => {
+  const stored = normalizeWidgetConfigStorage({
+    version: 1,
+    byInstance: {
+      hidden: {
+        type: WidgetId.CoreShortcuts,
+        showVersion: true,
+        showChannel: false,
+      },
+      invalid: {
+        type: WidgetId.CoreShortcuts,
+        showVersion: 'false',
+        showChannel: 'yes',
+      },
+    },
+  });
+  assert.deepEqual(getWidgetConfig(stored, 'hidden', WidgetId.CoreShortcuts), {
+    type: WidgetId.CoreShortcuts,
+    showVersion: true,
+    showChannel: false,
+  });
+  assert.deepEqual(
+    getWidgetConfig(stored, 'invalid', WidgetId.CoreShortcuts),
+    DEFAULT_WIDGET_CONFIGS[WidgetId.CoreShortcuts],
+  );
 });
 
 test('traffic report widgets persist range, profile filters, directions, and rankings', () => {

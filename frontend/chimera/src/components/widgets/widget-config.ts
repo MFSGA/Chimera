@@ -70,6 +70,7 @@ export type WidgetConfigs = {
   [WidgetId.CoreShortcuts]: {
     type: WidgetId.CoreShortcuts;
     showVersion: boolean;
+    showChannel: boolean;
   };
   [WidgetId.ProxyMode]: {
     type: WidgetId.ProxyMode;
@@ -150,6 +151,7 @@ export const DEFAULT_WIDGET_CONFIGS: WidgetConfigs = {
   [WidgetId.CoreShortcuts]: {
     type: WidgetId.CoreShortcuts,
     showVersion: true,
+    showChannel: true,
   },
   [WidgetId.ProxyMode]: {
     type: WidgetId.ProxyMode,
