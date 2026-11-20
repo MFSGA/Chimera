@@ -61,6 +61,8 @@ import {
   WidgetId,
 } from '@/components/widgets/consts';
 import { useDashboardContext } from '@/components/widgets/provider';
+import { WidgetDataCalibration } from '@/components/widgets/widget-data-calibration';
+import { DashboardTrafficProvider } from '@/components/widgets/widget-traffic-provider';
 import * as m from '@/paraglide/messages';
 import EditAction from './_modules/edit-action';
 import {
@@ -357,38 +359,41 @@ const WidgetRender = () => {
         className="flex min-h-0 flex-1 flex-col p-4"
         data-slot="dashboard-widget-container"
       >
-        {/* DnD Widget 网格 */}
-        <DndGrid
-          gridId="main"
-          className="min-h-0 flex-1"
-          items={displayItems}
-          onLayoutChange={(newItems) =>
-            handleLayoutChange(normalizeItems(newItems))
-          }
-          onExternalDrop={(id, position) =>
-            addWidgetFromSheet(id as WidgetId, position)
-          }
-          minCellSize={64}
-          onSizeChange={handleSizeChange}
-          onInteractionChange={handleGridInteractionChange}
-          gap={16}
-          disabled={!isEditing}
-        >
-          {(item) => {
-            const WidgetComponent = RENDER_MAP[(item as DashboardItem).type];
+        <DashboardTrafficProvider items={displayItems}>
+          <WidgetDataCalibration items={displayItems} />
+          {/* DnD Widget 网格 */}
+          <DndGrid
+            gridId="main"
+            className="min-h-0 flex-1"
+            items={displayItems}
+            onLayoutChange={(newItems) =>
+              handleLayoutChange(normalizeItems(newItems))
+            }
+            onExternalDrop={(id, position) =>
+              addWidgetFromSheet(id as WidgetId, position)
+            }
+            minCellSize={64}
+            onSizeChange={handleSizeChange}
+            onInteractionChange={handleGridInteractionChange}
+            gap={16}
+            disabled={!isEditing}
+          >
+            {(item) => {
+              const WidgetComponent = RENDER_MAP[(item as DashboardItem).type];
 
-            return (
-              <WidgetComponent
-                id={item.id}
-                onCloseClick={() =>
-                  handleLayoutChange(
-                    displayItemsRef.current.filter((i) => i.id !== item.id),
-                  )
-                }
-              />
-            );
-          }}
-        </DndGrid>
+              return (
+                <WidgetComponent
+                  id={item.id}
+                  onCloseClick={() =>
+                    handleLayoutChange(
+                      displayItemsRef.current.filter((i) => i.id !== item.id),
+                    )
+                  }
+                />
+              );
+            }}
+          </DndGrid>
+        </DashboardTrafficProvider>
       </div>
 
       {/* 拖拽浮动预览 */}

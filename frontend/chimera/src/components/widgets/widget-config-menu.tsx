@@ -28,6 +28,7 @@ import {
 import { ConfigGroup, ConfigRow } from './widget-config-row';
 import {
   ProviderReferencesField,
+  ReportProfileField,
   SubscriptionTargetField,
   WidgetOptionSelect,
 } from './widget-reference-fields';
@@ -163,6 +164,81 @@ function ConfigFieldRows({
   onChange: (config: WidgetConfig) => void;
 }) {
   switch (config.type) {
+    case WidgetId.RecentTraffic:
+    case WidgetId.OriginTraffic:
+    case WidgetId.ExitTraffic:
+    case WidgetId.TargetTraffic:
+    case WidgetId.RuleTraffic:
+      return (
+        <>
+          <ConfigGroup>
+            <WidgetOptionSelect
+              label={m.dashboard_widget_config_range()}
+              value={config.range}
+              disabled={disabled}
+              options={[
+                {
+                  value: 'last_hour',
+                  label: m.dashboard_widget_config_range_hour(),
+                },
+                {
+                  value: 'last6_hours',
+                  label: m.dashboard_widget_config_range_6hours(),
+                },
+                {
+                  value: 'last24_hours',
+                  label: m.dashboard_widget_config_range_24hours(),
+                },
+                {
+                  value: 'last7_days',
+                  label: m.dashboard_widget_config_range_7days(),
+                },
+                {
+                  value: 'last30_days',
+                  label: m.dashboard_widget_config_range_30days(),
+                },
+                { value: 'all', label: m.dashboard_widget_config_range_all() },
+              ]}
+              onChange={(range) =>
+                onChange({ ...config, range: range as typeof config.range })
+              }
+            />
+            <ReportProfileField
+              profileUid={config.profileUid}
+              disabled={disabled}
+              onChange={(profileUid) => onChange({ ...config, profileUid })}
+            />
+          </ConfigGroup>
+          <ConfigGroup>
+            <Toggle
+              label={m.dashboard_widget_config_directions()}
+              checked={config.showDirections}
+              disabled={disabled}
+              onChange={(showDirections) =>
+                onChange({ ...config, showDirections })
+              }
+            />
+            {config.type !== WidgetId.RecentTraffic && (
+              <Stepper
+                label={m.dashboard_widget_config_top()}
+                value={config.topN}
+                range={WIDGET_CONFIG_NUMBER_RANGES.topN}
+                disabled={disabled}
+                onChange={(topN) => onChange({ ...config, topN })}
+              />
+            )}
+            {(config.type === WidgetId.OriginTraffic ||
+              config.type === WidgetId.TargetTraffic) && (
+              <Toggle
+                label={m.dashboard_widget_config_hide_names()}
+                checked={config.hideNames}
+                disabled={disabled}
+                onChange={(hideNames) => onChange({ ...config, hideNames })}
+              />
+            )}
+          </ConfigGroup>
+        </>
+      );
     case WidgetId.ActiveConnections:
       return (
         <>

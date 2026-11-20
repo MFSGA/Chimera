@@ -86,6 +86,59 @@ test('normalizes persisted widget settings and rejects invalid values', () => {
   assert.equal('unknown-0' in normalized.byInstance, false);
 });
 
+test('traffic report widgets persist range, profile filters, directions, and rankings', () => {
+  const stored = normalizeWidgetConfigStorage({
+    version: 1,
+    byInstance: {
+      recent: {
+        type: WidgetId.RecentTraffic,
+        range: 'last7_days',
+        profileUid: 'profile-1',
+        showDirections: false,
+      },
+      origin: {
+        type: WidgetId.OriginTraffic,
+        range: 'all',
+        profileUid: null,
+        topN: 50,
+        showDirections: false,
+        hideNames: true,
+      },
+      invalid: {
+        type: WidgetId.TargetTraffic,
+        range: 'tomorrow',
+        profileUid: '',
+        topN: 1.5,
+        showDirections: 'no',
+        hideNames: 'no',
+      },
+      minimum: { type: WidgetId.ExitTraffic, topN: 0 },
+    },
+  });
+  assert.deepEqual(getWidgetConfig(stored, 'recent', WidgetId.RecentTraffic), {
+    type: WidgetId.RecentTraffic,
+    range: 'last7_days',
+    profileUid: 'profile-1',
+    showDirections: false,
+  });
+  assert.deepEqual(getWidgetConfig(stored, 'origin', WidgetId.OriginTraffic), {
+    type: WidgetId.OriginTraffic,
+    range: 'all',
+    profileUid: null,
+    showDirections: false,
+    topN: 20,
+    hideNames: true,
+  });
+  assert.deepEqual(
+    getWidgetConfig(stored, 'invalid', WidgetId.TargetTraffic),
+    DEFAULT_WIDGET_CONFIGS[WidgetId.TargetTraffic],
+  );
+  assert.deepEqual(getWidgetConfig(stored, 'minimum', WidgetId.ExitTraffic), {
+    ...DEFAULT_WIDGET_CONFIGS[WidgetId.ExitTraffic],
+    topN: 1,
+  });
+});
+
 test('Active Connections retains its ref sorting controls and bounds visible rows', () => {
   const storage = normalizeWidgetConfigStorage({
     version: 1,

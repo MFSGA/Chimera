@@ -4,17 +4,21 @@ import { ScrollArea } from '@chimera/ui/scroll-area';
 import { SearchField } from '@chimera/ui/search-field';
 import { cn } from '@chimera/utils';
 import AddRounded from '~icons/material-symbols/add-rounded';
+import AppsRounded from '~icons/material-symbols/apps-rounded';
 import ArrowDownwardRounded from '~icons/material-symbols/arrow-downward-rounded';
 import ArrowUpwardRounded from '~icons/material-symbols/arrow-upward-rounded';
+import CallSplitRounded from '~icons/material-symbols/call-split-rounded';
 import CloseRounded from '~icons/material-symbols/close-rounded';
 import CloudSyncRounded from '~icons/material-symbols/cloud-sync-rounded';
 import DataUsageRounded from '~icons/material-symbols/data-usage-rounded';
+import DnsRounded from '~icons/material-symbols/dns-rounded';
 import DoneRounded from '~icons/material-symbols/done-rounded';
 import EventRepeatRounded from '~icons/material-symbols/event-repeat-rounded';
 import MemoryOutlineRounded from '~icons/material-symbols/memory-outline-rounded';
 import NetworkCheckRounded from '~icons/material-symbols/network-check-rounded';
 import PublicRounded from '~icons/material-symbols/public-rounded';
 import RouteRounded from '~icons/material-symbols/route-rounded';
+import RuleFolderRounded from '~icons/material-symbols/rule-folder-rounded';
 import SettingsEthernetRounded from '~icons/material-symbols/settings-ethernet-rounded';
 import { cva } from 'class-variance-authority';
 import { useState, type ComponentType } from 'react';
@@ -39,6 +43,11 @@ const WIDGET_TITLE_MAP: Record<WidgetId, () => string> = {
     m.dashboard_widget_subscription_schedule_title,
   [WidgetId.SubscriptionQuota]: m.dashboard_widget_subscription_quota_title,
   [WidgetId.ProviderUpdates]: m.dashboard_widget_provider_updates_title,
+  [WidgetId.RecentTraffic]: m.dashboard_widget_recent_traffic_title,
+  [WidgetId.OriginTraffic]: m.dashboard_widget_origin_traffic_title,
+  [WidgetId.ExitTraffic]: m.dashboard_widget_exit_traffic_title,
+  [WidgetId.TargetTraffic]: m.dashboard_widget_target_traffic_title,
+  [WidgetId.RuleTraffic]: m.dashboard_widget_rule_traffic_title,
   [WidgetId.NetworkInfo]: m.dashboard_widget_network_info_title,
   [WidgetId.ActiveConnections]: m.dashboard_widget_active_connections_title,
 };
@@ -57,6 +66,11 @@ const WIDGET_ICON_MAP: Record<
   [WidgetId.SubscriptionSchedule]: EventRepeatRounded,
   [WidgetId.SubscriptionQuota]: DataUsageRounded,
   [WidgetId.ProviderUpdates]: CloudSyncRounded,
+  [WidgetId.RecentTraffic]: DataUsageRounded,
+  [WidgetId.OriginTraffic]: AppsRounded,
+  [WidgetId.ExitTraffic]: CallSplitRounded,
+  [WidgetId.TargetTraffic]: DnsRounded,
+  [WidgetId.RuleTraffic]: RuleFolderRounded,
   [WidgetId.NetworkInfo]: PublicRounded,
   [WidgetId.ActiveConnections]: NetworkCheckRounded,
 };
