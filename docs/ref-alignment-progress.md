@@ -1,5 +1,13 @@
 # ref 对齐进度
 
+## DIFF-111：Jobs 与 CoreLifecycle 同步可恢复 Panic 边界对齐（2026-11-20）
+
+- **固定上游与目标**：以 `ref@c4b35e048` 的 `backend/nyanpasu-panics/src/lib.rs::catch_recoverable`（此前 DIFF-110 复制到 `chimera-panics`）为统一语义，把 Chimera 已明确需要吞掉 panic 并返回业务错误的**同步**回调迁移到上游的线程局部可恢复作用域。风险 **L2**（Jobs 编解码、持久化回调、Core 生命周期通知），只调整实际已有捕获边界的 panic 策略，不扩张应用致命崩溃判定、不变更 `ref` / Runtime pin、Migration 数据与备份。按维护者要求本轮不额外运行单元测试、all-features、实际二进制或 GUI E2E；仓库提交钩子附带的格式与 Clippy 检查不视作单独功能验收。
+- **Jobs 三处生产边界**：`chimera-jobs/src/encoding.rs::json` 在同步 `serde_json::to_writer` 外改用 `chimera_panics::catch_recoverable(AssertUnwindSafe(...))`，继续把编码 panic 映射为 `OutputUnavailable("encoding_failed")`，保留 `size_limit` 语义。`src/job.rs::Job::new` 的同步输入验证只捕获 `serde_json::from_str`，依旧映射到 `Error::Invalid("input decoder panicked")`；**不改动**其跨 `.await` 的异步 handler `FutureExt::catch_unwind`。`src/journal.rs::Journal::call` 的同步存储回调同样调用上游可恢复 API，保留 `Error::Journal("store_panicked")` 和 oneshot 应答；作用域只覆盖本次闭包，不延伸到队列或等待部分。新增 `chimera-jobs -> chimera-panics` 本地依赖，并更新对应 Cargo.lock 直接依赖。
+- **CoreLifecycle 两处同步通知边界**：将拒绝安装操作时的 `artifact.progress.finished(...)` 与执行完成后 `progress.finished(...)` 两处同步 observer 保护改为共享 `catch_recoverable`，继续在 observer panic 时记录原有日志，不覆盖真正的 CoreLifecycle 成功/失败/不确定状态。这里的通知既不执行生命周期事务，也不需要改变 `CoreFacade` 所有权；主线程上被显式恢复的 observer panic 不再触发 DIFF-110 新增的致命报告/退出。
+- **异步/传播边界保持原义**：本轮故意**不改变** `run_profile_mutation`、`execute_lifecycle`、`probe_service`、Jobs handler、Effects、CoreFacade 的异步 `catch_unwind().await`：它们跨线程 poll，不能使用线程局部 `catch_recoverable` 直接包装整个 Future。所有用于真实错误传播的 `JoinError::try_into_panic` / `resume_unwind` 也保持原样，不将崩溃误报为普通业务失败。下一轮应分开处理异步任务策略和上游 fatal-hook owner shutdown，不能因迁移同步 API 而假定全局 Panic 语义已经与上游完全一致。
+- **范围/风险/回滚**：本轮只修改上述五个既有同步捕获调用点、Jobs 依赖和进度文档；没有改写用户配置、存储、备份或 Hook 线程选择。若实际平台兼容性出现问题，可回滚同步捕获 API 的替换，但保留原来的业务错误判定与 Panic 恢复证据；本轮无独立功能测试结果，状态记为**待验**。
+
 ## DIFF-110：上游 Panic Hook / Frames / 独立 panic-dialog 进程首轮迁移（2026-11-20）
 
 - **来源及目标**：以固定 `ref@c4b35e048` 的 `backend/nyanpasu-panics/src/{lib.rs,frames.rs}`、`backend/tauri/src/{lib.rs,cmds/panic_dialog.rs}` 和 `backend/nyanpasu-crash-reporter/src/report.rs::PanicDetails` 为代码参照。重点迁入 Panic 的可复用源代码、独立进程的 JSON 载荷，以及程序实际崩溃时的 Hook 调度。风险 **L2**（全局 panic 策略、事件循环退出和已有 Actor 错误隔离），遵循维护者此前“不要额外验证，继续迁移代码”的要求：本轮不单独跑功能测试、构建、完整桌面或 CI；Git 提交钩子按仓库规则执行的 Rustfmt、Clippy 和 Prettier 不代表实际系统验收。
