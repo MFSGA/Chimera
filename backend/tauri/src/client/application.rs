@@ -598,6 +598,11 @@ impl ChimeraClient {
     ) -> anyhow::Result<super::MutationOutcome<()>> {
         let mut candidate = self.get_app_config()?;
         candidate.apply(patch.clone());
+        chimera_config::application::validate_public_ip_probe_sources(
+            &candidate.stun_servers,
+            &candidate.ip_lookup_providers,
+        )
+        .map_err(anyhow::Error::msg)?;
         let clash = self.get_clash_config()?;
         clash.validate_transparent_proxy(candidate.core, cfg!(target_os = "linux"))?;
         anyhow::ensure!(

@@ -438,6 +438,21 @@ pub async fn patch_verge_config(
 /// HTTP proxy, and refuses to probe while TUN or local capture is active.
 #[tauri::command]
 #[specta::specta]
+pub fn get_ip_lookup_providers() -> Vec<chimera_config::application::IpLookupProviderInfo> {
+    crate::network_info::ip_lookup_providers()
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn test_stun_server(
+    host: String,
+    port: u16,
+) -> Result<crate::network_info::StunServerTest> {
+    Ok(crate::network_info::test_stun_server(host, port).await?)
+}
+
+#[tauri::command]
+#[specta::specta]
 pub async fn probe_direct_egress(
     client: State<'_, ChimeraClient>,
 ) -> Result<crate::network_info::DirectEgress> {

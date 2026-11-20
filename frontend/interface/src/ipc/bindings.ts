@@ -111,12 +111,18 @@ export const commands = {
     typedError<NetworkProbeResult, string>(
       __TAURI_INVOKE('probe_network', { request }),
     ),
+  probeDirectEgress: () =>
+    typedError<DirectEgress, string>(__TAURI_INVOKE('probe_direct_egress')),
   /**
    *  An explicitly opted-in STUN probe of the OS direct route. Never uses an
    *  HTTP proxy, and refuses to probe while TUN or local capture is active.
    */
-  probeDirectEgress: () =>
-    typedError<DirectEgress, string>(__TAURI_INVOKE('probe_direct_egress')),
+  getIpLookupProviders: () =>
+    __TAURI_INVOKE<IpLookupProviderInfo[]>('get_ip_lookup_providers'),
+  testStunServer: (host: string, port: number) =>
+    typedError<StunServerTest, string>(
+      __TAURI_INVOKE('test_stun_server', { host, port }),
+    ),
   /**  later: check in the frontend */
   getPendingDeepLinks: () =>
     typedError<PendingDeepLinkEntry[], string>(
@@ -1136,6 +1142,7 @@ export type ChimeraAppConfigPatch_Deserialize = {
   theme_mode?: ThemeMode | null;
   enable_local_ip_probe?: boolean | null;
   stun_servers?: StunServer[] | null;
+  ip_lookup_providers?: IpLookupProvider[] | null;
   traffic_graph?: boolean | null;
   enable_memory_usage?: boolean | null;
   lighten_animation_effects?: boolean | null;
@@ -1178,6 +1185,7 @@ export type ChimeraAppConfigPatch_Serialize = {
   theme_mode?: ThemeMode | null;
   enable_local_ip_probe?: boolean | null;
   stun_servers?: StunServer[] | null;
+  ip_lookup_providers?: IpLookupProvider[] | null;
   traffic_graph?: boolean | null;
   enable_memory_usage?: boolean | null;
   lighten_animation_effects?: boolean | null;
@@ -1229,6 +1237,8 @@ export type ChimeraAppConfig_Deserialize = {
   enable_local_ip_probe?: boolean;
   /**  STUN destinations, with no HTTP fallback unless separately consented to. */
   stun_servers?: StunServer[];
+  /**  HTTP lookup providers are never used until individually consented to. */
+  ip_lookup_providers?: IpLookupProvider[];
   /**  enable traffic graph */
   traffic_graph?: boolean;
   /**  show memory info (only for Clash Meta) */
@@ -1291,6 +1301,8 @@ export type ChimeraAppConfig_Serialize = {
   enable_local_ip_probe: boolean;
   /**  STUN destinations, with no HTTP fallback unless separately consented to. */
   stun_servers: StunServer[];
+  /**  HTTP lookup providers are never used until individually consented to. */
+  ip_lookup_providers: IpLookupProvider[];
   /**  enable traffic graph */
   traffic_graph: boolean;
   /**  show memory info (only for Clash Meta) */
@@ -2179,12 +2191,9 @@ export type EgressAddress = {
   source: EgressSource;
 };
 
-export type EgressSource = {
-  kind: 'stun';
-  host: string;
-  port: number;
-  transport: StunTransport;
-};
+export type EgressSource =
+  | { kind: 'stun'; host: string; port: number; transport: StunTransport }
+  | { kind: 'lookup'; provider: IpLookupProvider };
 
 export type EndpointConnectivity =
   | { kind: 'connected' }
@@ -2479,6 +2488,20 @@ export type IVerge_Serialize = {
    *  Legacy: opens legacy window
    */
   window_type: WindowType | null;
+};
+
+/**
+ *  HTTP services that answer with the caller's address. Each one receives
+ *  the address and ordinary request metadata, so none is used until the user
+ *  accepts its privacy notice.
+ */
+export type IpLookupProvider = 'dnspod' | 'ip_sb' | 'ipify' | 'ident_me';
+
+/**  A provider and the endpoints it is asked at, for its privacy notice. */
+export type IpLookupProviderInfo = {
+  provider: IpLookupProvider;
+  ipv4_url: string;
+  ipv6_url: string;
 };
 
 export type IpsbResponse = {
@@ -3687,14 +3710,49 @@ export type StorageValueChangedEvent = {
   revision: StorageRevision;
 };
 
-/**  STUN endpoint for explicitly enabled public-IP detection. */
+export type StunAttempt =
+  | { kind: 'answered'; address: string; latency_ms: number }
+  | { kind: 'no_address' }
+  | { kind: 'no_answer' };
+
+/**  Which address families a transport answered over. */
+export type StunFamilies = {
+  ipv4: boolean;
+  ipv6: boolean;
+};
+
+/**
+ *  A STUN server the probe may ask. The built-in ones are ordinary entries of
+ *  the list, so the user can turn them off or reorder them like their own.
+ */
 export type StunServer = {
   host: string;
   port: number;
   enabled: boolean;
+  /**
+   *  What the operator documents for a built-in server, or what the test
+   *  found when the user added it.
+   */
+  capabilities?: StunServerCapabilities;
+  /**  Shipped with the app rather than added by the user. */
+  builtin?: boolean;
 };
 
-export type StunTransport = 'udp';
+/**  Which transports and families a STUN server answers Binding requests over. */
+export type StunServerCapabilities = {
+  udp: StunFamilies;
+  tcp: StunFamilies;
+};
+
+export type StunServerTest = {
+  udp_ipv4: StunAttempt;
+  udp_ipv6: StunAttempt;
+  tcp_ipv4: StunAttempt;
+  tcp_ipv6: StunAttempt;
+  capabilities: StunServerCapabilities;
+};
+
+export type StunTransport = 'udp' | 'tcp';
 
 export type SubscriptionInfo =
   SubscriptionInfo_Serialize | SubscriptionInfo_Deserialize;

@@ -1,15 +1,22 @@
-//! Public-IP probing with an explicit opt-in and ref's capture-mode guards.
-//! The STUN transport lives in chimera-net, not in the Tauri IPC layer.
-
+//! Ref-aligned direct-egress probe using Chimera's typed committed settings.
+//! STUN and consented HTTP echo bypass configured proxies; capture modes block
+//! requests because they could misidentify a proxy exit as local egress.
+use crate::client::ChimeraClient;
 use chimera_config::{
-    application::{ChimeraAppConfig, StunServer},
+    application::{
+        ChimeraAppConfig, IpLookupProvider, IpLookupProviderInfo, StunServer,
+        StunServerCapabilities, validate_public_ip_probe_sources,
+    },
     clash::config::{ClashConfig, TransparentProxyMode},
 };
-use chimera_net::direct_egress::{Family, probe_stun};
+use chimera_net::direct_egress::{
+    DirectEgressProbe as _, EgressAnswer, EgressSource as NetEgressSource,
+    NetworkDirectEgressProbe, ProbePermission, ProbeSources, StunAttempt as NetStunAttempt,
+    StunServerTest as NetStunServerTest, StunTransport as NetStunTransport,
+};
 use serde::Serialize;
 use specta::Type;
-
-use crate::client::ChimeraClient;
+use std::{net::IpAddr, sync::Arc};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Type)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -38,12 +45,83 @@ pub enum EgressSource {
         port: u16,
         transport: StunTransport,
     },
+    Lookup {
+        provider: IpLookupProvider,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Type)]
 #[serde(rename_all = "snake_case")]
 pub enum StunTransport {
     Udp,
+    Tcp,
+}
+
+impl From<NetEgressSource> for EgressSource {
+    fn from(source: NetEgressSource) -> Self {
+        match source {
+            NetEgressSource::Stun {
+                host,
+                port,
+                transport,
+            } => Self::Stun {
+                host,
+                port,
+                transport: match transport {
+                    NetStunTransport::Udp => StunTransport::Udp,
+                    NetStunTransport::Tcp => StunTransport::Tcp,
+                },
+            },
+            NetEgressSource::Lookup { provider } => Self::Lookup { provider },
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Type)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum StunAttempt {
+    Answered { address: String, latency_ms: u64 },
+    NoAddress,
+    NoAnswer,
+}
+impl From<NetStunAttempt> for StunAttempt {
+    fn from(attempt: NetStunAttempt) -> Self {
+        match attempt {
+            NetStunAttempt::Answered {
+                address,
+                latency_ms,
+            } => Self::Answered {
+                address: address.to_string(),
+                latency_ms,
+            },
+            NetStunAttempt::NoAddress => Self::NoAddress,
+            NetStunAttempt::NoAnswer => Self::NoAnswer,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Type)]
+pub struct StunServerTest {
+    pub udp_ipv4: StunAttempt,
+    pub udp_ipv6: StunAttempt,
+    pub tcp_ipv4: StunAttempt,
+    pub tcp_ipv6: StunAttempt,
+    pub capabilities: StunServerCapabilities,
+}
+impl From<NetStunServerTest> for StunServerTest {
+    fn from(test: NetStunServerTest) -> Self {
+        Self {
+            udp_ipv4: test.udp_ipv4.into(),
+            udp_ipv6: test.udp_ipv6.into(),
+            tcp_ipv4: test.tcp_ipv4.into(),
+            tcp_ipv6: test.tcp_ipv6.into(),
+            capabilities: test.capabilities,
+        }
+    }
+}
+
+pub fn ip_lookup_providers() -> Vec<IpLookupProviderInfo> {
+    IpLookupProvider::ALL.into_iter().map(Into::into).collect()
 }
 
 fn blocked(app: &ChimeraAppConfig, clash: &ClashConfig) -> Option<DirectEgress> {
@@ -67,89 +145,110 @@ fn current_gate(client: &ChimeraClient) -> anyhow::Result<Option<DirectEgress>> 
     ))
 }
 
-async fn probe_family(
-    client: &ChimeraClient,
-    allowed: &[StunServer],
-    family: Family,
-) -> Option<EgressAddress> {
-    for server in allowed {
-        // A settings change during a running probe must prevent its NEXT
-        // network request, not merely hide the final result.
-        if current_gate(client).ok()?.is_some() {
-            return None;
-        }
-
-        let current = client.get_app_config().ok()?;
-        if !current.stun_servers.iter().any(|candidate| {
-            candidate.enabled
-                && candidate.port == server.port
-                && candidate.host.eq_ignore_ascii_case(&server.host)
-        }) {
-            continue;
-        }
-        if let Some(address) = probe_stun(&server.host, server.port, family).await {
-            return Some(EgressAddress {
-                address: address.to_string(),
-                country: None,
-                source: EgressSource::Stun {
-                    host: server.host.clone(),
-                    port: server.port,
-                    transport: StunTransport::Udp,
-                },
-            });
-        }
+struct LiveProbePermission(ChimeraClient);
+impl ProbePermission for LiveProbePermission {
+    fn allows_stun(&self, server: &StunServer) -> bool {
+        current_gate(&self.0).ok() == Some(None)
+            && self
+                .0
+                .get_app_config()
+                .is_ok_and(|app| app.stun_servers.contains(server) && server.enabled)
     }
-    None
+    fn allows_lookup(&self, provider: IpLookupProvider) -> bool {
+        current_gate(&self.0).ok() == Some(None)
+            && self
+                .0
+                .get_app_config()
+                .is_ok_and(|app| app.ip_lookup_providers.contains(&provider))
+    }
 }
 
-/// Direct egress has a privacy cost: do not probe unless the user opted in.
-/// It is never safe to treat a TUN/transparent-capture response as the direct
-/// egress address, because the response may be from a proxy exit.
+fn locate(
+    client: &ChimeraClient,
+    answer: EgressAnswer<impl Into<IpAddr> + std::fmt::Display>,
+) -> EgressAddress {
+    let ip = answer.address.into();
+    EgressAddress {
+        address: ip.to_string(),
+        country: client.geo_country(ip),
+        source: answer.source.into(),
+    }
+}
+
+/// Every network destination is checked through the current opt-in + capture
+/// settings, and disabled destinations are dropped before attempting network IO.
 pub async fn probe_direct_egress(client: &ChimeraClient) -> anyhow::Result<DirectEgress> {
     if let Some(reason) = current_gate(client)? {
         return Ok(reason);
     }
-    let allowed: Vec<_> = client
-        .get_app_config()?
-        .stun_servers
-        .into_iter()
-        .filter(|server| server.enabled)
-        .collect();
-    let (ipv4, ipv6) = tokio::join!(
-        probe_family(client, &allowed, Family::Ipv4),
-        probe_family(client, &allowed, Family::Ipv6),
-    );
-    // Never report a result if the user's opt-in or capture mode changed.
+    let snapshot = client.get_app_config()?;
+    let sources =
+        ProbeSources::from_config(&snapshot, Arc::new(LiveProbePermission(client.clone())));
+    let probe = NetworkDirectEgressProbe::default();
+    let (ipv4, ipv6) = tokio::join!(probe.ipv4(&sources), probe.ipv6(&sources));
     if let Some(reason) = current_gate(client)? {
         return Ok(reason);
     }
-    Ok(DirectEgress::Probed { ipv4, ipv6 })
+    Ok(DirectEgress::Probed {
+        ipv4: ipv4.map(|answer| locate(client, answer)),
+        ipv6: ipv6.map(|answer| locate(client, answer)),
+    })
+}
+
+/// Explicit desktop user action: test all transports without saving results;
+/// never allow an arbitrary STUN target to resolve to a LAN/private IP.
+pub async fn test_stun_server(host: String, port: u16) -> anyhow::Result<StunServerTest> {
+    let server = StunServer {
+        host: host.trim().to_owned(),
+        port,
+        enabled: true,
+        builtin: false,
+        capabilities: StunServerCapabilities::default(),
+    };
+    validate_public_ip_probe_sources(&[server.clone()], &[]).map_err(anyhow::Error::msg)?;
+    let test = NetworkDirectEgressProbe::default()
+        .test_stun_server(&server.host, server.port)
+        .await;
+    Ok(test.into())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn default_is_disabled_and_capture_guards_take_priority() {
         let mut app = ChimeraAppConfig::default();
         let mut clash = ClashConfig::default();
         assert_eq!(blocked(&app, &clash), Some(DirectEgress::Disabled));
-
         app.enable_local_ip_probe = true;
         assert_eq!(blocked(&app, &clash), None);
-
         clash.enable_tun_mode = true;
         assert_eq!(blocked(&app, &clash), Some(DirectEgress::TunEnabled));
-
         clash.enable_tun_mode = false;
         clash.transparent_proxy.mode = TransparentProxyMode::Tproxy;
         assert_eq!(
             blocked(&app, &clash),
             Some(DirectEgress::TransparentProxyEnabled)
         );
-
         clash.transparent_proxy.local = false;
         assert_eq!(blocked(&app, &clash), None);
+    }
+    #[test]
+    fn lookup_source_preserves_which_consented_service_answered() {
+        assert_eq!(
+            EgressSource::from(NetEgressSource::Lookup {
+                provider: IpLookupProvider::Ipify
+            }),
+            EgressSource::Lookup {
+                provider: IpLookupProvider::Ipify
+            },
+        );
+    }
+    #[test]
+    fn providers_have_both_family_endpoints() {
+        for provider in ip_lookup_providers() {
+            assert!(provider.ipv4_url.starts_with("https://"));
+            assert!(provider.ipv6_url.starts_with("https://"));
+        }
     }
 }

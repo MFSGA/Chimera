@@ -1439,6 +1439,7 @@ dependencies = [
  "snafu",
  "time",
  "tokio",
+ "tracing",
  "url",
 ]
 

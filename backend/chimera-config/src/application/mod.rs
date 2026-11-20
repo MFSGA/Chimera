@@ -6,6 +6,7 @@ use struct_patch::Patch;
 mod clash_core;
 mod i18n;
 mod logging;
+mod public_ip_probe;
 mod traffic;
 mod update;
 mod widget;
@@ -14,6 +15,7 @@ mod window_close;
 pub use clash_core::*;
 pub use i18n::*;
 pub use logging::*;
+pub use public_ip_probe::*;
 pub use traffic::*;
 pub use update::*;
 pub use widget::*;
@@ -91,30 +93,6 @@ pub enum WindowType {
     Legacy,
 }
 
-/// STUN endpoint for explicitly enabled public-IP detection.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, Type)]
-pub struct StunServer {
-    pub host: String,
-    pub port: u16,
-    pub enabled: bool,
-}
-
-/// Default enabled servers match the pinned ref's public-IP probe ordering.
-pub fn default_stun_servers() -> Vec<StunServer> {
-    [
-        ("stun.cloudflare.com", 3478, true),
-        ("stun.l.google.com", 19302, true),
-        ("stun.miwifi.com", 3478, true),
-    ]
-    .into_iter()
-    .map(|(host, port, enabled)| StunServer {
-        host: host.into(),
-        port,
-        enabled,
-    })
-    .collect()
-}
-
 /// Typed application-owned subset of the legacy `verge.yaml` schema.
 ///
 /// Clash-owned fields live in `clash::config::ClashConfig`; window geometry
@@ -143,6 +121,10 @@ pub struct ChimeraAppConfig {
     #[serde(default = "default_stun_servers")]
     #[patch(attribute(specta(optional)))]
     pub stun_servers: Vec<StunServer>,
+    /// HTTP lookup providers are never used until individually consented to.
+    #[serde(default)]
+    #[patch(attribute(specta(optional)))]
+    pub ip_lookup_providers: Vec<IpLookupProvider>,
     /// enable traffic graph
     #[patch(attribute(specta(optional)))]
     pub traffic_graph: bool,
@@ -247,6 +229,7 @@ impl Default for ChimeraAppConfig {
             theme_mode: ThemeMode::System,
             enable_local_ip_probe: false,
             stun_servers: default_stun_servers(),
+            ip_lookup_providers: Vec::new(),
             traffic_graph: true,
             enable_memory_usage: true,
             lighten_animation_effects: false,
