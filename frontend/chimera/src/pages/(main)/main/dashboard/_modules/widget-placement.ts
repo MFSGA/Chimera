@@ -1,6 +1,14 @@
 import { hasOverlap, type GridPosition } from '@chimera/ui/dnd-grid';
 import type { DashboardItem, WidgetId } from '@/components/widgets/consts';
 
+/** Keep the sheet's drag preview dimensions consistent with the add action. */
+export function widgetSourceSize(
+  minimum: { minW: number; minH: number },
+  recommended?: { w: number; h: number },
+): { w: number; h: number } {
+  return recommended ?? { w: minimum.minW, h: minimum.minH };
+}
+
 export function placeWidget({
   id,
   type,

@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { WidgetId } from '../src/components/widgets/consts';
-import { placeWidget } from '../src/pages/(main)/main/dashboard/_modules/widget-placement';
+import {
+  placeWidget,
+  widgetSourceSize,
+} from '../src/pages/(main)/main/dashboard/_modules/widget-placement';
 
 /*
  * Contract: direct additions choose an available cell; external drops honor
@@ -12,6 +15,24 @@ const minimum = { minW: 2, minH: 2 };
 const memory = 'memory' as WidgetId;
 const trafficDown = 'traffic-down' as WidgetId;
 const occupied = [{ id: 'existing', type: memory, x: 0, y: 0, w: 2, h: 2 }];
+
+test('library drag preview uses the same recommended size as a direct add', () => {
+  const recommended = { w: 4, h: 3 };
+  const preview = widgetSourceSize(minimum, recommended);
+  assert.deepEqual(preview, recommended);
+  const placed = placeWidget({
+    id: 'report-instance',
+    type: trafficDown,
+    items: [],
+    cols: 8,
+    rows: 6,
+    minimum,
+    recommended,
+  });
+  assert.equal(placed?.w, preview.w);
+  assert.equal(placed?.h, preview.h);
+  assert.deepEqual(widgetSourceSize(minimum), { w: 2, h: 2 });
+});
 
 test('uses upstream recommended widget dimensions when they fit', () => {
   assert.deepEqual(
