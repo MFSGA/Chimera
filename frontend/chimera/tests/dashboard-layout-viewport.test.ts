@@ -32,6 +32,37 @@ test('resizing during drag defers layout changes and rejects an old-grid drop', 
   assert.equal(viewport.hasPendingSize(), false);
 });
 
+test('invalid old-grid drop is discarded only for its own gesture', () => {
+  const applied: ReturnType<typeof size>[] = [];
+  const viewport = createDashboardViewportCoordinator((next) =>
+    applied.push(next),
+  );
+  viewport.onSizeChange(size(8, 6));
+  viewport.onInteractionChange(true);
+  viewport.onSizeChange(size(4, 6));
+  assert.equal(viewport.shouldDiscardCommit(), true);
+  // The DnD root checks this before notifying interaction end.
+  viewport.onInteractionChange(false);
+  assert.equal(viewport.shouldDiscardCommit(), false);
+  assert.equal(viewport.isInteracting(), false);
+  assert.deepEqual(applied, [size(8, 6), size(4, 6)]);
+  // A direct library click or remove does not start another drag.
+  assert.equal(viewport.shouldDiscardCommit(), false);
+});
+
+test('cancelled resize cannot poison later direct edits or another drag', () => {
+  const viewport = createDashboardViewportCoordinator(() => {});
+  viewport.onSizeChange(size(8, 6));
+  viewport.onInteractionChange(true);
+  viewport.onSizeChange(size(6, 6));
+  assert.equal(viewport.shouldDiscardCommit(), true);
+  viewport.onInteractionChange(false); // pointercancel
+  assert.equal(viewport.shouldDiscardCommit(), false);
+  viewport.onInteractionChange(true);
+  assert.equal(viewport.shouldDiscardCommit(), false);
+  viewport.onInteractionChange(false);
+});
+
 test('unchanged dimensions still reapply after cancelled settle timer', () => {
   const applied: ReturnType<typeof size>[] = [];
   const viewport = createDashboardViewportCoordinator((next) =>

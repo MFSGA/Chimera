@@ -48,7 +48,11 @@ export function createDashboardViewportCoordinator(
         // cancelled but no ResizeObserver event occurred.
         pending ??= applied;
       } else {
+        // The drop/cancel handler has already consulted this flag before
+        // finishing the gesture. Do not let a rejected old-grid drop poison
+        // the next direct add/remove action outside a drag lifecycle.
         interacting = false;
+        resizedDuringInteraction = false;
         flush();
       }
     },
