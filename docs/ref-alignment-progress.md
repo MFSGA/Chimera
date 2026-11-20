@@ -1,5 +1,13 @@
 # ref 对齐进度
 
+## DIFF-091：Migration Context 与 Backup Port 共享化（2026-11-19）
+
+- **目标与基线**：以 `ref@c4b35e048` 的 `backend/nyanpasu-migration/src/{lib.rs,runner.rs}` 所定义的 `Ctx`、`PathResolver` 和迁移前 Backup gate 为准。本批风险 **L2**（旧配置备份及迁移前状态）。目标是让共享 `chimera-migration` 实际持有迁移路径、HotkeyStore 注入和安全备份决策；不更新两个 git submodule、不碰真实用户文件或启动服务，不改变旧 `migration-state.yaml` 的 schema 和 Legacy/UI/Agent 接口。
+- **Context 与 Path**：新增 `chimera-migration/src/context.rs`：`MigrationPaths` 从宿主解析后的 config/data 根目录纯派生 Profiles、应用配置、Session、Clash、Storage 和迁移状态路径；常量复用 `chimera-paths`，不要求 UTF-8 路径、不创建目录。共享 `Ctx` 保存这些路径与 `Arc<dyn HotkeyStoreOpener>`。Tauri 的 `core/migration::Ctx` 保留宿主 `PathResolver` 和一个可 `Deref` 的共享 Context；除 Profiles `DocumentSpec` 函数指针适配外，迁移模块经共享 Ctx 获取派生路径与 KV opener，避免两套热键/文件存储业务逻辑。
+- **Runner/Backup Port**：`chimera-migration::runner::{BackupPort,ensure_backup,has_nothing_to_protect}` 管理备份时机与“未成功备份就不得继续改写”的门槛：新安装（只有迁移状态 baseline）不创建备份；旧配置、Storage 文件或悬挂链接必须先备份；目录读取失败阻止迁移；已有快照不重复创建；备份失败不能将状态标记成已保护。Tauri `TauriBackupPort` 仅实现实际创建、完成校验的迁移备份，沿用 `BackupRequest::Migration`、关闭文件 `StorageSource::File`、manifest、安全目标与回滚约束；完成的快照才写入 Runner 的 `backup` 并可供启动故障诊断。原有 backup prune 与剩余 document/module 执行逻辑仍归 Tauri。
+- **兼容验证与错误**：共享 Migration 测试 **23/23**（含空目录和 baseline-only 不做 IO、未转换的非 UTF-8 路径、旧配置/KV 触发单次备份、失败后重试、悬挂软链接与无效配置根目录）；Tauri Migration **93/93**（宿主和共享派生路径逐项等价、真实 Runner 完整备份与重试）；Tauri 全库 **1057/1057**、1 项原有忽略项；`cargo check --locked --all-features --tests`、Rustfmt、diff check 通过。仅 macOS 本地运行，不能当作 Windows/Linux、真实用户数据迁移或 UI E2E 的验收。
+- **尚未完成/后续**：上游 `nyanpasu-migration` 的 `Runner` 完整循环、Document/Module traits、Registry、Modules 与 Backup 文件实现仍需分批搬迁；当前 Tauri 仅通过 BackupPort 注入实现。下批优先将 Module/Registry 对 `Ctx` 的引用改为共享上下文并迁入独立 crate，再收敛剩余执行循环/结构化错误；如发现运行时回归，回滚本轮 Context/Backup Port 接线即可，不能删除现有备份和 `.corrupt-*` 证据。
+
 ## DIFF-090：Migration 状态所有权与 Runner 调度策略下沉（2026-11-19）
 
 - **目标与参考**：基于 `ref@c4b35e048` 的 `backend/nyanpasu-migration/src/{lib.rs,store.rs,runner.rs,fs.rs}`，新增 `backend/chimera-migration`（风险 **L2：迁移状态与启动恢复**）；验收是旧 `migration-state.yaml` 仍可按 schema 2 读取和重新写入，错误来源与保护行为不变，现有 Legacy/E2E/API 不受影响。非目标：本轮不把依赖 Tauri `PathResolver`、备份、Profiles/Typed Config 迁移模块的 Runner IO 逻辑直接挪进共享 crate，不修改真实用户数据和两个 git submodule。
