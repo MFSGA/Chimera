@@ -1,5 +1,4 @@
 use crate::{Schedule, model::*};
-use futures_util::FutureExt;
 use serde::{Serialize, de::DeserializeOwned};
 use std::{
     future::Future,
@@ -179,7 +178,11 @@ impl Job {
                             .map_err(|_| JobError::new("input_invalid", "Input schema changed"))?;
                         handler(ctx, input).await
                     };
-                    match std::panic::AssertUnwindSafe(operation).catch_unwind().await {
+                    // Jobs intentionally convert handler panics to a durable
+                    // Failed completion. Keep each async poll in an isolated
+                    // recoverable scope; never hold a thread-local flag over
+                    // an await on a work-stealing runtime.
+                    match chimera_panics::catch_recoverable_future(operation).await {
                         Ok(Ok(output)) => Completion {
                             outcome: Outcome::Succeeded,
                             output: match crate::encoding::json(&output, limit) {

@@ -14,7 +14,6 @@ use chimera_core::actor_v2::{
 use std::{
     collections::{HashMap, VecDeque},
     future::Future,
-    panic::AssertUnwindSafe,
     sync::{
         Arc,
         atomic::{AtomicBool, AtomicU64, Ordering},
@@ -27,7 +26,6 @@ use chimera_config::clash::config::ClashConfig;
 use chimera_core_manager::{
     CoreCommand, CoreCommandEnvelope, CoreError, CoreErrorKind, CoreOwner, OperationId,
 };
-use futures::FutureExt;
 use tokio_util::{sync::CancellationToken, task::TaskTracker};
 
 use super::{
@@ -215,7 +213,9 @@ impl LocalOperationRegistry {
             }
         }
         tokio::spawn(async move {
-            let result = match AssertUnwindSafe(future).catch_unwind().await {
+            // Lower-host mutations are already recoverable at this boundary;
+            // ensure only the current poll is treated as recoverable.
+            let result = match chimera_panics::catch_recoverable_future(future).await {
                 Ok(result) => MutationResult::Completed(result.map_err(|error| {
                     match error.downcast::<
                         crate::client::application_workflow::mutation::RuntimeCheckFailure,
@@ -268,7 +268,7 @@ where
     }
 
     let mut reply_guard = MutationReplyGuard::new(outcome_uncertain.clone());
-    let result = AssertUnwindSafe(future).catch_unwind().await;
+    let result = chimera_panics::catch_recoverable_future(future).await;
     reply_guard.disarm();
     match result {
         Ok(result) => result,

@@ -24,7 +24,6 @@ use super::reconciler::{
     status::ReconcilerStatus,
 };
 use chimera_core::client::reconciler::plan::RunIntent;
-use futures_util::FutureExt;
 use ractor::{Actor, ActorProcessingErr, ActorRef, RpcReplyPort, rpc::CallResult};
 use tokio_util::{sync::CancellationToken, task::TaskTracker};
 
@@ -1096,9 +1095,13 @@ impl ApplicationWorkflowState {
         let task = tokio::spawn(async move {
             let (result, workflow_panicked, request_runtime_rebuild) = match command {
                 Command::ProfileMutation(mut mutation) => {
-                    let run = AssertUnwindSafe(workflow.run_profile_mutation(&mut mutation))
-                        .catch_unwind()
-                        .await;
+                    // Ref's recoverable panic flag must cover each future
+                    // poll, not remain set across a Tokio .await. Preserve
+                    // the uncertainty/recovery settlement on panic.
+                    let run = chimera_panics::catch_recoverable_future(
+                        workflow.run_profile_mutation(&mut mutation),
+                    )
+                    .await;
                     match run {
                         Ok((request_runtime_rebuild, settlement)) => (
                             settlement.map_err(anyhow::Error::msg),
@@ -1127,9 +1130,10 @@ impl ApplicationWorkflowState {
                     }
                 }
                 command => {
-                    match AssertUnwindSafe(workflow.execute_lifecycle(command))
-                        .catch_unwind()
-                        .await
+                    match chimera_panics::catch_recoverable_future(
+                        workflow.execute_lifecycle(command),
+                    )
+                    .await
                     {
                         Ok(Ok(request_runtime_rebuild)) => {
                             (Ok::<(), anyhow::Error>(()), false, request_runtime_rebuild)
@@ -1170,9 +1174,7 @@ impl ApplicationWorkflowState {
             let service_probe = if service_mutation && !workflow_panicked && publish_legacy_service
             {
                 Some(
-                    match AssertUnwindSafe(lifecycle.probe_service())
-                        .catch_unwind()
-                        .await
+                    match chimera_panics::catch_recoverable_future(lifecycle.probe_service()).await
                     {
                         Ok(Ok(info)) => Ok(info),
                         Ok(Err(error)) => Err(error.to_string()),

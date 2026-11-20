@@ -173,12 +173,11 @@ impl ractor::Actor for TestApplicationWorkflowActor {
         match message {
             TestMessage::BeginMutation(mut request) => {
                 let operation_id = request.operation_id.clone();
-                match std::panic::AssertUnwindSafe(
+                match chimera_panics::catch_recoverable_future(
                     state
                         .workflow
                         .run_mutation(&mut request, state.runtime.as_ref()),
                 )
-                .catch_unwind()
                 .await
                 {
                     Ok((rebuild, _)) if rebuild => state.runtime.request_runtime_rebuild(),
@@ -202,6 +201,3 @@ impl ractor::Actor for TestApplicationWorkflowActor {
         Ok(())
     }
 }
-
-#[cfg(test)]
-use futures_util::FutureExt;

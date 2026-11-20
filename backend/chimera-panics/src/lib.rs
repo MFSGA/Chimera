@@ -11,7 +11,9 @@ use std::{
     any::Any,
     cell::Cell,
     fmt,
-    panic::{self, UnwindSafe},
+    future::{Future, poll_fn},
+    panic::{self, AssertUnwindSafe, UnwindSafe},
+    task::Poll,
 };
 
 pub use frames::Frames;
@@ -99,6 +101,39 @@ where
     })
 }
 
+/// Recover a panic while **polling** a future, including after `.await`.
+///
+/// The upstream `catch_recoverable` guards a synchronous call. Extending the
+/// same thread-local marker across an `.await` would inadvertently mark
+/// unrelated tasks as recoverable on a shared Tokio worker. Instead, each
+/// poll installs the marker only until the poll yields `Pending`, completes,
+/// or unwinds. The scope guard restores nested scopes on every path.
+///
+/// This preserves Chimera's existing `FutureExt::catch_unwind` recovery
+/// boundaries for async mutation actors without treating all task panics as
+/// recoverable. It does not suppress panics from dropping the future outside
+/// the guarded poll (e.g. during external cancellation).
+pub async fn catch_recoverable_future<F>(future: F) -> Result<F::Output, RecoveredPanic>
+where
+    F: Future,
+{
+    let mut future = std::pin::pin!(future);
+    poll_fn(|cx| {
+        let previous = RECOVERABLE.replace(true);
+        let _restore = scopeguard::guard(previous, |previous| RECOVERABLE.set(previous));
+        match panic::catch_unwind(AssertUnwindSafe(|| future.as_mut().poll(cx))) {
+            Ok(Poll::Pending) => Poll::Pending,
+            Ok(Poll::Ready(value)) => Poll::Ready(Ok(value)),
+            Err(payload) => Poll::Ready(Err(RecoveredPanic {
+                message: payload_str(payload.as_ref())
+                    .unwrap_or("<non-string panic payload>")
+                    .to_owned(),
+            })),
+        }
+    })
+    .await
+}
+
 fn payload_str(payload: &(dyn Any + Send)) -> Option<&str> {
     payload
         .downcast_ref::<&str>()
@@ -161,6 +196,49 @@ mod tests {
         });
 
         assert_eq!(outer.unwrap().unwrap_err().to_string(), "panicked: inner");
+        assert!(!RECOVERABLE.get());
+    }
+
+    /// The recoverable flag must be scoped to one poll, never the suspended
+    /// time between polls on a work-stealing runtime.
+    #[test]
+    fn async_recovery_restores_flag_on_pending_and_panic() {
+        use std::{
+            future::{Future as _, poll_fn},
+            task::{Context, Poll, Waker},
+        };
+
+        install_recording_hook();
+        let mut polls = 0;
+        let future = poll_fn(|_| {
+            polls += 1;
+            assert!(RECOVERABLE.get());
+            if polls == 1 {
+                Poll::<()>::Pending
+            } else {
+                panic!("future operation failed")
+            }
+        });
+        let mut caught = Box::pin(catch_recoverable_future(future));
+        let mut cx = Context::from_waker(Waker::noop());
+        assert!(matches!(caught.as_mut().poll(&mut cx), Poll::Pending));
+        assert!(!RECOVERABLE.get());
+        let result = caught.as_mut().poll(&mut cx);
+        assert!(matches!(result, Poll::Ready(Err(_))));
+        assert!(!RECOVERABLE.get());
+        assert!(!cleaned_up(thread::current().id()));
+    }
+
+    #[test]
+    fn async_recovery_of_success_preserves_value() {
+        use std::{
+            future::Future as _,
+            task::{Context, Poll, Waker},
+        };
+
+        let mut caught = Box::pin(catch_recoverable_future(async { 42u32 }));
+        let mut cx = Context::from_waker(Waker::noop());
+        assert!(matches!(caught.as_mut().poll(&mut cx), Poll::Ready(Ok(42))));
         assert!(!RECOVERABLE.get());
     }
 

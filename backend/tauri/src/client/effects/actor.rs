@@ -1,7 +1,6 @@
 //! Owns peripheral desired state and independent, coalesced execution groups.
 use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
-use futures_util::FutureExt;
 use ractor::{Actor, ActorProcessingErr, ActorRef, RpcReplyPort, rpc::CallResult};
 use tokio::sync::watch;
 
@@ -379,10 +378,17 @@ impl State {
                     port.apply(revision, ApplicationEffectPlan::from_effects(effects))
                         .await
                 };
-                let statuses = std::panic::AssertUnwindSafe(work)
-                    .catch_unwind()
-                    .await
-                    .unwrap_or_default();
+                // The effect actor retains its recovery/retry state rather
+                // than allowing a panicking effect to tear down the group.
+                // Only the active poll is marked recoverable: no TLS guard
+                // may remain active while this task is suspended.
+                let statuses = match chimera_panics::catch_recoverable_future(work).await {
+                    Ok(statuses) => statuses,
+                    Err(error) => {
+                        tracing::error!(%error, ?kinds, "application effect group panicked");
+                        Vec::new()
+                    }
+                };
                 let _ = actor.cast(Message::Completed {
                     group: index,
                     revision,
