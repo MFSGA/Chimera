@@ -728,6 +728,11 @@ mod tests {
         let error = runner
             .run_pending()
             .expect_err("unsafe backup destination must block migration");
+        assert!(
+            matches!(error.downcast_ref::<core_runner::ExecutionError>(),
+            Some(core_runner::ExecutionError::CreateBackup { source })
+                if format!("{source:#}").contains("failed to back up the config"))
+        );
         assert!(format!("{error:#}").contains("failed to back up the config"));
         assert_eq!(
             std::fs::read_to_string(paths.chimera_config_path()).unwrap(),

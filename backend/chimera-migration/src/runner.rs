@@ -35,7 +35,9 @@ pub fn ensure_backup<P: BackupPort>(
     if existing.is_some() || has_nothing_to_protect(ctx)? {
         return Ok(false);
     }
-    let snapshot = port.create_snapshot(ctx)?;
+    let snapshot = port
+        .create_snapshot(ctx)
+        .map_err(|source| ExecutionError::CreateBackup { source })?;
     *existing = Some(snapshot);
     Ok(true)
 }
@@ -158,6 +160,42 @@ pub enum ExecutionError {
         source: anyhow::Error,
         persistence: anyhow::Error,
     },
+    #[error("failed to persist {operation} at {}", path.display())]
+    PersistState {
+        operation: String,
+        path: std::path::PathBuf,
+        #[source]
+        source: anyhow::Error,
+    },
+    #[error("failed to back up the config before migrating")]
+    CreateBackup {
+        #[source]
+        source: anyhow::Error,
+    },
+    #[error("failed to stamp the {module} files at {}", path.display())]
+    StampDocument {
+        module: String,
+        path: std::path::PathBuf,
+        #[source]
+        source: anyhow::Error,
+    },
+}
+
+/// One error boundary for every shared Runner state transition.
+/// Preserve the actual flush error for callers that inspect IO causes.
+fn persist_state(
+    store: &MigrationStore,
+    state_path: &Path,
+    operation: impl Into<String>,
+) -> anyhow::Result<()> {
+    store.flush_atomic(state_path).map_err(|source| {
+        ExecutionError::PersistState {
+            operation: operation.into(),
+            path: state_path.to_path_buf(),
+            source,
+        }
+        .into()
+    })
 }
 
 /// Initialize each module from its stamped document or injected baseline.
@@ -188,9 +226,7 @@ pub fn ensure_baselines<C: 'static>(
         }
     }
     if changed {
-        store
-            .flush_atomic(state_path)
-            .context("failed to persist migration baselines")?;
+        persist_state(store, state_path, "migration baselines")?;
     }
     Ok(())
 }
@@ -226,8 +262,13 @@ pub fn stamp_adopted_documents<C: 'static, P: BackupPort>(
                 continue;
             }
             ensure_backup(backup_ctx, existing, port)?;
-            document::write_document(&path, spec.document, head, file.payload, None)
-                .with_context(|| format!("failed to stamp the {} files", module.module()))?;
+            document::write_document(&path, spec.document, head, file.payload, None).map_err(
+                |source| ExecutionError::StampDocument {
+                    module: module.module().to_owned(),
+                    path: path.clone(),
+                    source,
+                },
+            )?;
         }
         store
             .modules
@@ -456,10 +497,14 @@ pub fn commit_successful_run(
     target: &Version,
     state_path: &Path,
 ) -> anyhow::Result<()> {
-    store.set_last_succeeded(target.clone());
-    store
-        .flush_atomic(state_path)
-        .context("failed to persist successful migration state")
+    // This app-wide marker is the final transaction commit: never retain a
+    // false success in memory if the atomic persistence operation fails.
+    let previous = store.app.last_succeeded.replace(target.clone());
+    if let Err(error) = persist_state(store, state_path, "successful migration state") {
+        store.app.last_succeeded = previous;
+        return Err(error);
+    }
+    Ok(())
 }
 
 /// Decide preflight backup requirements before any step may rewrite data.
@@ -552,9 +597,11 @@ pub fn execute_step<C: 'static>(
     }
 
     store.mark_in_progress(spec(step));
-    store
-        .flush_atomic(state_path)
-        .with_context(|| format!("failed to persist {} in-progress state", step.id()))?;
+    persist_state(
+        store,
+        state_path,
+        format!("{} in-progress state", step.id()),
+    )?;
 
     match step
         .run(ctx)
@@ -619,9 +666,7 @@ fn finish_step<C: 'static>(
         store.mark_completed(spec(step));
     }
     store.bump_module(step.module());
-    store
-        .flush_atomic(state_path)
-        .with_context(|| format!("failed to persist {} finished state", step.id()))
+    persist_state(store, state_path, format!("{} finished state", step.id()))
 }
 
 fn record_failure<C: 'static>(
@@ -631,7 +676,7 @@ fn record_failure<C: 'static>(
     error: anyhow::Error,
 ) -> anyhow::Error {
     store.mark_failed(spec(step), &error);
-    match store.flush_atomic(state_path) {
+    match persist_state(store, state_path, format!("{} failed state", step.id())) {
         Ok(()) => error,
         Err(persistence) => ExecutionError::RecordFailure {
             step: step.id().to_owned(),
@@ -804,6 +849,87 @@ mod tests {
         assert!(snapshot.is_none());
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn successful_commit_flush_failure_keeps_old_version_in_memory_and_external_file_untouched() {
+        use std::os::unix::fs::symlink;
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("migration-state.yaml");
+        let target = temp.path().join("external.yaml");
+        fs::write(&target, b"user state must remain untouched").unwrap();
+        symlink(&target, &path).unwrap();
+        let previous = Version::new(0, 27, 0);
+        let mut store = MigrationStore::default();
+        store.app.last_succeeded = Some(previous.clone());
+        let error = commit_successful_run(&mut store, &Version::new(0, 28, 3), &path).unwrap_err();
+        assert!(matches!(error.downcast_ref::<ExecutionError>(),
+            Some(ExecutionError::PersistState { operation, path: actual, source })
+                if operation == "successful migration state" && *actual == path
+                    && format!("{source:#}").contains("symbolic link")));
+        assert_eq!(store.app.last_succeeded.as_ref(), Some(&previous));
+        assert_eq!(
+            fs::read(&target).unwrap(),
+            b"user state must remain untouched"
+        );
+        assert_eq!(fs::read_link(&path).unwrap(), target);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unstamped_document_write_refusal_returns_typed_error_and_keeps_verified_snapshot() {
+        use std::os::unix::fs::symlink;
+        let root = tempfile::tempdir().unwrap();
+        let ctx = context(root.path());
+        fs::create_dir_all(ctx.paths().app_config_dir()).unwrap();
+        let document_path = ctx.profiles_path();
+        let external = root.path().join("external-profiles.yaml");
+        let original = b"items: []\n";
+        fs::write(&external, original).unwrap();
+        symlink(&external, &document_path).unwrap();
+        let mut store = MigrationStore::default();
+        store.modules.insert(
+            "profiles".to_owned(),
+            ModuleState {
+                applied_revision: 4,
+                baseline_revision: 4,
+                stamped: false,
+            },
+        );
+        let modules = [&crate::modules::profiles::MIGRATOR as &dyn ModuleMigrator<Ctx>];
+        let mut snapshot = None;
+        let mut port = RecordingBackup {
+            fail: true,
+            ..Default::default()
+        };
+        let error =
+            stamp_adopted_documents(modules, &ctx, &ctx, &mut store, &mut snapshot, &mut port)
+                .unwrap_err();
+        assert!(matches!(
+            error.downcast_ref::<ExecutionError>(),
+            Some(ExecutionError::CreateBackup { .. })
+        ));
+        assert!(snapshot.is_none());
+        assert!(!store.module_state("profiles").stamped);
+        assert_eq!(fs::read(&external).unwrap(), original);
+
+        port.fail = false;
+        let error =
+            stamp_adopted_documents(modules, &ctx, &ctx, &mut store, &mut snapshot, &mut port)
+                .unwrap_err();
+        assert!(matches!(error.downcast_ref::<ExecutionError>(),
+            Some(ExecutionError::StampDocument { module, path, source })
+                if module == "profiles" && *path == document_path
+                    && format!("{source:#}").contains("symbolic link")));
+        assert_eq!(
+            snapshot,
+            Some(2),
+            "verified pre-write snapshot must be retained"
+        );
+        assert!(!store.module_state("profiles").stamped);
+        assert_eq!(fs::read(&external).unwrap(), original);
+        assert_eq!(fs::read_link(&document_path).unwrap(), external);
+    }
+
     #[test]
     fn config_or_storage_requires_one_snapshot_before_rewrites() {
         for source in ["config", "storage"] {
@@ -838,6 +964,9 @@ mod tests {
             ..Default::default()
         };
         let error = ensure_backup(&ctx, &mut snapshot, &mut port).unwrap_err();
+        assert!(matches!(error.downcast_ref::<ExecutionError>(),
+            Some(ExecutionError::CreateBackup { source })
+                if format!("{source:#}").contains("injected snapshot failure")));
         assert!(format!("{error:#}").contains("injected snapshot failure"));
         assert!(snapshot.is_none());
         assert_eq!(fs::read(ctx.chimera_config_path()).unwrap(), old);
@@ -1501,6 +1630,10 @@ mod tests {
                 assert!(matches!(source.downcast_ref::<ExecutionError>(),
                     Some(ExecutionError::RunStep { step, source })
                         if step == "example/commit" && format!("{source:#}").contains("original step failure")));
+                assert!(matches!(persistence.downcast_ref::<ExecutionError>(),
+                    Some(ExecutionError::PersistState { operation, path, source })
+                        if operation.contains("failed state") && *path == state_path
+                            && format!("{source:#}").contains("symbolic link")));
                 assert!(format!("{persistence:#}").contains("symbolic link"));
             }
             other => panic!("expected RecordFailure, got {other:?}"),
@@ -1671,6 +1804,10 @@ mod tests {
             &transaction_registry(),
         )
         .unwrap_err();
+        assert!(matches!(error.downcast_ref::<ExecutionError>(),
+            Some(ExecutionError::PersistState { operation, path: actual, source })
+                if operation.contains("in-progress") && *actual == path
+                    && format!("{source:#}").contains("symbolic link")));
         assert!(format!("{error:#}").contains("symbolic link"));
         assert_eq!((ctx.runs, ctx.rollbacks), (0, 0));
         assert_eq!(std::fs::read(&target).unwrap(), b"external state");

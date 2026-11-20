@@ -19,6 +19,7 @@ use crate::{
     },
     utils::{path::PathResolver, recovery_io::IoFailure},
 };
+use chimera_migration::runner::ExecutionError;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -148,6 +149,9 @@ impl StartupFailure {
         let mut path = None;
         let mut revision = None;
         let mut host_user_config = false;
+        // RecordFailure exposes its independent persistence error as a field,
+        // not a source (the original step failure remains the source).
+        let mut secondary_persistence_io = None;
         let mut chain = Vec::new();
         let mut current = Some(error);
         while let Some(error) = current {
@@ -229,6 +233,25 @@ impl StartupFailure {
                     },
                 });
             }
+            if let Some(execution) = error.downcast_ref::<ExecutionError>() {
+                match execution {
+                    ExecutionError::PersistState { path: actual, .. }
+                    | ExecutionError::StampDocument { path: actual, .. } => {
+                        path = Some(actual.clone());
+                    }
+                    ExecutionError::RecordFailure { persistence, .. } => {
+                        secondary_persistence_io = corrupt::error_io(persistence.as_ref());
+                        if let Some(ExecutionError::PersistState { path: actual, .. }) =
+                            persistence.downcast_ref::<ExecutionError>()
+                        {
+                            // A later source may reveal a more precise path to
+                            // the original step failure; use this as fallback.
+                            path.get_or_insert_with(|| actual.clone());
+                        }
+                    }
+                    _ => {}
+                }
+            }
             if let Some(check) = error.downcast_ref::<MigrationCheckError>() {
                 match check {
                     MigrationCheckError::Io { path: actual, .. }
@@ -286,7 +309,15 @@ impl StartupFailure {
         if let Some(revision) = &revision {
             path = Some(revision.path().clone());
         }
-        let kind = match corrupt::error_io(error) {
+        // Classify the first IO failure in the primary error chain. If the
+        // original step failed without an IO cause, the independently failed
+        // state flush still needs to surface permission/busy diagnostics.
+        let primary_io = corrupt::error_io(error);
+        let io = match primary_io {
+            Some(IoFailure::PermissionDenied | IoFailure::Transient) => primary_io,
+            _ => secondary_persistence_io.or(primary_io),
+        };
+        let kind = match io {
             Some(IoFailure::PermissionDenied) => FailureKind::Permission,
             Some(IoFailure::Transient) => FailureKind::Busy,
             _ if revision.as_ref().is_some_and(RevisionFailure::is_newer) => {
@@ -704,6 +735,94 @@ mod tests {
         );
         assert!(report.failure.detail.contains("storage/hotkeys_to_kv"));
         assert_eq!(report.backups_dir, None);
+    }
+
+    #[test]
+    fn typed_migration_persistence_backup_and_stamp_failures_report_exact_paths() {
+        let (_temp, paths) = fixture();
+        let state_path = paths.app_config_dir().join("migration-state.yaml");
+        let persist = anyhow::Error::new(ExecutionError::PersistState {
+            operation: "successful migration state".to_owned(),
+            path: state_path.clone(),
+            source: std::io::Error::from(std::io::ErrorKind::PermissionDenied).into(),
+        })
+        .context("migration startup boundary");
+        let report = Report::from_error(persist.as_ref(), StartupStage::MigrationRun, &paths);
+        assert_eq!(report.failure.kind, FailureKind::Permission);
+        assert_eq!(report.failure.path, Some(state_path.clone()));
+        assert!(report.failure.detail.contains("successful migration state"));
+        assert!(report.backups_dir.is_none());
+
+        let unsafe_backup = paths.backups_dir();
+        let create = anyhow::Error::new(ExecutionError::CreateBackup {
+            source: BackupError::InvalidNode {
+                path: unsafe_backup.clone(),
+            }
+            .into(),
+        });
+        let report = Report::from_error(create.as_ref(), StartupStage::MigrationRun, &paths);
+        assert_eq!(report.failure.kind, FailureKind::MigrationFailed);
+        assert_eq!(report.failure.path, Some(unsafe_backup));
+        assert!(
+            report
+                .failure
+                .detail
+                .contains("failed to back up the config")
+        );
+        assert!(
+            report.backups_dir.is_none(),
+            "a failed snapshot is never advertised"
+        );
+
+        let profiles = paths.profiles_path();
+        let stamp = anyhow::Error::new(ExecutionError::StampDocument {
+            module: "profiles".to_owned(),
+            path: profiles.clone(),
+            source: anyhow::anyhow!("refused to replace a symbolic link"),
+        });
+        let report = Report::from_error(stamp.as_ref(), StartupStage::MigrationRun, &paths);
+        assert_eq!(report.failure.kind, FailureKind::MigrationFailed);
+        assert_eq!(report.failure.path, Some(profiles));
+        assert!(report.failure.detail.contains("symbolic link"));
+        assert!(report.backups_dir.is_none());
+    }
+
+    #[test]
+    fn secondary_persistence_error_preserves_original_failure_and_permission_diagnosis() {
+        let (_temp, paths) = fixture();
+        let state_path = paths.app_config_dir().join("migration-state.yaml");
+        let error = anyhow::Error::new(ExecutionError::RecordFailure {
+            step: "storage/hotkeys_to_kv".to_owned(),
+            source: ExecutionError::RunStep {
+                step: "storage/hotkeys_to_kv".to_owned(),
+                source: anyhow::anyhow!("original malformed hotkey data"),
+            }
+            .into(),
+            persistence: ExecutionError::PersistState {
+                operation: "storage/hotkeys_to_kv failed state".to_owned(),
+                path: state_path.clone(),
+                source: std::io::Error::from(std::io::ErrorKind::PermissionDenied).into(),
+            }
+            .into(),
+        })
+        .context("migration startup boundary");
+        let report = Report::from_error(error.as_ref(), StartupStage::MigrationRun, &paths);
+        assert_eq!(report.failure.kind, FailureKind::Permission);
+        assert_eq!(report.failure.path, Some(state_path));
+        assert!(
+            report
+                .failure
+                .detail
+                .contains("original malformed hotkey data")
+        );
+        assert!(
+            report
+                .failure
+                .detail
+                .contains("failed to persist storage/hotkeys_to_kv failed state")
+        );
+        assert!(report.failure.revision.is_none());
+        assert!(report.backups_dir.is_none());
     }
 
     #[test]
