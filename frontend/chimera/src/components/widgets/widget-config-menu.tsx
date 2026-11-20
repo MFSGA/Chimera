@@ -49,7 +49,8 @@ function Choice<T extends string>({
     | 'shortcut-order'
     | 'proxy-mode-layout'
     | 'quota-wave-style'
-    | 'provider-types';
+    | 'provider-types'
+    | 'connection-sort';
   label: string;
   value: T;
   options: ChoiceOption<T>[];
@@ -162,6 +163,49 @@ function ConfigFieldRows({
   onChange: (config: WidgetConfig) => void;
 }) {
   switch (config.type) {
+    case WidgetId.ActiveConnections:
+      return (
+        <>
+          <ConfigGroup>
+            <Choice
+              field="connection-sort"
+              label={m.dashboard_widget_config_sort()}
+              value={config.sort}
+              options={[
+                {
+                  value: 'download',
+                  label: m.dashboard_widget_config_download(),
+                },
+                { value: 'upload', label: m.dashboard_widget_config_upload() },
+                { value: 'total', label: m.dashboard_widget_config_total() },
+              ]}
+              disabled={disabled}
+              onChange={(sort) => onChange({ ...config, sort })}
+            />
+            <Stepper
+              label={m.dashboard_widget_config_top()}
+              value={config.topN}
+              range={WIDGET_CONFIG_NUMBER_RANGES.topN}
+              disabled={disabled}
+              onChange={(topN) => onChange({ ...config, topN })}
+            />
+          </ConfigGroup>
+          <ConfigGroup>
+            <Toggle
+              label={m.dashboard_widget_config_process()}
+              checked={config.showProcess}
+              disabled={disabled}
+              onChange={(showProcess) => onChange({ ...config, showProcess })}
+            />
+            <Toggle
+              label={m.dashboard_widget_config_hide_targets()}
+              checked={config.hideTargets}
+              disabled={disabled}
+              onChange={(hideTargets) => onChange({ ...config, hideTargets })}
+            />
+          </ConfigGroup>
+        </>
+      );
     case WidgetId.NetworkInfo:
       return (
         <ConfigGroup>

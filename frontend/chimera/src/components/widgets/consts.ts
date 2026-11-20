@@ -18,6 +18,7 @@
 
 import type { DndGridItemType } from '@chimera/ui/dnd-grid';
 import type { ReactNode } from 'react';
+import { ActiveConnectionsWidget } from './widget-active-connections';
 import { WidgetId } from './widget-config';
 import { NetworkInfoWidget } from './widget-network-info';
 import { ProviderUpdatesWidget } from './widget-provider-updates';
@@ -62,6 +63,7 @@ export const RENDER_MAP: Record<
   [WidgetId.SubscriptionQuota]: SubscriptionQuotaWidget,
   [WidgetId.ProviderUpdates]: ProviderUpdatesWidget,
   [WidgetId.NetworkInfo]: NetworkInfoWidget,
+  [WidgetId.ActiveConnections]: ActiveConnectionsWidget,
 };
 
 /**
@@ -138,6 +140,7 @@ export const WIDGET_MIN_SIZE_MAP: Record<
   [WidgetId.SubscriptionQuota]: { minW: 3, minH: 2 },
   [WidgetId.ProviderUpdates]: { minW: 3, minH: 2 },
   [WidgetId.NetworkInfo]: { minW: 3, minH: 2 },
+  [WidgetId.ActiveConnections]: { minW: 4, minH: 2 },
 };
 
 /** 持久化存储的布局数据结构 */

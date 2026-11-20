@@ -11,6 +11,7 @@ export enum WidgetId {
   SubscriptionQuota = 'subscription-quota',
   ProviderUpdates = 'provider-updates',
   NetworkInfo = 'network-info',
+  ActiveConnections = 'active-connections',
 }
 
 type TrafficConfig = {
@@ -72,6 +73,13 @@ export type WidgetConfigs = {
   [WidgetId.NetworkInfo]: {
     type: WidgetId.NetworkInfo;
     hideAddresses: boolean;
+  };
+  [WidgetId.ActiveConnections]: {
+    type: WidgetId.ActiveConnections;
+    sort: 'download' | 'upload' | 'total';
+    topN: number;
+    showProcess: boolean;
+    hideTargets: boolean;
   };
 };
 
@@ -139,6 +147,13 @@ export const DEFAULT_WIDGET_CONFIGS: WidgetConfigs = {
     type: WidgetId.NetworkInfo,
     hideAddresses: false,
   },
+  [WidgetId.ActiveConnections]: {
+    type: WidgetId.ActiveConnections,
+    sort: 'download',
+    topN: 3,
+    showProcess: true,
+    hideTargets: false,
+  },
 };
 
 export type WidgetConfigStorage = {
@@ -156,6 +171,7 @@ export const WIDGET_CONFIG_NUMBER_RANGES = {
   expiryWarningDays: [1, 365],
   quotaWarningPercent: [1, 100],
   maxItems: [1, 20],
+  topN: [1, 20],
 } as const;
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -222,7 +238,8 @@ export function normalizeWidgetConfigStorage(
         (key === 'samples' ||
           key === 'expiryWarningDays' ||
           key === 'quotaWarningPercent' ||
-          key === 'maxItems') &&
+          key === 'maxItems' ||
+          key === 'topN') &&
         typeof candidate === 'number' &&
         Number.isInteger(candidate)
       ) {
@@ -234,6 +251,10 @@ export function normalizeWidgetConfigStorage(
         (key === 'unit' && (candidate === 'bytes' || candidate === 'bits')) ||
         (key === 'waveStyle' &&
           (candidate === 'filled' || candidate === 'outline')) ||
+        (key === 'sort' &&
+          (candidate === 'download' ||
+            candidate === 'upload' ||
+            candidate === 'total')) ||
         (key === 'kinds' &&
           (candidate === 'both' ||
             candidate === 'proxy' ||

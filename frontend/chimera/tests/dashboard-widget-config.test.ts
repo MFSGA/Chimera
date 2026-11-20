@@ -86,6 +86,55 @@ test('normalizes persisted widget settings and rejects invalid values', () => {
   assert.equal('unknown-0' in normalized.byInstance, false);
 });
 
+test('Active Connections retains its ref sorting controls and bounds visible rows', () => {
+  const storage = normalizeWidgetConfigStorage({
+    version: 1,
+    byInstance: {
+      selected: {
+        type: WidgetId.ActiveConnections,
+        sort: 'upload',
+        topN: 200,
+        showProcess: false,
+        hideTargets: true,
+      },
+      invalid: {
+        type: WidgetId.ActiveConnections,
+        sort: 'unknown',
+        topN: 2.5,
+        showProcess: 'no',
+        hideTargets: null,
+      },
+      minimum: {
+        type: WidgetId.ActiveConnections,
+        sort: 'total',
+        topN: 0,
+      },
+    },
+  });
+  assert.deepEqual(
+    getWidgetConfig(storage, 'selected', WidgetId.ActiveConnections),
+    {
+      type: WidgetId.ActiveConnections,
+      sort: 'upload',
+      topN: 20,
+      showProcess: false,
+      hideTargets: true,
+    },
+  );
+  assert.deepEqual(
+    getWidgetConfig(storage, 'invalid', WidgetId.ActiveConnections),
+    DEFAULT_WIDGET_CONFIGS[WidgetId.ActiveConnections],
+  );
+  assert.deepEqual(
+    getWidgetConfig(storage, 'minimum', WidgetId.ActiveConnections),
+    {
+      ...DEFAULT_WIDGET_CONFIGS[WidgetId.ActiveConnections],
+      sort: 'total',
+      topN: 1,
+    },
+  );
+});
+
 test('Network Info address visibility persists and rejects non-booleans', () => {
   const saved = normalizeWidgetConfigStorage({
     version: 1,

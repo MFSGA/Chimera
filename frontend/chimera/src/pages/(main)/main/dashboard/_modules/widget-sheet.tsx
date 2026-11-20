@@ -12,6 +12,7 @@ import DataUsageRounded from '~icons/material-symbols/data-usage-rounded';
 import DoneRounded from '~icons/material-symbols/done-rounded';
 import EventRepeatRounded from '~icons/material-symbols/event-repeat-rounded';
 import MemoryOutlineRounded from '~icons/material-symbols/memory-outline-rounded';
+import NetworkCheckRounded from '~icons/material-symbols/network-check-rounded';
 import PublicRounded from '~icons/material-symbols/public-rounded';
 import RouteRounded from '~icons/material-symbols/route-rounded';
 import SettingsEthernetRounded from '~icons/material-symbols/settings-ethernet-rounded';
@@ -39,6 +40,7 @@ const WIDGET_TITLE_MAP: Record<WidgetId, () => string> = {
   [WidgetId.SubscriptionQuota]: m.dashboard_widget_subscription_quota_title,
   [WidgetId.ProviderUpdates]: m.dashboard_widget_provider_updates_title,
   [WidgetId.NetworkInfo]: m.dashboard_widget_network_info_title,
+  [WidgetId.ActiveConnections]: m.dashboard_widget_active_connections_title,
 };
 
 const WIDGET_ICON_MAP: Record<
@@ -56,6 +58,7 @@ const WIDGET_ICON_MAP: Record<
   [WidgetId.SubscriptionQuota]: DataUsageRounded,
   [WidgetId.ProviderUpdates]: CloudSyncRounded,
   [WidgetId.NetworkInfo]: PublicRounded,
+  [WidgetId.ActiveConnections]: NetworkCheckRounded,
 };
 
 const widgetEntryAddVariants = cva('size-9 shrink-0 shadow-none', {
