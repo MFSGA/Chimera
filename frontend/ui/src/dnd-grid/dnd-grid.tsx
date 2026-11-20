@@ -29,11 +29,17 @@ import type {
   ResizeHandle,
 } from './types';
 import { useGridLayout } from './use-grid-layout';
-import { calculateResize, committedResizeItems, hasOverlap } from './utils';
+import {
+  calculateResize,
+  committedResizeItems,
+  hasOverlap,
+  shouldAnimateGridDrop,
+} from './utils';
 
 export interface DndGridProps<T extends string = string> {
   items: DndGridItemType<T>[];
-  onLayoutChange?: (items: DndGridItemType<T>[]) => void;
+  /** Return false to reject a drop and suppress its committed-placement animation. */
+  onLayoutChange?: (items: DndGridItemType<T>[]) => boolean | void;
   minCellSize?: number;
   gap?: number;
   size?: GridSize;
@@ -182,11 +188,22 @@ export function DndGrid<T extends string = string>({
       setActiveItem(null);
       setPreviewItem(null);
       setFrozenItems(null);
-      setDropInfoMap((prev) => ({
-        ...prev,
-        [id]: { left: dropLeft, top: dropTop },
-      }));
-      onLayoutChange?.(newItems);
+      const accepted = onLayoutChange?.(newItems);
+      if (shouldAnimateGridDrop(accepted)) {
+        setDropInfoMap((prev) => ({
+          ...prev,
+          [id]: { left: dropLeft, top: dropTop },
+        }));
+      } else {
+        // A rejected old-grid drop is a cancellation, not a successful
+        // placement. Clear any prior landing animation for this widget.
+        setDropInfoMap((prev) => {
+          if (!(id in prev)) return prev;
+          const next = { ...prev };
+          delete next[id];
+          return next;
+        });
+      }
       onInteractionChange?.(false);
     },
     [

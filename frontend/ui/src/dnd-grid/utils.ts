@@ -86,3 +86,9 @@ export function committedResizeItems<T extends string>(
   if (cancelled || !preview) return null;
   return items.map((item) => (item.id === preview.id ? preview : item));
 }
+
+/** A drag rejected by the layout owner must not animate as if it committed.
+ * Legacy consumers without an explicit confirmation retain their behavior. */
+export function shouldAnimateGridDrop(result: boolean | void): boolean {
+  return result !== false;
+}

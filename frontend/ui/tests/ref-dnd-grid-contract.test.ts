@@ -10,6 +10,7 @@ import {
   committedResizeItems,
   hasOverlap,
   isOverlap,
+  shouldAnimateGridDrop,
 } from '../src/dnd-grid/utils';
 
 const moving: DndGridItemType = {
@@ -111,4 +112,11 @@ test('a second resize starts from unchanged geometry after cancellation', () => 
   assert.deepEqual(committedResizeItems(original, second, false), [
     { ...moving, h: 3 },
   ]);
+});
+
+test('rejected viewport or KV layout drops suppress successful-drop animation', () => {
+  assert.equal(shouldAnimateGridDrop(false), false);
+  // Existing standalone grids may not report acceptance explicitly.
+  assert.equal(shouldAnimateGridDrop(undefined), true);
+  assert.equal(shouldAnimateGridDrop(true), true);
 });
