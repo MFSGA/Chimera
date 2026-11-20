@@ -1,5 +1,6 @@
-//! Pure migration scheduling decisions from the ref Runner path.
-//! IO, backup creation, and module execution remain injected by the application adapter.
+//! Shared ref-aligned migration Runner: state loading, safe preflight checks,
+//! transactions, step execution, and recovery. Only the platform-specific
+//! verified backup producer and legacy conversion ports are host-injected.
 
 use crate::{
     MigrationAdvice, MigrationState, StepSpec,
@@ -54,13 +55,41 @@ pub fn has_nothing_to_protect(ctx: &Ctx) -> anyhow::Result<bool> {
     let config = ctx.paths().app_config_dir();
     let entries = match fs::read_dir(config) {
         Ok(entries) => entries,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(true),
-        Err(error) => {
-            return Err(error).with_context(|| format!("failed to list {}", config.display()));
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            // Do not treat a dangling directory symlink as a fresh installation.
+            // `read_dir` follows the link, whereas `config_node_exists` uses
+            // symlink_metadata and sees that a user-owned node is present.
+            match crate::fs::config_node_exists(config) {
+                Ok(false) => return Ok(true),
+                Ok(true) => {
+                    return Err(ExecutionError::ReadConfigDirectory {
+                        path: config.to_path_buf(),
+                        source: error,
+                    }
+                    .into());
+                }
+                Err(source) => {
+                    return Err(ExecutionError::ReadConfigDirectory {
+                        path: config.to_path_buf(),
+                        source,
+                    }
+                    .into());
+                }
+            }
+        }
+        Err(source) => {
+            return Err(ExecutionError::ReadConfigDirectory {
+                path: config.to_path_buf(),
+                source,
+            }
+            .into());
         }
     };
     for entry in entries {
-        let entry = entry.with_context(|| format!("failed to inspect {}", config.display()))?;
+        let entry = entry.map_err(|source| ExecutionError::ReadConfigDirectory {
+            path: config.to_path_buf(),
+            source,
+        })?;
         if entry.file_name() != STORE_FILE_NAME {
             return Ok(false);
         }
@@ -179,6 +208,30 @@ pub enum ExecutionError {
         #[source]
         source: anyhow::Error,
     },
+    #[error("failed to load migration state at {}", path.display())]
+    LoadState {
+        path: std::path::PathBuf,
+        #[source]
+        source: anyhow::Error,
+    },
+    #[error("failed to read {}", path.display())]
+    ReadConfigDirectory {
+        path: std::path::PathBuf,
+        #[source]
+        source: io::Error,
+    },
+}
+
+/// Read the migration state before constructing any modules or touching
+/// their files. Keep incompatible schema and malformed data as original causes.
+pub fn load_state(path: &Path) -> anyhow::Result<MigrationStore> {
+    MigrationStore::load(path).map_err(|source| {
+        ExecutionError::LoadState {
+            path: path.to_path_buf(),
+            source,
+        }
+        .into()
+    })
 }
 
 /// One error boundary for every shared Runner state transition.
@@ -1003,10 +1056,67 @@ mod tests {
         let mut snapshot = None;
         let mut port = RecordingBackup::default();
         let error = ensure_backup(&ctx, &mut snapshot, &mut port).unwrap_err();
-        assert!(format!("{error:#}").contains("failed to list"));
+        assert!(matches!(error.downcast_ref::<ExecutionError>(),
+            Some(ExecutionError::ReadConfigDirectory { path, source })
+                if *path == not_directory && source.kind() == io::ErrorKind::NotADirectory));
         assert!(snapshot.is_none());
         assert_eq!(port.calls, 0);
         assert_eq!(fs::read(&not_directory).unwrap(), b"do not delete");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn dangling_configuration_directory_is_not_a_fresh_install() {
+        use std::os::unix::fs::symlink;
+        let root = tempfile::tempdir().unwrap();
+        let ctx = context(root.path());
+        fs::create_dir_all(ctx.paths().app_data_dir()).unwrap();
+        let config = ctx.paths().app_config_dir();
+        let absent_target = root.path().join("missing-user-configuration");
+        symlink(&absent_target, config).unwrap();
+
+        let mut snapshot = None;
+        let mut backup = RecordingBackup::default();
+        let error = ensure_backup(&ctx, &mut snapshot, &mut backup).unwrap_err();
+        assert!(matches!(error.downcast_ref::<ExecutionError>(),
+            Some(ExecutionError::ReadConfigDirectory { path, source })
+                if path == config && source.kind() == io::ErrorKind::NotFound));
+        assert_eq!(backup.calls, 0);
+        assert!(snapshot.is_none());
+        assert_eq!(fs::read_link(config).unwrap(), absent_target);
+        assert!(!absent_target.exists());
+    }
+
+    #[test]
+    fn load_state_preserves_schema_error_and_does_not_rewrite_newer_state() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join(STORE_FILE_NAME);
+        assert_eq!(load_state(&path).unwrap(), MigrationStore::default());
+        assert!(!path.exists());
+        let original = b"store_schema_version: 99\napp:\n  last_succeeded: 9.9.9\n";
+        fs::write(&path, original).unwrap();
+        let error = load_state(&path).unwrap_err();
+        let typed = error
+            .downcast_ref::<ExecutionError>()
+            .expect("LoadState boundary");
+        match typed {
+            ExecutionError::LoadState {
+                path: found,
+                source,
+            } => {
+                assert_eq!(found, &path);
+                assert!(matches!(
+                    source.downcast_ref::<crate::store::SchemaError>(),
+                    Some(crate::store::SchemaError::Newer {
+                        read: 99,
+                        supported: 2,
+                        ..
+                    })
+                ));
+            }
+            other => panic!("expected LoadState: {other:?}"),
+        }
+        assert_eq!(fs::read(&path).unwrap(), original);
     }
 
     #[test]

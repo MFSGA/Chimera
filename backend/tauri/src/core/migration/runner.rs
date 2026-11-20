@@ -187,7 +187,7 @@ impl Runner {
         profile_migrations_enabled: bool,
     ) -> anyhow::Result<Self> {
         let state_path = ctx.state_path();
-        let store = MigrationStore::load(&state_path)?;
+        let store = core_runner::load_state(&state_path)?;
         let mut runner = Self {
             target,
             force,

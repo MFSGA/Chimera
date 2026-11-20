@@ -236,7 +236,9 @@ impl StartupFailure {
             if let Some(execution) = error.downcast_ref::<ExecutionError>() {
                 match execution {
                     ExecutionError::PersistState { path: actual, .. }
-                    | ExecutionError::StampDocument { path: actual, .. } => {
+                    | ExecutionError::StampDocument { path: actual, .. }
+                    | ExecutionError::LoadState { path: actual, .. }
+                    | ExecutionError::ReadConfigDirectory { path: actual, .. } => {
                         path = Some(actual.clone());
                     }
                     ExecutionError::RecordFailure { persistence, .. } => {
@@ -735,6 +737,54 @@ mod tests {
         );
         assert!(report.failure.detail.contains("storage/hotkeys_to_kv"));
         assert_eq!(report.backups_dir, None);
+    }
+
+    #[test]
+    fn migration_load_state_keeps_newer_schema_and_original_state_file() {
+        let (_temp, paths) = fixture();
+        let state_path = paths.app_config_dir().join("migration-state.yaml");
+        let original = b"store_schema_version: 99\n";
+        std::fs::write(&state_path, original).unwrap();
+        let error = crate::core::migration::Runner::with_paths(paths.clone(), false)
+            .expect_err("future migration state cannot be used by this release");
+        assert!(matches!(error.downcast_ref::<ExecutionError>(),
+            Some(ExecutionError::LoadState { path, source })
+                if path == &state_path && matches!(source.downcast_ref::<SchemaError>(),
+                    Some(SchemaError::Newer { read: 99, supported: 2, .. }))));
+        let report = Report::from_error(error.as_ref(), StartupStage::MigrationPrepare, &paths);
+        assert_eq!(report.failure.kind, FailureKind::NewerVersion);
+        assert_eq!(report.failure.path, Some(state_path.clone()));
+        assert!(matches!(
+            report.failure.revision,
+            Some(RevisionFailure::NewerStoreSchema {
+                read: 99,
+                supported: 2,
+                ..
+            })
+        ));
+        assert!(report.backups_dir.is_none());
+        assert_eq!(std::fs::read(&state_path).unwrap(), original);
+    }
+
+    #[test]
+    fn read_config_directory_failure_is_reported_with_exact_path_and_io_kind() {
+        let (_temp, paths) = fixture();
+        let config_path = paths.app_config_dir().to_owned();
+        let error = anyhow::Error::new(ExecutionError::ReadConfigDirectory {
+            path: config_path.clone(),
+            source: std::io::Error::from(std::io::ErrorKind::PermissionDenied),
+        })
+        .context("migration snapshot inspection");
+        let report = Report::from_error(error.as_ref(), StartupStage::MigrationRun, &paths);
+        assert_eq!(report.failure.kind, FailureKind::Permission);
+        assert_eq!(report.failure.path, Some(config_path));
+        assert!(
+            report
+                .failure
+                .detail
+                .contains("migration snapshot inspection")
+        );
+        assert!(report.backups_dir.is_none());
     }
 
     #[test]
