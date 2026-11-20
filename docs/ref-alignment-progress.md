@@ -1,5 +1,14 @@
 # ref 对齐进度
 
+## DIFF-110：上游 Panic Hook / Frames / 独立 panic-dialog 进程首轮迁移（2026-11-20）
+
+- **来源及目标**：以固定 `ref@c4b35e048` 的 `backend/nyanpasu-panics/src/{lib.rs,frames.rs}`、`backend/tauri/src/{lib.rs,cmds/panic_dialog.rs}` 和 `backend/nyanpasu-crash-reporter/src/report.rs::PanicDetails` 为代码参照。重点迁入 Panic 的可复用源代码、独立进程的 JSON 载荷，以及程序实际崩溃时的 Hook 调度。风险 **L2**（全局 panic 策略、事件循环退出和已有 Actor 错误隔离），遵循维护者此前“不要额外验证，继续迁移代码”的要求：本轮不单独跑功能测试、构建、完整桌面或 CI；Git 提交钩子按仓库规则执行的 Rustfmt、Clippy 和 Prettier 不代表实际系统验收。
+- **完整上游底层复制**：新增 `backend/chimera-panics` workspace crate。其 `src/lib.rs` 和 `src/frames.rs` 从固定的 `nyanpasu-panics` 拷贝，保留 `PanicReport`、backtrace 的模块偏移/可信符号呈现、`setup_panic_hook`、线程局部可恢复标记、同步 `catch_recoverable` 和嵌套作用域还原，使用上游相同的 `backtrace`、`scopeguard`、`tracing` 和 Windows 模块查询依赖。更新 Cargo workspace、Tauri 依赖和 `Cargo.lock`，不修改 `ref` 与 Runtime gitlink。
+- **独立桌面崩溃入口**：新增 Tauri 宿主 `panic_reporter.rs`，在桌面 `main.rs` 的 Tauri、Migration 和 startup-failed 分派**之前**识别 `--chimera-internal-panic-dialog`。独立进程通过 stdin-to-EOF 接收与上游 `PanicDetails {parent_pid,payload,location,backtrace}` 相同的 serde JSON 合同（最大 1 MiB），拒绝多余 CLI 参数、非法和超限数据。它不初始化 `AppHandle`、单实例插件、Core/Service/Jobs 或 redb，显示本地版本、平台、错误位置、payload 和堆栈。暂借用 Chimera 原有 rfd 错误对话框，不复制整套 Slint 诊断 UI，也不会自动上传敏感崩溃信息。
+- **真实 Hook 与父子生命周期**：桌面 `chimera_lib::run()` 进入主应用时安装 `chimera_panics::setup_panic_hook`。Hook 使用上游帧捕获和原始错误日志，并在主线程遭遇非可恢复 panic 时，先把 JSON 同步写入**独立可执行文件子进程**、关闭 stdin 发送 EOF，不等待窗口关闭，然后退出发生 panic 的主进程。报告进程在父进程结束后继续拥有自己的 GUI 生命周期；若无法启动则以原有对话框作为最后回退。沿用上游对 Tauri 消息队列溢出 (`PostMessage failed`) 的过滤策略。内部 child reporter 在 `run()` 前分派，不会递归安装自身 Hook；Android/iOS 不引入桌面子进程入口。
+- **Chimera 特有的渐进兼容边界**：与上游“所有未显式 `catch_recoverable` 的 panic 均致命”的策略不同，Chimera 现有多个同步和异步 Actor 使用标准 `catch_unwind` / `FutureExt::catch_unwind` 将任务失败与主应用隔离；未经全量转换就复制上游致命策略会使真实可恢复异步任务失败直接杀死整个客户端。故本轮 Hook 对其他线程**仍记录 upstream backtrace，但不强制启动致命报告/退出**；只在已确认的 UI 主线程执行致命 reporter/exit。下一轮应按模块逐步将可恢复同步边界迁至 `chimera_panics::catch_recoverable`，异步边界需另行设计而非跨 await 使用线程局部标记。当前启动时主线程退出尚未实现上游 `shutdown_on_main_thread` 的已持有 owner 同步清理，也不对外声称实现全部 Crash Reporter 语义。
+- **源码回归定义与待验**：增加读取/格式化 `PanicDetails` 的可注入展示回调、非法/过大 JSON 拒绝的 Rust 测试定义；本轮按要求**未运行**。此轮只是将上游数据和进程边界落到真实调用路径，不包含独立 Slint UI、自动诊断 zip、GitHub issue 填报、主线程崩溃后 Core 优雅释放、Windows/Linux/macOS 打包后的子进程运行验证。若出现平台兼容性回归，需成组回滚新增 Hook、panic-dialog 分派与 `chimera-panics` 依赖，保留原用户配置、已验证备份、`migration-state.yaml` 和 `.corrupt-*` 证据。
+
 ## DIFF-109：独立启动失败报告子进程与 stdin-to-EOF 展示入口迁移（2026-11-20）
 
 - **固定参考、目标与风险**：对照 `ref@c4b35e048` 的 `backend/tauri/src/{cmds/startup_failed.rs,startup_failure.rs,cmds/mod.rs}`，把原本由 Chimera 主进程直接弹出的 Migration/Core/Jobs 启动错误窗口改为**可独立运行的报告进程**。本轮风险 **L2**（启动失败、错误展示、子进程生命周期），遵照用户近期“**不用验证，继续迁移代码**”要求，不额外运行单元测试、完整构建、GUI E2E 或 CI 查询；仅允许提交钩子按仓库策略自动执行 Rustfmt/Clippy/Prettier。
