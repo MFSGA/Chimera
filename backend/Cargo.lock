@@ -1411,6 +1411,7 @@ dependencies = [
  "chimera-paths",
  "chimera-persistence",
  "chrono",
+ "pretty_assertions",
  "semver 1.0.28",
  "serde",
  "serde_yaml",
