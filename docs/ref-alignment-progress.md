@@ -1,5 +1,13 @@
 # ref 对齐进度
 
+## DIFF-109：独立启动失败报告子进程与 stdin-to-EOF 展示入口迁移（2026-11-20）
+
+- **固定参考、目标与风险**：对照 `ref@c4b35e048` 的 `backend/tauri/src/{cmds/startup_failed.rs,startup_failure.rs,cmds/mod.rs}`，把原本由 Chimera 主进程直接弹出的 Migration/Core/Jobs 启动错误窗口改为**可独立运行的报告进程**。本轮风险 **L2**（启动失败、错误展示、子进程生命周期），遵照用户近期“**不用验证，继续迁移代码**”要求，不额外运行单元测试、完整构建、GUI E2E 或 CI 查询；仅允许提交钩子按仓库策略自动执行 Rustfmt/Clippy/Prettier。
+- **主进程入口与独立所有权**：新增 `backend/tauri/src/startup_reporter.rs`，在桌面 `main.rs` 的 `chimera_lib::run()` / Tauri Builder / Windows shutdown helper 和 Migration CLI 分派之前识别内部 `--chimera-internal-startup-failed` 命令。独立进程只读取 stdin 直到 EOF、解码现有 `startup_failure::Report` 并展示错误窗口；不建立 Tauri `AppHandle`、单实例插件、Core、Service、Jobs、Client、redb 或迁移 Runner。Android/iOS 通过 cfg 保持原进程内错误对话框，不尝试启动桌面 exe。
+- **生产传输合同**：`startup_failure::show_report` 使用 `startup_reporter::show_in_subprocess`，序列化包含失败阶段/分类、错误链、修订路径、应用版本、日志路径及已验证备份路径的原有 JSON `Report`；子进程读取 JSON **到 EOF**，输入长度上限 1 MiB，拒绝参数数量异常、超大或不合法 JSON。父进程通过 pipe 写入，不把错误及用户路径放进进程命令行，**关闭 stdin 后再等待**子进程正常退出，防止仍在等待输入的子进程与 `wait()` 死锁；进程启动、写入或返回码异常时回退到原有 rfd 窗口，并保留原报告文本。备份仍只有在生产 `BackupInfo::is_available()` 验证通过后才出现在报告中；展示进程不创建或恢复任何配置。
+- **对齐源代码与测试定义**：参照上游 `cmds/startup_failed::read_and_show` 拆出可注入显示回调的 `read_and_show`，并新增源代码级覆盖：真实 `Report` 由 JSON stdin 到 EOF 解码、原始阶段与路径保留，格式错误/超限输入不启动窗口。这些测试**本轮未执行**。原有 `Report` wire/FailureKind/UI 文案保持兼容，避免本轮引入 Slint GUI 与多平台打包依赖。
+- **剩余差异与回滚**：本轮迁移的是**独立 startup-failed 命令/报告所有权**，不是上游 `nyanpasu-crash-reporter` 的 Slint 可交互 UI，也不是 `panic-dialog` 全局 panic hook 或诊断数据采集；这些仍留待后续完整迁移，不能表述为崩溃报告系统已 100% 对齐。若发布时发现桌面子进程兼容性问题，仅回滚本轮报告分派/调用，继续保留原有进程内 fallback、共享 Migration、用户原始配置、`migration-state.yaml`、已验证备份和 `.corrupt-*` 证据；`ref` 与 Runtime pin 未改变。本轮未执行 standalone tests/builds/E2E，实际运行兼容性待验。
+
 ## DIFF-108：独立 Migration 子进程的失败载荷切换至共享 Failure v2（2026-11-20）
 
 - **上游目标与范围**：沿用固定 `ref@c4b35e048` 的 `backend/nyanpasu-migration/src/child_result.rs::{FailureStage,Failure,Failure::from_error}`，把上一轮已共享但尚未直接用于父子进程传递的 `Failure` 作为 Chimera 桌面 Migration 子进程**真实生产载荷**。风险 **L2**（跨进程版本、备份可信性、权限/修订错误报告），不改任何迁移步骤、用户配置、migration-state schema、备份 manifest、`ref` / Runtime 指针。按维护者最近要求，此轮**不额外运行测试、桌面构建或 E2E**；仓库提交钩子必需的 Rustfmt/Clippy 属于正常提交流程。
