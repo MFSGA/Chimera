@@ -33,6 +33,7 @@ import {
   getRoutedCoreStatusMessage,
   isRoutedCoreRunning,
 } from '@/features/dashboard/core-service-status';
+import { visibleProxyShortcutButtons } from '@/features/dashboard/proxy-shortcut-buttons';
 import { getProxyStatus } from '@/features/dashboard/proxy-status';
 import { useTransparentProxyAction } from '@/features/system-proxy/use-proxy-settings';
 import useCoreIcon from '@/hooks/use-core-icon';
@@ -63,10 +64,7 @@ const ProxyTitleRow = ({
       getProxyStatus({
         enableSystemProxy,
         enableTunMode,
-        transparentProxyActive:
-          transparent.visible &&
-          transparent.status?.active === true &&
-          transparent.status.mode === transparent.mode,
+        transparentProxyActive: transparent.applied,
         systemProxyEnabled: systemProxyStatus?.enable,
         systemProxyServer: systemProxyStatus?.server,
         mixedPort: clashConfigs?.['mixed-port'],
@@ -74,9 +72,7 @@ const ProxyTitleRow = ({
     [
       enableSystemProxy,
       enableTunMode,
-      transparent.visible,
-      transparent.status,
-      transparent.mode,
+      transparent.applied,
       systemProxyStatus,
       clashConfigs,
     ],
@@ -108,7 +104,13 @@ const ProxyTitleRow = ({
         )}
         asChild
       >
-        <Link to="/main/settings/system">
+        <Link
+          to={
+            status === 'transparent'
+              ? '/main/settings/clash'
+              : '/main/settings/system'
+          }
+        >
           <TextMarquee className="px-2" fadeEdges fadeWidth={8}>
             {messages[status]}
           </TextMarquee>
@@ -118,22 +120,32 @@ const ProxyTitleRow = ({
   );
 };
 
+/** Live settings subscriptions are mounted only for an actual dashboard
+ * widget, never while dragging a library source or overlay. */
+const LiveProxyTitleRow = () => {
+  const { value: enableSystemProxy } = useSetting('enable_system_proxy');
+  const { value: enableTunMode } = useClashSetting('enable_tun_mode');
+  return (
+    <ProxyTitleRow
+      enableSystemProxy={enableSystemProxy}
+      enableTunMode={enableTunMode}
+    />
+  );
+};
+
 export function ProxyShortcutsWidget({
   id,
   onCloseClick,
 }: WidgetComponentProps) {
   const config = useWidgetConfig(id, WidgetId.ProxyShortcuts);
-  const { value: enableSystemProxy } = useSetting('enable_system_proxy');
-  const { value: enableTunMode } = useClashSetting('enable_tun_mode');
   const { sourceOnly, isOverlay } = useDndGridContext();
   const preview = sourceOnly || isOverlay;
   const linuxDesktop = isTauri() && OS === 'linux';
-  const buttons: ('system' | 'tun' | 'transparent')[] = [
-    ...(config.order === 'system-first'
-      ? (['system', 'tun'] as const)
-      : (['tun', 'system'] as const)),
-    'transparent',
-  ];
+  const buttons = visibleProxyShortcutButtons(
+    config.buttons,
+    config.order,
+    linuxDesktop,
+  );
 
   return (
     <WidgetItem
@@ -163,63 +175,54 @@ export function ProxyShortcutsWidget({
             </Button>
           </WidgetHeader>
         ) : (
-          <ProxyTitleRow
-            enableSystemProxy={enableSystemProxy}
-            enableTunMode={enableTunMode}
-          />
+          <LiveProxyTitleRow />
         )}
         <CardContent
           className="min-h-0 flex-1 flex-row items-stretch justify-center gap-2 overflow-hidden py-3"
           data-slot="proxy-shortcut-buttons"
         >
-          {buttons
-            .filter(
-              (button) =>
-                config.buttons.includes(button) &&
-                (button !== 'transparent' || linuxDesktop),
-            )
-            .map((button) => {
-              const content = preview ? (
-                <ShapeToggle
-                  disabled
-                  active={button === 'system'}
-                  elastic={config.layout === 'flex'}
-                  icon={
-                    button === 'system' ? (
-                      <NetworkPingRounded />
-                    ) : button === 'tun' ? (
-                      <SettingsEthernetRounded />
-                    ) : (
-                      <ShieldRounded />
-                    )
-                  }
-                  label={
-                    button === 'system'
-                      ? m.settings_system_proxy_system_proxy_label()
-                      : button === 'tun'
-                        ? m.settings_system_proxy_tun_mode_label()
-                        : m.settings_clash_transparent_proxy_label()
-                  }
-                />
-              ) : button === 'system' ? (
-                <SystemProxyButton
-                  presentation="cookie"
-                  elastic={config.layout === 'flex'}
-                />
-              ) : button === 'tun' ? (
-                <TunModeButton
-                  presentation="cookie"
-                  elastic={config.layout === 'flex'}
-                />
-              ) : (
-                <TransparentProxyButton elastic={config.layout === 'flex'} />
-              );
-              return (
-                <div key={button} className="flex min-w-0 flex-1">
-                  {content}
-                </div>
-              );
-            })}
+          {buttons.map((button) => {
+            const content = preview ? (
+              <ShapeToggle
+                disabled
+                active={button === 'system'}
+                elastic={config.layout === 'flex'}
+                icon={
+                  button === 'system' ? (
+                    <NetworkPingRounded />
+                  ) : button === 'tun' ? (
+                    <SettingsEthernetRounded />
+                  ) : (
+                    <ShieldRounded />
+                  )
+                }
+                label={
+                  button === 'system'
+                    ? m.settings_system_proxy_system_proxy_label()
+                    : button === 'tun'
+                      ? m.settings_system_proxy_tun_mode_label()
+                      : m.settings_clash_transparent_proxy_label()
+                }
+              />
+            ) : button === 'system' ? (
+              <SystemProxyButton
+                presentation="cookie"
+                elastic={config.layout === 'flex'}
+              />
+            ) : button === 'tun' ? (
+              <TunModeButton
+                presentation="cookie"
+                elastic={config.layout === 'flex'}
+              />
+            ) : (
+              <TransparentProxyButton elastic={config.layout === 'flex'} />
+            );
+            return (
+              <div key={button} className="flex min-w-0 flex-1">
+                {content}
+              </div>
+            );
+          })}
         </CardContent>
       </Card>
     </WidgetItem>
