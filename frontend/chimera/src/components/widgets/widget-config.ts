@@ -64,7 +64,7 @@ export type WidgetConfigs = {
   [WidgetId.ProxyShortcuts]: {
     type: WidgetId.ProxyShortcuts;
     layout: 'equal' | 'flex';
-    buttons: 'both' | 'system' | 'tun';
+    buttons: ('system' | 'tun' | 'transparent')[];
     order: 'system-first' | 'tun-first';
   };
   [WidgetId.CoreShortcuts]: {
@@ -145,7 +145,7 @@ export const DEFAULT_WIDGET_CONFIGS: WidgetConfigs = {
   [WidgetId.ProxyShortcuts]: {
     type: WidgetId.ProxyShortcuts,
     layout: 'flex',
-    buttons: 'both',
+    buttons: ['system', 'tun', 'transparent'],
     order: 'system-first',
   },
   [WidgetId.CoreShortcuts]: {
@@ -268,6 +268,25 @@ export function normalizeWidgetConfigStorage(
           (typeof candidate === 'string' && candidate.trim().length > 0))
       ) {
         Object.assign(config, { profileUid: candidate });
+      } else if (key === 'buttons' && config.type === WidgetId.ProxyShortcuts) {
+        if (candidate === 'both') {
+          Object.assign(config, { buttons: ['system', 'tun', 'transparent'] });
+        } else if (
+          candidate === 'system' ||
+          candidate === 'tun' ||
+          candidate === 'transparent'
+        ) {
+          Object.assign(config, { buttons: [candidate] });
+        } else if (
+          Array.isArray(candidate) &&
+          candidate.length > 0 &&
+          candidate.every(
+            (entry) =>
+              entry === 'system' || entry === 'tun' || entry === 'transparent',
+          )
+        ) {
+          Object.assign(config, { buttons: [...new Set(candidate)] });
+        }
       } else if (key === 'resources' && Array.isArray(candidate)) {
         const resources: ProviderReference[] = [];
         const seen = new Set<string>();
@@ -323,10 +342,6 @@ export function normalizeWidgetConfigStorage(
             (candidate === 'focus' || candidate === 'flex')) ||
             (config.type === WidgetId.ProxyShortcuts &&
               (candidate === 'equal' || candidate === 'flex')))) ||
-        (key === 'buttons' &&
-          (candidate === 'both' ||
-            candidate === 'system' ||
-            candidate === 'tun')) ||
         (key === 'order' &&
           (candidate === 'system-first' || candidate === 'tun-first'))
       ) {

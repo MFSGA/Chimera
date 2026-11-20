@@ -76,7 +76,7 @@ test('normalizes persisted widget settings and rejects invalid values', () => {
   assert.deepEqual(normalized.byInstance['proxy-shortcuts-0'], {
     type: WidgetId.ProxyShortcuts,
     layout: 'flex',
-    buttons: 'system',
+    buttons: ['system'],
     order: 'tun-first',
   });
   assert.deepEqual(normalized.byInstance['core-shortcuts-0'], {
@@ -85,6 +85,45 @@ test('normalizes persisted widget settings and rejects invalid values', () => {
     showChannel: true,
   });
   assert.equal('unknown-0' in normalized.byInstance, false);
+});
+
+test('Proxy Shortcuts migrates legacy buttons and validates multiselect arrays', () => {
+  const persisted = normalizeWidgetConfigStorage({
+    version: 1,
+    byInstance: {
+      legacyBoth: { type: WidgetId.ProxyShortcuts, buttons: 'both' },
+      legacySystem: { type: WidgetId.ProxyShortcuts, buttons: 'system' },
+      legacyTun: { type: WidgetId.ProxyShortcuts, buttons: 'tun' },
+      transparentOnly: {
+        type: WidgetId.ProxyShortcuts,
+        buttons: 'transparent',
+      },
+      custom: {
+        type: WidgetId.ProxyShortcuts,
+        buttons: ['transparent', 'system', 'transparent'],
+      },
+      invalid: {
+        type: WidgetId.ProxyShortcuts,
+        buttons: ['system', 'invalid'],
+      },
+      empty: { type: WidgetId.ProxyShortcuts, buttons: [] },
+    },
+  });
+  const buttonsFor = (id: string) =>
+    getWidgetConfig(persisted, id, WidgetId.ProxyShortcuts).buttons;
+  assert.deepEqual(buttonsFor('legacyBoth'), ['system', 'tun', 'transparent']);
+  assert.deepEqual(buttonsFor('legacySystem'), ['system']);
+  assert.deepEqual(buttonsFor('legacyTun'), ['tun']);
+  assert.deepEqual(buttonsFor('transparentOnly'), ['transparent']);
+  assert.deepEqual(buttonsFor('custom'), ['transparent', 'system']);
+  assert.deepEqual(
+    buttonsFor('invalid'),
+    DEFAULT_WIDGET_CONFIGS[WidgetId.ProxyShortcuts].buttons,
+  );
+  assert.deepEqual(
+    buttonsFor('empty'),
+    DEFAULT_WIDGET_CONFIGS[WidgetId.ProxyShortcuts].buttons,
+  );
 });
 
 test('Core Shortcuts retains the channel toggle and rejects invalid saved values', () => {

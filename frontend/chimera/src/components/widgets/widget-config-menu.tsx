@@ -1,4 +1,11 @@
+import { isTauri } from '@chimera/interface';
 import { Button } from '@chimera/ui/button';
+import {
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuTrigger,
+} from '@chimera/ui/dropdown-menu';
 import {
   LauncherMenu,
   LauncherMenuChipButton,
@@ -11,11 +18,13 @@ import { Popover, PopoverContent, PopoverTrigger } from '@chimera/ui/popover';
 import { ScrollArea } from '@chimera/ui/scroll-area';
 import { Switch } from '@chimera/ui/switch';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@chimera/ui/tooltip';
+import ArrowDropDownRounded from '~icons/material-symbols/arrow-drop-down-rounded';
 import RestartAltRounded from '~icons/material-symbols/restart-alt-rounded';
 import SwapHorizRounded from '~icons/material-symbols/swap-horiz-rounded';
 import TuneRounded from '~icons/material-symbols/tune-rounded';
 import { motion, useReducedMotion } from 'motion/react';
 import { useEffect, useId, useState } from 'react';
+import { OS } from '@/consts';
 import * as m from '@/paraglide/messages';
 import { useDashboardContext } from './provider';
 import {
@@ -50,7 +59,6 @@ function Choice<T extends string>({
   field:
     | 'speed-unit'
     | 'shortcut-layout'
-    | 'shortcut-buttons'
     | 'shortcut-order'
     | 'proxy-mode-layout'
     | 'quota-wave-style'
@@ -520,44 +528,91 @@ function ConfigFieldRows({
             ]}
             onChange={(layout) => onChange({ ...config, layout })}
           />
-          <Choice
-            field="shortcut-buttons"
+          <ConfigRow
             label={m.dashboard_widget_proxy_shortcuts_config_buttons()}
-            value={config.buttons}
-            disabled={disabled}
-            options={[
-              {
-                value: 'both',
-                label: m.dashboard_widget_proxy_shortcuts_config_both(),
-              },
-              {
-                value: 'system',
-                label: m.dashboard_widget_proxy_shortcuts_config_system(),
-              },
-              { value: 'tun', label: 'TUN' },
-            ]}
-            onChange={(buttons) => onChange({ ...config, buttons })}
-          />
-          {config.buttons === 'both' && (
-            <Choice
-              field="shortcut-order"
-              label={m.dashboard_widget_proxy_shortcuts_config_order()}
-              value={config.order}
-              disabled={disabled}
-              options={[
-                {
-                  value: 'system-first',
-                  label:
-                    m.dashboard_widget_proxy_shortcuts_config_system_first(),
-                },
-                {
-                  value: 'tun-first',
-                  label: m.dashboard_widget_proxy_shortcuts_config_tun_first(),
-                },
-              ]}
-              onChange={(order) => onChange({ ...config, order })}
-            />
-          )}
+          >
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <LauncherMenuChipButton
+                  data-slot="widget-proxy-shortcut-buttons"
+                  disabled={disabled}
+                  aria-label={m.dashboard_widget_proxy_shortcuts_config_buttons()}
+                >
+                  <span className="truncate">{config.buttons.length}</span>
+                  <ArrowDropDownRounded className="size-4" aria-hidden="true" />
+                </LauncherMenuChipButton>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent>
+                {(
+                  [
+                    {
+                      value: 'system',
+                      label: m.dashboard_widget_proxy_shortcuts_config_system(),
+                    },
+                    {
+                      value: 'tun',
+                      label: m.settings_system_proxy_tun_mode_label(),
+                    },
+                    ...(isTauri() && OS === 'linux'
+                      ? [
+                          {
+                            value: 'transparent' as const,
+                            label: m.settings_clash_transparent_proxy_label(),
+                          },
+                        ]
+                      : []),
+                  ] as const
+                ).map(({ value, label }) => (
+                  <DropdownMenuCheckboxItem
+                    key={value}
+                    checked={config.buttons.includes(value)}
+                    disabled={
+                      disabled ||
+                      (config.buttons.includes(value) &&
+                        config.buttons.filter(
+                          (button) =>
+                            button !== 'transparent' ||
+                            (isTauri() && OS === 'linux'),
+                        ).length === 1)
+                    }
+                    onSelect={(event) => event.preventDefault()}
+                    onCheckedChange={(checked) =>
+                      onChange({
+                        ...config,
+                        buttons: checked
+                          ? [...config.buttons, value]
+                          : config.buttons.filter((button) => button !== value),
+                      })
+                    }
+                  >
+                    {label}
+                  </DropdownMenuCheckboxItem>
+                ))}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </ConfigRow>
+          {config.buttons.includes('system') &&
+            config.buttons.includes('tun') && (
+              <Choice
+                field="shortcut-order"
+                label={m.dashboard_widget_proxy_shortcuts_config_order()}
+                value={config.order}
+                disabled={disabled}
+                options={[
+                  {
+                    value: 'system-first',
+                    label:
+                      m.dashboard_widget_proxy_shortcuts_config_system_first(),
+                  },
+                  {
+                    value: 'tun-first',
+                    label:
+                      m.dashboard_widget_proxy_shortcuts_config_tun_first(),
+                  },
+                ]}
+                onChange={(order) => onChange({ ...config, order })}
+              />
+            )}
         </ConfigGroup>
       );
     case WidgetId.CoreShortcuts:
