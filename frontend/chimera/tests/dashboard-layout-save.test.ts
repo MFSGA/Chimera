@@ -217,3 +217,42 @@ test('a failed save remains pending until the refreshed authoritative snapshot s
   assert.equal(queue.getState(), 'error');
   assert.deepEqual(states, ['saving', 'error']);
 });
+
+test('rapid consecutive edits serialize, then restart from the last acknowledged write', async () => {
+  let committed = base;
+  const firstAck = deferred<boolean>();
+  let writes = 0;
+  const saver = createDashboardLayoutSaveQueue({
+    write: async (intent) => {
+      writes++;
+      if (writes === 1 && !(await firstAck.promise)) return false;
+      committed = applyDashboardLayoutEdit(committed, intent);
+      return true;
+    },
+    refresh: async () => {},
+    onStateChange: () => {},
+  });
+  const move = { ...edit, nextItems: [{ ...down, x: 1 }, up] };
+  const remove = {
+    sourceId: 'main',
+    visibleIds: ['down', 'up'],
+    nextItems: [up],
+  };
+  assert.equal(saver.save(move), true);
+  assert.equal(saver.save(remove), false);
+  assert.equal(writes, 1);
+  firstAck.resolve(true);
+  await flush();
+  assert.equal(saver.getState(), 'saved');
+  assert.equal(saver.save(remove), true);
+  await flush();
+  assert.equal(writes, 2);
+  assert.equal(saver.getState(), 'saved');
+  const reloaded = normalizeLayoutStorage(
+    JSON.parse(JSON.stringify(committed)),
+    {},
+  );
+  assert.deepEqual(reloaded.entries[0]?.items, [up, hidden]);
+  assert.equal(reloaded.preferredId, 'main');
+  assert.deepEqual(reloaded.entries[1], base.entries[1]);
+});
