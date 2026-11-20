@@ -1,5 +1,14 @@
 # ref 对齐进度
 
+## DIFF-095：Typed Config Migrator 生产所有权迁入共享 crate（2026-11-20）
+
+- **上游基线与范围**：以固定 `ref@c4b35e048` 的 `backend/nyanpasu-migration/src/modules/typed_config.rs` 为参考，将本地 `typed_config/split_legacy_config` rev1、`typed_config/repair_clash_config` rev2 的生产步骤与 typed 文件完整/缺失/部分配置识别迁入 `chimera-migration/src/modules/typed_config.rs`；风险 **L2**（启动时配置拆分、旧 clash 配置、Session 恢复）。不更新 `ref` 和 Runtime 子模块，不访问用户真实配置或修改本机系统服务。
+- **共享迁移生产逻辑**：`TypedConfigMigrator` 和两个 `MigrationStep<C>` 通过泛型 `TypedConfigHost: AsRef<chimera_migration::context::Ctx>` 运行；共享 crate 现在持有启动 baseline 判定、`application.yaml`/`session-state.yaml`/`clash-config.yaml` 的整体状态机、typed YAML 解析与验证、Legacy Runtime Clash 键识别、配置不完整及无法识别状态拒绝、拆分三文件的依序原子写入/失败时新文件回滚和旧 Clash 文件的修复写入。按 Chimera 已发布 `0.23.0` 门槛及原有两个 step ID 与 revision 保持兼容，不能直接复制上游 `2.0.0` 门槛或改名 `repair_clash_config_path`。
+- **Tauri 宿主端口**：`backend/tauri/src/core/migration/modules/typed_config.rs` 仅保留 `TypedConfigHost` 注入和 Legacy `IVerge` 补丁/模板、`IClashTemp` 与 overrides 合并、`typed_config_from_legacy_parts` 转换、Chimera `serde_yaml` 格式序列化、`core::session_state::read` 损坏文件保存后恢复；配置文件状态分类、迁移步骤和原子写入不再在 Tauri 重复实现。共享 crate 使用既有 `chimera-config` typed 数据模型及相同 `serde_yaml` 编解码，未将 Tauri crate 引为依赖，Legacy UI/IPCs、Session 状态与用户配置字段不变。
+- **安全边界**：按 `ref` 在识别部分 typed 配置之前先读取并恢复 Session；非法/不完整/无法辨认的 Clash 节点不被静默当作缺失；悬挂符号链接不被视为不存在。转换失败不创建新文件，多个 typed 文件的部分写入失败仅清理由本次步骤创建的文件；已有 typed 配置不会因重新启动被重写。与前轮 Migration Runner 的备份前检查及 `_nyanpasu` stamp/`migration-state.yaml` schema 2 协同保持旧版本升级语义。
+- **验证**：共享 Migration 单元测试 **45/45**（新增 5 项 fake TypedConfigHost 的直接验证：两步步骤 ID、初次拆分/幂等、Clash 修复、转换失败、部分配置拒绝、符号链接目标保留）；Tauri Typed Config 原有 **15/15**、Tauri 完整库 **1058/1058**、1 项既有忽略测试；`cargo check --locked -p chimera --all-features --tests`、Rustfmt、仓库 commit 钩子 Clippy、diff check 均通过。未在 Windows/Linux、真实历史用户数据或桌面 E2E 上执行，也未核验 GitHub CI 最终结果。
+- **尚未迁移与回滚**：Tauri `ProfilesMigrator` 的具体生产代码仍需按照上游 `ref` 迁入共享 crate；Typed Config 宿主端口因依赖本地旧 `IVerge` 与 Session 恢复仍保留在 Tauri，不能声称全部 Modules 100% 无宿主依赖。若生产回归，回滚共享 Typed Config 步骤及宿主注入即可，保留迁移前备份、旧配置和任何 `.corrupt-*` 证据。
+
 ## DIFF-094：Storage Migrator 生产模块迁入共享 crate（2026-11-20）
 
 - **上游来源与目标**：参照固定 `ref@c4b35e048` 的 `backend/nyanpasu-migration/src/modules/storage.rs`，把 Chimera 已兼容的双步骤热键迁移**实际生产实现**从 `backend/tauri/src/core/migration/modules/storage.rs` 迁入 `backend/chimera-migration/src/modules/storage.rs`，不只是移动接口或测试。本轮风险 **L2**（历史热键和配置读写），不修改 `ref` / Runtime gitlink、不触碰真实用户文件、系统代理和服务。
