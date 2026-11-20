@@ -1,5 +1,13 @@
 # ref 对齐进度
 
+## DIFF-106：子进程结果协议与 RevisionFailure 从 Tauri 迁入共享 Migration（2026-11-20）
+
+- **目标/参考/范围**：固定 `ref@c4b35e048` 的 `backend/nyanpasu-migration/src/child_result.rs`，迁移真正属于共享 Migration 的 child-result 协议及 revision 错误合同。风险 **L2**（跨进程报告读写和原有配置迁移错误分类）。按照本轮维护者“**不用验证，继续迁移代码**”的指示，专注生产代码迁移，没有运行本轮新的测试、`cargo check`、完整构建或桌面 E2E；旧轮验证不能当作本轮的测试证据。
+- **共享 crate 生产所有权**：新增 `backend/chimera-migration/src/child_result.rs`，集中提供 `ChildOutcome<Report>` 的 generic wire 合同、versioned JSON Envelope（`protocol_version: 1`、`status: success|failure`、已有 `backup_name` 字段）、`read_outcome`/`write_outcome`、1 MiB 有界结果文件和拒绝已存在节点/软链接/不安全父目录的安全读写，以及备份名称拒绝路径遍历/非法字符。写入继续通过 `chimera-migration::fs::atomic_write` 与共享 persistence 原子写入执行。该模块不依赖 Tauri，也不创建/校验具体快照；通过 `serde_json` 显式依赖（同步更新 `backend/Cargo.lock`）公开给宿主。
+- **上游 RevisionFailure 迁移**：将 Tauri `startup_failure::RevisionFailure` 的全部七种已有错误形态与 `path()`/`is_newer()` 迁入共享 `child_result`，保留上游四种版本差异及 Chimera 既有的 `DocumentBehindState`、`MissingDocumentStamp`、`FilesBehindState`；原 `startup_failure.rs` 用 re-export 继续提供既有调用路径，维护 JSON `snake_case` wire 格式和原有权限/版本分类语义。Tauri `migration_child.rs` 不再持有 Envelope、JSON 编解码、文件节点安全检查或备份 basename 规则，仅通过 `ChildOutcome<startup_failure::Report>` 专化共享协议；主进程仍在 Tauri 端使用真实 `BackupInfo` manifest+SHA 校验，失败报告仍由宿主生成和展示。
+- **必要 Chimera 兼容差异**：上游 `child_result::Failure` 包含 `FailureStage`/`chain`/`io_failure` 等迁移专用错误。Chimera 当前已经公开更广的 `startup_failure::Report`，含 `StartupStage`、`FailureKind`、`version`、日志路径与备份提示；此轮保留当前已发布的 child JSON，以避免在未经跨进程验收时切换生产消息格式。下一轮可按上游 `Failure` 逐字段迁入，在 Tauri `StartupFailure` 专用转换适配层完成后再替换 wire type；本轮属于**部分架构迁移**，不是上游 `child_result` 100% 同型。
+- **验收与回滚**：未执行测试、编译、打包、macOS/Windows/Linux 平台验证或 CI 状态核对；相关结果均标记**待验**。若发生兼容性回归，仅回滚本轮共享协议提取及 re-export，保留现有用户配置、版本状态、`.corrupt-*`、已验证备份、Legacy UI 与移动端进程内迁移。`ref` 和 Runtime gitlink 均保持固定。
+
 ## DIFF-105：正式 macOS 二进制的 Migration 子进程验收与结果路径保护（2026-11-20）
 
 - **目标、固定来源与风险**：沿用 `ref@c4b35e048` 的 `backend/tauri/src/cmds/migrate.rs`/`backend/nyanpasu-migration/src/child_result.rs` 独立执行/失败报告边界，验证上轮 Chimera `backend/tauri/src/migration_child.rs` 的生产入口。风险 **L2**（启动时升级数据、child JSON result、快照恢复性）；不更新 `ref`/Runtime gitlink、不改变 CLI 标识、结果 JSON schema 1、备份 manifest、迁移状态或步骤 ID，不读取/写入主机当前用户配置，不启动有网络/TUN 副作用的图形应用。
