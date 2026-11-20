@@ -52,7 +52,12 @@ function findGrid(
   return null;
 }
 
-export function DndGridRoot({ children }: PropsWithChildren) {
+export function DndGridRoot({
+  children,
+  onSourceInteractionChange,
+}: PropsWithChildren<{
+  onSourceInteractionChange?: (active: boolean) => void;
+}>) {
   const gridsRef = useRef<Map<string, GridRegistration>>(new Map());
 
   const [activeDrag, setActiveDrag] = useState<ActiveDrag | null>(null);
@@ -102,72 +107,76 @@ export function DndGridRoot({ children }: PropsWithChildren) {
     }),
   );
 
-  const handleDragStart = useCallback((e: DragStartEvent) => {
-    const startSourceDrag = (
-      itemId: string,
-      onSourceDragStart?: () => void,
-    ) => {
-      pointerRef.current = null;
-      // Capture before onSourceDragStart may unmount the source
-      pendingSourceRef.current = {
-        itemId,
+  const handleDragStart = useCallback(
+    (e: DragStartEvent) => {
+      const startSourceDrag = (
+        itemId: string,
+        onSourceDragStart?: () => void,
+      ) => {
+        pointerRef.current = null;
+        // Capture before onSourceDragStart may unmount the source
+        pendingSourceRef.current = {
+          itemId,
+        };
+        onSourceInteractionChange?.(true);
+        onSourceDragStart?.();
       };
-      onSourceDragStart?.();
-    };
 
-    const source = e.active.data.current;
-    if (isDndGridSourceData(source)) {
-      // A source has no cells; size the preview by a grid it can drop into.
-      const destination = [...gridsRef.current.values()].find(
-        (reg) => !reg.sourceOnly,
-      );
-      if (!destination) {
+      const source = e.active.data.current;
+      if (isDndGridSourceData(source)) {
+        // A source has no cells; size the preview by a grid it can drop into.
+        const destination = [...gridsRef.current.values()].find(
+          (reg) => !reg.sourceOnly,
+        );
+        if (!destination) {
+          return;
+        }
+
+        const { cellW, cellH, gap } = destination.getCellSize();
+        startSourceDrag(source.itemId, source.onDragStart);
+        setActiveDrag({
+          itemId: source.itemId,
+          dragIdPrefix: source.dragIdPrefix,
+          dims: {
+            width: source.w * cellW + (source.w - 1) * gap,
+            height: source.h * cellH + (source.h - 1) * gap,
+          },
+        });
         return;
       }
 
-      const { cellW, cellH, gap } = destination.getCellSize();
-      startSourceDrag(source.itemId, source.onDragStart);
+      const activeId = String(e.active.id);
+      const found = findGrid(gridsRef.current, activeId);
+      if (!found) {
+        return;
+      }
+
+      const { reg, plainId } = found;
+      const { sourceOnly, getCellSize, onSourceDragStart } = reg;
+
+      const data = e.active.data.current as
+        { w?: number; h?: number } | undefined;
+      const { cellW, cellH, gap } = getCellSize();
+      const w = data?.w ?? 2;
+      const h = data?.h ?? 2;
+
+      if (sourceOnly) {
+        startSourceDrag(plainId, onSourceDragStart);
+      } else {
+        reg.handleDragStart(e);
+      }
+
       setActiveDrag({
-        itemId: source.itemId,
-        dragIdPrefix: source.dragIdPrefix,
+        itemId: plainId,
+        dragIdPrefix: reg.dragIdPrefix,
         dims: {
-          width: source.w * cellW + (source.w - 1) * gap,
-          height: source.h * cellH + (source.h - 1) * gap,
+          width: w * cellW + (w - 1) * gap,
+          height: h * cellH + (h - 1) * gap,
         },
       });
-      return;
-    }
-
-    const activeId = String(e.active.id);
-    const found = findGrid(gridsRef.current, activeId);
-    if (!found) {
-      return;
-    }
-
-    const { reg, plainId } = found;
-    const { sourceOnly, getCellSize, onSourceDragStart } = reg;
-
-    const data = e.active.data.current as
-      { w?: number; h?: number } | undefined;
-    const { cellW, cellH, gap } = getCellSize();
-    const w = data?.w ?? 2;
-    const h = data?.h ?? 2;
-
-    if (sourceOnly) {
-      startSourceDrag(plainId, onSourceDragStart);
-    } else {
-      reg.handleDragStart(e);
-    }
-
-    setActiveDrag({
-      itemId: plainId,
-      dragIdPrefix: reg.dragIdPrefix,
-      dims: {
-        width: w * cellW + (w - 1) * gap,
-        height: h * cellH + (h - 1) * gap,
-      },
-    });
-  }, []);
+    },
+    [onSourceInteractionChange],
+  );
 
   const handleDragMove = useCallback((e: DragMoveEvent) => {
     const activeId = String(e.active.id);
@@ -182,51 +191,57 @@ export function DndGridRoot({ children }: PropsWithChildren) {
     }
   }, []);
 
-  const handleDragEnd = useCallback((e: DragEndEvent) => {
-    setActiveDrag(null);
+  const handleDragEnd = useCallback(
+    (e: DragEndEvent) => {
+      setActiveDrag(null);
 
-    // The destination owns the drop; a missing destination cancels the addition.
-    if (pendingSourceRef.current) {
-      const { itemId } = pendingSourceRef.current;
-      pendingSourceRef.current = null;
+      // The destination owns the drop; a missing destination cancels the addition.
+      if (pendingSourceRef.current) {
+        const { itemId } = pendingSourceRef.current;
+        pendingSourceRef.current = null;
 
-      // Drag deltas include layout adjustments when the drawer closes; use
-      // the native release coordinates instead.
-      const pointer = pointerRef.current;
-      pointerRef.current = null;
-      if (pointer) {
-        for (const reg of gridsRef.current.values()) {
-          if (reg.sourceOnly || !reg.onExternalDrop) continue;
-          const position = reg.getDropPosition(pointer.x, pointer.y);
-          if (position) {
-            reg.onExternalDrop(itemId, position);
-            break;
+        // Drag deltas include layout adjustments when the drawer closes; use
+        // the native release coordinates instead.
+        const pointer = pointerRef.current;
+        pointerRef.current = null;
+        if (pointer) {
+          for (const reg of gridsRef.current.values()) {
+            if (reg.sourceOnly || !reg.onExternalDrop) continue;
+            const position = reg.getDropPosition(pointer.x, pointer.y);
+            if (position) {
+              reg.onExternalDrop(itemId, position);
+              break;
+            }
           }
         }
+        onSourceInteractionChange?.(false);
+        return;
       }
-      return;
-    }
 
-    const activeId = String(e.active.id);
-    const found = findGrid(gridsRef.current, activeId);
-    if (!found) {
-      return;
-    }
+      const activeId = String(e.active.id);
+      const found = findGrid(gridsRef.current, activeId);
+      if (!found) {
+        return;
+      }
 
-    found.reg.handleDragEnd(e);
-  }, []);
+      found.reg.handleDragEnd(e);
+    },
+    [onSourceInteractionChange],
+  );
 
   const handleDragCancel = useCallback(() => {
     pointerRef.current = null;
+    const cancelledSource = pendingSourceRef.current !== null;
     pendingSourceRef.current = null;
     setActiveDrag(null);
+    if (cancelledSource) onSourceInteractionChange?.(false);
 
     for (const [, reg] of gridsRef.current) {
       if (!reg.sourceOnly) {
         reg.handleDragCancel();
       }
     }
-  }, []);
+  }, [onSourceInteractionChange]);
 
   return (
     <DndGridRootContext.Provider
