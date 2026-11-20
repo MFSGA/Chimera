@@ -1057,6 +1057,7 @@ dependencies = [
  "chimera-ipc",
  "chimera-jobs",
  "chimera-macro",
+ "chimera-migration",
  "chimera-net",
  "chimera-os",
  "chimera-paths",
@@ -1398,6 +1399,20 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 3.0.6",
+]
+
+[[package]]
+name = "chimera-migration"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chimera-persistence",
+ "chrono",
+ "semver 1.0.28",
+ "serde",
+ "serde_yaml_ng",
+ "tempfile",
+ "thiserror 2.0.21",
 ]
 
 [[package]]

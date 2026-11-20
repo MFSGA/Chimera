@@ -5,7 +5,6 @@
 //! the actual atomic write to the shared persistence implementation.
 
 use super::MigrationCheckError;
-use anyhow::{Context, bail, ensure};
 use chimera_core::format::{Inspected, StampError};
 use chimera_persistence::write as persistence_write;
 use serde::de::DeserializeOwned;
@@ -119,49 +118,14 @@ pub(crate) fn write_document(
     payload: Mapping,
     prefix: Option<&str>,
 ) -> anyhow::Result<()> {
-    validate_destination(path)?;
+    chimera_migration::fs::validate_destination(path)?;
     persistence_write::write_document(path, document, schema_revision, payload, prefix)?;
     Ok(())
 }
 
-/// Atomically write `contents` using shared persistence after validating
-/// the migration destination's stricter compatibility requirements.
+/// Atomically write a migration document using the shared safe destination policy.
 pub(crate) fn atomic_write(path: &Path, contents: &[u8]) -> anyhow::Result<()> {
-    validate_destination(path)?;
-    persistence_write::atomic_write(path, contents)?;
-    Ok(())
-}
-
-fn validate_destination(path: &Path) -> anyhow::Result<()> {
-    ensure!(
-        path.file_name().is_some(),
-        "destination path has no file name: {}",
-        path.display()
-    );
-    // An atomic rename would replace a symbolic link itself rather than
-    // updating its target, silently breaking externally managed config paths.
-    // A directory or other non-file node must never be replaced either.
-    match crate::core::corrupt::retry_io(|| std::fs::symlink_metadata(path)) {
-        Ok(metadata) if crate::core::corrupt::is_link(&metadata) => {
-            bail!(
-                "cannot atomically overwrite symbolic link {}",
-                path.display()
-            );
-        }
-        Ok(metadata) if !metadata.is_file() => {
-            bail!(
-                "cannot atomically overwrite non-file node {}",
-                path.display()
-            );
-        }
-        Ok(_) => {}
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => {
-            return Err(error)
-                .with_context(|| format!("failed to inspect destination {}", path.display()));
-        }
-    }
-    Ok(())
+    chimera_migration::fs::atomic_write(path, contents)
 }
 
 #[cfg(test)]

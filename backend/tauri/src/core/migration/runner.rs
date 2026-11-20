@@ -1,6 +1,6 @@
 use super::{
-    Ctx, DocumentSpec, MigrationAdvice, MigrationCheckError, MigrationState, MigrationStep,
-    ModuleKind, ModuleMigrator, StepCheck, current_version, fs, registry,
+    Ctx, DocumentSpec, MigrationAdvice, MigrationCheckError, MigrationStep, ModuleKind,
+    ModuleMigrator, StepCheck, current_version, fs, registry,
     store::{MigrationStore, ModuleState},
 };
 use crate::{
@@ -11,8 +11,18 @@ use crate::{
     utils::path::PathResolver,
 };
 use anyhow::{Context, bail};
+use chimera_migration::{StepSpec, runner as core_runner};
 use semver::Version;
 use time::OffsetDateTime;
+
+fn step_spec(step: &dyn MigrationStep) -> StepSpec<'static> {
+    StepSpec {
+        id: step.id(),
+        module: step.module(),
+        revision: step.revision(),
+        introduced_in: step.introduced_in(),
+    }
+}
 
 /// An on-disk revision written by a future build; never downgrade it.
 #[derive(Debug, thiserror::Error)]
@@ -80,33 +90,13 @@ impl Runner {
     }
 
     pub fn advice_step(&self, step: &dyn MigrationStep) -> MigrationAdvice {
-        if !self.profile_migrations_enabled && step.module() == "profiles" {
-            return MigrationAdvice::Ignored;
-        }
-        if self.force {
-            return MigrationAdvice::Pending;
-        }
-
-        match self.store.task_state(step.id()) {
-            Some(MigrationState::Completed | MigrationState::Skipped) => {
-                return MigrationAdvice::Done;
-            }
-            Some(
-                MigrationState::Failed | MigrationState::InProgress | MigrationState::NotStarted,
-            ) => {
-                return MigrationAdvice::Pending;
-            }
-            None => {}
-        }
-
-        let module_state = self.store.module_state(step.module());
-        if step.revision() > module_state.applied_revision
-            && introduced_in_reached(step.introduced_in(), &self.target)
-        {
-            MigrationAdvice::Pending
-        } else {
-            MigrationAdvice::Ignored
-        }
+        core_runner::advice_step(
+            &self.store,
+            step_spec(step),
+            &self.target,
+            self.force,
+            self.profile_migrations_enabled || step.module() != "profiles",
+        )
     }
 
     pub fn run_migration(&mut self, step: &dyn MigrationStep) -> anyhow::Result<()> {
@@ -269,7 +259,10 @@ impl Runner {
     fn ensure_baselines(&mut self) -> anyhow::Result<()> {
         let mut changed = self.reconcile_documents()?;
         for module in self.modules() {
-            changed |= self.store.ensure_module(module, &self.ctx)?;
+            if !self.store.modules.contains_key(module.module()) {
+                let baseline = module.detect_baseline(&self.ctx)?;
+                changed |= self.store.ensure_module(module.module(), baseline);
+            }
         }
 
         if changed {
@@ -461,7 +454,7 @@ impl Runner {
             }
         }
 
-        self.store.mark_in_progress(step);
+        self.store.mark_in_progress(step_spec(step));
         self.store
             .flush_atomic(&self.ctx.state_path())
             .with_context(|| format!("failed to persist {} in-progress state", step.id()))?;
@@ -497,9 +490,9 @@ impl Runner {
             self.set_stamped(step.module());
         }
         if skipped {
-            self.store.mark_skipped(step);
+            self.store.mark_skipped(step_spec(step));
         } else {
-            self.store.mark_completed(step);
+            self.store.mark_completed(step_spec(step));
         }
         self.store.bump_module(step.module());
         self.store
@@ -508,7 +501,7 @@ impl Runner {
     }
 
     fn record_failure(&mut self, step: &dyn MigrationStep, error: anyhow::Error) -> anyhow::Error {
-        self.store.mark_failed(step, &error);
+        self.store.mark_failed(step_spec(step), &error);
         match self.store.flush_atomic(&self.ctx.state_path()) {
             Ok(()) => error,
             Err(flush_error) => error.context(format!(
@@ -591,18 +584,10 @@ fn at_revision(revision: u64, stamped: bool) -> ModuleState {
     }
 }
 
-/// Whether a migration introduced in `introduced_in` should run when upgrading
-/// to `target`. Only the `(major, minor, patch)` triple is compared, so a
-/// prerelease/nightly build (e.g. `2.0.0-rc.1`) still runs migrations introduced
-/// in the matching release (`2.0.0`) instead of skipping them due to semver
-/// prerelease ordering (`2.0.0-rc.1 < 2.0.0`).
-fn introduced_in_reached(introduced_in: &Version, target: &Version) -> bool {
-    (
-        introduced_in.major,
-        introduced_in.minor,
-        introduced_in.patch,
-    ) <= (target.major, target.minor, target.patch)
-}
+#[cfg(test)]
+use super::MigrationState;
+#[cfg(test)]
+use chimera_migration::runner::introduced_in_reached;
 
 #[cfg(test)]
 mod tests {
