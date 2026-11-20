@@ -11,7 +11,7 @@ use crate::{
     registry::Registry,
     store::{MigrationStore, ModuleState, STORE_FILE_NAME},
 };
-use anyhow::{Context as _, bail};
+use anyhow::Context as _;
 use semver::Version;
 use std::{fs, io, path::Path};
 
@@ -106,6 +106,60 @@ pub enum RevisionError {
     },
 }
 
+/// Structured execution failure variants from ref Runner. The checked
+/// migration contracts remain unchanged: each original source is kept in the
+/// error chain for startup diagnostics and safe retries.
+#[derive(Debug, thiserror::Error)]
+pub enum ExecutionError {
+    #[error("failed to detect {module} baseline")]
+    DetectBaseline {
+        module: String,
+        #[source]
+        source: anyhow::Error,
+    },
+    #[error("failed to inspect {module} files")]
+    InspectModule {
+        module: String,
+        #[source]
+        source: anyhow::Error,
+    },
+    #[error("failed to inspect the {module} files")]
+    InspectDocument {
+        module: String,
+        #[source]
+        source: MigrationCheckError,
+    },
+    #[error("failed to check migration {step}")]
+    CheckStep {
+        step: String,
+        #[source]
+        source: MigrationCheckError,
+    },
+    #[error("failed to run migration {step}")]
+    RunStep {
+        step: String,
+        #[source]
+        source: anyhow::Error,
+    },
+    #[error(
+        "migration {step} ran without leaving its document stamped; this is a bug in the migration"
+    )]
+    VerifyDocumentStamp { step: String },
+    #[error(
+        "migration {step} ran but its check still reports it as needed; this is a bug in the migration"
+    )]
+    VerifyStep { step: String },
+    /// Exposes both failures: the original step error remains the source,
+    /// while callers can inspect the independent persistence error by type.
+    #[error("failed to persist failed migration {step} ({persistence:#})")]
+    RecordFailure {
+        step: String,
+        #[source]
+        source: anyhow::Error,
+        persistence: anyhow::Error,
+    },
+}
+
 /// Initialize each module from its stamped document or injected baseline.
 /// A detected newer schema stops the run before any baseline state is flushed.
 pub fn ensure_baselines<C: 'static>(
@@ -123,7 +177,13 @@ pub fn ensure_baselines<C: 'static>(
     let mut changed = reconcile_documents(modules.iter().copied(), ctx, store, state_path)?;
     for module in modules {
         if !store.modules.contains_key(module.module()) {
-            let baseline = module.detect_baseline(ctx)?;
+            let baseline =
+                module
+                    .detect_baseline(ctx)
+                    .map_err(|source| ExecutionError::DetectBaseline {
+                        module: module.module().to_owned(),
+                        source,
+                    })?;
             changed |= store.ensure_module(module.module(), baseline);
         }
     }
@@ -151,8 +211,12 @@ pub fn stamp_adopted_documents<C: 'static, P: BackupPort>(
             continue;
         };
         let path = (spec.path)(ctx);
-        let Some(file) = document::read_document(&path, spec.document)
-            .with_context(|| format!("failed to inspect the {} files", module.module()))?
+        let Some(file) = document::read_document(&path, spec.document).map_err(|source| {
+            ExecutionError::InspectDocument {
+                module: module.module().to_owned(),
+                source,
+            }
+        })?
         else {
             continue;
         };
@@ -192,8 +256,12 @@ pub fn reconcile_documents<C: 'static>(
             continue;
         }
         let path = (spec.path)(ctx);
-        let file = document::read_document(&path, spec.document)
-            .with_context(|| format!("failed to inspect the {} files", module.module()))?;
+        let file = document::read_document(&path, spec.document).map_err(|source| {
+            ExecutionError::InspectDocument {
+                module: module.module().to_owned(),
+                source,
+            }
+        })?;
         let Some(file) = file else {
             if entry.is_none() {
                 // Nothing to migrate: the file will be created at head.
@@ -287,9 +355,13 @@ pub fn verify_applied_revisions<C: 'static>(
 ) -> anyhow::Result<()> {
     for module in modules {
         let applied = store.module_state(module.module()).applied_revision;
-        let behind = module
-            .files_behind(ctx, applied)
-            .with_context(|| format!("failed to inspect the {} files", module.module()))?;
+        let behind =
+            module
+                .files_behind(ctx, applied)
+                .map_err(|source| ExecutionError::InspectModule {
+                    module: module.module().to_owned(),
+                    source,
+                })?;
         if let Some(reason) = behind {
             return Err(RevisionError::FilesBehindState {
                 state_path: state_path.to_path_buf(),
@@ -469,7 +541,11 @@ pub fn execute_step<C: 'static>(
         }
         Ok(Some(StepCheck::Needed) | None) => {}
         Err(error) => {
-            let error = anyhow::Error::new(error).context(format!("failed to check {}", step.id()));
+            let error: anyhow::Error = ExecutionError::CheckStep {
+                step: step.id().to_owned(),
+                source: error,
+            }
+            .into();
             eprintln!("Migration {} failed: {error:#}", step.id());
             return Err(record_failure(step, store, state_path, error));
         }
@@ -482,6 +558,13 @@ pub fn execute_step<C: 'static>(
 
     match step
         .run(ctx)
+        .map_err(|source| {
+            ExecutionError::RunStep {
+                step: step.id().to_owned(),
+                source,
+            }
+            .into()
+        })
         .and_then(|()| ensure_satisfied(step, ctx, registry))
     {
         Ok(()) => {
@@ -550,10 +633,12 @@ fn record_failure<C: 'static>(
     store.mark_failed(spec(step), &error);
     match store.flush_atomic(state_path) {
         Ok(()) => error,
-        Err(flush_error) => error.context(format!(
-            "failed to persist {} failed state: {flush_error:#}",
-            step.id()
-        )),
+        Err(persistence) => ExecutionError::RecordFailure {
+            step: step.id().to_owned(),
+            source: error,
+            persistence,
+        }
+        .into(),
     }
 }
 
@@ -565,23 +650,30 @@ fn ensure_satisfied<C: 'static>(
     registry: &Registry<C>,
 ) -> anyhow::Result<()> {
     if let Some(spec) = document_spec(registry, step.module()) {
-        let file = document::read_document(&(spec.path)(ctx), spec.document)
-            .with_context(|| format!("failed to check {} after it ran", step.id()))?;
+        let file = document::read_document(&(spec.path)(ctx), spec.document).map_err(|source| {
+            ExecutionError::CheckStep {
+                step: step.id().to_owned(),
+                source,
+            }
+        })?;
         if file.is_none_or(|file| file.schema_revision.is_none()) {
-            bail!(
-                "migration {} ran without leaving its document stamped; this is a bug in the migration",
-                step.id()
-            );
+            return Err(ExecutionError::VerifyDocumentStamp {
+                step: step.id().to_owned(),
+            }
+            .into());
         }
     }
     match check_step(step, ctx, registry) {
-        Ok(Some(StepCheck::Needed)) => bail!(
-            "migration {} ran but its check still reports it as needed; this is a bug in the migration",
-            step.id()
-        ),
+        Ok(Some(StepCheck::Needed)) => Err(ExecutionError::VerifyStep {
+            step: step.id().to_owned(),
+        }
+        .into()),
         Ok(Some(StepCheck::Satisfied) | None) => Ok(()),
-        Err(error) => Err(anyhow::Error::new(error)
-            .context(format!("failed to check {} after it ran", step.id()))),
+        Err(source) => Err(ExecutionError::CheckStep {
+            step: step.id().to_owned(),
+            source,
+        }
+        .into()),
     }
 }
 
@@ -1279,6 +1371,146 @@ mod tests {
             Some(MigrationState::Completed)
         );
         assert!(!has_pending_steps(&modules, &store, &target, false));
+    }
+
+    #[test]
+    fn step_check_run_and_postcondition_failures_are_typed_and_preserve_causes() {
+        let dir = tempfile::tempdir().unwrap();
+        let state_path = dir.path().join("migration-state.yaml");
+        let registry = transaction_registry();
+        let mut store = MigrationStore::default();
+        let mut ctx = TransactionCtx {
+            fail_check: true,
+            ..Default::default()
+        };
+        let error = execute_step(
+            &TRANSACTION_STEP,
+            &mut ctx,
+            &mut store,
+            &state_path,
+            &registry,
+        )
+        .unwrap_err();
+        assert!(matches!(error.downcast_ref::<ExecutionError>(),
+            Some(ExecutionError::CheckStep { step, source: MigrationCheckError::Unrecognized(reason) })
+                if step == "example/commit" && reason == "injected check failure"));
+        assert_eq!(ctx.runs, 0);
+        assert_eq!(
+            store.task_state("example/commit"),
+            Some(MigrationState::Failed)
+        );
+
+        ctx.fail_check = false;
+        ctx.fail_run = true;
+        let error = execute_step(
+            &TRANSACTION_STEP,
+            &mut ctx,
+            &mut store,
+            &state_path,
+            &registry,
+        )
+        .unwrap_err();
+        assert!(matches!(error.downcast_ref::<ExecutionError>(),
+            Some(ExecutionError::RunStep { step, source })
+                if step == "example/commit" && format!("{source:#}").contains("injected run failure")));
+        assert_eq!((ctx.runs, ctx.rollbacks), (1, 1));
+
+        ctx.fail_run = false;
+        ctx.leave_check_needed = true;
+        let error = execute_step(
+            &TRANSACTION_STEP,
+            &mut ctx,
+            &mut store,
+            &state_path,
+            &registry,
+        )
+        .unwrap_err();
+        assert!(matches!(error.downcast_ref::<ExecutionError>(),
+            Some(ExecutionError::VerifyStep { step }) if step == "example/commit"));
+        assert_eq!((ctx.runs, ctx.rollbacks), (2, 2));
+        assert_eq!(store.module_state("example").applied_revision, 0);
+        assert_eq!(
+            MigrationStore::load(&state_path)
+                .unwrap()
+                .task_state("example/commit"),
+            Some(MigrationState::Failed)
+        );
+    }
+
+    struct FailingBaseline;
+    static FAILING_BASELINE: FailingBaseline = FailingBaseline;
+    impl ModuleMigrator<TransactionCtx> for FailingBaseline {
+        fn module(&self) -> &'static str {
+            "example"
+        }
+        fn detect_baseline(&self, _: &TransactionCtx) -> anyhow::Result<u64> {
+            anyhow::bail!("injected baseline detection failure")
+        }
+        fn steps(&self) -> &'static [&'static dyn MigrationStep<TransactionCtx>] {
+            &TRANSACTION_STEPS
+        }
+        fn files_behind(&self, _: &TransactionCtx, _: u64) -> anyhow::Result<Option<String>> {
+            anyhow::bail!("injected module inspection failure")
+        }
+    }
+
+    #[test]
+    fn baseline_and_module_inspection_keep_original_failure_without_writing_state() {
+        let dir = tempfile::tempdir().unwrap();
+        let state_path = dir.path().join("migration-state.yaml");
+        let mut store = MigrationStore::default();
+        let modules = [&FAILING_BASELINE as &dyn ModuleMigrator<TransactionCtx>];
+        let error = ensure_baselines(modules, &TransactionCtx::default(), &mut store, &state_path)
+            .unwrap_err();
+        assert!(matches!(error.downcast_ref::<ExecutionError>(),
+            Some(ExecutionError::DetectBaseline { module, source })
+                if module == "example" && format!("{source:#}").contains("injected baseline detection failure")));
+        assert!(!state_path.exists());
+        let error =
+            verify_applied_revisions(modules, &TransactionCtx::default(), &store, &state_path)
+                .unwrap_err();
+        assert!(matches!(error.downcast_ref::<ExecutionError>(),
+            Some(ExecutionError::InspectModule { module, source })
+                if module == "example" && format!("{source:#}").contains("injected module inspection failure")));
+        assert!(!state_path.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn failed_state_record_preserves_original_cause_and_rejected_symlink_write() {
+        use std::os::unix::fs::symlink;
+        let dir = tempfile::tempdir().unwrap();
+        let state_path = dir.path().join("migration-state.yaml");
+        let outside = dir.path().join("outside.yaml");
+        std::fs::write(&outside, b"user-owned content").unwrap();
+        symlink(&outside, &state_path).unwrap();
+        let mut store = MigrationStore::default();
+        let original: anyhow::Error = ExecutionError::RunStep {
+            step: "example/commit".into(),
+            source: anyhow::anyhow!("original step failure"),
+        }
+        .into();
+        let result = record_failure(&TRANSACTION_STEP, &mut store, &state_path, original);
+        match result.downcast_ref::<ExecutionError>() {
+            Some(ExecutionError::RecordFailure {
+                step,
+                source,
+                persistence,
+            }) => {
+                assert_eq!(step, "example/commit");
+                assert!(matches!(source.downcast_ref::<ExecutionError>(),
+                    Some(ExecutionError::RunStep { step, source })
+                        if step == "example/commit" && format!("{source:#}").contains("original step failure")));
+                assert!(format!("{persistence:#}").contains("symbolic link"));
+            }
+            other => panic!("expected RecordFailure, got {other:?}"),
+        }
+        assert_eq!(
+            store.task_state("example/commit"),
+            Some(MigrationState::Failed)
+        );
+        assert_eq!(std::fs::read(&outside).unwrap(), b"user-owned content");
+        assert_eq!(std::fs::read_link(&state_path).unwrap(), outside);
     }
 
     #[test]

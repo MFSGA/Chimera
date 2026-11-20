@@ -454,7 +454,13 @@ mod tests {
         ] {
             let case = DocumentCase::new(None, &profiles);
 
-            let error = format!("{:#}", case.runner().unwrap_err());
+            let source = case.runner().unwrap_err();
+            assert!(
+                matches!(source.downcast_ref::<core_runner::ExecutionError>(),
+                Some(core_runner::ExecutionError::InspectDocument { module, .. })
+                    if module == "profiles")
+            );
+            let error = format!("{source:#}");
 
             assert!(
                 error.contains("failed to inspect the profiles files"),
@@ -493,7 +499,13 @@ mod tests {
         };
         let mut runner = case.runner().unwrap();
 
-        let error = format!("{:#}", runner.run_step(&step).unwrap_err());
+        let cause = runner.run_step(&step).unwrap_err();
+        assert!(
+            matches!(cause.downcast_ref::<core_runner::ExecutionError>(),
+            Some(core_runner::ExecutionError::VerifyDocumentStamp { step })
+                if step == "profiles/example")
+        );
+        let error = format!("{cause:#}");
 
         assert!(
             error.contains("without leaving its document stamped"),

@@ -650,6 +650,63 @@ mod tests {
     }
 
     #[test]
+    fn typed_migration_execution_errors_reach_startup_report_with_original_sources() {
+        use chimera_migration::runner::ExecutionError;
+        let (_temp, paths) = fixture();
+        let config = paths.application_config_path();
+        let source = MigrationCheckError::Io {
+            path: config.clone(),
+            source: std::io::Error::from(std::io::ErrorKind::PermissionDenied),
+        };
+        let error = anyhow::Error::new(ExecutionError::CheckStep {
+            step: "typed_config/split_legacy_config".into(),
+            source,
+        })
+        .context("failed at migration boundary");
+        let report = Report::from_error(error.as_ref(), StartupStage::MigrationRun, &paths);
+        assert_eq!(report.failure.kind, FailureKind::Permission);
+        assert_eq!(report.failure.path, Some(config));
+        assert!(
+            report
+                .failure
+                .detail
+                .contains("failed to check migration typed_config/split_legacy_config")
+        );
+        assert!(
+            report
+                .failure
+                .detail
+                .contains("failed at migration boundary")
+        );
+        assert!(report.failure.revision.is_none());
+        assert!(report.backups_dir.is_none());
+
+        // The original runtime failure remains reachable through the source
+        // chain even when writing the failed state *also* fails.
+        let error = anyhow::Error::new(ExecutionError::RecordFailure {
+            step: "storage/hotkeys_to_kv".into(),
+            source: ExecutionError::RunStep {
+                step: "storage/hotkeys_to_kv".into(),
+                source: anyhow::anyhow!("original KV write denied"),
+            }
+            .into(),
+            persistence: anyhow::anyhow!("migration-state atomic write denied"),
+        })
+        .context("failed at migration boundary");
+        let report = Report::from_error(error.as_ref(), StartupStage::MigrationRun, &paths);
+        assert_eq!(report.failure.kind, FailureKind::MigrationFailed);
+        assert!(report.failure.detail.contains("original KV write denied"));
+        assert!(
+            report
+                .failure
+                .detail
+                .contains("migration-state atomic write denied")
+        );
+        assert!(report.failure.detail.contains("storage/hotkeys_to_kv"));
+        assert_eq!(report.backups_dir, None);
+    }
+
+    #[test]
     fn jobs_and_user_config_have_stage_specific_safe_fallback_paths() {
         let (_temp, paths) = fixture();
         let error = std::io::Error::from(std::io::ErrorKind::InvalidData);
