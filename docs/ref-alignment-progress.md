@@ -1,5 +1,14 @@
 # ref 对齐进度
 
+## DIFF-108：独立 Migration 子进程的失败载荷切换至共享 Failure v2（2026-11-20）
+
+- **上游目标与范围**：沿用固定 `ref@c4b35e048` 的 `backend/nyanpasu-migration/src/child_result.rs::{FailureStage,Failure,Failure::from_error}`，把上一轮已共享但尚未直接用于父子进程传递的 `Failure` 作为 Chimera 桌面 Migration 子进程**真实生产载荷**。风险 **L2**（跨进程版本、备份可信性、权限/修订错误报告），不改任何迁移步骤、用户配置、migration-state schema、备份 manifest、`ref` / Runtime 指针。按维护者最近要求，此轮**不额外运行测试、桌面构建或 E2E**；仓库提交钩子必需的 Rustfmt/Clippy 属于正常提交流程。
+- **协议版本化及共享载荷**：桌面 `migration_child.rs` 将 `ChildOutcome<startup_failure::Report>` 改为 `ChildOutcome<chimera_migration::child_result::Failure>`；Runner 构造失败输出 `FailureStage::RunnerConstruction`，真正的快照创建失败输出 `FailureStage::Backup`，其他迁移执行失败输出 `FailureStage::Migration`。通过共享 `Failure::from_error` 捕获有类型的版本错误、迁移步骤/状态/文档路径及完整 source chain，并由 Tauri 宿主注入备份是否真实可用及 IO 分类；仅在宿主保存报告前补充 Tauri `BackupError`、Session 和保全证据的相关路径。`ExecutionError::RecordFailure` 的次级状态持久化路径也纳入共享 Failure 路径列表，宿主分类继续保留次级 IO 权限错误。
+- **显式不兼容的 wire 版本**：原 `protocol_version: 1` 的 `failure.report` 是包含 `StartupFailure`、logs、app version 的 Tauri 对象；新 `protocol_version: 2` 的 `failure.report` 是共享 `Failure {stage,config_dir,backups_dir,paths,revision,chain,backup_available,io_failure}`，成功载荷字段维持 `backup_name`。共享 `read_outcome` 改为**先解码版本信封，再拒绝不支持的版本，最后解释具体失败载荷**，防止以 v2 类型误读 v1 Tauri 报告。升级时必须让父进程与子进程来自同一兼容的可执行文件；混合版本会 fail-closed，绝不自动重复可能部分成功的迁移。
+- **Tauri 宿主兼容转换**：新 `startup_failure::Report::from_migration_failure` 将 v2 `FailureStage` 映射为既有 `MigrationPrepare` / `MigrationRun`，根据共享 `RevisionFailure` 与 `IoFailure` 恢复 `NewerVersion`、`Permission`、`Busy` 和默认 Migration 分类，保留完整原因链与相应文件路径，继续由本地主进程构造可信 `version`、`logs_dir` 和旧 UI `Report` 结构。主进程接收失败结果时先核对 `config_dir` / `backups_dir` 与自身 `PathResolver` 完全一致，再对 `backup_name` 重新进行合法性校验与 manifest/哈希验证；子进程的 `backup_available` **只作诊断提示，不构成恢复授权**，快照损坏时不会在 UI 显示可恢复备份。Tauri 进程内报告、移动端迁移与 Core/Jobs/TypedClient 的旧接口仍然保留。
+- **已有验收入口的源码调整**：同步修改 `migration_child` 的既有 Rust 断言和 `scripts/ci/verify-migration-binary.py`，识别新的 v2 版本号、`runner_construction`/`migration` 阶段及共享 revision/备份可用字段；只编辑测试与脚本源码，**本轮不运行它们**。本轮无新增完整构建、桌面实机、Windows/Linux 或 CI 验收结果，历史轮次的通过数不作为本轮证据。
+- **剩余/回滚**：此轮保留共享 crate 的 `ChildOutcome<Report>` generic API，但桌面正式生产已改用共享 `Failure`，不再将 Tauri 启动 UI 报告写入子进程结果文件。独立 crash-reporter UI、跨版本打包升级进程和恢复交互仍未全部按上游迁移。若上线遇到协议兼容问题，必须**成对**回滚 v2 子进程写入与主进程解析/转换，不能只回滚一侧、不能删除 `migration-state.yaml`、现有用户配置、备份或 `.corrupt-*` 证据。
+
 ## DIFF-107：共享 child_result FailureStage / Failure 与源错误链归集迁移（2026-11-20）
 
 - **固定上游/迁移目标**：以 `ref@c4b35e048` 的 `backend/nyanpasu-migration/src/child_result.rs::{FailureStage,Failure,Failure::from_error}` 为蓝本。遵照维护者本轮“**不用验证，继续迁移代码**”要求，继续真实迁移源代码，不单独运行单元测试、all-features check、构建、桌面 E2E 或 CI 状态查询。提交钩子按仓库现有设置自动运行的 Rustfmt/Clippy 属于提交行为，并非单独开展的新验收。
