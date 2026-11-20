@@ -125,6 +125,10 @@ struct ManifestSymlink {
 /// Creates a full backup. A failure leaves neither a backup directory nor a
 /// `.partial` behind.
 pub fn create_backup(req: &BackupRequest<'_>) -> Result<BackupInfo, BackupError> {
+    // The data root must be checked BEFORE constructing `<data>/backups`.
+    // Otherwise creating the backup directory itself may follow a linked
+    // parent into another tree before storage-copy validation gets a chance.
+    validate_data_root(req.paths.app_data_dir())?;
     let backups_dir = req.paths.backups_dir();
     // The backup root itself may be a dangling or live symlink. Never follow it.
     match fs::symlink_metadata(&backups_dir) {
@@ -137,6 +141,7 @@ pub fn create_backup(req: &BackupRequest<'_>) -> Result<BackupInfo, BackupError>
         }
         Err(error) => return Err(io_error(&backups_dir)(error)),
     }
+    validate_data_root(req.paths.app_data_dir())?;
     let actual = fs::symlink_metadata(&backups_dir).map_err(io_error(&backups_dir))?;
     if !actual.is_dir() || actual.file_type().is_symlink() {
         return Err(BackupError::InvalidNode { path: backups_dir });
@@ -161,6 +166,9 @@ pub fn create_backup(req: &BackupRequest<'_>) -> Result<BackupInfo, BackupError>
 /// Prunes only committed backups with a valid matching manifest, preserving
 /// unknown directories and all `.partial` nodes that may have a live owner.
 pub fn prune_backups(backups_dir: &Path, prefix: &str, keep: usize) -> Result<(), BackupError> {
+    if let Some(data_root) = backups_dir.parent() {
+        validate_data_root(data_root)?;
+    }
     match fs::symlink_metadata(backups_dir) {
         Ok(meta) if !meta.is_dir() || meta.file_type().is_symlink() => {
             return Err(BackupError::InvalidNode {
@@ -212,6 +220,21 @@ pub fn prune_backups(backups_dir: &Path, prefix: &str, keep: usize) -> Result<()
         fs::remove_dir_all(&path).map_err(io_error(&path))?;
     }
     Ok(())
+}
+
+/// Refuse links or non-directories at the data-root boundary. Allow a
+/// genuinely absent data root so config-only backups can create a new one.
+fn validate_data_root(data_root: &Path) -> Result<(), BackupError> {
+    match fs::symlink_metadata(data_root) {
+        Ok(meta) if !meta.is_dir() || meta.file_type().is_symlink() => {
+            Err(BackupError::InvalidNode {
+                path: data_root.to_owned(),
+            })
+        }
+        Ok(_) => Ok(()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(io_error(data_root)(error)),
+    }
 }
 
 fn io_error(path: &Path) -> impl FnOnce(io::Error) -> BackupError + '_ {
@@ -346,6 +369,7 @@ fn copy_dir(
 }
 
 fn backup_storage(req: &BackupRequest<'_>, data_dir: &Path) -> Result<(), BackupError> {
+    validate_data_root(req.paths.app_data_dir())?;
     let storage_path = req.paths.storage_path();
     let dest = data_dir.join(storage_path.file_name().unwrap_or_default());
 
@@ -614,6 +638,128 @@ mod tests {
         assert_eq!(
             fs::read_to_string(paths.profiles_path()).unwrap(),
             "current: [new-profile]\n"
+        );
+    }
+
+    #[test]
+    fn upstream_v1_6_1_fixture_upgrades_then_restores_exact_pre_migration_config_and_redb() {
+        use crate::core::migration::{Runner, store::MigrationStore};
+        use redb::ReadableDatabase as _;
+
+        // Read the pinned upstream real-world fixture, not a fabricated modern
+        // config. This is a test-only isolated upgrade and restore, never an
+        // operation on the running user's paths.
+        const OLD_PROFILES: &str = include_str!(
+            "../../../../ref/backend/nyanpasu-migration/src/fixtures/v1_6_1/profiles.yaml"
+        );
+        const OLD_CONFIG: &str = include_str!(
+            "../../../../ref/backend/nyanpasu-migration/src/fixtures/v1_6_1/nyanpasu-config.yaml"
+        );
+        const USER_TABLE: redb::TableDefinition<&str, &str> =
+            redb::TableDefinition::new("legacy-user-prefs");
+
+        let temp = tempfile::tempdir().unwrap();
+        let paths = paths(temp.path());
+        fs::create_dir_all(paths.app_config_dir()).unwrap();
+        fs::create_dir_all(paths.app_data_dir()).unwrap();
+        fs::write(paths.profiles_path(), OLD_PROFILES).unwrap();
+        fs::write(paths.chimera_config_path(), OLD_CONFIG).unwrap();
+        write(
+            &paths.app_profiles_dir().join("rIWXPHuafvEM.yaml"),
+            "proxies: []\n",
+        );
+        write(
+            &paths.app_profiles_dir().join("siL1cvjnvLB6.js"),
+            "// old script\n",
+        );
+        let storage_path = paths.storage_path();
+        {
+            let db = redb::Database::create(&storage_path).unwrap();
+            let tx = db.begin_write().unwrap();
+            tx.open_table(USER_TABLE)
+                .unwrap()
+                .insert("favorite-profile", "legacy-script")
+                .unwrap();
+            tx.commit().unwrap();
+        }
+        let old_storage = fs::read(&storage_path).unwrap();
+        // Real Runner with an explicit temporary layout; no current-user paths.
+        let mut runner = Runner::with_paths(paths.clone(), false).unwrap();
+        runner.run_pending().unwrap();
+
+        let backup = runner
+            .backup_info()
+            .expect("pre-migration snapshot is required");
+        assert!(backup.is_available());
+        assert_eq!(
+            fs::read(backup.path.join("config/profiles.yaml")).unwrap(),
+            OLD_PROFILES.as_bytes()
+        );
+        assert_eq!(
+            fs::read(backup.path.join("config/chimera-config.yaml")).unwrap(),
+            OLD_CONFIG.as_bytes()
+        );
+        assert_eq!(
+            fs::read(backup.path.join("data/storage.db")).unwrap(),
+            old_storage
+        );
+        assert!(backup.name.starts_with("migration-"));
+        assert_eq!(read_manifest(backup)["kind"], "migration");
+        assert!(paths.application_config_path().exists());
+        assert!(paths.clash_config_path().exists());
+        assert!(paths.session_state_path().exists());
+        assert_ne!(
+            fs::read(paths.profiles_path()).unwrap(),
+            OLD_PROFILES.as_bytes()
+        );
+        let state_path = paths.app_config_dir().join("migration-state.yaml");
+        let migrated = MigrationStore::load(&state_path).unwrap();
+        assert!(migrated.app.last_succeeded.is_some());
+        assert_eq!(migrated.module_state("profiles").applied_revision, 4);
+        assert_eq!(migrated.module_state("typed_config").applied_revision, 2);
+        assert_eq!(migrated.module_state("storage").applied_revision, 2);
+
+        let restored = temp.path().join("isolated-upstream-v1.6.1-restore");
+        verify::restore_to_empty_sandbox(backup, &restored).unwrap();
+        assert_eq!(
+            fs::read(restored.join("config/profiles.yaml")).unwrap(),
+            OLD_PROFILES.as_bytes()
+        );
+        assert_eq!(
+            fs::read(restored.join("config/chimera-config.yaml")).unwrap(),
+            OLD_CONFIG.as_bytes()
+        );
+        assert_eq!(
+            fs::read(restored.join("data/storage.db")).unwrap(),
+            old_storage
+        );
+        assert_eq!(
+            fs::read_to_string(restored.join("config/profiles/rIWXPHuafvEM.yaml")).unwrap(),
+            "proxies: []\n"
+        );
+        assert_eq!(
+            fs::read_to_string(restored.join("config/profiles/siL1cvjnvLB6.js")).unwrap(),
+            "// old script\n"
+        );
+        let db = redb::Database::open(restored.join("data/storage.db")).unwrap();
+        let tx = db.begin_read().unwrap();
+        assert_eq!(
+            tx.open_table(USER_TABLE)
+                .unwrap()
+                .get("favorite-profile")
+                .unwrap()
+                .unwrap()
+                .value(),
+            "legacy-script"
+        );
+        assert!(
+            backup.is_available(),
+            "verified snapshot remains intact after recovery test"
+        );
+        assert_ne!(
+            fs::read(paths.profiles_path()).unwrap(),
+            OLD_PROFILES.as_bytes(),
+            "sandbox restore must not roll back running config"
         );
     }
 
@@ -887,6 +1033,95 @@ mod tests {
                 "path": "config/profiles/local.yaml",
                 "target": external.to_str().unwrap(),
             }])
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn linked_data_root_cannot_be_backup_source_even_when_storage_appears_regular_or_missing() {
+        use std::os::unix::fs::symlink;
+        for dangling in [false, true] {
+            let temp = tempfile::tempdir().unwrap();
+            let paths = paths(temp.path());
+            write(&paths.profiles_path(), "original profiles\n");
+            let external = temp.path().join("external-data");
+            if !dangling {
+                fs::create_dir(&external).unwrap();
+                fs::write(external.join("storage.db"), b"private external storage").unwrap();
+            }
+            symlink(&external, paths.app_data_dir()).unwrap();
+            let storage_path = paths.storage_path();
+            let error = create_backup(&manual(&paths, StorageSource::File(&storage_path)))
+                .expect_err("data root symlinks cannot silently bypass the backup boundary");
+            assert!(matches!(error, BackupError::InvalidNode { path }
+                if path == paths.app_data_dir()));
+            assert_eq!(fs::read_link(paths.app_data_dir()).unwrap(), external);
+            assert!(
+                !external.join("backups").exists(),
+                "backup must not create directories outside its trusted root"
+            );
+            assert_eq!(
+                fs::read(paths.profiles_path()).unwrap(),
+                b"original profiles\n"
+            );
+            if !dangling {
+                assert_eq!(
+                    fs::read(external.join("storage.db")).unwrap(),
+                    b"private external storage"
+                );
+            } else {
+                assert!(!external.exists());
+            }
+            assert!(
+                !paths.backups_dir().exists(),
+                "failed preflight cannot create verified or partial backup directories"
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pruning_and_verified_snapshot_reporting_reject_a_retargeted_data_root() {
+        use std::os::unix::fs::symlink;
+        let temp = tempfile::tempdir().unwrap();
+        let paths = paths(temp.path());
+        write(&paths.profiles_path(), "original\n");
+        let source = paths.storage_path();
+        let backup = create_backup(&manual(&paths, StorageSource::File(&source))).unwrap();
+        assert!(backup.is_available());
+        let original_data = temp.path().join("original-data");
+        fs::rename(paths.app_data_dir(), &original_data).unwrap();
+        let external = temp.path().join("external-data");
+        fs::create_dir(&external).unwrap();
+        symlink(&external, paths.app_data_dir()).unwrap();
+        let result = prune_backups(&paths.backups_dir(), MIGRATION_PREFIX, 0);
+        assert!(matches!(result, Err(BackupError::InvalidNode { path })
+            if path == paths.app_data_dir()));
+        assert!(!backup.is_available());
+        assert!(
+            !backup.path.join("config/profiles.yaml").exists(),
+            "a snapshot at the old path must not be claimed through a retargeted root"
+        );
+        assert!(
+            original_data.join("backups").join(&backup.name).exists(),
+            "the original snapshot must remain intact for manual recovery"
+        );
+        assert!(fs::read_dir(&external).unwrap().next().is_none());
+    }
+
+    #[test]
+    fn nonexistent_data_root_and_database_are_valid_for_config_only_backups() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = paths(temp.path());
+        write(&paths.profiles_path(), "old profiles\n");
+        assert!(!paths.app_data_dir().exists());
+        let storage_path = paths.storage_path();
+        let backup = create_backup(&manual(&paths, StorageSource::File(&storage_path))).unwrap();
+        assert!(backup.is_available());
+        assert!(!backup.path.join("data").exists());
+        assert_eq!(
+            fs::read(backup.path.join("config/profiles.yaml")).unwrap(),
+            b"old profiles\n"
         );
     }
 
