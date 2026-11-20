@@ -1417,7 +1417,14 @@ impl Actor for ApplicationWorkflowActor {
                         .take()
                         .expect("matched active lifecycle operation");
                     debug_assert_eq!(active.shutdown, shutdown);
-                    let _ = active.task.await;
+                    // A Completed message precedes the task's return. Keep
+                    // the workflow task owned until its JoinHandle settles;
+                    // unexpected task panics must reach Actor supervision.
+                    if let Err(error) = active.task.await
+                        && let Ok(panic) = error.try_into_panic()
+                    {
+                        std::panic::resume_unwind(panic);
+                    }
                     // A successful command alone is not proof that the Core
                     // reached Running or Stopped. Publish Converged/Inactive
                     // only after sampling the runtime owner.
@@ -2152,6 +2159,29 @@ impl Actor for ApplicationWorkflowActor {
         state: &mut Self::State,
     ) -> Result<(), ActorProcessingErr> {
         state.service_recovery_timer.abort();
+        // The workflow (and its transaction/Service lease) is moved into the
+        // active task. An unexpected Actor stop cannot drop that owner while
+        // it might still be mutating Core or committing a profile decision.
+        // The outcome is unproven because its Completed message was not
+        // handled; do not publish a successful runtime conclusion.
+        if let Some(active) = state.active.take() {
+            state.uncertain = true;
+            state
+                .startup_owner_unproven_shared
+                .store(true, Ordering::Release);
+            {
+                let mut status = state.status.lock();
+                status.active = None;
+                status.uncertain = true;
+                status.shutting_down = true;
+            }
+            if let Err(error) = active.task.await {
+                match error.try_into_panic() {
+                    Ok(panic) => std::panic::resume_unwind(panic),
+                    Err(error) => tracing::warn!(%error, "core lifecycle owner task cancelled"),
+                }
+            }
+        }
         state.reconciler.send_modify(ReconcilerStatus::close);
         Ok(())
     }
