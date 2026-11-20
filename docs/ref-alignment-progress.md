@@ -1,5 +1,14 @@
 # ref 对齐进度
 
+## DIFF-092：Migration Module / Registry / Document 契约下沉（2026-11-19）
+
+- **基线与目标**：继续对齐 `ref@c4b35e048` 的 `nyanpasu-migration/src/{lib.rs,registry.rs,fs.rs,runner.rs}` 和 `nyanpasu-persistence::format`。本轮风险 **L2**（启动前迁移检查及带 stamp 的文档）；不改两个 git submodule 的指针，不触碰真实用户目录、网络服务和既有应用配置。
+- **共享模块契约**：新增 `chimera-migration/src/module.rs`，将 `StepCheck`、`MigrationCheckError`（保留 IO、YAML、KV、Stamp 原始错误来源）、`MigrationStep<Ctx>`、`ModuleMigrator<Ctx>`、`ModuleKind<Ctx>`、`DocumentSpec<Ctx>` 从 Tauri 搬到共享 crate。Context 采用泛型，Tauri 的 Profiles、Typed Config 和 Storage 模块继续实现共享契约并持有特有业务适配，避免迁移 crate 反向依赖宿主或修改旧 migration ID、revision、版本门槛和 Legacy IPC。Tauri `migration::mod` 只重导出共享类型，不再定义平行 trait。
+- **Registry 实际所有权**：新增 `chimera-migration/src/registry.rs` 的 `Registry<Ctx>`，统一维护有序模块集合与步骤查找，构建时拒绝重复模块、重复 step ID、错误模块归属或未严格递增的 revision。Tauri 注册表只注入既有的 `profiles → typed_config → storage` 实例及必需顺序；Runner 消费共享 Registry 输出，不再自建重复的步骤列表/查找算法。已有 Heuristic rev2 冻结测试、Profiles 迁移文档顺序测试保持不变。
+- **Document 实际所有权**：新增 `chimera-migration/src/document.rs`，统一 YAML 可选读取、暂态 IO 重试、悬挂软链接检查、stamp 解析/文件名校验、带指定前缀的原子写入及符号链接/目录目标保护；直接使用既有 `chimera-persistence::format` / `write`，保留 `_nyanpasu` stamp 和 `serde_yaml_ng` 字节格式。Tauri `core/migration/fs.rs` 仅保留兼容转发及原回归测试，不再复制核心解析和写入算法。
+- **验证与剩余边界**：共享 Migration 库 **29/29**、Tauri 全库 **1057/1057**、1 项原有忽略测试；后端 `cargo check --locked -p chimera --all-features --tests`、Rustfmt、提交 Clippy/diff check 通过。共享 Registry 已覆盖查找、严格 revision 顺序、重复模块/错误归属；Document 已覆盖 stamp 读写、错 stamp、软链接保护。完整 Runner 执行循环、Profiles/Typed Config/Storage 的迁移业务实现和应用特有备份生成仍在 Tauri；这不是对上游独立 Migration crate 的全部完成。未进行 Windows/Linux 实机、旧用户全量升级、桌面 E2E 和 GitHub CI 验收。
+- **回滚与下一步**：若发现生产迁移回归，先回滚本轮 Tauri 泛型迁移契约和共享 Registry/Document 接线，保留迁移前备份、旧配置以及任何 `.corrupt-*` 证据；下一轮集中迁移 Runner 的执行/恢复事务并逐步将具体 Module 转入共享 crate，完成对 ref 的完整迁移。
+
 ## DIFF-091：Migration Context 与 Backup Port 共享化（2026-11-19）
 
 - **目标与基线**：以 `ref@c4b35e048` 的 `backend/nyanpasu-migration/src/{lib.rs,runner.rs}` 所定义的 `Ctx`、`PathResolver` 和迁移前 Backup gate 为准。本批风险 **L2**（旧配置备份及迁移前状态）。目标是让共享 `chimera-migration` 实际持有迁移路径、HotkeyStore 注入和安全备份决策；不更新两个 git submodule、不碰真实用户文件或启动服务，不改变旧 `migration-state.yaml` 的 schema 和 Legacy/UI/Agent 接口。
