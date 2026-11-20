@@ -11,26 +11,34 @@ import {
   useTunModeAction,
 } from '@/features/system-proxy/use-proxy-settings';
 import * as m from '@/paraglide/messages';
+import { formatError } from '@/utils';
+import { message } from '@/utils/notification';
+
+const reportProxyActionError = (error: unknown) => {
+  void message(formatError(error), { title: m.common_error(), kind: 'error' });
+};
 
 const ProxyButton = ({
   className,
   isActive,
   loading,
+  disabled,
   children,
   ...props
 }: ButtonProps & { isActive?: boolean }) => (
   <Button
     className={cn(
-      'group h-16 rounded-3xl font-bold text-nowrap',
+      'group h-14 font-semibold text-nowrap',
       'flex items-center justify-between gap-2',
-      'data-[active=false]:bg-white dark:data-[active=false]:bg-black',
+      'data-[active=false]:bg-surface data-[active=false]:text-on-surface',
+      'disabled:bg-surface disabled:text-on-surface/40 disabled:shadow-sm',
       className,
     )}
     data-active={String(Boolean(isActive))}
     data-loading={String(Boolean(loading))}
-    disabled={loading}
     variant="fab"
     {...props}
+    disabled={Boolean(loading || disabled)}
   >
     <div className="flex items-center gap-3 [&_svg]:size-7">{children}</div>
     {loading && (
@@ -47,23 +55,31 @@ const ProxyButton = ({
 
 type ShortcutButtonProps = Omit<ButtonProps, 'children' | 'loading'> & {
   presentation?: 'cookie';
+  compact?: boolean;
   elastic?: boolean;
 };
 
 export const SystemProxyButton = ({
   presentation,
+  compact,
   elastic,
   ...props
 }: ShortcutButtonProps) => {
-  const { execute, isPending, isActive } = useSystemProxyAction();
+  const { execute, isPending, isActive, isReady } = useSystemProxyAction();
+  const run = () => {
+    void execute().catch(reportProxyActionError);
+  };
   if (presentation === 'cookie') {
     return (
       <ShapeToggle
         {...props}
+        compact={compact}
         active={isActive}
         loading={isPending}
         elastic={elastic}
-        onClick={() => void execute()}
+        disabled={!isReady || isPending || props.disabled}
+        title={!isReady ? m.common_loading() : props.title}
+        onClick={run}
         icon={<NetworkPing />}
         label={m.settings_system_proxy_system_proxy_label()}
       />
@@ -73,7 +89,9 @@ export const SystemProxyButton = ({
     <ProxyButton
       {...props}
       loading={isPending}
-      onClick={() => void execute()}
+      disabled={!isReady || isPending || props.disabled}
+      title={!isReady ? m.common_loading() : props.title}
+      onClick={run}
       isActive={isActive}
     >
       <NetworkPing />
@@ -84,19 +102,26 @@ export const SystemProxyButton = ({
 
 export const TunModeButton = ({
   presentation,
+  compact,
   elastic,
   ...props
 }: ShortcutButtonProps) => {
-  const { execute, isPending, isActive, blocked } = useTunModeAction();
+  const { execute, isPending, isActive, blocked, blockedReason } =
+    useTunModeAction();
+  const run = () => {
+    void execute().catch(reportProxyActionError);
+  };
   if (presentation === 'cookie') {
     return (
       <ShapeToggle
         {...props}
+        compact={compact}
         active={isActive}
         loading={isPending}
         elastic={elastic}
-        disabled={blocked || props.disabled}
-        onClick={() => void execute()}
+        disabled={blocked || isPending || props.disabled}
+        title={blockedReason ?? props.title}
+        onClick={run}
         icon={<SettingsEthernet />}
         label={m.settings_system_proxy_tun_mode_label()}
       />
@@ -105,9 +130,10 @@ export const TunModeButton = ({
   return (
     <ProxyButton
       {...props}
-      disabled={blocked || props.disabled}
+      disabled={blocked || isPending || props.disabled}
+      title={blockedReason ?? props.title}
       loading={isPending}
-      onClick={() => void execute()}
+      onClick={run}
       isActive={isActive}
     >
       <SettingsEthernet />
