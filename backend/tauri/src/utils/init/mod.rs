@@ -4,7 +4,7 @@ use anyhow::{Context as _, Result};
 use serde::Serialize;
 
 use crate::{
-    config::{chimera::IVerge, clash::IClashTemp, profile::profiles::Profiles},
+    config::{chimera::IVerge, clash::IClashTemp},
     utils::{help, path::PathResolver},
 };
 
@@ -12,13 +12,25 @@ mod logging;
 pub use logging::jobs_capture;
 pub use logging::refresh_logger;
 
-/// Initialize all the config files
-/// before tauri setup
-pub fn init_config(paths: &PathResolver) -> Result<()> {
-    // Initialize the logger against the same resolved data root used by setup.
-    logging::init(paths)?;
-    tracing::info!("initializing logging config...");
+/// Initialize logging after the primary instance is claimed but before
+/// migrations. This must not read or synthesize legacy config documents.
+pub fn init_logging(paths: &PathResolver) -> Result<()> {
+    logging::init(paths)
+}
+
+/// Only called after the migration Runner has committed successfully.
+/// Initializing legacy defaults before migration changes baseline detection
+/// and the pre-migration backup's set of original files.
+pub fn initialize_post_migration_defaults(paths: &PathResolver) -> Result<()> {
+    tracing::info!("initializing compatibility defaults after migration");
     initialize_default_configs(paths)
+}
+
+/// Read the migrated app's log preferences only after migration. Delaying
+/// `Config::verge()` also prevents its global legacy cache from being seeded
+/// before the typed documents have been upgraded.
+pub fn refresh_migrated_logging() {
+    logging::refresh_from_config();
 }
 
 fn initialize_default_configs(paths: &PathResolver) -> Result<()> {
@@ -34,16 +46,39 @@ fn initialize_default_configs(paths: &PathResolver) -> Result<()> {
         &paths.chimera_config_path(),
         &IVerge::template(),
     ));
-    crate::log_err!(initialize_default_yaml(
-        &paths.profiles_path(),
-        &Profiles::default(),
-    ));
+    // A stamped Profiles document is required. Do not silently boot with
+    // migration state ahead of a missing or unwritable document.
+    initialize_stamped_profiles_default(&paths.profiles_path())?;
 
     Ok(())
 }
 
+/// Default Profiles are a typed document, not a legacy unstamped YAML.
+/// The migration state has already advanced to revision 4, so writing the
+/// pre-migration `current: []`/`chain: []` shape here would make the next
+/// startup reject it as a document behind that state.
+fn initialize_stamped_profiles_default(path: &Path) -> Result<()> {
+    use chimera_persistence::format::StampedDocument as _;
+    if crate::core::corrupt::config_node_exists(path)
+        .with_context(|| format!("failed to inspect startup config {}", path.display()))?
+    {
+        return Ok(());
+    }
+    let payload = serde_yaml_ng::to_value(chimera_config::profile::Profiles::default())?;
+    let serde_yaml_ng::Value::Mapping(payload) = payload else {
+        anyhow::bail!("default typed profiles must serialize as a YAML mapping");
+    };
+    chimera_migration::document::write_document(
+        path,
+        chimera_migration::modules::profiles::ProfilesDocument::DOCUMENT,
+        chimera_migration::modules::profiles::ProfilesDocument::SCHEMA_REVISION,
+        payload,
+        Some("# Clash Chimera"),
+    )
+}
+
 /// A dangling symlink is an existing config node, not an empty installation.
-/// This runs before the typed migration and must not erase links or evidence.
+/// Defaults run *after* typed migration and must never erase links or evidence.
 fn initialize_default_yaml<T: Serialize>(path: &Path, template: &T) -> Result<()> {
     if !crate::core::corrupt::config_node_exists(path)
         .with_context(|| format!("failed to inspect startup config {}", path.display()))?

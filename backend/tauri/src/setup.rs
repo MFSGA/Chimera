@@ -34,6 +34,41 @@ use crate::client::hotkey::{
     ports::{HotkeyAction, WindowControl},
 };
 
+/// Migration is the first writer of config documents. This follows ref's
+/// "migrate before initial defaults and runtime owners" ordering without
+/// changing Chimera's platform-specific verified backup adapter.
+fn migrate_before_legacy_defaults(
+    paths: &PathResolver,
+    capture: &parking_lot::Mutex<Option<crate::startup_failure::Report>>,
+) -> anyhow::Result<crate::core::migration::Runner> {
+    let mut migrations = crate::startup_failure::report_boundary_with_backup_and_capture(
+        crate::core::migration::Runner::with_paths(paths.clone(), false)
+            .context("failed to setup config migrations"),
+        crate::startup_failure::StartupStage::MigrationPrepare,
+        paths,
+        None,
+        Some(capture),
+    )?;
+    crate::startup_failure::report_boundary_with_backup_and_capture(
+        migrations
+            .run_pending()
+            .context("failed to run config migrations before client setup"),
+        crate::startup_failure::StartupStage::MigrationRun,
+        paths,
+        migrations.backup_info(),
+        Some(capture),
+    )?;
+    crate::startup_failure::report_boundary_with_backup_and_capture(
+        init::initialize_post_migration_defaults(paths)
+            .context("failed to initialize post-migration compatibility defaults"),
+        crate::startup_failure::StartupStage::Setup,
+        paths,
+        migrations.backup_info(),
+        Some(capture),
+    )?;
+    Ok(migrations)
+}
+
 struct LegacySelfProxyPort;
 
 impl chimera_contracts::net::SelfProxyPortSource for LegacySelfProxyPort {
@@ -69,24 +104,8 @@ pub fn setup(
     );
 
     let runtime_paths = RuntimePaths::from_resolver(&paths)?;
-    let mut migrations = crate::startup_failure::report_boundary_with_backup_and_capture(
-        crate::core::migration::Runner::with_paths(paths.clone(), false)
-            .context("failed to setup config migrations"),
-        crate::startup_failure::StartupStage::MigrationPrepare,
-        &paths,
-        None,
-        Some(startup_failure_capture),
-    )?;
-    let migration_result = migrations
-        .run_pending()
-        .context("failed to run config migrations before client setup");
-    crate::startup_failure::report_boundary_with_backup_and_capture(
-        migration_result,
-        crate::startup_failure::StartupStage::MigrationRun,
-        &paths,
-        migrations.backup_info(),
-        Some(startup_failure_capture),
-    )?;
+    let migrations = migrate_before_legacy_defaults(&paths, startup_failure_capture)?;
+    init::refresh_migrated_logging();
 
     // ref initializes bundled resources before constructing runtime owners.
     let resources_dir = init::bundled_resources_dir(app)

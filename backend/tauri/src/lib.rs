@@ -295,7 +295,9 @@ pub fn run() -> std::process::ExitCode {
                     // Do not use the reference directory helper here: it can remove a
                     // file obstructing a root. Chimera must preserve user data on error.
                     setup_paths.create_base_dirs()?;
-                    init::init_config(&setup_paths)?;
+                    // Before Migration, initialize only the logger. Default
+                    // YAML files would alter baselines and snapshot contents.
+                    init::init_logging(&setup_paths)?;
 
                     #[cfg(all(debug_assertions, not(feature = "e2e")))]
                     {

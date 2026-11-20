@@ -132,14 +132,19 @@ pub fn init(paths: &PathResolver) -> Result<()> {
         .map_err(|x| anyhow!("setup logging error: {}", x))?;
     let _ = JOB_LOG_CAPTURE.set(jobs);
 
-    // reload the log level
-    std::thread::spawn(move || {
-        let config = Config::verge();
-        let log_level = config.latest().get_log_level();
-        let log_max_files = config.latest().max_log_files;
-        let _ = refresh_logger((Some(log_level), log_max_files));
-    });
+    // Do not load Config::verge() here: it initializes a process-global legacy
+    // draft and would read pre-migration data. The caller refreshes settings
+    // after migration has succeeded, before constructing the client.
     Ok(())
+}
+
+pub(super) fn refresh_from_config() {
+    let config = Config::verge();
+    let log_level = config.latest().get_log_level();
+    let log_max_files = config.latest().max_log_files;
+    if let Err(error) = refresh_logger((Some(log_level), log_max_files)) {
+        tracing::warn!(%error, "failed to update migrated logger settings");
+    }
 }
 
 pub fn jobs_capture() -> chimera_jobs::LogCapture {
