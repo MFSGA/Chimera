@@ -1410,6 +1410,7 @@ dependencies = [
  "chimera-contracts",
  "chimera-paths",
  "chimera-persistence",
+ "chimera-utils",
  "chrono",
  "pretty_assertions",
  "semver 1.0.28",

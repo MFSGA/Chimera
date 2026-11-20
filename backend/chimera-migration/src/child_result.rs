@@ -4,12 +4,20 @@
 //! The application shell supplies its diagnostic `Report` and the verified
 //! backup producer. This shared crate owns the wire format and safe file IO.
 use std::{
+    error::Error as StdError,
     fs, io,
     path::{Path, PathBuf},
 };
 
 use anyhow::{Context as _, bail};
+use chimera_utils::io::IoFailure;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
+
+use crate::{
+    module::MigrationCheckError,
+    runner::{ExecutionError, RevisionError},
+    store::SchemaError,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -74,6 +82,183 @@ impl RevisionFailure {
                 | Self::NewerDocument { .. }
                 | Self::NewerAppliedModule { .. }
         )
+    }
+}
+
+/// Upstream-compatible stage in the migration-only subprocess. Unlike the
+/// broader Tauri StartupStage, this is independent of windows and runtime.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FailureStage {
+    RunnerConstruction,
+    Backup,
+    Migration,
+}
+
+/// Information collected from the original error chain before crossing the
+/// child/parent boundary. The application shell may enrich it with platform
+/// paths and classify it for its existing startup UI.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, thiserror::Error)]
+#[error("migration child failed during {stage:?}: {}", .chain.join(": "))]
+pub struct Failure {
+    pub stage: FailureStage,
+    pub config_dir: PathBuf,
+    pub backups_dir: PathBuf,
+    pub paths: Vec<PathBuf>,
+    pub revision: Option<RevisionFailure>,
+    pub chain: Vec<String>,
+    pub backup_available: bool,
+    #[serde(default)]
+    pub io_failure: Option<IoFailure>,
+}
+
+impl Failure {
+    /// Collect original sources, revision details and migration-owned paths;
+    /// do not flatten errors to strings before examining their types.
+    /// Tauri supplies platform IO classification and verified backup status.
+    pub fn from_error(
+        error: &(dyn StdError + 'static),
+        stage: FailureStage,
+        config_dir: PathBuf,
+        backups_dir: PathBuf,
+        backup_available: bool,
+        io_failure: Option<IoFailure>,
+    ) -> Self {
+        let mut chain = Vec::new();
+        let mut paths = Vec::new();
+        let mut revision = None;
+        let mut current = Some(error);
+        while let Some(cause) = current {
+            chain.push(cause.to_string());
+            if let Some(schema) = cause.downcast_ref::<SchemaError>() {
+                revision = Some(match schema {
+                    SchemaError::Newer {
+                        path,
+                        read,
+                        supported,
+                    } => RevisionFailure::NewerStoreSchema {
+                        path: path.clone(),
+                        read: *read,
+                        supported: *supported,
+                    },
+                    SchemaError::Older {
+                        path,
+                        read,
+                        supported,
+                    } => RevisionFailure::OlderStoreSchema {
+                        path: path.clone(),
+                        read: *read,
+                        supported: *supported,
+                    },
+                });
+            }
+            if let Some(revision_error) = cause.downcast_ref::<RevisionError>() {
+                revision = Some(match revision_error {
+                    RevisionError::NewerDocument {
+                        path,
+                        read,
+                        supported,
+                    } => RevisionFailure::NewerDocument {
+                        path: path.clone(),
+                        read: *read,
+                        supported: *supported,
+                    },
+                    RevisionError::NewerAppliedModule {
+                        path,
+                        module,
+                        read,
+                        supported,
+                    } => RevisionFailure::NewerAppliedModule {
+                        path: path.clone(),
+                        module: module.clone(),
+                        read: *read,
+                        supported: *supported,
+                    },
+                    RevisionError::DocumentBehindState {
+                        path,
+                        state_path,
+                        module,
+                        read,
+                        applied,
+                    } => RevisionFailure::DocumentBehindState {
+                        path: path.clone(),
+                        state_path: state_path.clone(),
+                        module: module.clone(),
+                        read: *read,
+                        applied: *applied,
+                    },
+                    RevisionError::MissingDocumentStamp { path, state_path } => {
+                        RevisionFailure::MissingDocumentStamp {
+                            path: path.clone(),
+                            state_path: state_path.clone(),
+                        }
+                    }
+                    RevisionError::FilesBehindState {
+                        state_path,
+                        module,
+                        applied,
+                        reason,
+                    } => RevisionFailure::FilesBehindState {
+                        state_path: state_path.clone(),
+                        module: module.clone(),
+                        applied: *applied,
+                        reason: reason.clone(),
+                    },
+                });
+            }
+            let found_path = if let Some(check) = cause.downcast_ref::<MigrationCheckError>() {
+                match check {
+                    MigrationCheckError::Io { path, .. }
+                    | MigrationCheckError::Parse { path, .. }
+                    | MigrationCheckError::Storage { path, .. }
+                    | MigrationCheckError::Stamp { path, .. } => Some(path),
+                    MigrationCheckError::Unrecognized(_) => None,
+                }
+            } else if let Some(execution) = cause.downcast_ref::<ExecutionError>() {
+                match execution {
+                    ExecutionError::PersistState { path, .. }
+                    | ExecutionError::StampDocument { path, .. }
+                    | ExecutionError::LoadState { path, .. }
+                    | ExecutionError::ReadConfigDirectory { path, .. } => Some(path),
+                    _ => None,
+                }
+            } else if let Some(error) = cause.downcast_ref::<chimera_persistence::write::Error>() {
+                match error {
+                    chimera_persistence::write::Error::StampDocument { path, .. }
+                    | chimera_persistence::write::Error::SerializeDocument { path, .. }
+                    | chimera_persistence::write::Error::ValidateDestination { path, .. }
+                    | chimera_persistence::write::Error::CreateDirectory { path, .. }
+                    | chimera_persistence::write::Error::WriteFile { path, .. } => Some(path),
+                }
+            } else if let Some(chimera_persistence::Error::PreserveEvidence { path, .. }) =
+                cause.downcast_ref::<chimera_persistence::Error>()
+            {
+                Some(path)
+            } else {
+                None
+            };
+            if let Some(path) = found_path
+                && !paths.contains(path)
+            {
+                paths.push(path.clone());
+            }
+            current = cause.source();
+        }
+        if let Some(revision) = &revision
+            && !paths.contains(revision.path())
+        {
+            paths.push(revision.path().clone());
+        }
+        Self {
+            stage,
+            config_dir,
+            backups_dir,
+            paths,
+            revision,
+            chain,
+            backup_available,
+            io_failure,
+        }
     }
 }
 

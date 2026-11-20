@@ -1,10 +1,9 @@
 //! Structured, source-preserving startup diagnostics.
 //!
-//! Maps the same failure kinds/revision cases as ref startup_failure.rs and
-//! core/migration/child_result.rs, but Chimera has not migrated the independent
-//! crash-reporter process or subprocess migration protocol. This layer is
-//! deliberately read-only: it does not create backups, reset configurations,
-//! launch another process or display a GUI.
+//! Converts the shared migration child failure diagnostics into Chimera's
+//! existing startup report, while retaining platform-owned Core/Jobs, backup
+//! and user-config classifications. This module is deliberately read-only:
+//! it does not create backups, reset configuration or spawn a reporter.
 
 use std::{error::Error as StdError, path::PathBuf};
 
@@ -14,12 +13,15 @@ use crate::{
     core::{
         backup::{BackupError, BackupInfo},
         corrupt,
-        migration::{MigrationCheckError, runner::RevisionError, store::SchemaError},
+        migration::MigrationCheckError,
         session_state,
     },
     utils::{path::PathResolver, recovery_io::IoFailure},
 };
-use chimera_migration::runner::ExecutionError;
+use chimera_migration::{
+    child_result::{Failure as MigrationFailure, FailureStage},
+    runner::ExecutionError,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -82,93 +84,34 @@ impl StartupFailure {
             StartupStage::Storage | StartupStage::CoreHost => FailureKind::Internal,
             StartupStage::TypedClient => FailureKind::UserConfig,
         };
-        let mut path = None;
-        let mut revision = None;
+        // The shared migration failure collector owns the original error
+        // chain, typed revision and migration-owned path extraction. Tauri
+        // only augments it with host/backup paths and UI classification.
+        // Revision and path extraction is useful to every startup stage; the
+        // shared FailureStage is internal here and only reaches the child
+        // protocol for MigrationPrepare/MigrationRun reports.
+        let shared = MigrationFailure::from_error(
+            error,
+            if stage == StartupStage::MigrationPrepare {
+                FailureStage::RunnerConstruction
+            } else {
+                FailureStage::Migration
+            },
+            paths.app_config_dir().to_owned(),
+            paths.backups_dir(),
+            false,
+            corrupt::error_io(error),
+        );
+        let mut path = shared.paths.last().cloned();
+        let revision = shared.revision;
+
         let mut host_user_config = false;
         // RecordFailure exposes its independent persistence error as a field,
         // not a source (the original step failure remains the source).
         let mut secondary_persistence_io = None;
-        let mut chain = Vec::new();
+        let chain = shared.chain;
         let mut current = Some(error);
         while let Some(error) = current {
-            chain.push(error.to_string());
-
-            if let Some(schema) = error.downcast_ref::<SchemaError>() {
-                revision = Some(match schema {
-                    SchemaError::Newer {
-                        path,
-                        read,
-                        supported,
-                    } => RevisionFailure::NewerStoreSchema {
-                        path: path.clone(),
-                        read: *read,
-                        supported: *supported,
-                    },
-                    SchemaError::Older {
-                        path,
-                        read,
-                        supported,
-                    } => RevisionFailure::OlderStoreSchema {
-                        path: path.clone(),
-                        read: *read,
-                        supported: *supported,
-                    },
-                });
-            }
-            if let Some(revision_error) = error.downcast_ref::<RevisionError>() {
-                revision = Some(match revision_error {
-                    RevisionError::NewerDocument {
-                        path,
-                        read,
-                        supported,
-                    } => RevisionFailure::NewerDocument {
-                        path: path.clone(),
-                        read: *read,
-                        supported: *supported,
-                    },
-                    RevisionError::NewerAppliedModule {
-                        path,
-                        module,
-                        read,
-                        supported,
-                    } => RevisionFailure::NewerAppliedModule {
-                        path: path.clone(),
-                        module: module.clone(),
-                        read: *read,
-                        supported: *supported,
-                    },
-                    RevisionError::DocumentBehindState {
-                        path,
-                        state_path,
-                        module,
-                        read,
-                        applied,
-                    } => RevisionFailure::DocumentBehindState {
-                        path: path.clone(),
-                        state_path: state_path.clone(),
-                        module: module.clone(),
-                        read: *read,
-                        applied: *applied,
-                    },
-                    RevisionError::MissingDocumentStamp { path, state_path } => {
-                        RevisionFailure::MissingDocumentStamp {
-                            path: path.clone(),
-                            state_path: state_path.clone(),
-                        }
-                    }
-                    RevisionError::FilesBehindState {
-                        state_path,
-                        module,
-                        applied,
-                        reason,
-                    } => RevisionFailure::FilesBehindState {
-                        state_path: state_path.clone(),
-                        module: module.clone(),
-                        applied: *applied,
-                        reason: reason.clone(),
-                    },
-                });
-            }
             if let Some(execution) = error.downcast_ref::<ExecutionError>() {
                 match execution {
                     ExecutionError::PersistState { path: actual, .. }
@@ -452,7 +395,10 @@ fn one_shot_message(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::migration::{runner::RevisionError, store::MigrationStore};
+    use crate::core::migration::{
+        runner::RevisionError,
+        store::{MigrationStore, SchemaError},
+    };
 
     fn fixture() -> (tempfile::TempDir, PathResolver) {
         let temp = tempfile::tempdir().unwrap();
