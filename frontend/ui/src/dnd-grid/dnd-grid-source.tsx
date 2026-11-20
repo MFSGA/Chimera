@@ -11,6 +11,8 @@ export type DndGridSourceProps = Omit<ComponentProps<'div'>, 'ref'> & {
   /** Size in grid cells of the dragged preview. */
   w: number;
   h: number;
+  /** Prevent new drags while the destination layout/config is unreadable. */
+  disabled?: boolean;
   onSourceDragStart?: () => void;
 };
 
@@ -23,6 +25,7 @@ export function DndGridSource({
   dragIdPrefix,
   w,
   h,
+  disabled = false,
   onSourceDragStart,
   className,
   ...props
@@ -38,13 +41,18 @@ export function DndGridSource({
   const { listeners, setNodeRef } = useDraggable({
     id: `${dragIdPrefix}${itemId}`,
     data,
+    disabled,
   });
 
   return (
     <div
       ref={setNodeRef}
       data-slot="dnd-grid-source"
-      className={cn('cursor-grab', className)}
+      className={cn(
+        disabled ? 'cursor-not-allowed opacity-60' : 'cursor-grab',
+        className,
+      )}
+      aria-disabled={disabled || undefined}
       {...props}
       {...listeners}
     />

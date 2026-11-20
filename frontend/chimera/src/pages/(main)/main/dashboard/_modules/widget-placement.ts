@@ -1,6 +1,30 @@
 import { hasOverlap, type GridPosition } from '@chimera/ui/dnd-grid';
 import type { DashboardItem, WidgetId } from '@/components/widgets/consts';
 
+/** Shared permission for edits, library drags and external drops. Never
+ * modify the layout from a cache before its authoritative KV read succeeds. */
+export function canEditDashboard({
+  isEditing,
+  layoutLoading,
+  layoutReadError,
+  configLoading,
+  configReadError,
+}: {
+  isEditing: boolean;
+  layoutLoading: boolean;
+  layoutReadError: boolean;
+  configLoading: boolean;
+  configReadError: boolean;
+}): boolean {
+  return (
+    isEditing &&
+    !layoutLoading &&
+    !layoutReadError &&
+    !configLoading &&
+    !configReadError
+  );
+}
+
 /** Keep the sheet's drag preview dimensions consistent with the add action. */
 export function widgetSourceSize(
   minimum: { minW: number; minH: number },

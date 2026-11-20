@@ -42,7 +42,7 @@ import {
   selectLayoutEntry,
   type DashboardLayoutStorage,
 } from './_modules/layout-storage';
-import { placeWidget } from './_modules/widget-placement';
+import { canEditDashboard, placeWidget } from './_modules/widget-placement';
 import { WidgetSheet } from './_modules/widget-sheet';
 
 export const Route = createFileRoute('/(main)/main/dashboard/')({
@@ -139,6 +139,14 @@ const WidgetRender = () => {
     { migrate: (value) => normalizeLayoutStorage(value, DEFAULT_LAYOUTS) },
   );
 
+  const editable = canEditDashboard({
+    isEditing,
+    layoutLoading,
+    layoutReadError: Boolean(layoutReadError),
+    configLoading,
+    configReadError,
+  });
+
   const [gridSize, setGridSize] = useState<GridSize | null>(null);
   const [activeLayoutId, setActiveLayoutId] = useState<string | null>(null);
   const gridSizeRef = useRef<GridSize | null>(null);
@@ -214,7 +222,7 @@ const WidgetRender = () => {
 
   const handleLayoutChange = useCallback(
     (newItems: DashboardItem[]) => {
-      if (layoutLoading || layoutReadError) return;
+      if (!editable) return;
 
       const gridSize = gridSizeRef.current;
       const source =
@@ -240,7 +248,7 @@ const WidgetRender = () => {
       setActiveLayoutId(source.id);
       setLayoutStorage(layoutStorageRef.current);
     },
-    [layoutLoading, layoutReadError, setLayoutStorage],
+    [editable, setLayoutStorage],
   );
 
   const handleCloseClick = useCallback(
@@ -288,11 +296,11 @@ const WidgetRender = () => {
   );
 
   const addWidgetFromSheet = useCallback(
-    (widgetId: WidgetId, position?: GridPosition) => {
-      if (layoutLoading || layoutReadError) return;
+    (widgetId: WidgetId, position?: GridPosition): boolean => {
+      if (!editable) return false;
 
       const gridSize = gridSizeRef.current;
-      if (!gridSize) return;
+      if (!gridSize) return false;
 
       const { cols, rows } = gridSize;
       const current = displayItemsRef.current;
@@ -310,9 +318,11 @@ const WidgetRender = () => {
 
       if (placement) {
         handleLayoutChange([...current, placement]);
+        return true;
       }
+      return false;
     },
-    [handleLayoutChange, layoutLoading, layoutReadError],
+    [handleLayoutChange, editable],
   );
 
   return (
@@ -335,7 +345,7 @@ const WidgetRender = () => {
             minCellSize={64}
             onSizeChange={handleSizeChange}
             gap={16}
-            disabled={!isEditing || layoutLoading || Boolean(layoutReadError)}
+            disabled={!editable}
           >
             {renderWidget}
           </DndGrid>
@@ -344,7 +354,11 @@ const WidgetRender = () => {
 
       <DashboardDragOverlay displayItems={displayItems} />
 
-      <WidgetSheet placedTypes={placedTypes} onAdd={addWidgetFromSheet} />
+      <WidgetSheet
+        placedTypes={placedTypes}
+        onAdd={addWidgetFromSheet}
+        disabled={!editable}
+      />
     </DndGridRoot>
   );
 };

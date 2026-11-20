@@ -107,11 +107,13 @@ function WidgetEntry({
   placed,
   onAdd,
   onDragStart,
+  disabled,
 }: {
   id: WidgetId;
   placed: boolean;
   onAdd: (id: WidgetId) => void;
   onDragStart: () => void;
+  disabled: boolean;
 }) {
   const title = WIDGET_TITLE_MAP[id]();
   const Icon = WIDGET_ICON_MAP[id];
@@ -124,6 +126,7 @@ function WidgetEntry({
       w={w}
       h={h}
       onSourceDragStart={onDragStart}
+      disabled={disabled}
       className="bg-surface-variant/40 flex min-w-0 items-center gap-3 rounded-2xl py-2 pr-2 pl-4"
       data-slot="widget-sheet-entry"
       data-widget-id={id}
@@ -144,6 +147,7 @@ function WidgetEntry({
         aria-label={m.dashboard_widget_library_add_entry({ name: title })}
         data-slot="widget-library-add"
         data-widget-id={id}
+        disabled={disabled}
         onPointerDown={(event) => event.stopPropagation()}
         onTouchStart={(event) => event.stopPropagation()}
         onClick={() => onAdd(id)}
@@ -161,9 +165,11 @@ function WidgetEntry({
 export function WidgetSheet({
   placedTypes,
   onAdd,
+  disabled = false,
 }: {
   placedTypes: ReadonlySet<WidgetId>;
-  onAdd: (id: WidgetId) => void;
+  onAdd: (id: WidgetId) => boolean;
+  disabled?: boolean;
 }) {
   const { openSheet, setOpenSheet } = useDashboardContext();
 
@@ -177,8 +183,7 @@ export function WidgetSheet({
 
   // Close the library so the new widget appears on the dashboard in view.
   const handleAdd = (id: WidgetId) => {
-    onAdd(id);
-    setOpenSheet(false);
+    if (!disabled && onAdd(id)) setOpenSheet(false);
   };
 
   return (
@@ -228,6 +233,7 @@ export function WidgetSheet({
                 placed={placedTypes.has(id)}
                 onAdd={handleAdd}
                 onDragStart={() => setOpenSheet(false)}
+                disabled={disabled}
               />
             ))}
 

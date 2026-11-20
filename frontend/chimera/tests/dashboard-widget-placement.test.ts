@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { WidgetId } from '../src/components/widgets/consts';
 import {
+  canEditDashboard,
   placeWidget,
   widgetSourceSize,
 } from '../src/pages/(main)/main/dashboard/_modules/widget-placement';
@@ -15,6 +16,26 @@ const minimum = { minW: 2, minH: 2 };
 const memory = 'memory' as WidgetId;
 const trafficDown = 'traffic-down' as WidgetId;
 const occupied = [{ id: 'existing', type: memory, x: 0, y: 0, w: 2, h: 2 }];
+
+test('editing, dropping and library dragging share strict loaded-state gates', () => {
+  const ready = {
+    isEditing: true,
+    layoutLoading: false,
+    layoutReadError: false,
+    configLoading: false,
+    configReadError: false,
+  };
+  assert.equal(canEditDashboard(ready), true);
+  for (const patch of [
+    { isEditing: false },
+    { layoutLoading: true },
+    { layoutReadError: true },
+    { configLoading: true },
+    { configReadError: true },
+  ]) {
+    assert.equal(canEditDashboard({ ...ready, ...patch }), false);
+  }
+});
 
 test('library drag preview uses the same recommended size as a direct add', () => {
   const recommended = { w: 4, h: 3 };
