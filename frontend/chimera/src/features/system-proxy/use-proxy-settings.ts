@@ -15,23 +15,28 @@ import { OS } from '@/consts';
 import * as m from '@/paraglide/messages';
 import { formatError } from '@/utils';
 import { message } from '@/utils/notification';
+import { proxyToggleGate } from './proxy-toggle-gate';
 import {
   canToggleTransparentProxy,
   isTransparentProxyApplied,
   transparentProxyNextPatch,
 } from './transparent-proxy-policy';
 
-/** Expose a serialized action for toggling a proxy-related setting. */
+/** Expose a safe, serialized action for a persisted proxy setting.
+ * Writes are shared across Settings, Dashboard and Legacy UI instances. */
 const useProxySetting = (
+  key: 'system' | 'tun',
   value: boolean | undefined,
   upsert: (value: boolean) => Promise<unknown>,
+  refetch: () => Promise<unknown>,
 ) => {
   const [isPending, setIsPending] = useState(false);
 
   const execute = useLockFn(async () => {
+    if (value === undefined) return;
     setIsPending(true);
     try {
-      await upsert(!value);
+      await proxyToggleGate.run(key, value, upsert, refetch);
     } finally {
       setIsPending(false);
     }
@@ -40,18 +45,29 @@ const useProxySetting = (
   return {
     execute,
     isPending,
+    isReady: value !== undefined,
     isActive: Boolean(value),
   };
 };
 
 export const useSystemProxyAction = () => {
   const setting = useSetting('enable_system_proxy');
-  return useProxySetting(setting.value, setting.upsert);
+  return useProxySetting(
+    'system',
+    setting.value,
+    setting.upsert,
+    setting.refetch,
+  );
 };
 
 export const useTunModeAction = () => {
   const setting = useClashSetting('enable_tun_mode');
-  const action = useProxySetting(setting.value, setting.upsert);
+  const action = useProxySetting(
+    'tun',
+    setting.value,
+    setting.upsert,
+    setting.refetch,
+  );
   const serviceMode = useSetting('enable_service_mode');
   const service = useSystemService();
   const enabling = !action.isActive;
@@ -64,16 +80,20 @@ export const useTunModeAction = () => {
     transparentProxy.value?.mode !== undefined &&
     transparentProxy.value.mode !== 'disabled';
   const blocked =
+    !action.isReady ||
     (OS === 'windows' && enabling && !serviceReady) ||
     (enabling && transparentActive);
+  const blockedReason =
+    transparentActive && enabling
+      ? m.error_transparent_proxy_tun_conflict()
+      : OS === 'windows' && enabling && !serviceReady
+        ? m.settings_system_proxy_service_mode_disabled_tooltip()
+        : undefined;
 
   const execute = useLockFn(async () => {
     if (blocked) {
-      throw new Error(
-        transparentActive
-          ? 'Disable transparent proxy before enabling TUN.'
-          : 'TUN on Windows requires Service Mode and a compatible running Chimera Service. The backend will verify and converge the core onto the service host.',
-      );
+      if (blockedReason) throw new Error(blockedReason);
+      return;
     }
     await action.execute();
   });
@@ -82,6 +102,7 @@ export const useTunModeAction = () => {
     ...action,
     execute,
     blocked,
+    blockedReason,
     serviceReady,
   };
 };
@@ -145,7 +166,7 @@ export const useTransparentProxyAction = () => {
   const reason = !serviceModeEnabled
     ? m.settings_clash_transparent_proxy_service_mode_required()
     : config.query.data?.enable_tun_mode && !isActive
-      ? m.settings_clash_transparent_proxy_status_pending()
+      ? m.error_transparent_proxy_tun_conflict()
       : status.isError
         ? m.settings_clash_transparent_proxy_status_unavailable()
         : status.isPending || (!isActive && status.isFetching)

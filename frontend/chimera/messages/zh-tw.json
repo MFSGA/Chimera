@@ -1456,5 +1456,6 @@
   "dashboard_widget_config_directions": "顯示上行與下行",
   "dashboard_widget_config_hide_names": "隱藏名稱",
   "dashboard_widget_core_shortcuts_config_channel": "顯示控制管道",
-  "settings_clash_control_channel_label": "控制管道"
+  "settings_clash_control_channel_label": "控制管道",
+  "error_transparent_proxy_tun_conflict": "透明代理接管不能與 TUN 同時啟用"
 }

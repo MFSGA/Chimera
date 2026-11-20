@@ -1482,5 +1482,6 @@
   "dashboard_widget_config_directions": "Show upload and download",
   "dashboard_widget_config_hide_names": "Hide names",
   "dashboard_widget_core_shortcuts_config_channel": "Show control channel",
-  "settings_clash_control_channel_label": "Control Channel"
+  "settings_clash_control_channel_label": "Control Channel",
+  "error_transparent_proxy_tun_conflict": "Transparent proxy capture cannot be combined with TUN"
 }

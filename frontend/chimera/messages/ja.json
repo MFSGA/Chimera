@@ -1455,5 +1455,6 @@
   "dashboard_widget_config_directions": "上り・下りを表示",
   "dashboard_widget_config_hide_names": "名前を非表示",
   "dashboard_widget_core_shortcuts_config_channel": "制御チャネルを表示",
-  "settings_clash_control_channel_label": "制御チャネル"
+  "settings_clash_control_channel_label": "制御チャネル",
+  "error_transparent_proxy_tun_conflict": "透過プロキシの捕捉は TUN と併用できません"
 }
