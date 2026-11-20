@@ -398,10 +398,21 @@ pub(crate) fn show_report(report: &Report) {
         "application startup failed during Tauri setup"
     );
     eprintln!("{message}");
+    // Upstream presents the startup failure from an independent command so
+    // Tauri Core/Service/Jobs remain out of the error UI lifecycle. Preserve
+    // the existing dialog as a last-resort fallback on spawn/protocol errors.
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    {
+        if let Err(error) = crate::startup_reporter::show_in_subprocess(report) {
+            eprintln!("standalone startup reporter unavailable: {error:#}");
+            crate::utils::dialog::error_dialog(message);
+        }
+    }
+    #[cfg(any(target_os = "android", target_os = "ios"))]
     crate::utils::dialog::error_dialog(message);
 }
 
-fn report_message(report: &Report) -> String {
+pub(crate) fn report_message(report: &Report) -> String {
     let failure = &report.failure;
     let location = failure
         .path

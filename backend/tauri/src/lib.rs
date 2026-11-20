@@ -44,6 +44,9 @@ mod shutdown_hook;
 mod single_instance_activation;
 mod specta_export;
 mod startup_failure;
+// The reporter is a separate desktop process, not a Tauri window/owner.
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+pub mod startup_reporter;
 mod state;
 /// 4
 mod utils;
