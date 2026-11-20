@@ -1,5 +1,13 @@
 # ref 对齐进度
 
+## DIFF-094：Storage Migrator 生产模块迁入共享 crate（2026-11-20）
+
+- **上游来源与目标**：参照固定 `ref@c4b35e048` 的 `backend/nyanpasu-migration/src/modules/storage.rs`，把 Chimera 已兼容的双步骤热键迁移**实际生产实现**从 `backend/tauri/src/core/migration/modules/storage.rs` 迁入 `backend/chimera-migration/src/modules/storage.rs`，不只是移动接口或测试。本轮风险 **L2**（历史热键和配置读写），不修改 `ref` / Runtime gitlink、不触碰真实用户文件、系统代理和服务。
+- **共享实现与宿主适配**：共享 `StorageMigrator` 提供上游同 ID 的 `storage/hotkeys_to_kv` rev1 和 `storage/hotkeys_to_typed_config` rev2，按现有 Chimera `0.28.3` 版本门槛执行。泛型 `ModuleMigrator<C>` / `MigrationStep<C>` 通过 `AsRef<chimera_migration::context::Ctx>` 同时服务共享 Context 与 Tauri 适配 Context；静态步骤表按泛型类型提供，但生产代码只保留一份。Tauri 模块现在只重导出共享生产类型并保留真实 redb / 完整 Runner 的历史回归测试；原 Registry 顺序 `profiles → typed_config → storage` 不变，Legacy IPC 和热键 key 名不变。
+- **上游安全和语义**：初次基线探测**不打开 redb**，避免迁移前备份完成前触发损坏库恢复；第 1 步 KV 保存成功后才移除旧 YAML 热键，第 2 步原子写入 typed `application.yaml` 后才删除 KV 的旧 key。保留显式空数组、Script 热键精确过滤、不可用/损坏配置错误来源、旧键缺失时无副作用、符号链接写入拒绝、原始字段保留。复用共享 `document`、`fs`、`HotkeyStoreOpener` 和上游风格错误类型；不新增 Tauri 反向依赖。
+- **测试与影响范围**：共享 Migration 测试 **40/40**（其中 5 项新增共享 Ctx + 注入式 KV 测试，覆盖双步骤数据流、备份前只探测节点、KV 写失败的 YAML 保留、空值、符号链接安全）；Tauri 完整库 **1057/1057**、1 项原有忽略测试，包含 Storage 模块 12 项真实 redb/Runner 旧测试；`cargo check --locked -p chimera --all-features --tests`、Rustfmt、提交 Clippy、差异检查通过。未执行 Windows/Linux、真实历史用户数据迁移、桌面 GUI E2E 和 GitHub CI 完成态核验。
+- **剩余差异及回滚**：上游其它 Profiles / Typed Config 模块仍在 Tauri，使用本地 Legacy 转换器、Profiles 文档形态和路径适配；完整迁移须逐个拆掉 Tauri 专有输入，不能机械复制上游模块导致版本/格式退化。发生不兼容时可整体回滚本轮共享 Storage 模块和 Tauri 重导出，迁移前备份、状态文件和任何 `.corrupt-*` 原始证据不得自动删除。
+
 ## DIFF-093：Migration Runner 执行事务与恢复核验下沉（2026-11-19）
 
 - **参考基线与风险**：以 `ref@c4b35e048` 的 `backend/nyanpasu-migration/src/runner.rs` 为核心参考；本批风险 **L2**（运行前保护与旧数据迁移）。目标是在共享 `chimera-migration` 里统一 Runner 步骤执行、恢复和模块遍历的真实生产逻辑，同时保留 Tauri 的宿主路径、BackupPort 与具体迁移模块。不改 `ref` / Runtime gitlink，不清理用户历史、备份与 `.corrupt-*` 数据证据。
