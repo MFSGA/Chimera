@@ -1,5 +1,14 @@
 # ref 对齐进度
 
+## DIFF-101：Migration 状态加载与配置目录读取错误对齐、悬挂目录安全修复（2026-11-20）
+
+- **参考版本与目标**：继续以固定 `ref@c4b35e048` 的 `backend/nyanpasu-migration/src/runner.rs::Error::{LoadState,ReadConfigDirectory}` 为准，消除共享 Runner 状态文件加载和配置目录预备份检查中的纯字符串错误边界。本轮风险 **L2**（迁移启动前的读操作、备份前数据保护）。不改 `ref` / Runtime gitlink、不碰实际用户目录，不变更原有 `migration-state.yaml` schema 2、Stamp、step ID/revision 或备份格式。
+- **真正的共享初始化所有权**：新增 `chimera-migration::runner::load_state(path)`，由它调用 `MigrationStore::load` 并返回 `ExecutionError::LoadState {path,source}`，保留内部 `SchemaError`、IO 和 YAML 解析来源。Tauri `Runner::with_context_and_profile_migrations` 改用此共享入口，而非直接调用 store；高版本 state 在模块初始化/写盘前拒绝，启动报告仍从源错误链识别为 `NewerVersion`，并保留状态文件真实路径与 revision。
+- **配置目录读取与安全修复**：`runner::has_nothing_to_protect` 对 `read_dir`、目录项迭代错误返回 `ExecutionError::ReadConfigDirectory {path,source: io::Error}`，与上游对应。特别区分真正缺失的配置目录和**悬挂目录符号链接**：`read_dir` 返回 `NotFound` 时再使用不跟随符号链接的 `config_node_exists` 检查节点是否存在；存在却不可读的用户目录绝不能误判为“新安装、无需备份”。发生这种错误直接阻止迁移，备份回调不执行，原始链接不变；普通全新目录依然允许跳过无意义备份。
+- **宿主报告边界**：`startup_failure.rs` 对 `LoadState`、`ReadConfigDirectory` 解析精确路径，并继续保留底层权限/繁忙错误分类。真实 Tauri Runner 初始化的高版本 state 测试确认外层 `LoadState` + 内层 `SchemaError::Newer`、`NewerVersion` 报告、零写入；目录错误的报告保留原始 IO 来源。错误报告仍只读取现有异常及真实已验证快照，不创建/修改配置、不擅自宣布备份可恢复。
+- **验证**：共享 `chimera-migration` **88/88**，包括新增加载高版本 store 的原始字节保留、悬挂配置目录拒绝及既有不可读配置祖先测试的结构化错误检查；Tauri 全库 **1034/1034**、1 项既有忽略，新增真实 Runner 初始化和启动报告路径/分类测试。`cargo check --locked -p chimera --all-features --tests`、Rustfmt、差异检查和提交 Clippy 钩子通过。未完成 Windows/Linux 实机、旧用户数据全量升级、桌面 E2E 和 GitHub CI 最终状态。
+- **仍需对齐/回滚**：Tauri 仍持有 Legacy Verge/Clash 转换、Session 损坏恢复、平台路径、快照创建与备份修剪；整个 Migration 并非严格上游 100% 同型。后续优先验证备份恢复中的真实旧版本数据、跨平台路径节点和独立启动失败呈现。出现回归时回滚本轮 `load_state`/目录判定与报告映射，不清理用户原始文件、备份和 `.corrupt-*` 证据。
+
 ## DIFF-100：Migration 状态持久化、备份与文档 stamp 错误合同对齐（2026-11-20）
 
 - **固定上游与目标**：参照 `ref@c4b35e048` 的 `backend/nyanpasu-migration/src/runner.rs::Error::{PersistState,CreateBackup,StampDocument}` 与 `backend/nyanpasu-persistence/src/write.rs`。本批风险 **L2**（迁移状态文件、写前备份、补写旧文档 stamp）。前轮已迁入共享 Runner 的步骤执行错误，尚有三类实际生产写入/备份失败仅通过 `anyhow::context` 返回文本。本轮统一为可 downcast 的 typed 边界；保持 Chimera 现有 `BackupPort` / Tauri `BackupRequest`/manifest、旧迁移步骤、文件 schema 和应用启动接口不变。
