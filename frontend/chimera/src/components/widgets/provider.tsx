@@ -13,6 +13,7 @@ import {
   EMPTY_WIDGET_CONFIG_STORAGE,
   getWidgetConfig,
   normalizeWidgetConfigStorage,
+  withWidgetConfig,
   type WidgetConfig,
   type WidgetConfigStorage,
   type WidgetId,
@@ -55,21 +56,27 @@ export function DashboardProvider({ children }: PropsWithChildren) {
   );
   const [saveStatus, setSaveStatus] = useState<SaveStatus>({ state: 'saved' });
 
-  const configsRef = useRef(configs);
-  configsRef.current = configs;
   const saveSequenceRef = useRef(0);
+  // Save the last *intent*, not a whole-map snapshot: the backend may have
+  // received another instance's configuration while this write was in flight.
+  const retryIntentRef = useRef<{ id: string; config: WidgetConfig } | null>(
+    null,
+  );
 
   const persist = useCallback(
-    async (id: string | undefined, next: WidgetConfigStorage) => {
+    async (id: string, config: WidgetConfig) => {
       const sequence = ++saveSequenceRef.current;
       setSaveStatus({ state: 'saving', id });
       let saved = false;
       try {
-        saved = await setConfigs(next);
+        saved = await setConfigs((current) =>
+          withWidgetConfig(current, id, config),
+        );
       } catch {
         saved = false;
       }
       if (sequence === saveSequenceRef.current) {
+        if (saved) retryIntentRef.current = null;
         setSaveStatus({ state: saved ? 'saved' : 'error', id });
       }
     },
@@ -78,21 +85,23 @@ export function DashboardProvider({ children }: PropsWithChildren) {
 
   const saveConfig = useCallback(
     (id: string, config: WidgetConfig) => {
+      // Never overwrite a pending authoritative read or an unreadable value.
       if (isLoading || readError !== null) return;
-      const next: WidgetConfigStorage = {
-        version: 1,
-        byInstance: { ...configsRef.current.byInstance, [id]: config },
-      };
-      configsRef.current = next;
-      void persist(id, next);
+      retryIntentRef.current = { id, config };
+      void persist(id, config);
     },
     [isLoading, readError, persist],
   );
 
   const retryConfig = useCallback(() => {
-    if (readError !== null) void refresh();
-    else void persist(saveStatus.id, configsRef.current);
-  }, [readError, refresh, persist, saveStatus.id]);
+    if (readError !== null) {
+      void refresh();
+      return;
+    }
+    if (isLoading || saveStatus.state === 'saving') return;
+    const intent = retryIntentRef.current;
+    if (intent) void persist(intent.id, intent.config);
+  }, [isLoading, readError, refresh, persist, saveStatus.state]);
 
   return (
     <DashboardContext.Provider

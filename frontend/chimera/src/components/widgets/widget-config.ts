@@ -359,6 +359,20 @@ export function normalizeWidgetConfigStorage(
   return { version: 1, byInstance };
 }
 
+/** Patch the current shared KV draft, never an earlier full-map snapshot.
+ * A failed write can be retried against a refreshed remote revision without
+ * overwriting settings saved by other widget instances in the meantime. */
+export function withWidgetConfig(
+  storage: WidgetConfigStorage,
+  id: string,
+  config: WidgetConfig,
+): WidgetConfigStorage {
+  return {
+    version: 1,
+    byInstance: { ...storage.byInstance, [id]: config },
+  };
+}
+
 export function getWidgetConfig<T extends WidgetId>(
   storage: WidgetConfigStorage,
   id: string,

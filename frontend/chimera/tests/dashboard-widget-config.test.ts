@@ -6,6 +6,7 @@ import {
   getWidgetConfig,
   normalizeWidgetConfigStorage,
   WidgetId,
+  withWidgetConfig,
 } from '../src/components/widgets/widget-config.ts';
 
 test('normalizes persisted widget settings and rejects invalid values', () => {
@@ -85,6 +86,56 @@ test('normalizes persisted widget settings and rejects invalid values', () => {
     showChannel: true,
   });
   assert.equal('unknown-0' in normalized.byInstance, false);
+});
+
+test('patching a single Widget preserves newer settings from other instances', () => {
+  const initial = withWidgetConfig(EMPTY_WIDGET_CONFIG_STORAGE, 'down', {
+    ...DEFAULT_WIDGET_CONFIGS[WidgetId.TrafficDown],
+    unit: 'bits',
+  });
+  const concurrentlySaved = withWidgetConfig(initial, 'memory', {
+    ...DEFAULT_WIDGET_CONFIGS[WidgetId.Memory],
+    samples: 12,
+  });
+  // Simulate retry after a stale whole-map write was rejected by the KV
+  // revision guard: apply only the intended instance to the new snapshot.
+  const retried = withWidgetConfig(concurrentlySaved, 'down', {
+    ...DEFAULT_WIDGET_CONFIGS[WidgetId.TrafficDown],
+    showChart: false,
+  });
+  assert.equal(
+    getWidgetConfig(retried, 'down', WidgetId.TrafficDown).showChart,
+    false,
+  );
+  assert.equal(getWidgetConfig(retried, 'memory', WidgetId.Memory).samples, 12);
+  assert.equal(
+    getWidgetConfig(initial, 'down', WidgetId.TrafficDown).unit,
+    'bits',
+  );
+});
+
+test('rapid edits on different instances use latest shared draft without replacing siblings', () => {
+  const changedA = withWidgetConfig(EMPTY_WIDGET_CONFIG_STORAGE, 'instance-a', {
+    ...DEFAULT_WIDGET_CONFIGS[WidgetId.TrafficUp],
+    showTotal: false,
+  });
+  const changedB = withWidgetConfig(changedA, 'instance-b', {
+    ...DEFAULT_WIDGET_CONFIGS[WidgetId.NetworkInfo],
+    hideAddresses: true,
+  });
+  assert.deepEqual(Object.keys(changedB.byInstance).sort(), [
+    'instance-a',
+    'instance-b',
+  ]);
+  assert.equal(
+    getWidgetConfig(changedB, 'instance-a', WidgetId.TrafficUp).showTotal,
+    false,
+  );
+  assert.equal(
+    getWidgetConfig(changedB, 'instance-b', WidgetId.NetworkInfo).hideAddresses,
+    true,
+  );
+  assert.deepEqual(EMPTY_WIDGET_CONFIG_STORAGE.byInstance, {});
 });
 
 test('Proxy Shortcuts migrates legacy buttons and validates multiselect arrays', () => {
