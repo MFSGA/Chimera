@@ -1,5 +1,14 @@
 # ref 对齐进度
 
+## DIFF-100：Migration 状态持久化、备份与文档 stamp 错误合同对齐（2026-11-20）
+
+- **固定上游与目标**：参照 `ref@c4b35e048` 的 `backend/nyanpasu-migration/src/runner.rs::Error::{PersistState,CreateBackup,StampDocument}` 与 `backend/nyanpasu-persistence/src/write.rs`。本批风险 **L2**（迁移状态文件、写前备份、补写旧文档 stamp）。前轮已迁入共享 Runner 的步骤执行错误，尚有三类实际生产写入/备份失败仅通过 `anyhow::context` 返回文本。本轮统一为可 downcast 的 typed 边界；保持 Chimera 现有 `BackupPort` / Tauri `BackupRequest`/manifest、旧迁移步骤、文件 schema 和应用启动接口不变。
+- **生产错误合同**：`chimera-migration::runner::ExecutionError` 增加 `PersistState {operation,path,source}`、`CreateBackup {source}`、`StampDocument {module,path,source}`。共享 `persist_state` 统一覆盖初始化 baseline、`in_progress`、单步骤完成、失败步骤状态和全局 `last_succeeded` 的所有实际状态写入，保留完整磁盘路径、操作阶段和 `chimera_persistence::write`/IO 原始来源。`ensure_backup` 只包装真实的宿主快照创建失败，不把无数据的新安装误报成已备份；`stamp_adopted_documents` 仅在所需快照创建成功后尝试原子补 stamp，并保留模块与文档路径。`RecordFailure.persistence` 字段现在可 downcast 为 `PersistState`，与原始 `RunStep` 错误独立可查。
+- **成功状态安全边界**：最终提交 `last_succeeded` 后的 `flush_atomic` 若失败，共享 Runner 在返回 typed `PersistState` 前恢复**内存中的原成功版本**，避免同一个 Runner 对象在失败重试期间误认为新版本已经成功写盘；宿主仍只在共享 `run_pending` 完整成功后才修剪备份。旧文档被符号链接保护拒绝补 stamp 时，不设置 `stamped` 标志、不改目标文件，已经真实完成的备份可供故障诊断；备份本身失败时不得生成快照标记。
+- **启动诊断与备份可信性**：Tauri `startup_failure` 从 `PersistState` 和 `StampDocument` 读取精确路径，`CreateBackup` 保持 `BackupError` 原始文件/目录来源，失败备份不显示为可恢复快照。`RecordFailure` 的持久化错误不是主错误链的 `source`（主链必须保留最初的步骤失败），因此启动诊断增加次要失败的路径回退和 IO 权限/繁忙分类，保留两个故障的文本详情；如主错误本身是权限/繁忙问题，仍优先遵从主错误。没有创建新的恢复 UI、自动覆盖任何旧文件或声称未经 manifest 校验的备份可用。
+- **验证**：共享 Migration **86/86**，新增成功状态写盘失败后内存回滚、备份失败、补 stamp 软链接保护及双重失败 typed error 检查；Tauri 完整库 **1032/1032**、1 项原有忽略，其中真实 Runner 的无效备份目标检查 `CreateBackup` 类型，启动报告新测 `PersistState`、`CreateBackup`、`StampDocument` 路径及双重错误次级权限检测。后端 `cargo check --locked -p chimera --all-features --tests`、Rustfmt、Git diff check、提交 Clippy 钩子通过。仅本地 macOS 验证，未执行 Windows/Linux 实机、真实历史用户目录迁移、桌面 E2E 或 GitHub CI 最终结果。
+- **剩余差异与回滚**：上游还包含 `LoadState`、`ReadConfigDirectory`、部分 `snafu::OperationError` 与独立迁移子进程/崩溃报告边界；本轮保持 `anyhow` + `thiserror` 外层合同，以兼容当前 Chimera 的 Legacy 转换端口和原始错误链。若发现生产回归，回滚本轮错误包装和启动诊断映射；不要删除 `migration-state.yaml`、原始数据、`.corrupt-*` 证据或用户备份。
+
 ## DIFF-099：共享 Runner 步骤执行结构化错误合同对齐（2026-11-20）
 
 - **上游来源与目标**：参考 `ref@c4b35e048` 的 `backend/nyanpasu-migration/src/runner.rs::Error::{DetectBaseline,InspectModule,InspectDocument,CheckStep,RunStep,VerifyDocumentStamp,VerifyStep,RecordFailure}`。本轮风险 **L2**（迁移失败状态/启动恢复诊断），目标是让共享 Runner 生产调用路径直接返回可 downcast 的执行错误类型，而非只用 `anyhow::context` 拼接步骤或模块错误字符串。继续保留 `anyhow::Result` 对现有 `MigrationStep`、`ModuleMigrator`、Tauri BackupPort 的兼容接口，不在本轮统一替换全部底层模块为 `snafu::OperationError`。
