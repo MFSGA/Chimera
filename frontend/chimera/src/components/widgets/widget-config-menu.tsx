@@ -25,6 +25,11 @@ import TuneRounded from '~icons/material-symbols/tune-rounded';
 import { motion, useReducedMotion } from 'motion/react';
 import { useEffect, useId, useState } from 'react';
 import { OS } from '@/consts';
+import {
+  proxyShortcutSelectionSummary,
+  toggleProxyShortcutSelection,
+  visibleSelectedProxyShortcutButtons,
+} from '@/features/dashboard/proxy-shortcut-buttons';
 import * as m from '@/paraglide/messages';
 import { useDashboardContext } from './provider';
 import {
@@ -177,6 +182,7 @@ function ConfigFieldRows({
   disabled: boolean;
   onChange: (config: WidgetConfig) => void;
 }) {
+  const showTransparent = isTauri() && OS === 'linux';
   switch (config.type) {
     case WidgetId.RecentTraffic:
     case WidgetId.OriginTraffic:
@@ -531,15 +537,30 @@ function ConfigFieldRows({
           <ConfigRow
             label={m.dashboard_widget_proxy_shortcuts_config_buttons()}
           >
-            <DropdownMenu>
+            <DropdownMenu align="end">
               <DropdownMenuTrigger asChild>
                 <LauncherMenuChipButton
                   data-slot="widget-proxy-shortcut-buttons"
                   disabled={disabled}
                   aria-label={m.dashboard_widget_proxy_shortcuts_config_buttons()}
                 >
-                  <span className="truncate">{config.buttons.length}</span>
-                  <ArrowDropDownRounded className="size-4" aria-hidden="true" />
+                  <span className="truncate">
+                    {proxyShortcutSelectionSummary(
+                      config.buttons,
+                      showTransparent,
+                      {
+                        all: m.dashboard_widget_proxy_shortcuts_config_both(),
+                        system:
+                          m.dashboard_widget_proxy_shortcuts_config_system(),
+                        tun: m.settings_system_proxy_tun_mode_label(),
+                        transparent: m.settings_clash_transparent_proxy_label(),
+                      },
+                    )}
+                  </span>
+                  <ArrowDropDownRounded
+                    className="size-4 shrink-0"
+                    aria-hidden="true"
+                  />
                 </LauncherMenuChipButton>
               </DropdownMenuTrigger>
               <DropdownMenuContent>
@@ -553,7 +574,7 @@ function ConfigFieldRows({
                       value: 'tun',
                       label: m.settings_system_proxy_tun_mode_label(),
                     },
-                    ...(isTauri() && OS === 'linux'
+                    ...(showTransparent
                       ? [
                           {
                             value: 'transparent' as const,
@@ -569,19 +590,21 @@ function ConfigFieldRows({
                     disabled={
                       disabled ||
                       (config.buttons.includes(value) &&
-                        config.buttons.filter(
-                          (button) =>
-                            button !== 'transparent' ||
-                            (isTauri() && OS === 'linux'),
-                        ).length === 1)
+                        visibleSelectedProxyShortcutButtons(
+                          config.buttons,
+                          showTransparent,
+                        ).length <= 1)
                     }
                     onSelect={(event) => event.preventDefault()}
                     onCheckedChange={(checked) =>
                       onChange({
                         ...config,
-                        buttons: checked
-                          ? [...config.buttons, value]
-                          : config.buttons.filter((button) => button !== value),
+                        buttons: toggleProxyShortcutSelection(
+                          config.buttons,
+                          value,
+                          checked,
+                          showTransparent,
+                        ),
                       })
                     }
                   >
