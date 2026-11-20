@@ -86,6 +86,24 @@ test('normalizes persisted widget settings and rejects invalid values', () => {
   assert.equal('unknown-0' in normalized.byInstance, false);
 });
 
+test('Network Info address visibility persists and rejects non-booleans', () => {
+  const saved = normalizeWidgetConfigStorage({
+    version: 1,
+    byInstance: {
+      hidden: { type: WidgetId.NetworkInfo, hideAddresses: true },
+      invalid: { type: WidgetId.NetworkInfo, hideAddresses: 'yes' },
+    },
+  });
+  assert.deepEqual(getWidgetConfig(saved, 'hidden', WidgetId.NetworkInfo), {
+    type: WidgetId.NetworkInfo,
+    hideAddresses: true,
+  });
+  assert.deepEqual(
+    getWidgetConfig(saved, 'invalid', WidgetId.NetworkInfo),
+    DEFAULT_WIDGET_CONFIGS[WidgetId.NetworkInfo],
+  );
+});
+
 test('Provider Updates keeps pinned resources and constrains invalid saved options', () => {
   const saved = normalizeWidgetConfigStorage({
     version: 1,

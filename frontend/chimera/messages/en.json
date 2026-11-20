@@ -1370,5 +1370,19 @@
   "dashboard_widget_provider_updates_preview": "Review provider counts and update selected proxy or rule resources.",
   "dashboard_widget_config_provider_types": "Types",
   "dashboard_widget_config_both_providers": "Both",
-  "dashboard_widget_config_items": "Visible items"
+  "dashboard_widget_config_items": "Visible items",
+  "dashboard_widget_network_info_title": "Network info",
+  "dashboard_widget_network_info_via_stun": "via {server} ({transport})",
+  "dashboard_widget_network_info_via_lookup": "via {provider}",
+  "dashboard_widget_network_info_no_address": "No address",
+  "dashboard_widget_network_info_disabled": "Public IP detection is off.",
+  "dashboard_widget_network_info_open_settings": "Open settings",
+  "dashboard_widget_network_info_tun": "Not checked while TUN mode is on, since the answer could come from a proxy exit.",
+  "dashboard_widget_network_info_transparent_proxy": "Not checked while local transparent capture is on, since the answer could come from a proxy exit.",
+  "dashboard_widget_network_info_failed": "The public IP could not be detected.",
+  "dashboard_widget_network_info_probing": "Detecting the public IP…",
+  "dashboard_widget_network_info_refresh": "Detect again",
+  "dashboard_widget_network_info_config_hide_addresses": "Hide addresses",
+  "settings_nyanpasu_local_ip_probe_label": "Allow Local IP Detection",
+  "settings_nyanpasu_local_ip_probe_description": "If enabled, ask configured STUN servers for your direct public IPv4/IPv6 addresses. Off by default; no probe while TUN or local transparent capture is active. STUN operators may see your IP."
 }

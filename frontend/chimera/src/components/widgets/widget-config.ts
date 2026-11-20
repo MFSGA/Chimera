@@ -10,6 +10,7 @@ export enum WidgetId {
   SubscriptionSchedule = 'subscription-schedule',
   SubscriptionQuota = 'subscription-quota',
   ProviderUpdates = 'provider-updates',
+  NetworkInfo = 'network-info',
 }
 
 type TrafficConfig = {
@@ -67,6 +68,10 @@ export type WidgetConfigs = {
     kinds: 'both' | 'proxy' | 'rule';
     resources: ProviderReference[];
     maxItems: number;
+  };
+  [WidgetId.NetworkInfo]: {
+    type: WidgetId.NetworkInfo;
+    hideAddresses: boolean;
   };
 };
 
@@ -129,6 +134,10 @@ export const DEFAULT_WIDGET_CONFIGS: WidgetConfigs = {
     kinds: 'both',
     resources: [],
     maxItems: 3,
+  },
+  [WidgetId.NetworkInfo]: {
+    type: WidgetId.NetworkInfo,
+    hideAddresses: false,
   },
 };
 
