@@ -1,5 +1,14 @@
 # ref 对齐进度
 
+## DIFF-089：Storage Hotkeys 两步迁移生产接线（2026-11-19）
+
+- **固定基线与目标**：以 `ref@c4b35e048` 的 `nyanpasu-migration/src/modules/storage.rs` 和共享 `HotkeyStoreOpener` / `HotkeyStore` 契约为源，把热键从旧版 `chimera-config.yaml` 迁至 KV，再迁至 typed `application.yaml`。本轮不修改 `ref`、Runtime gitlink、真实用户文件、系统服务和网络设置。
+- **上游算法与真实注册**：`backend/tauri/src/core/migration/modules/storage.rs` 保留上游两个 Migration ID：`storage/hotkeys_to_kv`（rev1）和 `storage/hotkeys_to_typed_config`（rev2）。模块注册在 `typed_config` 之后，确保 typed 文件先建立；Ctx 注入 `Arc<dyn HotkeyStoreOpener>`，生产使用共享 `chimera_core::storage::RedbHotkeyStoreOpener`，测试允许注入拒绝访问源。第 1 步保存非空旧 YAML 热键后才移除旧字段；第 2 步在 typed 文件存在时将 KV 中的列表（含显式空列表）替换 typed 字段，并且只有 typed 原子写入成功后才删除 KV 旧键。
+- **安全与兼容边界**：保留上游 `clash_mode_script` 精确函数名过滤、保留其他 typed 应用字段、键不存在时无副作用，以及错误源和路径。使用 Chimera 的 `chimera_config_path`、`serde_yaml_ng`、具有链接保护的 `migration::fs::atomic_write`；上游 `2.0.0` 引入版本在本产品适配为 `0.28.3`。本地 Runner 在基线检测之后才建立迁移前备份，因此基线检测只读取 YAML 并保守检查存储节点是否存在，**不提前打开 redb**（它可能触发损坏文件恢复）；对损坏旧 YAML 的解析错误也延迟到备份后按步骤报告。无旧热键的首次安装不创建 KV，也不重写 typed 热键。
+- **类型化错误与剩余差异**：共享 `MigrationCheckError::Storage` 改为原始 `BoxedCause`，匹配上游动态存储端口；Storage 模块的读取、解析、序列化、检查、原子写入、存储打开/保存/删除错误均保留来源链，当前按本地 `thiserror` + `anyhow` 合同适配上游 `snafu` 错误型态。迁移框架当前仍位于 Tauri，未整体搬到独立 `chimera-migration` crate，也未接入上轮 Live Backup 的用户可见手动入口；这些仍属于后续架构工作。
+- **回归覆盖**：真实 redb + 临时路径验证 KV→typed、旧 YAML→KV→typed、空列表清空、缺失旧键幂等、Script 精确匹配、typed 缺失/损坏以及符号链接写入失败后旧 KV 不丢、注入打开失败保留真实 `io::Error`；真实 Runner 验证迁移前备份、完整两步流程、状态记录、二次启动不重写和不安全备份拒绝。Migration 定向测试 **101/101** 通过；原有备份失败和损坏文件保护测试全部保留。生成的 Specta Storage 文档注释同步到共享契约，不改变 TS 类型/IPC 形状。跨平台 E2E、真实用户旧版本数据和远端 CI 仍须另行验收。
+- **后续**：进一步将 Migration 迁出 Tauri 到上游式独立 crate，并打通手动 Live Backup UI；保持旧迁移状态 schema 与用户数据兼容，不通过重置应用数据修复测试。回滚时保留已生成的备份及 `.corrupt-*` 证据。
+
 ## DIFF-088：Storage 共享所有权及 Live Snapshot / Hotkey Port（2026-11-19）
 
 - **基线与范围**：以 `ref@c4b35e048` 的 `nyanpasu-runtime-values/src/storage.rs`、`nyanpasu-core/src/storage.rs`、`nyanpasu-migration/{backup.rs,modules/storage.rs}` 为准迁移；不改变 `ref` 或 Runtime gitlink，不访问用户实际数据库与系统配置。重点消除 Tauri 持有的 redb 数据所有权和重复的错误分类实现。

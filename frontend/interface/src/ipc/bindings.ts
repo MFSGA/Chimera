@@ -3621,7 +3621,7 @@ export type StorageEntry = {
   value: string;
 };
 
-/**  A stored value, or `None` when its key is absent, as of `revision`. */
+/**  A stored value, or `None` if the key is absent, as of `revision`. */
 export type StorageItem<T> = {
   value: T | null;
   revision: StorageRevision;
@@ -3634,8 +3634,8 @@ export type StorageItem<T> = {
 export type StorageResyncEvent = Record<string, never>;
 
 /**
- *  Orders every commit made while this application process has the store open.
- *  Revisions restart at zero when the store is reopened.
+ *  Orders the commits of one open store, every key alike. It is kept in
+ *  memory and starts at 0 each time the store opens.
  */
 export type StorageRevision = number;
 
