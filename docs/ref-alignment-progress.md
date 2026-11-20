@@ -1,5 +1,13 @@
 # ref 对齐进度
 
+## DIFF-090：Migration 状态所有权与 Runner 调度策略下沉（2026-11-19）
+
+- **目标与参考**：基于 `ref@c4b35e048` 的 `backend/nyanpasu-migration/src/{lib.rs,store.rs,runner.rs,fs.rs}`，新增 `backend/chimera-migration`（风险 **L2：迁移状态与启动恢复**）；验收是旧 `migration-state.yaml` 仍可按 schema 2 读取和重新写入，错误来源与保护行为不变，现有 Legacy/E2E/API 不受影响。非目标：本轮不把依赖 Tauri `PathResolver`、备份、Profiles/Typed Config 迁移模块的 Runner IO 逻辑直接挪进共享 crate，不修改真实用户数据和两个 git submodule。
+- **共享迁移内容**：从 Tauri 提取上游同名的 `MigrationState`、`MigrationAdvice`、`store::{MigrationStore,ModuleState,TaskRecord,SchemaError}`、`runner::{advice_step,introduced_in_reached}`，并通过无 UI 依赖的 `StepSpec` 描述步骤元数据。状态机的启动/完成/跳过/失败流转、连续 revision 推进、版本 gating（包括 prerelease）、错误文本和存储 schema 保持现有行为。Tauri 原 `migration::store` 仅重导出共享状态类型，`Runner::advice_step` 和状态转换直接委托共享实现，只有模块基线检测通过注入模块回调留在 Tauri。
+- **安全 IO 合并**：迁移状态 `load` 使用共享 `chimera_persistence::retry_io` 和 `symlink_metadata`，不把悬挂软链接当缺失文件。`flush_atomic` 保留原注释头、schema/字段名、文件写入格式；使用共享 `chimera-migration::fs::{atomic_write,validate_destination}` 在写入前拒绝符号链接、目录及其他非文件目标。Tauri 文档写入器也使用相同检查，避免两份安全策略漂移；未触碰 `.corrupt-*` 等证据文件。
+- **剩余差异**：上游完整 `nyanpasu-migration` crate 自己持有 Runner、Module、Registry、路径/备份接口；Chimera 尚有 `core/migration/{runner,modules,registry}` 在 Tauri，并包含 Legacy 配置适配。下一轮应先提供独立的路径、备份、Document/Module Port，迁移剩余 Runner IO 与完整模块，最终消除 Tauri 重导出适配；本轮不可宣称 Runner 全部完成迁移。
+- **验证及回滚**：新 crate 单元测试 **16/16**（从旧 Store 迁移的验证及新增状态调度/符号链接保护）、Tauri 迁移 **92/92**、Tauri 完整库 **1056/1056**、后端 all-features 编译、Rustfmt、提交检查通过；Tauri 测试数下降系 9 项原 Store 测试转移到了共享 crate，未删除验证。暂未执行 Windows/Linux、真实旧版用户升级与 GUI E2E；如果出现兼容性问题，回滚本轮 crate 接线和 Tauri 委托即可，用户配置、备份和旧证据文件必须保留。
+
 ## DIFF-089：Storage Hotkeys 两步迁移生产接线（2026-11-19）
 
 - **固定基线与目标**：以 `ref@c4b35e048` 的 `nyanpasu-migration/src/modules/storage.rs` 和共享 `HotkeyStoreOpener` / `HotkeyStore` 契约为源，把热键从旧版 `chimera-config.yaml` 迁至 KV，再迁至 typed `application.yaml`。本轮不修改 `ref`、Runtime gitlink、真实用户文件、系统服务和网络设置。
