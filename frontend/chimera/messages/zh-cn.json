@@ -1456,5 +1456,9 @@
   "dashboard_widget_config_hide_names": "隐藏名称",
   "dashboard_widget_core_shortcuts_config_channel": "显示控制通道",
   "settings_clash_control_channel_label": "控制通道",
-  "error_transparent_proxy_tun_conflict": "透明代理接管不能与 TUN 同时启用"
+  "error_transparent_proxy_tun_conflict": "透明代理接管不能与 TUN 同时启用",
+  "dashboard_layout_loading": "正在加载仪表盘布局…",
+  "dashboard_layout_load_failed": "无法加载仪表盘布局",
+  "dashboard_layout_saving": "正在保存仪表盘布局…",
+  "dashboard_layout_save_failed": "无法保存仪表盘布局"
 }
