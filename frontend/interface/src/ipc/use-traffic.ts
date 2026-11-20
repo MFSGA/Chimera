@@ -1,5 +1,6 @@
 import {
   useInfiniteQuery,
+  useQueries,
   useQuery,
   type UseQueryOptions,
 } from '@tanstack/react-query';
@@ -45,6 +46,18 @@ export function trafficReportQueryOptions(
     refetchOnReconnect: !paused,
     ...(options?.refetchInterval === undefined ? {} : { retry: false }),
   };
+}
+
+/** Share QueryClient cache entries for identical report requests. */
+export function useTrafficReports(
+  requests: ReportRequest[],
+  options?: { enabled?: boolean; refetchInterval?: number | false },
+) {
+  return useQueries({
+    queries: requests.map((request) =>
+      trafficReportQueryOptions(request, options),
+    ),
+  });
 }
 
 export function useTrafficReport(
