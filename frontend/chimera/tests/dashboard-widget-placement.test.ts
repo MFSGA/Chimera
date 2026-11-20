@@ -13,6 +13,50 @@ const memory = 'memory' as WidgetId;
 const trafficDown = 'traffic-down' as WidgetId;
 const occupied = [{ id: 'existing', type: memory, x: 0, y: 0, w: 2, h: 2 }];
 
+test('uses upstream recommended widget dimensions when they fit', () => {
+  assert.deepEqual(
+    placeWidget({
+      id: 'report-instance',
+      type: trafficDown,
+      items: [],
+      cols: 8,
+      rows: 6,
+      minimum,
+      recommended: { w: 4, h: 3 },
+    }),
+    {
+      id: 'report-instance',
+      type: trafficDown,
+      x: 0,
+      y: 0,
+      w: 4,
+      h: 3,
+    },
+  );
+});
+
+test('falls back to minimum sizes when the preferred widget size does not fit', () => {
+  assert.deepEqual(
+    placeWidget({
+      id: 'report-instance',
+      type: trafficDown,
+      items: [],
+      cols: 3,
+      rows: 2,
+      minimum,
+      recommended: { w: 4, h: 3 },
+    }),
+    {
+      id: 'report-instance',
+      type: trafficDown,
+      x: 0,
+      y: 0,
+      w: 2,
+      h: 2,
+    },
+  );
+});
+
 test('places a library add in the first free cell', () => {
   assert.deepEqual(
     placeWidget({
