@@ -7,12 +7,14 @@ export function canEditDashboard({
   isEditing,
   layoutLoading,
   layoutReadError,
+  layoutSaveBlocked = false,
   configLoading,
   configReadError,
 }: {
   isEditing: boolean;
   layoutLoading: boolean;
   layoutReadError: boolean;
+  layoutSaveBlocked?: boolean;
   configLoading: boolean;
   configReadError: boolean;
 }): boolean {
@@ -20,6 +22,7 @@ export function canEditDashboard({
     isEditing &&
     !layoutLoading &&
     !layoutReadError &&
+    !layoutSaveBlocked &&
     !configLoading &&
     !configReadError
   );

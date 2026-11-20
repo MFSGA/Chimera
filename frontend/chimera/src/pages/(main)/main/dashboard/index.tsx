@@ -1,4 +1,3 @@
-import { useKvStorage } from '@chimera/interface';
 import { Card, CardContent } from '@chimera/ui/card';
 import { ContextMenuItem } from '@chimera/ui/context-menu';
 import {
@@ -22,7 +21,6 @@ import {
 } from '@/components/providers/context-menu-provider';
 import {
   DashboardItem,
-  DEFAULT_LAYOUTS,
   RENDER_MAP,
   WIDGET_MIN_SIZE_MAP,
   WIDGET_RECOMMENDED_SIZE_MAP,
@@ -37,11 +35,10 @@ import * as m from '@/paraglide/messages';
 import EditAction from './_modules/edit-action';
 import { adaptLayout } from './_modules/layout-adapt';
 import {
-  normalizeLayoutStorage,
-  saveLayout,
-  selectLayoutEntry,
-  type DashboardLayoutStorage,
-} from './_modules/layout-storage';
+  DashboardLayoutPersistenceProvider,
+  useDashboardLayoutPersistence,
+} from './_modules/layout-persistence';
+import { selectLayoutEntry } from './_modules/layout-storage';
 import { canEditDashboard, placeWidget } from './_modules/widget-placement';
 import { WidgetSheet } from './_modules/widget-sheet';
 
@@ -129,20 +126,19 @@ function DashboardDragOverlay({
 const WidgetRender = () => {
   const { isEditing, configLoading, configReadError } = useDashboardContext();
 
-  const [
-    layoutStorage,
-    setLayoutStorage,
-    { isLoading: layoutLoading, readError: layoutReadError },
-  ] = useKvStorage<DashboardLayoutStorage>(
-    'dashboard-widgets',
-    normalizeLayoutStorage(DEFAULT_LAYOUTS, DEFAULT_LAYOUTS),
-    { migrate: (value) => normalizeLayoutStorage(value, DEFAULT_LAYOUTS) },
-  );
+  const {
+    storage: layoutStorage,
+    loading: layoutLoading,
+    readError: layoutReadError,
+    saveState: layoutSaveState,
+    saveEdit: saveLayoutEdit,
+  } = useDashboardLayoutPersistence();
 
   const editable = canEditDashboard({
     isEditing,
     layoutLoading,
-    layoutReadError: Boolean(layoutReadError),
+    layoutReadError,
+    layoutSaveBlocked: layoutSaveState !== 'saved',
     configLoading,
     configReadError,
   });
@@ -234,21 +230,17 @@ const WidgetRender = () => {
           : null);
       if (!source) return;
 
-      const visibleIds = new Set(displayItemsRef.current.map(({ id }) => id));
-      const hiddenSourceItems = source.items.filter(
-        ({ id }) => !visibleIds.has(id),
-      );
+      const saved = saveLayoutEdit({
+        sourceId: source.id,
+        visibleIds: displayItemsRef.current.map(({ id }) => id),
+        nextItems: newItems,
+      });
+      if (!saved) return;
       displayItemsRef.current = newItems;
-      layoutStorageRef.current = saveLayout(
-        layoutStorageRef.current,
-        source.id,
-        [...newItems, ...hiddenSourceItems],
-      );
       activeLayoutIdRef.current = source.id;
       setActiveLayoutId(source.id);
-      setLayoutStorage(layoutStorageRef.current);
     },
-    [editable, setLayoutStorage],
+    [editable, saveLayoutEdit],
   );
 
   const handleCloseClick = useCallback(
@@ -373,9 +365,10 @@ function RouteComponent() {
           data-slot="dashboard-container"
           className="relative flex min-h-0 flex-1 flex-col overflow-hidden"
         >
-          <WidgetRender />
-
-          <EditAction />
+          <DashboardLayoutPersistenceProvider>
+            <WidgetRender />
+            <EditAction />
+          </DashboardLayoutPersistenceProvider>
         </div>
       </RegisterContextMenuTrigger>
 
