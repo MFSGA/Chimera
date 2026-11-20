@@ -1328,5 +1328,20 @@
   "dashboard_widget_config_expiry": "有効期限を表示",
   "dashboard_widget_config_progress": "クォータの進捗を表示",
   "dashboard_widget_config_expiry_threshold": "有効期限の警告",
-  "dashboard_widget_config_quota_threshold": "残量の警告しきい値"
+  "dashboard_widget_config_quota_threshold": "残量の警告しきい値",
+  "dashboard_widget_provider_updates_title": "プロキシとルールのリソース",
+  "dashboard_widget_provider_updates_details": "リソース",
+  "dashboard_widget_provider_updates_counts": "プロキシ {proxies} · ルール {rules}",
+  "dashboard_widget_provider_updates_read_failed": "リソースのデータを読み取れませんでした。一覧が空であることを意味するものではありません。",
+  "dashboard_widget_provider_updates_loading": "リソースを読み込み中…",
+  "dashboard_widget_provider_updates_empty": "選択した種類のリソースはありません。",
+  "dashboard_widget_provider_updates_missing": "選択したリソースは存在しなくなりました。",
+  "dashboard_widget_provider_updates_refresh": "{name} を更新",
+  "dashboard_widget_provider_updates_check": "状態を確認: {name}",
+  "dashboard_widget_provider_updates_failed": "この更新は失敗しました。失敗の履歴は保存されません。",
+  "dashboard_widget_provider_updates_unconfirmed": "結果が確認できていないため、リソース一覧を再読み込みしました。",
+  "dashboard_widget_provider_updates_preview": "リソースの数を確認し、選択したプロキシまたはルールのリソースを更新します。",
+  "dashboard_widget_config_provider_types": "種類",
+  "dashboard_widget_config_both_providers": "両方",
+  "dashboard_widget_config_items": "表示する項目"
 }

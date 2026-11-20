@@ -1355,5 +1355,20 @@
   "dashboard_widget_config_expiry": "Show expiration time",
   "dashboard_widget_config_progress": "Show quota progress",
   "dashboard_widget_config_expiry_threshold": "Expiry warning",
-  "dashboard_widget_config_quota_threshold": "Remaining quota warning"
+  "dashboard_widget_config_quota_threshold": "Remaining quota warning",
+  "dashboard_widget_provider_updates_title": "Proxy and rule providers",
+  "dashboard_widget_provider_updates_details": "Providers",
+  "dashboard_widget_provider_updates_counts": "Proxy {proxies} · Rule {rules}",
+  "dashboard_widget_provider_updates_read_failed": "Provider data could not be read. This is different from an empty list.",
+  "dashboard_widget_provider_updates_loading": "Reading providers…",
+  "dashboard_widget_provider_updates_empty": "No providers of the selected type.",
+  "dashboard_widget_provider_updates_missing": "This selected provider no longer exists.",
+  "dashboard_widget_provider_updates_refresh": "Update {name}",
+  "dashboard_widget_provider_updates_check": "Check status: {name}",
+  "dashboard_widget_provider_updates_failed": "This update failed. No failure history is stored.",
+  "dashboard_widget_provider_updates_unconfirmed": "The result is unconfirmed; the provider list was re-read.",
+  "dashboard_widget_provider_updates_preview": "Review provider counts and update selected proxy or rule resources.",
+  "dashboard_widget_config_provider_types": "Types",
+  "dashboard_widget_config_both_providers": "Both",
+  "dashboard_widget_config_items": "Visible items"
 }

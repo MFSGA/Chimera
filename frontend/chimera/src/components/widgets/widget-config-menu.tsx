@@ -27,6 +27,7 @@ import {
 } from './widget-config';
 import { ConfigGroup, ConfigRow } from './widget-config-row';
 import {
+  ProviderReferencesField,
   SubscriptionTargetField,
   WidgetOptionSelect,
 } from './widget-reference-fields';
@@ -47,7 +48,8 @@ function Choice<T extends string>({
     | 'shortcut-buttons'
     | 'shortcut-order'
     | 'proxy-mode-layout'
-    | 'quota-wave-style';
+    | 'quota-wave-style'
+    | 'provider-types';
   label: string;
   value: T;
   options: ChoiceOption<T>[];
@@ -160,6 +162,48 @@ function ConfigFieldRows({
   onChange: (config: WidgetConfig) => void;
 }) {
   switch (config.type) {
+    case WidgetId.ProviderUpdates:
+      return (
+        <>
+          <ConfigGroup>
+            <Choice
+              field="provider-types"
+              label={m.dashboard_widget_config_provider_types()}
+              value={config.kinds}
+              options={[
+                {
+                  value: 'both',
+                  label: m.dashboard_widget_config_both_providers(),
+                },
+                {
+                  value: 'proxy',
+                  label: m.dashboard_widget_config_proxy_providers(),
+                },
+                {
+                  value: 'rule',
+                  label: m.dashboard_widget_config_rule_providers(),
+                },
+              ]}
+              disabled={disabled}
+              onChange={(kinds) => onChange({ ...config, kinds })}
+            />
+            <Stepper
+              label={m.dashboard_widget_config_items()}
+              value={config.maxItems}
+              range={WIDGET_CONFIG_NUMBER_RANGES.maxItems}
+              disabled={disabled}
+              onChange={(maxItems) => onChange({ ...config, maxItems })}
+            />
+          </ConfigGroup>
+          <ConfigGroup>
+            <ProviderReferencesField
+              resources={config.resources}
+              disabled={disabled}
+              onChange={(resources) => onChange({ ...config, resources })}
+            />
+          </ConfigGroup>
+        </>
+      );
     case WidgetId.SubscriptionQuota:
       return (
         <>

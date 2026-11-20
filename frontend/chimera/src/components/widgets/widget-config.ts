@@ -9,6 +9,7 @@ export enum WidgetId {
   ProxyMode = 'proxy-mode',
   SubscriptionSchedule = 'subscription-schedule',
   SubscriptionQuota = 'subscription-quota',
+  ProviderUpdates = 'provider-updates',
 }
 
 type TrafficConfig = {
@@ -60,6 +61,12 @@ export type WidgetConfigs = {
     animateWave: boolean;
     expiryWarningDays: number;
     quotaWarningPercent: number;
+  };
+  [WidgetId.ProviderUpdates]: {
+    type: WidgetId.ProviderUpdates;
+    kinds: 'both' | 'proxy' | 'rule';
+    resources: ProviderReference[];
+    maxItems: number;
   };
 };
 
@@ -117,6 +124,12 @@ export const DEFAULT_WIDGET_CONFIGS: WidgetConfigs = {
     expiryWarningDays: 7,
     quotaWarningPercent: 20,
   },
+  [WidgetId.ProviderUpdates]: {
+    type: WidgetId.ProviderUpdates,
+    kinds: 'both',
+    resources: [],
+    maxItems: 3,
+  },
 };
 
 export type WidgetConfigStorage = {
@@ -133,6 +146,7 @@ export const WIDGET_CONFIG_NUMBER_RANGES = {
   samples: [2, 32],
   expiryWarningDays: [1, 365],
   quotaWarningPercent: [1, 100],
+  maxItems: [1, 20],
 } as const;
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -177,6 +191,19 @@ export function normalizeWidgetConfigStorage(
               ? { kind: 'current' }
               : { kind: 'fixed', profileUid: candidate.profileUid },
         });
+      } else if (key === 'resources' && Array.isArray(candidate)) {
+        const resources: ProviderReference[] = [];
+        const seen = new Set<string>();
+        for (const entry of candidate) {
+          if (!isRecord(entry)) continue;
+          if (entry.kind !== 'proxy' && entry.kind !== 'rule') continue;
+          if (typeof entry.name !== 'string' || !entry.name.trim()) continue;
+          const identity = JSON.stringify([entry.kind, entry.name]);
+          if (seen.has(identity)) continue;
+          seen.add(identity);
+          resources.push({ kind: entry.kind, name: entry.name });
+        }
+        Object.assign(config, { resources });
       } else if (
         typeof candidate === 'boolean' &&
         typeof defaultValue === 'boolean'
@@ -185,7 +212,8 @@ export function normalizeWidgetConfigStorage(
       } else if (
         (key === 'samples' ||
           key === 'expiryWarningDays' ||
-          key === 'quotaWarningPercent') &&
+          key === 'quotaWarningPercent' ||
+          key === 'maxItems') &&
         typeof candidate === 'number' &&
         Number.isInteger(candidate)
       ) {
@@ -197,6 +225,10 @@ export function normalizeWidgetConfigStorage(
         (key === 'unit' && (candidate === 'bytes' || candidate === 'bits')) ||
         (key === 'waveStyle' &&
           (candidate === 'filled' || candidate === 'outline')) ||
+        (key === 'kinds' &&
+          (candidate === 'both' ||
+            candidate === 'proxy' ||
+            candidate === 'rule')) ||
         (key === 'layout' &&
           ((config.type === WidgetId.ProxyMode &&
             (candidate === 'focus' || candidate === 'flex')) ||

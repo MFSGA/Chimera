@@ -1329,5 +1329,20 @@
   "dashboard_widget_config_expiry": "顯示到期時間",
   "dashboard_widget_config_progress": "顯示額度進度",
   "dashboard_widget_config_expiry_threshold": "到期提醒門檻",
-  "dashboard_widget_config_quota_threshold": "餘量提醒門檻"
+  "dashboard_widget_config_quota_threshold": "餘量提醒門檻",
+  "dashboard_widget_provider_updates_title": "Proxy 與路由規則提供者",
+  "dashboard_widget_provider_updates_details": "提供者清單",
+  "dashboard_widget_provider_updates_counts": "Proxy {proxies} · 路由規則 {rules}",
+  "dashboard_widget_provider_updates_read_failed": "無法讀取提供者資料；這不代表清單為空。",
+  "dashboard_widget_provider_updates_loading": "正在讀取提供者…",
+  "dashboard_widget_provider_updates_empty": "所選類型沒有提供者。",
+  "dashboard_widget_provider_updates_missing": "所選提供者已不存在。",
+  "dashboard_widget_provider_updates_refresh": "更新 {name}",
+  "dashboard_widget_provider_updates_check": "檢查狀態：{name}",
+  "dashboard_widget_provider_updates_failed": "本次更新失敗；不會儲存失敗歷史。",
+  "dashboard_widget_provider_updates_unconfirmed": "結果尚未確認；已重新讀取提供者清單。",
+  "dashboard_widget_provider_updates_preview": "查看提供者數量，並手動更新選取的 Proxy 或路由規則提供者。",
+  "dashboard_widget_config_provider_types": "類型",
+  "dashboard_widget_config_both_providers": "全部",
+  "dashboard_widget_config_items": "顯示數量"
 }

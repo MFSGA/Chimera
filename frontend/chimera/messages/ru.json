@@ -1361,5 +1361,20 @@
   "dashboard_widget_config_expiry": "Показывать срок действия",
   "dashboard_widget_config_progress": "Показывать использование квоты",
   "dashboard_widget_config_expiry_threshold": "Предупреждение об истечении",
-  "dashboard_widget_config_quota_threshold": "Предупреждение об остатке квоты"
+  "dashboard_widget_config_quota_threshold": "Предупреждение об остатке квоты",
+  "dashboard_widget_provider_updates_title": "Провайдеры прокси и правил",
+  "dashboard_widget_provider_updates_details": "Провайдеры",
+  "dashboard_widget_provider_updates_counts": "Прокси: {proxies} · Правила: {rules}",
+  "dashboard_widget_provider_updates_read_failed": "Не удалось прочитать данные провайдеров. Это не означает, что список пуст.",
+  "dashboard_widget_provider_updates_loading": "Загрузка провайдеров…",
+  "dashboard_widget_provider_updates_empty": "Нет провайдеров выбранного типа.",
+  "dashboard_widget_provider_updates_missing": "Выбранный провайдер больше не существует.",
+  "dashboard_widget_provider_updates_refresh": "Обновить {name}",
+  "dashboard_widget_provider_updates_check": "Проверить состояние: {name}",
+  "dashboard_widget_provider_updates_failed": "Не удалось обновить. История ошибок не сохраняется.",
+  "dashboard_widget_provider_updates_unconfirmed": "Результат не подтверждён; список провайдеров перечитан.",
+  "dashboard_widget_provider_updates_preview": "Просматривайте количество провайдеров и обновляйте выбранные ресурсы прокси или правил.",
+  "dashboard_widget_config_provider_types": "Типы ресурсов",
+  "dashboard_widget_config_both_providers": "Все",
+  "dashboard_widget_config_items": "Число элементов"
 }

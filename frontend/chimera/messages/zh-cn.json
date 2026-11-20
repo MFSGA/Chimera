@@ -1328,5 +1328,20 @@
   "dashboard_widget_config_expiry": "显示到期时间",
   "dashboard_widget_config_progress": "显示额度进度",
   "dashboard_widget_config_expiry_threshold": "到期提醒阈值",
-  "dashboard_widget_config_quota_threshold": "余量提醒阈值"
+  "dashboard_widget_config_quota_threshold": "余量提醒阈值",
+  "dashboard_widget_provider_updates_title": "代理与规则提供者",
+  "dashboard_widget_provider_updates_details": "资源列表",
+  "dashboard_widget_provider_updates_counts": "代理 {proxies} · 规则 {rules}",
+  "dashboard_widget_provider_updates_read_failed": "无法读取提供者数据；这不代表列表为空。",
+  "dashboard_widget_provider_updates_loading": "正在读取提供者…",
+  "dashboard_widget_provider_updates_empty": "所选类型没有提供者。",
+  "dashboard_widget_provider_updates_missing": "所选提供者已不存在。",
+  "dashboard_widget_provider_updates_refresh": "更新 {name}",
+  "dashboard_widget_provider_updates_check": "检查状态：{name}",
+  "dashboard_widget_provider_updates_failed": "本次更新失败；不会保存失败历史。",
+  "dashboard_widget_provider_updates_unconfirmed": "结果尚未确认；已重新读取提供者列表。",
+  "dashboard_widget_provider_updates_preview": "查看提供者数量，并手动更新选定的代理或规则提供者。",
+  "dashboard_widget_config_provider_types": "类型",
+  "dashboard_widget_config_both_providers": "全部",
+  "dashboard_widget_config_items": "显示数量"
 }

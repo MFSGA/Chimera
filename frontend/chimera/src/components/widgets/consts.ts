@@ -19,6 +19,7 @@
 import type { DndGridItemType } from '@chimera/ui/dnd-grid';
 import type { ReactNode } from 'react';
 import { WidgetId } from './widget-config';
+import { ProviderUpdatesWidget } from './widget-provider-updates';
 import { ProxyModeWidget } from './widget-proxy-mode';
 import { CoreShortcutsWidget, ProxyShortcutsWidget } from './widget-shortcut';
 import {
@@ -58,6 +59,7 @@ export const RENDER_MAP: Record<
   [WidgetId.ProxyMode]: ProxyModeWidget,
   [WidgetId.SubscriptionSchedule]: SubscriptionScheduleWidget,
   [WidgetId.SubscriptionQuota]: SubscriptionQuotaWidget,
+  [WidgetId.ProviderUpdates]: ProviderUpdatesWidget,
 };
 
 /**
@@ -132,6 +134,7 @@ export const WIDGET_MIN_SIZE_MAP: Record<
   [WidgetId.ProxyMode]: { minW: 4, minH: 2 },
   [WidgetId.SubscriptionSchedule]: { minW: 3, minH: 2 },
   [WidgetId.SubscriptionQuota]: { minW: 3, minH: 2 },
+  [WidgetId.ProviderUpdates]: { minW: 3, minH: 2 },
 };
 
 /** 持久化存储的布局数据结构 */

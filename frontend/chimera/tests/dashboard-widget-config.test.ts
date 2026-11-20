@@ -86,6 +86,58 @@ test('normalizes persisted widget settings and rejects invalid values', () => {
   assert.equal('unknown-0' in normalized.byInstance, false);
 });
 
+test('Provider Updates keeps pinned resources and constrains invalid saved options', () => {
+  const saved = normalizeWidgetConfigStorage({
+    version: 1,
+    byInstance: {
+      selected: {
+        type: WidgetId.ProviderUpdates,
+        kinds: 'rule',
+        maxItems: 50,
+        resources: [
+          { kind: 'proxy', name: 'Alpha' },
+          { kind: 'proxy', name: 'Alpha' },
+          { kind: 'rule', name: 'Rule One' },
+          { kind: 'random', name: 'invalid' },
+          { kind: 'proxy', name: '' },
+        ],
+      },
+      broken: {
+        type: WidgetId.ProviderUpdates,
+        kinds: 'untrusted',
+        maxItems: 0,
+        resources: 'broken',
+      },
+      low: {
+        type: WidgetId.ProviderUpdates,
+        maxItems: 1.5,
+      },
+    },
+  });
+  assert.deepEqual(
+    getWidgetConfig(saved, 'selected', WidgetId.ProviderUpdates),
+    {
+      type: WidgetId.ProviderUpdates,
+      kinds: 'rule',
+      maxItems: 20,
+      resources: [
+        { kind: 'proxy', name: 'Alpha' },
+        { kind: 'rule', name: 'Rule One' },
+      ],
+    },
+  );
+  assert.deepEqual(getWidgetConfig(saved, 'broken', WidgetId.ProviderUpdates), {
+    type: WidgetId.ProviderUpdates,
+    kinds: 'both',
+    maxItems: 1,
+    resources: [],
+  });
+  assert.deepEqual(
+    getWidgetConfig(saved, 'low', WidgetId.ProviderUpdates),
+    DEFAULT_WIDGET_CONFIGS[WidgetId.ProviderUpdates],
+  );
+});
+
 test('normalizes Subscription Quota controls without accepting invalid thresholds', () => {
   const storage = normalizeWidgetConfigStorage({
     version: 1,
