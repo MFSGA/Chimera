@@ -10,7 +10,6 @@ use std::{
 };
 
 use anyhow::{Context as _, anyhow, bail};
-use serde::{Deserialize, Serialize};
 
 use crate::{
     core::{backup::BackupInfo, migration::Runner},
@@ -18,26 +17,21 @@ use crate::{
     utils::path::PathResolver,
 };
 
-const CHILD_FLAG: &str = "--chimera-internal-migrate";
-const PROTOCOL_VERSION: u32 = 1;
-const MAX_REPORT_BYTES: u64 = 1024 * 1024;
+#[cfg(test)]
+use chimera_migration::child_result::MAX_REPORT_BYTES;
+use chimera_migration::child_result::{self, validate_new_result_destination};
 
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(tag = "status", rename_all = "snake_case")]
-enum ChildOutcome {
-    Success {
-        backup_name: Option<String>,
-    },
-    Failure {
-        report: Report,
-        backup_name: Option<String>,
-    },
+const CHILD_FLAG: &str = "--chimera-internal-migrate";
+type ChildOutcome = child_result::ChildOutcome<Report>;
+
+// The shell specializes the shared generic wire protocol to Tauri's existing
+// startup report. Encoding, validation and IO are owned by chimera-migration.
+fn write_outcome(result: &Path, outcome: &ChildOutcome) -> anyhow::Result<()> {
+    child_result::write_outcome(result, outcome)
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-struct ChildEnvelope {
-    protocol_version: u32,
-    outcome: ChildOutcome,
+fn read_outcome(result: &Path) -> anyhow::Result<ChildOutcome> {
+    child_result::read_outcome(result)
 }
 
 /// Called in `main` before `chimera_lib::run()` and before all Tauri plugins.
@@ -96,61 +90,6 @@ fn execute(paths: &PathResolver) -> ChildOutcome {
     }
 }
 
-/// This result belongs to a fresh, privately owned directory created by the
-/// primary process. Reject pre-existing nodes before migration starts, rather
-/// than relying on atomic rename to replace a link or an unrelated file.
-/// The additional check at write time catches ordinary late collisions; the
-/// parent's private TempDir is the protection against concurrent replacement.
-fn validate_new_result_destination(result: &Path) -> anyhow::Result<()> {
-    let parent = result
-        .parent()
-        .filter(|parent| !parent.as_os_str().is_empty())
-        .ok_or_else(|| anyhow!("migration result has no private parent directory"))?;
-    let parent_metadata = chimera_persistence::retry_io(|| fs::symlink_metadata(parent))
-        .with_context(|| {
-            format!(
-                "migration result parent is not accessible {}",
-                parent.display()
-            )
-        })?;
-    if !parent_metadata.is_dir() || chimera_persistence::is_link(&parent_metadata) {
-        bail!(
-            "migration result parent is not a real directory: {}",
-            parent.display()
-        );
-    }
-    match chimera_persistence::retry_io(|| fs::symlink_metadata(result)) {
-        Ok(_) => bail!(
-            "refusing to overwrite existing migration result node {}",
-            result.display()
-        ),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(error)
-            .with_context(|| format!("failed to inspect migration result {}", result.display())),
-    }
-}
-
-fn write_outcome(result: &Path, outcome: &ChildOutcome) -> anyhow::Result<()> {
-    validate_new_result_destination(result)?;
-    let body = serde_json::to_vec(&ChildEnvelope {
-        protocol_version: PROTOCOL_VERSION,
-        outcome: match outcome {
-            ChildOutcome::Success { backup_name } => ChildOutcome::Success {
-                backup_name: backup_name.clone(),
-            },
-            ChildOutcome::Failure {
-                report,
-                backup_name,
-            } => ChildOutcome::Failure {
-                report: report.clone(),
-                backup_name: backup_name.clone(),
-            },
-        },
-    })?;
-    chimera_migration::fs::atomic_write(result, &body)
-        .with_context(|| format!("failed to save migration result {}", result.display()))
-}
-
 fn execute_to_file(paths: &PathResolver, result: &Path) -> ExitCode {
     // Fail *before* running an irreversible migration if the expected new
     // result path is already occupied. Otherwise a write refusal after a
@@ -171,46 +110,12 @@ fn execute_to_file(paths: &PathResolver, result: &Path) -> ExitCode {
     }
 }
 
-fn read_outcome(path: &Path) -> anyhow::Result<ChildOutcome> {
-    let metadata = fs::symlink_metadata(path)
-        .with_context(|| format!("migration result was not written at {}", path.display()))?;
-    if !metadata.is_file() || metadata.file_type().is_symlink() || metadata.len() > MAX_REPORT_BYTES
-    {
-        bail!(
-            "migration result is not a valid bounded regular file: {}",
-            path.display()
-        );
-    }
-    let envelope: ChildEnvelope = serde_json::from_slice(&fs::read(path)?)
-        .with_context(|| format!("invalid migration result {}", path.display()))?;
-    if envelope.protocol_version != PROTOCOL_VERSION {
-        bail!(
-            "unsupported migration result protocol {}",
-            envelope.protocol_version
-        );
-    }
-    Ok(envelope.outcome)
-}
-
-fn validate_backup_name(name: &str) -> anyhow::Result<()> {
-    if !name.starts_with(crate::core::backup::MIGRATION_PREFIX)
-        || name.len() > 200
-        || name.contains("..")
-        || !name
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'+'))
-    {
-        bail!("unsafe migration backup name in child result");
-    }
-    Ok(())
-}
-
 fn verified_backup(
     paths: &PathResolver,
     name: Option<String>,
 ) -> anyhow::Result<Option<BackupInfo>> {
     name.map(|name| {
-        validate_backup_name(&name)?;
+        child_result::validate_backup_name(&name, crate::core::backup::MIGRATION_PREFIX)?;
         let backup = BackupInfo {
             path: paths.backups_dir().join(&name),
             name,

@@ -1414,6 +1414,7 @@ dependencies = [
  "pretty_assertions",
  "semver 1.0.28",
  "serde",
+ "serde_json",
  "serde_yaml",
  "serde_yaml_ng",
  "tempfile",

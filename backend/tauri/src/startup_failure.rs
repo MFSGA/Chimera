@@ -55,71 +55,7 @@ pub(crate) enum StartupStage {
     TypedClient,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub(crate) enum RevisionFailure {
-    NewerStoreSchema {
-        path: PathBuf,
-        read: u64,
-        supported: u64,
-    },
-    OlderStoreSchema {
-        path: PathBuf,
-        read: u64,
-        supported: u64,
-    },
-    NewerDocument {
-        path: PathBuf,
-        read: u64,
-        supported: u64,
-    },
-    NewerAppliedModule {
-        path: PathBuf,
-        module: String,
-        read: u64,
-        supported: u64,
-    },
-    DocumentBehindState {
-        path: PathBuf,
-        state_path: PathBuf,
-        module: String,
-        read: u64,
-        applied: u64,
-    },
-    MissingDocumentStamp {
-        path: PathBuf,
-        state_path: PathBuf,
-    },
-    FilesBehindState {
-        state_path: PathBuf,
-        module: String,
-        applied: u64,
-        reason: String,
-    },
-}
-
-impl RevisionFailure {
-    fn path(&self) -> &PathBuf {
-        match self {
-            Self::NewerStoreSchema { path, .. }
-            | Self::OlderStoreSchema { path, .. }
-            | Self::NewerDocument { path, .. }
-            | Self::NewerAppliedModule { path, .. }
-            | Self::DocumentBehindState { path, .. }
-            | Self::MissingDocumentStamp { path, .. } => path,
-            Self::FilesBehindState { state_path, .. } => state_path,
-        }
-    }
-
-    fn is_newer(&self) -> bool {
-        matches!(
-            self,
-            Self::NewerStoreSchema { .. }
-                | Self::NewerDocument { .. }
-                | Self::NewerAppliedModule { .. }
-        )
-    }
-}
+pub(crate) use chimera_migration::child_result::RevisionFailure;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct Report {
