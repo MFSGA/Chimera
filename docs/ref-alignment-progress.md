@@ -1,5 +1,12 @@
 # ref 对齐进度
 
+## DIFF-113：Effects 与 CoreLifecycle Actor 停止时的 in-flight 任务所有权对齐（2026-11-20）
+
+- **固定上游/核心差异**：依据 `ref@c4b35e048` 的 `backend/nyanpasu-core/src/client/effects/actor.rs::post_stop` 以及 `backend/nyanpasu-core/src/actor_v2/service_actor.rs` 的 JoinHandle fatal panic 传播语义。风险 **L2**（OS 副作用/系统代理与透明代理切换、Core/Profile 事务在停止时被抢断、Actor 意外终止）；只修改两个已有拥有者的真实生产生命周期，保留现有 `ref` 和 Runtime 子模块指针。用户此前要求**只做代码迁移、不额外测试**，故不主动运行单测、全量构建、打包或 CI；强制提交钩子的 Rustfmt/Clippy 属于提交步骤而非独立 E2E 验收。
+- **EffectsActor 按上游先 drain 再关闭**：原 Chimera `Message::Shutdown` 对四个正在执行的 `port.apply(...)` 的 `JoinHandle` 调用 `abort()` 并等待取消，`post_stop` 甚至只 `abort()` 后立即返回；这可能在系统代理/透明代理、热键或其他 OS 状态还处于中间步骤时让 `port.shutdown()` 与残留写入交叉。新增 `State::drain_active`：不再 abort 正在执行的效果组，逐个 take 并 await 全部 JoinHandle；正常 `Shutdown` 首先置 `closed`、取消计时器和 pending，然后 drain 全部 active，再向待决请求返回 shutdown 降级结果并调用 `port.shutdown()`。意外 `post_stop` 也先关闭、停止计时器，再完整 drain。多个执行组分别拥有任务，若某个任务发生**非预期 fatal panic**，先等待其余组结束，再以 `try_into_panic` / `resume_unwind` 向上层传播，避免错误传播本身让其它 OS 写入失去所有权；已取消的任务记录警告。`Message::Completed` 也不再丢弃尚未 Join 的句柄，而是先等待拥有的任务结束再更新执行组状态。
+- **CoreLifecycle 的真实事务 Owner 保全**：CoreLifecycle `Completed` 原先忽略 `active.task.await` 的 `JoinError`，现转为传播其中真实 Panic。原 `post_stop` 只停恢复计时器并关闭 Reconciler，若 Actor 在一个迁移/Service/Core/Profile 事务仍在执行时停止，活动任务的 workflow、lease 和未决决策被独立执行且失去主人；现从 `state.active` take 出任务并等待，不 `abort`，在等待前将共享 `startup_owner_unproven` 标记、`CoreLifecycleStatus` 的 `uncertain`/`shutting_down` 与活动项清理，禁止后续把未知完成结果误发布为成功。完成等待后关闭 Reconciler；意外 JoinError 的 Panic 向上层传播，不吞掉失去所有权的致命错误。普通已捕获的业务 Panic 仍按 DIFF-112 原流程 `mark_recovery_required` 和事务结算处理。
+- **回归源码与余留差异**：新增 `effects/actor.rs` 的屏障式测试定义：在 `port.apply` 持续修改状态时调用 Shutdown，必须先等待应用完成，再进入 `port.shutdown()`；测试采用隔离 `BlockingEffectsPort`、oneshot gate、完成标志，不调用真实 OS 服务。本轮**未执行测试**，不能称作实机完成。上游 EffectsActor 本身没有 Chimera 独有的 RPC `Shutdown` 命令；本轮保留该接口，并以 ref 的停止时任务 drain 语义适配，未机械删除 Chimera UI/服务 API。下一步仍需迁移其它 Owner（例如 Core/Service/Jobs）实际 JoinHandle 和后台任务所有权，避免对故意恢复的 panic 误用 `resume_unwind`。若出现无法完成的慢 OS 操作，actor 会持续等待而非强制取消，UI RPC 目前仍有 10 秒等待上限；需要后续上层 shutdown 超时与诊断规划，不应用 `abort` 假装操作已完成。
+
 ## DIFF-112：异步 Actor 可恢复 Panic 作用域按 Future poll 收窄（2026-11-20）
 
 - **固定上游与原始需求**：继续按 `ref@c4b35e048` 的 `backend/nyanpasu-panics/src/lib.rs::{setup_panic_hook,catch_recoverable}`、上游 Core/Effects/Jobs Owner 的 Panic 传播语义对齐；承接 DIFF-110/111 已迁移的 `chimera-panics` 和同步边界。风险 **L2**（异步事务、CoreLifecycle 不确定状态、Effects 重试、Jobs 持久化失败）；本轮根据用户持续的“专注迁移、不用验证”要求，不另行运行单元测试、完整构建、桌面 E2E 或 CI。仓库强制 Git 提交钩子仍按原设置执行 Rustfmt/Clippy 等，不视作本轮独立验收。
