@@ -1,5 +1,15 @@
 # ref 对齐进度
 
+## DIFF-093：Migration Runner 执行事务与恢复核验下沉（2026-11-19）
+
+- **参考基线与风险**：以 `ref@c4b35e048` 的 `backend/nyanpasu-migration/src/runner.rs` 为核心参考；本批风险 **L2**（运行前保护与旧数据迁移）。目标是在共享 `chimera-migration` 里统一 Runner 步骤执行、恢复和模块遍历的真实生产逻辑，同时保留 Tauri 的宿主路径、BackupPort 与具体迁移模块。不改 `ref` / Runtime gitlink，不清理用户历史、备份与 `.corrupt-*` 数据证据。
+- **共享步骤事务**：`chimera-migration::runner::execute_step` 接管原 Tauri `run_step`、`finish_step`、`record_failure`、`check_step`、`ensure_satisfied`，沿用共享 `MigrationStep<Ctx>` 和 `Registry<Ctx>`。运行前先验证步骤需要性并落盘 `InProgress`；完成后核对 document stamp 和步骤条件，再连同模块连续 revision 记录 `Completed` / `Skipped`；发生检查、运行或后置条件错误时记录 `Failed` 并保留真实错误链，回滚为 best-effort，回滚失败不能掩盖原始运行错误；写状态文件失败时不执行下一次文件修改。
+- **共享恢复和文档核验**：`runner::{ensure_baselines,reconcile_documents,ensure_known_revisions,verify_applied_revisions,stamp_adopted_documents}` 接管 stamped 文档与状态文件的双向核对，拒绝高于当前版本的文件、丢失 stamp、落后于状态的文件及不一致的落盘修订；恢复错误 `RevisionError` 移入共享 crate，Tauri 保留同一类型重导出供原有启动诊断 downcast 使用。旧文档只在完整核验达到模块 head 且 BackupPort 已成功返回后补 stamp，保证失败前不覆盖原始配置。新安装的 baseline 仍不创建无意义备份。
+- **共享模块循环与最终提交**：`runner::{has_pending_steps,execute_pending_steps,commit_successful_run}` 负责逐模块执行、按 Registry 顺序处理 pending、独立模块失败时记录第一条错误并继续其他模块、重启仅重试失败步骤；全部模块、旧文档 stamp 和文件状态核验完成后才原子写入 `last_succeeded`。Tauri 仍负责 preflight 备份的实际文件生成/校验和最终备份 pruning，不能在成功状态落盘之前清理任何旧备份。单步 `run_migration` 沿用同一个共享执行事务。
+- **兼容与未完成**：保留既有 `_nyanpasu` stamp、`migration-state.yaml` schema 2 和错误消息、Profiles 功能开关、Chimera 0.28.x 的步骤版本门槛、旧 IPC 以及 BackupRequest/Manifest 语义。共享 Runner 接收泛型上下文及注入的 Registry/BackupPort，Tauri `Runner` 剩余宿主编排与具体 `modules/{profiles,typed_config,storage}` 业务尚未全部迁出，尚不能声称整个 Migration crate 已按 ref 100% 对齐。
+- **验证**：共享 Migration 直接验证成功、跳过、检查错误、运行错误、后置条件不满足、失败回滚、回滚失败不隐藏原始错误、重启重试、跨模块故障隔离、符号链接状态目标拒绝等，库测试 **35/35**；Tauri 完整库 **1057/1057**、1 项原有忽略项；`cargo check --locked -p chimera --all-features --tests`、Rustfmt、提交 Clippy、Git diff check 通过。仅 macOS 本地测试；Windows/Linux、用户历史数据实机升级、GUI E2E、远端 CI 尚未验收。
+- **回滚和后续**：出问题先回滚本轮共享 Runner 委托与相关诊断重导出，不重置状态、不删除迁移前备份或 `.corrupt-*` 证据。下一步完整搬迁 Profiles/Typed Config/Storage 的业务模块，最终将宿主 `Runner` 收敛为纯注入适配。
+
 ## DIFF-092：Migration Module / Registry / Document 契约下沉（2026-11-19）
 
 - **基线与目标**：继续对齐 `ref@c4b35e048` 的 `nyanpasu-migration/src/{lib.rs,registry.rs,fs.rs,runner.rs}` 和 `nyanpasu-persistence::format`。本轮风险 **L2**（启动前迁移检查及带 stamp 的文档）；不改两个 git submodule 的指针，不触碰真实用户目录、网络服务和既有应用配置。
