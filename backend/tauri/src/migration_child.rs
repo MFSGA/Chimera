@@ -96,7 +96,42 @@ fn execute(paths: &PathResolver) -> ChildOutcome {
     }
 }
 
+/// This result belongs to a fresh, privately owned directory created by the
+/// primary process. Reject pre-existing nodes before migration starts, rather
+/// than relying on atomic rename to replace a link or an unrelated file.
+/// The additional check at write time catches ordinary late collisions; the
+/// parent's private TempDir is the protection against concurrent replacement.
+fn validate_new_result_destination(result: &Path) -> anyhow::Result<()> {
+    let parent = result
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .ok_or_else(|| anyhow!("migration result has no private parent directory"))?;
+    let parent_metadata = chimera_persistence::retry_io(|| fs::symlink_metadata(parent))
+        .with_context(|| {
+            format!(
+                "migration result parent is not accessible {}",
+                parent.display()
+            )
+        })?;
+    if !parent_metadata.is_dir() || chimera_persistence::is_link(&parent_metadata) {
+        bail!(
+            "migration result parent is not a real directory: {}",
+            parent.display()
+        );
+    }
+    match chimera_persistence::retry_io(|| fs::symlink_metadata(result)) {
+        Ok(_) => bail!(
+            "refusing to overwrite existing migration result node {}",
+            result.display()
+        ),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error)
+            .with_context(|| format!("failed to inspect migration result {}", result.display())),
+    }
+}
+
 fn write_outcome(result: &Path, outcome: &ChildOutcome) -> anyhow::Result<()> {
+    validate_new_result_destination(result)?;
     let body = serde_json::to_vec(&ChildEnvelope {
         protocol_version: PROTOCOL_VERSION,
         outcome: match outcome {
@@ -112,11 +147,18 @@ fn write_outcome(result: &Path, outcome: &ChildOutcome) -> anyhow::Result<()> {
             },
         },
     })?;
-    chimera_persistence::write::atomic_write(result, &body)
+    chimera_migration::fs::atomic_write(result, &body)
         .with_context(|| format!("failed to save migration result {}", result.display()))
 }
 
 fn execute_to_file(paths: &PathResolver, result: &Path) -> ExitCode {
+    // Fail *before* running an irreversible migration if the expected new
+    // result path is already occupied. Otherwise a write refusal after a
+    // successful migration would leave no trustworthy child result.
+    if let Err(error) = validate_new_result_destination(result) {
+        eprintln!("invalid migration child result destination: {error:#}");
+        return ExitCode::FAILURE;
+    }
     let outcome = execute(paths);
     if let Err(error) = write_outcome(result, &outcome) {
         eprintln!("failed to persist migration child report: {error:#}");
@@ -325,6 +367,56 @@ mod tests {
             symlink(temp.path().join("missing"), &result).unwrap();
             assert!(read_outcome(&result).is_err());
         }
+    }
+
+    #[test]
+    fn existing_result_file_or_missing_parent_rejects_migration_before_running() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths =
+            PathResolver::with_base_dirs(temp.path().join("config"), temp.path().join("data"));
+        fs::create_dir_all(paths.app_config_dir()).unwrap();
+        fs::create_dir_all(paths.app_data_dir()).unwrap();
+        let legacy = b"hotkeys: [clash_mode_rule,Control+Q]\n";
+        fs::write(paths.chimera_config_path(), legacy).unwrap();
+        let result = temp.path().join("child-result.json");
+        fs::write(&result, b"unrelated previous result").unwrap();
+        assert_eq!(execute_to_file(&paths, &result), ExitCode::FAILURE);
+        assert_eq!(fs::read(&result).unwrap(), b"unrelated previous result");
+        assert_eq!(
+            execute_to_file(&paths, &temp.path().join("missing-parent/result.json")),
+            ExitCode::FAILURE
+        );
+        assert!(!paths.app_config_dir().join("migration-state.yaml").exists());
+        assert!(!paths.application_config_path().exists());
+        assert_eq!(fs::read(paths.chimera_config_path()).unwrap(), legacy);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn occupied_result_node_rejects_migration_before_any_user_data_writes() {
+        use std::os::unix::fs::symlink;
+        let temp = tempfile::tempdir().unwrap();
+        let paths =
+            PathResolver::with_base_dirs(temp.path().join("config"), temp.path().join("data"));
+        fs::create_dir_all(paths.app_config_dir()).unwrap();
+        fs::create_dir_all(paths.app_data_dir()).unwrap();
+        let original = b"hotkeys: [clash_mode_rule,Control+Q]\n";
+        fs::write(paths.chimera_config_path(), original).unwrap();
+        let external = temp.path().join("external-result.txt");
+        fs::write(&external, b"other user's bytes").unwrap();
+        let result = temp.path().join("result.json");
+        symlink(&external, &result).unwrap();
+        assert_eq!(execute_to_file(&paths, &result), ExitCode::FAILURE);
+        assert_eq!(fs::read_link(&result).unwrap(), external);
+        assert_eq!(fs::read(&external).unwrap(), b"other user's bytes");
+        assert_eq!(fs::read(paths.chimera_config_path()).unwrap(), original);
+        assert!(!paths.app_config_dir().join("migration-state.yaml").exists());
+        assert!(!paths.application_config_path().exists());
+        fs::remove_file(&result).unwrap();
+        fs::write(&result, b"existing child result").unwrap();
+        assert_eq!(execute_to_file(&paths, &result), ExitCode::FAILURE);
+        assert_eq!(fs::read(&result).unwrap(), b"existing child result");
+        assert!(!paths.app_config_dir().join("migration-state.yaml").exists());
     }
 
     #[test]
