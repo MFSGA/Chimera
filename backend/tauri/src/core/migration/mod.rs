@@ -22,6 +22,12 @@ pub struct Ctx {
     shared: chimera_migration::context::Ctx,
 }
 
+impl AsRef<chimera_migration::context::Ctx> for Ctx {
+    fn as_ref(&self) -> &chimera_migration::context::Ctx {
+        &self.shared
+    }
+}
+
 impl std::ops::Deref for Ctx {
     type Target = chimera_migration::context::Ctx;
 

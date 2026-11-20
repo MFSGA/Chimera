@@ -5,6 +5,7 @@ pub mod context;
 pub mod document;
 pub mod fs;
 pub mod module;
+pub mod modules;
 pub mod registry;
 pub mod runner;
 pub mod store;
