@@ -27,6 +27,8 @@ const DashboardLayoutContext = createContext<{
   readError: boolean;
   saveState: DashboardLayoutSaveState;
   saveEdit: (edit: DashboardLayoutEdit) => boolean;
+  /** Synchronous state for DnD callbacks before React flushes the save update. */
+  getSaveState: () => DashboardLayoutSaveState;
   retry: () => void;
 } | null>(null);
 
@@ -86,6 +88,7 @@ export function DashboardLayoutPersistenceProvider({
         readError: readError !== null,
         saveState,
         saveEdit,
+        getSaveState: saver.getState,
         retry,
       }}
     >

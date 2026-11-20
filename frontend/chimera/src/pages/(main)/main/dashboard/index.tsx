@@ -39,6 +39,7 @@ import {
   useDashboardLayoutPersistence,
 } from './_modules/layout-persistence';
 import { selectLayoutEntry } from './_modules/layout-storage';
+import { createDashboardViewportCoordinator } from './_modules/layout-viewport';
 import { canEditDashboard, placeWidget } from './_modules/widget-placement';
 import { WidgetSheet } from './_modules/widget-sheet';
 
@@ -132,6 +133,7 @@ const WidgetRender = () => {
     readError: layoutReadError,
     saveState: layoutSaveState,
     saveEdit: saveLayoutEdit,
+    getSaveState,
   } = useDashboardLayoutPersistence();
 
   const editable = canEditDashboard({
@@ -152,17 +154,6 @@ const WidgetRender = () => {
 
   const activeLayoutIdRef = useRef(activeLayoutId);
   activeLayoutIdRef.current = activeLayoutId;
-
-  useEffect(() => {
-    const gridSize = gridSizeRef.current;
-    const nextId =
-      layoutStorage.preferredId ??
-      (gridSize ? selectLayoutEntry(layoutStorage, gridSize)?.id : null) ??
-      null;
-
-    activeLayoutIdRef.current = nextId;
-    setActiveLayoutId(nextId);
-  }, [layoutStorage]);
 
   const sourceLayout = useMemo(() => {
     if (!gridSize) return null;
@@ -198,11 +189,10 @@ const WidgetRender = () => {
   const settledTimerRef = useRef<number | undefined>(undefined);
   useEffect(() => () => window.clearTimeout(settledTimerRef.current), []);
 
-  const handleSizeChange = useCallback(
+  const applySizeChange = useCallback(
     (newSize: GridSize) => {
       gridSizeRef.current = newSize;
       setGridSize(newSize);
-
       window.clearTimeout(settledTimerRef.current);
       if (activeLayoutIdRef.current === null) {
         selectForSize(newSize);
@@ -216,9 +206,57 @@ const WidgetRender = () => {
     [selectForSize],
   );
 
+  const viewport = useMemo(
+    () => createDashboardViewportCoordinator(applySizeChange),
+    [applySizeChange],
+  );
+
+  // A queue's state changes synchronously before the React commit. Check it
+  // in each callback so a pending layout write also defers viewport changes.
+  const handleSizeChange = useCallback(
+    (size: GridSize) => {
+      const saving = getSaveState() === 'saving';
+      if (saving) window.clearTimeout(settledTimerRef.current);
+      viewport.onSavingChange(saving);
+      viewport.onSizeChange(size);
+    },
+    [viewport, getSaveState],
+  );
+
+  const handleGridInteractionChange = useCallback(
+    (active: boolean) => {
+      if (active) window.clearTimeout(settledTimerRef.current);
+      const saving = getSaveState() === 'saving';
+      if (saving) window.clearTimeout(settledTimerRef.current);
+      viewport.onSavingChange(saving);
+      viewport.onInteractionChange(active);
+    },
+    [viewport, getSaveState],
+  );
+
+  useEffect(() => {
+    if (layoutSaveState === 'saving') {
+      window.clearTimeout(settledTimerRef.current);
+    }
+    viewport.onSavingChange(layoutSaveState === 'saving');
+  }, [viewport, layoutSaveState]);
+
+  useEffect(() => {
+    // A KV change event can arrive while dragging; don't reselect the
+    // persisted source until the gesture or pending write has finished.
+    if (viewport.isInteracting() || getSaveState() === 'saving') return;
+    const available = gridSizeRef.current;
+    const nextId =
+      layoutStorage.preferredId ??
+      (available ? selectLayoutEntry(layoutStorage, available)?.id : null) ??
+      null;
+    activeLayoutIdRef.current = nextId;
+    setActiveLayoutId(nextId);
+  }, [layoutStorage, layoutSaveState, viewport, getSaveState]);
+
   const handleLayoutChange = useCallback(
-    (newItems: DashboardItem[]) => {
-      if (!editable) return;
+    (newItems: DashboardItem[]): boolean => {
+      if (!editable || viewport.shouldDiscardCommit()) return false;
 
       const gridSize = gridSizeRef.current;
       const source =
@@ -228,19 +266,20 @@ const WidgetRender = () => {
         (gridSize
           ? selectLayoutEntry(layoutStorageRef.current, gridSize)
           : null);
-      if (!source) return;
+      if (!source) return false;
 
       const saved = saveLayoutEdit({
         sourceId: source.id,
         visibleIds: displayItemsRef.current.map(({ id }) => id),
         nextItems: newItems,
       });
-      if (!saved) return;
+      if (!saved) return false;
       displayItemsRef.current = newItems;
       activeLayoutIdRef.current = source.id;
       setActiveLayoutId(source.id);
+      return true;
     },
-    [editable, saveLayoutEdit],
+    [editable, saveLayoutEdit, viewport],
   );
 
   const handleCloseClick = useCallback(
@@ -309,8 +348,7 @@ const WidgetRender = () => {
       });
 
       if (placement) {
-        handleLayoutChange([...current, placement]);
-        return true;
+        return handleLayoutChange([...current, placement]);
       }
       return false;
     },
@@ -318,7 +356,7 @@ const WidgetRender = () => {
   );
 
   return (
-    <DndGridRoot>
+    <DndGridRoot onSourceInteractionChange={handleGridInteractionChange}>
       <div
         className="flex min-h-0 flex-1 flex-col p-4"
         data-slot="dashboard-widget-container"
@@ -336,6 +374,7 @@ const WidgetRender = () => {
             }
             minCellSize={64}
             onSizeChange={handleSizeChange}
+            onInteractionChange={handleGridInteractionChange}
             gap={16}
             disabled={!editable}
           >
