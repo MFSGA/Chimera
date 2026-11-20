@@ -113,6 +113,7 @@ function DashboardDragOverlay({
                   onResizeStart: () => {},
                   onResizeMove: () => {},
                   onResizeEnd: () => {},
+                  onResizeCancel: () => {},
                 }}
               >
                 <WidgetComponent id={activeDrag.itemId} />

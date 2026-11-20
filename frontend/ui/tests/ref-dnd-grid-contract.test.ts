@@ -5,7 +5,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { DndGridItemType } from '../src/dnd-grid/types';
-import { calculateResize, hasOverlap, isOverlap } from '../src/dnd-grid/utils';
+import {
+  calculateResize,
+  committedResizeItems,
+  hasOverlap,
+  isOverlap,
+} from '../src/dnd-grid/utils';
 
 const moving: DndGridItemType = {
   id: 'moving',
@@ -60,4 +65,50 @@ test('resize snaps to cells, preserves opposite edge, and respects bounds', () =
   assert.deepEqual(resize('left', 1000, 0), { ...moving, x: 3, w: 1 });
   assert.deepEqual(resize('right', 100, 0, { maxW: 2 }), moving);
   assert.deepEqual(resize('bottom', 0, -100, { minH: 2 }), moving);
+});
+
+test('pointer cancellation discards a valid resize preview without changing layout', () => {
+  const original: DndGridItemType[] = [
+    moving,
+    { id: 'sibling', x: 0, y: 0, w: 2, h: 2 },
+  ];
+  const enlarged = calculateResize(
+    moving,
+    'bottom-right',
+    100,
+    100,
+    100,
+    100,
+    0,
+    6,
+    6,
+  );
+  assert.notDeepEqual(enlarged, moving);
+  assert.equal(committedResizeItems(original, enlarged, true), null);
+  assert.deepEqual(original[0], moving);
+  assert.deepEqual(committedResizeItems(original, enlarged, false), [
+    enlarged,
+    original[1],
+  ]);
+  assert.equal(committedResizeItems(original, null, false), null);
+});
+
+test('a second resize starts from unchanged geometry after cancellation', () => {
+  const original: DndGridItemType[] = [moving];
+  const first = calculateResize(moving, 'right', 100, 0, 100, 100, 0, 6, 6);
+  assert.equal(committedResizeItems(original, first, true), null);
+  const second = calculateResize(
+    original[0]!,
+    'bottom',
+    0,
+    100,
+    100,
+    100,
+    0,
+    6,
+    6,
+  );
+  assert.deepEqual(committedResizeItems(original, second, false), [
+    { ...moving, h: 3 },
+  ]);
 });

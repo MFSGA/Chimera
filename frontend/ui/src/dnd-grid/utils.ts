@@ -76,3 +76,13 @@ export function calculateResize<T extends string>(
     h,
   };
 }
+
+/** A cancelled pointer gesture must never enqueue a new persistent layout. */
+export function committedResizeItems<T extends string>(
+  items: DndGridItemType<T>[],
+  preview: DndGridItemType<T> | null,
+  cancelled: boolean,
+): DndGridItemType<T>[] | null {
+  if (cancelled || !preview) return null;
+  return items.map((item) => (item.id === preview.id ? preview : item));
+}

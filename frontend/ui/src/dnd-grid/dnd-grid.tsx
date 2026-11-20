@@ -29,7 +29,7 @@ import type {
   ResizeHandle,
 } from './types';
 import { useGridLayout } from './use-grid-layout';
-import { calculateResize, hasOverlap } from './utils';
+import { calculateResize, committedResizeItems, hasOverlap } from './utils';
 
 export interface DndGridProps<T extends string = string> {
   items: DndGridItemType<T>[];
@@ -260,20 +260,26 @@ export function DndGrid<T extends string = string>({
     [items, layout, gap],
   );
 
-  const onResizeEnd = useCallback(() => {
-    const preview = resizePreviewRef.current;
-    resizeStateRef.current = null;
-    resizePreviewRef.current = null;
-    setResizingItemId(null);
-    setResizePreview(null);
-    setFrozenItems(null);
+  const finishResize = useCallback(
+    (cancelled: boolean) => {
+      const committed = committedResizeItems(
+        items,
+        resizePreviewRef.current,
+        cancelled,
+      );
+      resizeStateRef.current = null;
+      resizePreviewRef.current = null;
+      setResizingItemId(null);
+      setResizePreview(null);
+      setFrozenItems(null);
+      if (committed) onLayoutChange?.(committed);
+      onInteractionChange?.(false);
+    },
+    [items, onLayoutChange, onInteractionChange],
+  );
 
-    if (preview) {
-      const newItems = items.map((i) => (i.id === preview.id ? preview : i));
-      onLayoutChange?.(newItems);
-    }
-    onInteractionChange?.(false);
-  }, [items, onLayoutChange, onInteractionChange]);
+  const onResizeEnd = useCallback(() => finishResize(false), [finishResize]);
+  const onResizeCancel = useCallback(() => finishResize(true), [finishResize]);
 
   const rootCtx = useDndGridRoot();
 
@@ -361,6 +367,7 @@ export function DndGrid<T extends string = string>({
       onResizeStart,
       onResizeMove,
       onResizeEnd,
+      onResizeCancel,
     }),
     [
       effectiveDisplayItems,
@@ -374,6 +381,7 @@ export function DndGrid<T extends string = string>({
       onResizeStart,
       onResizeMove,
       onResizeEnd,
+      onResizeCancel,
     ],
   );
 
@@ -447,6 +455,7 @@ export function DndGrid<T extends string = string>({
                     onResizeStart,
                     onResizeMove,
                     onResizeEnd,
+                    onResizeCancel,
                   }}
                 >
                   {children(activeItem)}
