@@ -1,6 +1,8 @@
 use crate::utils::path::PathResolver;
+use chimera_contracts::{BoxedCause, storage::HotkeyStoreOpener};
+use chimera_core::storage::RedbHotkeyStoreOpener;
 use semver::Version;
-use std::path::PathBuf;
+use std::{path::PathBuf, sync::Arc};
 
 pub(crate) mod fs;
 pub mod modules;
@@ -44,29 +46,40 @@ impl std::fmt::Display for MigrationAdvice {
 #[derive(Debug, Clone)]
 pub struct Ctx {
     paths: PathResolver,
+    hotkey_store_opener: Arc<dyn HotkeyStoreOpener>,
 }
 
 impl Ctx {
     pub fn from_app_dirs() -> anyhow::Result<Self> {
-        Ok(Self {
-            paths: PathResolver::from_env()?,
-        })
+        Ok(Self::from_paths(PathResolver::from_env()?))
     }
 
     pub fn from_paths(paths: PathResolver) -> Self {
-        Self { paths }
+        Self::with_hotkey_store_opener(paths, Arc::new(RedbHotkeyStoreOpener))
+    }
+
+    pub fn with_hotkey_store_opener(
+        paths: PathResolver,
+        hotkey_store_opener: Arc<dyn HotkeyStoreOpener>,
+    ) -> Self {
+        Self {
+            paths,
+            hotkey_store_opener,
+        }
     }
 
     #[cfg(test)]
     pub fn new(app_config_dir: PathBuf, app_data_dir: PathBuf) -> Self {
-        Self {
-            paths: PathResolver::with_base_dirs(app_config_dir, app_data_dir),
-        }
+        Self::from_paths(PathResolver::with_base_dirs(app_config_dir, app_data_dir))
     }
 
     /// The underlying path resolver, the single source of truth for app paths.
     pub fn paths(&self) -> &PathResolver {
         &self.paths
+    }
+
+    pub fn hotkey_store_opener(&self) -> &dyn HotkeyStoreOpener {
+        self.hotkey_store_opener.as_ref()
     }
 
     pub fn profiles_path(&self) -> PathBuf {
@@ -140,7 +153,7 @@ pub enum MigrationCheckError {
     Storage {
         path: PathBuf,
         #[source]
-        source: crate::core::storage::StorageOperationError,
+        source: BoxedCause,
     },
     #[error("failed to read the stamp of {}", path.display())]
     Stamp {
