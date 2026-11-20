@@ -86,6 +86,48 @@ test('normalizes persisted widget settings and rejects invalid values', () => {
   assert.equal('unknown-0' in normalized.byInstance, false);
 });
 
+test('normalizes Subscription Quota controls without accepting invalid thresholds', () => {
+  const storage = normalizeWidgetConfigStorage({
+    version: 1,
+    byInstance: {
+      custom: {
+        type: WidgetId.SubscriptionQuota,
+        target: { kind: 'fixed', profileUid: 'remote-a' },
+        showExpiry: false,
+        showProgress: false,
+        waveStyle: 'outline',
+        animateWave: false,
+        expiryWarningDays: 500,
+        quotaWarningPercent: 0,
+      },
+      malformed: {
+        type: WidgetId.SubscriptionQuota,
+        target: { kind: 'fixed', profileUid: '' },
+        waveStyle: 'invalid',
+        expiryWarningDays: 2.5,
+        quotaWarningPercent: NaN,
+      },
+    },
+  });
+  assert.deepEqual(
+    getWidgetConfig(storage, 'custom', WidgetId.SubscriptionQuota),
+    {
+      type: WidgetId.SubscriptionQuota,
+      target: { kind: 'fixed', profileUid: 'remote-a' },
+      showExpiry: false,
+      showProgress: false,
+      waveStyle: 'outline',
+      animateWave: false,
+      expiryWarningDays: 365,
+      quotaWarningPercent: 1,
+    },
+  );
+  assert.deepEqual(
+    getWidgetConfig(storage, 'malformed', WidgetId.SubscriptionQuota),
+    DEFAULT_WIDGET_CONFIGS[WidgetId.SubscriptionQuota],
+  );
+});
+
 test('preserves only valid Subscription Schedule targets and history settings', () => {
   const stored = normalizeWidgetConfigStorage({
     version: 1,

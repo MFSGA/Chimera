@@ -7,6 +7,7 @@ import AddRounded from '~icons/material-symbols/add-rounded';
 import ArrowDownwardRounded from '~icons/material-symbols/arrow-downward-rounded';
 import ArrowUpwardRounded from '~icons/material-symbols/arrow-upward-rounded';
 import CloseRounded from '~icons/material-symbols/close-rounded';
+import DataUsageRounded from '~icons/material-symbols/data-usage-rounded';
 import DoneRounded from '~icons/material-symbols/done-rounded';
 import EventRepeatRounded from '~icons/material-symbols/event-repeat-rounded';
 import MemoryOutlineRounded from '~icons/material-symbols/memory-outline-rounded';
@@ -33,6 +34,7 @@ const WIDGET_TITLE_MAP: Record<WidgetId, () => string> = {
   [WidgetId.ProxyMode]: m.dashboard_widget_proxy_mode_title,
   [WidgetId.SubscriptionSchedule]:
     m.dashboard_widget_subscription_schedule_title,
+  [WidgetId.SubscriptionQuota]: m.dashboard_widget_subscription_quota_title,
 };
 
 const WIDGET_ICON_MAP: Record<
@@ -47,6 +49,7 @@ const WIDGET_ICON_MAP: Record<
   [WidgetId.CoreShortcuts]: MemoryOutlineRounded,
   [WidgetId.ProxyMode]: RouteRounded,
   [WidgetId.SubscriptionSchedule]: EventRepeatRounded,
+  [WidgetId.SubscriptionQuota]: DataUsageRounded,
 };
 
 const widgetEntryAddVariants = cva('size-9 shrink-0 shadow-none', {

@@ -136,3 +136,21 @@ export function latestFinishedRuns<T extends RunDto | SyncRunSummary>(
     })
     .slice(0, Math.max(0, limit));
 }
+
+/** Warn on an approaching expiration, including already-expired subscriptions. */
+export function isExpiryWarning(
+  timestamp: number | null,
+  warningDays: number,
+  now: number,
+): boolean {
+  return (
+    timestamp !== null && timestamp - now <= warningDays * 24 * 60 * 60 * 1000
+  );
+}
+
+export function isQuotaWarning(
+  quota: SubscriptionQuota | null,
+  warningPercent: number,
+): boolean {
+  return quota !== null && quota.remainingPercent <= warningPercent;
+}

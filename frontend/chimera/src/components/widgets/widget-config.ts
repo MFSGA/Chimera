@@ -8,6 +8,7 @@ export enum WidgetId {
   CoreShortcuts = 'core-shortcuts',
   ProxyMode = 'proxy-mode',
   SubscriptionSchedule = 'subscription-schedule',
+  SubscriptionQuota = 'subscription-quota',
 }
 
 type TrafficConfig = {
@@ -21,6 +22,8 @@ type HistoryConfig = { showChart: boolean; samples: number };
 /** Reference targets for upcoming subscription/report dashboard widgets. */
 export type SubscriptionTarget =
   { kind: 'current' } | { kind: 'fixed'; profileUid: string };
+
+export type SubscriptionQuotaWaveStyle = 'filled' | 'outline';
 
 export type ProviderReference = { kind: 'proxy' | 'rule'; name: string };
 
@@ -47,6 +50,16 @@ export type WidgetConfigs = {
     type: WidgetId.SubscriptionSchedule;
     target: SubscriptionTarget;
     showRecentRuns: boolean;
+  };
+  [WidgetId.SubscriptionQuota]: {
+    type: WidgetId.SubscriptionQuota;
+    target: SubscriptionTarget;
+    showExpiry: boolean;
+    showProgress: boolean;
+    waveStyle: SubscriptionQuotaWaveStyle;
+    animateWave: boolean;
+    expiryWarningDays: number;
+    quotaWarningPercent: number;
   };
 };
 
@@ -94,6 +107,16 @@ export const DEFAULT_WIDGET_CONFIGS: WidgetConfigs = {
     target: { kind: 'current' },
     showRecentRuns: true,
   },
+  [WidgetId.SubscriptionQuota]: {
+    type: WidgetId.SubscriptionQuota,
+    target: { kind: 'current' },
+    showExpiry: true,
+    showProgress: true,
+    waveStyle: 'filled',
+    animateWave: true,
+    expiryWarningDays: 7,
+    quotaWarningPercent: 20,
+  },
 };
 
 export type WidgetConfigStorage = {
@@ -108,6 +131,8 @@ export const EMPTY_WIDGET_CONFIG_STORAGE: WidgetConfigStorage = {
 
 export const WIDGET_CONFIG_NUMBER_RANGES = {
   samples: [2, 32],
+  expiryWarningDays: [1, 365],
+  quotaWarningPercent: [1, 100],
 } as const;
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -157,15 +182,21 @@ export function normalizeWidgetConfigStorage(
         typeof defaultValue === 'boolean'
       ) {
         Object.assign(config, { [key]: candidate });
-      } else if (key === 'samples' && typeof candidate === 'number') {
-        const [min, max] = WIDGET_CONFIG_NUMBER_RANGES.samples;
-        if (Number.isInteger(candidate)) {
-          Object.assign(config, {
-            samples: Math.min(max, Math.max(min, candidate)),
-          });
-        }
+      } else if (
+        (key === 'samples' ||
+          key === 'expiryWarningDays' ||
+          key === 'quotaWarningPercent') &&
+        typeof candidate === 'number' &&
+        Number.isInteger(candidate)
+      ) {
+        const [min, max] = WIDGET_CONFIG_NUMBER_RANGES[key];
+        Object.assign(config, {
+          [key]: Math.min(max, Math.max(min, candidate)),
+        });
       } else if (
         (key === 'unit' && (candidate === 'bytes' || candidate === 'bits')) ||
+        (key === 'waveStyle' &&
+          (candidate === 'filled' || candidate === 'outline')) ||
         (key === 'layout' &&
           ((config.type === WidgetId.ProxyMode &&
             (candidate === 'focus' || candidate === 'flex')) ||

@@ -4,6 +4,8 @@ import type { ProfileItem_Serialize, SyncRunSummary } from '@chimera/interface';
 import {
   calculateSubscriptionQuota,
   getRemoteFileConfigs,
+  isExpiryWarning,
+  isQuotaWarning,
   latestFinishedRuns,
   resolveProfileTarget,
   subscriptionExpiryTimestamp,
@@ -104,6 +106,23 @@ test('recent summary runs exclude active work and sort large admission sequences
     ['new', 'middle'],
   );
   assert.deepEqual(latestFinishedRuns(runs, 0), []);
+});
+
+test('quota and expiry warnings match ref boundaries and leave unknown data unknown', () => {
+  const now = Date.parse('2026-11-20T00:00:00Z');
+  const day = 24 * 60 * 60 * 1000;
+  assert.equal(isExpiryWarning(null, 7, now), false);
+  assert.equal(isExpiryWarning(now + 7 * day, 7, now), true);
+  assert.equal(isExpiryWarning(now + 7 * day + 1, 7, now), false);
+  assert.equal(isExpiryWarning(now - 1, 7, now), true);
+  assert.equal(isQuotaWarning(null, 20), false);
+  const quota = calculateSubscriptionQuota({
+    upload: 40,
+    download: 40,
+    total: 100,
+  });
+  assert.equal(isQuotaWarning(quota, 20), true);
+  assert.equal(isQuotaWarning(quota, 19), false);
 });
 
 test('calculates remaining quota and percentage from both traffic directions', () => {
