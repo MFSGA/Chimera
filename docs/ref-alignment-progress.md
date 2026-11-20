@@ -1,5 +1,14 @@
 # ref 对齐进度
 
+## DIFF-103：Migration 首写入边界与启动默认配置顺序对齐（2026-11-20）
+
+- **固定上游与目标**：参考 `ref@c4b35e048` 的 `backend/tauri/src/utils/init/mod.rs`/`backend/tauri/src/setup.rs` 的迁移优先生命周期及 `backend/nyanpasu-migration/src/runner.rs`，核对 Chimera 的 Tauri `.setup`。本轮风险 **L2**（首次启动、已有 typed 文件、迁移失败后的用户配置与快照）。此前 `.setup` 在 `Runner::with_paths`/`run_pending` **之前**调用 `init::init_config`，隐式生成 `chimera-config.yaml`、Legacy `profiles.yaml` 和 Clash overrides；还在日志初始化中通过后台线程过早读取 `Config::verge()`，构造全局配置草稿。这违反“迁移首先读取用户原始文件并取得实际快照”的边界。保留现有平台 BackupPort、Tauri 生命周期、`ref`/Runtime gitlinks、migration-state schema 2 和所有步骤 ID。
+- **生产启动顺序**：将 `init::init_config` 拆成前置的 `init_logging`（只建立日志系统，不读取和生成任何 legacy YAML），和后置 `initialize_post_migration_defaults`。新增 `setup::migrate_before_legacy_defaults` 统一 `MigrationPrepare` → `MigrationRun` → `Setup`（默认值生成）三段可测试边界：迁移构造/执行任一失败即停止，不初始化 Legacy 或 typed 默认文件，不启动后续 Core、Service、Jobs、客户端。`StartupFailure` 捕获仍保留原错误链、阶段、精确路径和有效的已验证 BackupInfo；成功后才运行 `init::refresh_migrated_logging`，避免过早读取 Legacy 的进程全局 `IVerge` 草稿。仍只在主实例进入 Tauri `.setup` 后创建目录，不改变单实例声明与窗口启动次序。
+- **Profiles 文档正确性修复**：后置默认值必须生成真正的**rev4 stamped** `profiles.yaml`，不可写入旧版 Legacy `current: [] / chain: []`，否则迁移状态已经记录 rev4 时，下次启动可能检测到 `FilesBehindState`/失配。使用 `chimera_config::profile::Profiles::default()` + 共享 `chimera_migration::document::write_document` 的原子且目标安全的写入路径，写入 `_nyanpasu` `document: profiles`, `schema_revision: 4`。已存在的 Profiles 文件和悬挂链接均不会被覆写；如果缺失且写入失败则作为 `Setup` 错误立即中止，而不是只打印日志并继续进入 Client。旧版 Verge/Clash overrides 的默认模板仅用于成功迁移后的兼容层，不在迁移前更改备份原貌。
+- **实际失败与重启验证**：新增隔离 `setup` 回归：全新安装先完成 Migration，再创建带 stamp 的 typed Profiles 默认文档及兼容 YAML，第二次启动保持 Profiles/typed 应用字节不变、不生成额外备份；部分 typed 文件导致 `MigrationPrepare` 拒绝且不创建任何 Legacy 默认文件，原始 typed 文件字节不变；旧 Verge YAML 损坏时 `MigrationRun` 失败，`Report.backups_dir` 仅引用完整验证过的真实快照，快照与原目录均不包含错误前置初始化的默认 Profiles/overrides。原有 `init` 注入路径和无覆盖测试继续通过。
+- **本地验证**：共享 Migration **88/88**，Tauri 完整库 **1041/1041**（额外 3 项真实 setup 顺序测试，1 项既有忽略），`cargo check --locked -p chimera --all-features --tests`、Rustfmt、提交 Clippy 与 Git diff check 通过。未执行独立 `migrate` 子进程协议、`child_result` 落盘与外部 crash reporter；这些属于上游下一阶段实质架构差异，不应把本轮称为完整独立进程迁移。也未核验 Windows/Linux 实机、桌面 E2E 或 GitHub CI 最终结果。
+- **剩余/回滚**：Chimera 仍在 Tauri 单实例 setup 内运行 Migration，而 `ref` 可以独立进程运行并持久化跨进程错误；未来需设计独立进程对单实例锁、RustDesk/服务及 Windows 提权、退出码/报告文件的影响。若发现兼容性回归，回滚本轮初始化顺序和 stamped default，保留任何现有用户配置、有效备份、`migration-state.yaml` 和 `.corrupt-*` 数据证据；绝不自动强制恢复旧目录。
+
 ## DIFF-102：上游 v1.6.1 真实配置升级与隔离恢复验证、备份数据根边界修复（2026-11-20）
 
 - **固定参考与范围**：以 `ref@c4b35e048` 的 `nyanpasu-migration/src/fixtures/v1_6_1/{profiles.yaml,nyanpasu-config.yaml}` 和 `nyanpasu-migration/src/backup.rs` 的备份事务/manifest 为参照，在独立临时目录运行 Chimera 的**真实** Runner、Profiles/Typed Config/Storage 三组生产 migrator。风险 **L2**（升级前快照完整性与损坏快照报告）；不读取或写入当前用户配置、不改变 `ref` / Runtime 指针、迁移状态 schema 2、步骤 ID、manifest wire 格式或备份留存数量。
