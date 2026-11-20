@@ -1406,12 +1406,14 @@ name = "chimera-migration"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "chimera-config",
  "chimera-contracts",
  "chimera-paths",
  "chimera-persistence",
  "chrono",
  "semver 1.0.28",
  "serde",
+ "serde_yaml",
  "serde_yaml_ng",
  "tempfile",
  "thiserror 2.0.21",
