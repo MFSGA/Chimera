@@ -125,7 +125,9 @@ export const TransparentProxyButton = ({
   return (
     <ShapeToggle
       {...props}
-      active={action.isActive}
+      active={action.applied}
+      data-configured={String(action.isActive)}
+      data-applied={String(action.applied)}
       loading={action.isPending}
       disabled={action.disabled || props.disabled}
       title={action.reason}

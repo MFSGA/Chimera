@@ -3,6 +3,7 @@ import test from 'node:test';
 import { getProxyStatus } from '../src/features/dashboard/proxy-status.ts';
 import {
   canToggleTransparentProxy,
+  isTransparentProxyApplied,
   transparentProxyNextPatch,
   type TransparentProxyAdmission,
 } from '../src/features/system-proxy/transparent-proxy-policy.ts';
@@ -95,4 +96,58 @@ test('proxy title prefers actual TUN/transparent state over less authoritative s
     'disabled',
   );
   assert.equal(getProxyStatus({ ...base, mixedPort: 7891 }), 'occupied');
+});
+
+test('configured capture does not claim active until the same mode is confirmed by the service', () => {
+  const base = {
+    visible: true,
+    serviceModeEnabled: true,
+    configuredMode: 'tproxy' as const,
+    status: { supported: true, active: true, mode: 'tproxy', error: null },
+  };
+  assert.equal(isTransparentProxyApplied(base), true);
+  for (const patch of [
+    { visible: false },
+    { serviceModeEnabled: false },
+    { configuredMode: 'disabled' as const },
+    { configuredMode: 'redir' as const },
+    { status: { supported: true, active: false, mode: 'tproxy', error: null } },
+    { status: { supported: true, active: true, mode: 'redir', error: null } },
+    { status: { supported: false, active: true, mode: 'tproxy', error: null } },
+    {
+      status: {
+        supported: true,
+        active: true,
+        mode: 'tproxy',
+        error: 'rules not installed',
+      },
+    },
+    { status: null },
+    { statusFresh: false },
+    { isSyncing: true },
+  ]) {
+    assert.equal(isTransparentProxyApplied({ ...base, ...patch }), false);
+  }
+});
+
+test('a previous enabled snapshot cannot mark newly disabled capture as applied', () => {
+  const stale = { supported: true, active: true, mode: 'tproxy', error: null };
+  assert.equal(
+    isTransparentProxyApplied({
+      visible: true,
+      serviceModeEnabled: true,
+      configuredMode: 'disabled',
+      status: stale,
+    }),
+    false,
+  );
+  assert.equal(
+    isTransparentProxyApplied({
+      visible: true,
+      serviceModeEnabled: false,
+      configuredMode: 'tproxy',
+      status: stale,
+    }),
+    false,
+  );
 });

@@ -26,6 +26,41 @@ export function canToggleTransparentProxy({
   return serviceModeEnabled && statusSupported && !tunEnabled;
 }
 
+/** Applied state must be confirmed by the service, not inferred from a
+ * persisted capture mode. A disabled query may still retain cached status. */
+export function isTransparentProxyApplied({
+  visible,
+  serviceModeEnabled,
+  configuredMode,
+  status,
+  statusFresh = true,
+  isSyncing = false,
+}: {
+  visible: boolean;
+  serviceModeEnabled: boolean;
+  configuredMode: TransparentProxyMode;
+  statusFresh?: boolean;
+  status?: {
+    supported: boolean;
+    active: boolean;
+    mode: string | null;
+    error?: string | null;
+  } | null;
+  isSyncing?: boolean;
+}): boolean {
+  return (
+    visible &&
+    serviceModeEnabled &&
+    !isSyncing &&
+    statusFresh &&
+    configuredMode !== 'disabled' &&
+    status?.supported === true &&
+    status.active === true &&
+    status.mode === configuredMode &&
+    !status.error
+  );
+}
+
 export function transparentProxyNextPatch(
   mode: TransparentProxyMode,
   hasTproxyPort: boolean,

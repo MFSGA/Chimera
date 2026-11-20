@@ -10,12 +10,14 @@ import {
 } from '@chimera/interface';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useLockFn } from 'ahooks';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { OS } from '@/consts';
+import * as m from '@/paraglide/messages';
 import { formatError } from '@/utils';
 import { message } from '@/utils/notification';
 import {
   canToggleTransparentProxy,
+  isTransparentProxyApplied,
   transparentProxyNextPatch,
 } from './transparent-proxy-policy';
 
@@ -102,48 +104,83 @@ export const useTransparentProxyAction = () => {
     enabled: visible && Boolean(serviceMode.value),
     refetchInterval: serviceMode.value ? 2000 : false,
   });
+  // An old status snapshot belongs to the previous host/core/service state.
+  // Invalidate the shared query when any of those gates change.
+  useEffect(() => {
+    if (!visible || !serviceMode.value) return;
+    void queryClient.invalidateQueries({
+      queryKey: [TRANSPARENT_PROXY_STATUS_QUERY_KEY],
+    });
+  }, [core.value, serviceMode.value, visible, queryClient]);
+  const [isSyncing, setIsSyncing] = useState(false);
+
   const mode = config.query.data?.transparent_proxy?.mode ?? 'disabled';
   const isActive = mode !== 'disabled';
+  const serviceModeEnabled = serviceMode.value === true;
+  const applied = isTransparentProxyApplied({
+    visible,
+    serviceModeEnabled,
+    configuredMode: mode,
+    status: status.isError ? null : status.data,
+    statusFresh: status.dataUpdatedAt >= config.query.dataUpdatedAt,
+    isSyncing,
+  });
+  const enabledStatusReady =
+    !status.isError &&
+    !status.isPending &&
+    !status.isFetching &&
+    status.data?.supported === true &&
+    !status.data.error;
+  const isPending = config.upsert.isPending || isSyncing;
   const disabled =
     !canToggleTransparentProxy({
       supportedHost,
       supportedCore,
-      serviceModeEnabled: Boolean(serviceMode.value),
-      statusSupported: status.data?.supported === true && !status.isError,
+      serviceModeEnabled,
+      statusSupported: enabledStatusReady,
       tunEnabled: Boolean(config.query.data?.enable_tun_mode),
       configReady: Boolean(config.query.data),
       mode,
-    }) || config.upsert.isPending;
-  const reason = !serviceMode.value
-    ? 'Service Mode is required for transparent proxy'
+    }) || isPending;
+  const reason = !serviceModeEnabled
+    ? m.settings_clash_transparent_proxy_service_mode_required()
     : config.query.data?.enable_tun_mode && !isActive
-      ? 'Disable TUN before enabling transparent proxy'
+      ? m.settings_clash_transparent_proxy_status_pending()
       : status.isError
-        ? 'Transparent proxy status unavailable'
-        : status.isPending
-          ? 'Checking transparent proxy support'
+        ? m.settings_clash_transparent_proxy_status_unavailable()
+        : status.isPending || (!isActive && status.isFetching)
+          ? m.settings_clash_transparent_proxy_status_loading()
           : status.data && !status.data.supported
-            ? 'Transparent proxy is unsupported by this host'
-            : undefined;
+            ? m.settings_clash_transparent_proxy_status_unsupported()
+            : isActive && !applied
+              ? m.settings_clash_transparent_proxy_status_pending()
+              : undefined;
 
   const execute = useLockFn(async () => {
     if (disabled || !config.query.data) return;
+    setIsSyncing(true);
     try {
       await config.upsert.mutateAsync(
         transparentProxyNextPatch(mode, Boolean(config.query.data.tproxy_port)),
       );
+      // The mutation has already refreshed the persisted Clash config. Read
+      // the service's applied state afterwards; don't optimistically claim
+      // that firewall rules changed when only the config write succeeded.
       await queryClient.invalidateQueries({
         queryKey: [TRANSPARENT_PROXY_STATUS_QUERY_KEY],
       });
     } catch (error) {
       void message(formatError(error), { title: 'Error', kind: 'error' });
+    } finally {
+      setIsSyncing(false);
     }
   });
 
   return {
     visible,
     isActive,
-    isPending: config.upsert.isPending,
+    applied,
+    isPending,
     disabled,
     reason,
     status: status.data,
