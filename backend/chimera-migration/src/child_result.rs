@@ -1,8 +1,8 @@
 //! Versioned migration-child result, exchanged only between the isolated
 //! migration process and its parent. Ref: nyanpasu-migration/child_result.rs.
 //!
-//! The application shell supplies its diagnostic `Report` and the verified
-//! backup producer. This shared crate owns the wire format and safe file IO.
+//! The shared `Failure` is the subprocess's wire payload. Tauri owns only
+//! the platform UI report conversion and independently verified snapshots.
 use std::{
     error::Error as StdError,
     fs, io,
@@ -220,6 +220,14 @@ impl Failure {
                     | ExecutionError::StampDocument { path, .. }
                     | ExecutionError::LoadState { path, .. }
                     | ExecutionError::ReadConfigDirectory { path, .. } => Some(path),
+                    // The independently failed state flush is held outside
+                    // source(), so include its actual path in the v2 report.
+                    ExecutionError::RecordFailure { persistence, .. } => {
+                        match persistence.downcast_ref::<ExecutionError>() {
+                            Some(ExecutionError::PersistState { path, .. }) => Some(path),
+                            _ => None,
+                        }
+                    }
                     _ => None,
                 }
             } else if let Some(error) = cause.downcast_ref::<chimera_persistence::write::Error>() {
@@ -262,7 +270,9 @@ impl Failure {
     }
 }
 
-pub const PROTOCOL_VERSION: u32 = 1;
+// v1 failure outcomes contained a Tauri-specific Report. v2 uses the shared
+// Failure; a mismatched child/parent must fail closed rather than misread it.
+pub const PROTOCOL_VERSION: u32 = 2;
 pub const MAX_REPORT_BYTES: u64 = 1024 * 1024;
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -342,7 +352,11 @@ pub fn read_outcome<R: DeserializeOwned>(path: &Path) -> anyhow::Result<ChildOut
             path.display()
         );
     }
-    let envelope: ChildEnvelope<ChildOutcome<R>> = serde_json::from_slice(&fs::read(path)?)
+    // Validate the envelope version *before* interpreting the payload. A v1
+    // failure contains a Tauri Report instead of the shared v2 Failure; an
+    // incompatible child must produce a version error, not a misleading
+    // missing-field decode error.
+    let envelope: ChildEnvelope<serde_json::Value> = serde_json::from_slice(&fs::read(path)?)
         .with_context(|| format!("invalid migration result {}", path.display()))?;
     if envelope.protocol_version != PROTOCOL_VERSION {
         bail!(
@@ -350,7 +364,8 @@ pub fn read_outcome<R: DeserializeOwned>(path: &Path) -> anyhow::Result<ChildOut
             envelope.protocol_version
         );
     }
-    Ok(envelope.outcome)
+    serde_json::from_value(envelope.outcome)
+        .with_context(|| format!("invalid migration outcome {}", path.display()))
 }
 
 /// Only an expected migration snapshot basename can be returned from a child;

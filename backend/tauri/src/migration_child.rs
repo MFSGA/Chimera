@@ -12,20 +12,26 @@ use std::{
 use anyhow::{Context as _, anyhow, bail};
 
 use crate::{
-    core::{backup::BackupInfo, migration::Runner},
+    core::{
+        backup::{BackupError, BackupInfo},
+        migration::Runner,
+    },
     startup_failure::{self, Report, StartupStage},
     utils::path::PathResolver,
 };
 
 #[cfg(test)]
 use chimera_migration::child_result::MAX_REPORT_BYTES;
-use chimera_migration::child_result::{self, validate_new_result_destination};
+use chimera_migration::{
+    child_result::{self, Failure, FailureStage, validate_new_result_destination},
+    runner::ExecutionError,
+};
 
 const CHILD_FLAG: &str = "--chimera-internal-migrate";
-type ChildOutcome = child_result::ChildOutcome<Report>;
+type ChildOutcome = child_result::ChildOutcome<Failure>;
 
-// The shell specializes the shared generic wire protocol to Tauri's existing
-// startup report. Encoding, validation and IO are owned by chimera-migration.
+// The shell uses the ref-aligned shared Failure on the wire. It reconstructs
+// the existing Tauri startup Report only after validating the child outcome.
 fn write_outcome(result: &Path, outcome: &ChildOutcome) -> anyhow::Result<()> {
     child_result::write_outcome(result, outcome)
 }
@@ -62,6 +68,54 @@ fn parse_child_arguments(args: Vec<OsString>) -> anyhow::Result<(PathResolver, P
     Ok((PathResolver::with_base_dirs(config, data), result))
 }
 
+/// Host-only diagnostics: the shared migration crate must not depend on
+/// Tauri's backup or Session recovery types. Add those paths to the shared
+/// source-chain report before the child writes it out.
+fn child_failure(
+    error: &(dyn std::error::Error + 'static),
+    stage: FailureStage,
+    paths: &PathResolver,
+    backup: Option<&BackupInfo>,
+) -> Failure {
+    let backup_available = backup.is_some_and(BackupInfo::is_available);
+    let mut failure = Failure::from_error(
+        error,
+        stage,
+        paths.app_config_dir().to_owned(),
+        paths.backups_dir(),
+        backup_available,
+        startup_failure::migration_io_failure(error),
+    );
+    let mut current = Some(error);
+    while let Some(cause) = current {
+        let path = if let Some(backup) = cause.downcast_ref::<BackupError>() {
+            match backup {
+                BackupError::Io { path, .. }
+                | BackupError::Snapshot { path, .. }
+                | BackupError::InvalidNode { path } => Some(path),
+                BackupError::Manifest(_) | BackupError::Verification(_) => None,
+            }
+        } else if let Some(crate::core::session_state::Error::ReadState { path, .. }) =
+            cause.downcast_ref::<crate::core::session_state::Error>()
+        {
+            Some(path)
+        } else if let Some(crate::core::corrupt::Error::PreserveEvidence { path, .. }) =
+            cause.downcast_ref::<crate::core::corrupt::Error>()
+        {
+            Some(path)
+        } else {
+            None
+        };
+        if let Some(path) = path
+            && !failure.paths.contains(path)
+        {
+            failure.paths.push(path.clone());
+        }
+        current = cause.source();
+    }
+    failure
+}
+
 fn execute(paths: &PathResolver) -> ChildOutcome {
     let mut runner = match Runner::with_paths(paths.clone(), false)
         .context("failed to prepare migration child Runner")
@@ -69,16 +123,30 @@ fn execute(paths: &PathResolver) -> ChildOutcome {
         Ok(runner) => runner,
         Err(error) => {
             return ChildOutcome::Failure {
-                report: Report::from_error(error.as_ref(), StartupStage::MigrationPrepare, paths),
+                report: child_failure(
+                    error.as_ref(),
+                    FailureStage::RunnerConstruction,
+                    paths,
+                    None,
+                ),
                 backup_name: None,
             };
         }
     };
     if let Err(error) = runner.run_pending().context("migration child failed") {
         return ChildOutcome::Failure {
-            report: Report::from_error_with_backup(
+            report: child_failure(
                 error.as_ref(),
-                StartupStage::MigrationRun,
+                if error.chain().any(|cause| {
+                    matches!(
+                        cause.downcast_ref::<ExecutionError>(),
+                        Some(ExecutionError::CreateBackup { .. })
+                    )
+                }) {
+                    FailureStage::Backup
+                } else {
+                    FailureStage::Migration
+                },
                 paths,
                 runner.backup_info(),
             ),
@@ -185,12 +253,15 @@ fn run_with_spawn(
                     backup_name,
                 },
             ) => {
-                // Recheck the child-supplied snapshot from the primary process.
-                // A path reported by a child isn't proof of current integrity.
-                report.backups_dir = verified_backup(paths, backup_name)
-                    .ok()
-                    .flatten()
-                    .and_then(|backup| backup.path.parent().map(Path::to_path_buf));
+                // The parent never trusts roots supplied by a subprocess.
+                // Its own PathResolver and manifest verifier are authoritative.
+                if report.config_dir != paths.app_config_dir()
+                    || report.backups_dir != paths.backups_dir()
+                {
+                    bail!("migration child returned mismatched configuration roots");
+                }
+                let verified = verified_backup(paths, backup_name).ok().flatten();
+                let report = Report::from_migration_failure(report, paths, verified.as_ref());
                 *capture.lock() = Some(report.clone());
                 Err(anyhow!(
                     "migration subprocess reported {:?} ({:?}): {}",
@@ -250,7 +321,7 @@ mod tests {
         ));
         let body = fs::read_to_string(&result)
             .unwrap()
-            .replace("\"protocol_version\":1", "\"protocol_version\":999");
+            .replace("\"protocol_version\":2", "\"protocol_version\":999");
         fs::write(&result, body).unwrap();
         assert!(
             read_outcome(&result)
@@ -358,8 +429,10 @@ mod tests {
                 backup_name,
             } => {
                 assert!(backup_name.is_some());
-                assert_eq!(report.failure.stage, StartupStage::MigrationRun);
-                assert_eq!(report.backups_dir, Some(paths.backups_dir()));
+                assert_eq!(report.stage, FailureStage::Migration);
+                assert_eq!(report.backups_dir, paths.backups_dir());
+                assert!(report.backup_available);
+                assert!(!report.chain.is_empty());
                 assert_eq!(fs::read(paths.chimera_config_path()).unwrap(), original);
             }
             other => panic!("expected migration failure: {other:?}"),

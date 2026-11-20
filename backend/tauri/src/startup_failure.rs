@@ -108,7 +108,6 @@ impl StartupFailure {
         let mut host_user_config = false;
         // RecordFailure exposes its independent persistence error as a field,
         // not a source (the original step failure remains the source).
-        let mut secondary_persistence_io = None;
         let chain = shared.chain;
         let mut current = Some(error);
         while let Some(error) = current {
@@ -121,7 +120,6 @@ impl StartupFailure {
                         path = Some(actual.clone());
                     }
                     ExecutionError::RecordFailure { persistence, .. } => {
-                        secondary_persistence_io = corrupt::error_io(persistence.as_ref());
                         if let Some(ExecutionError::PersistState { path: actual, .. }) =
                             persistence.downcast_ref::<ExecutionError>()
                         {
@@ -193,12 +191,7 @@ impl StartupFailure {
         // Classify the first IO failure in the primary error chain. If the
         // original step failed without an IO cause, the independently failed
         // state flush still needs to surface permission/busy diagnostics.
-        let primary_io = corrupt::error_io(error);
-        let io = match primary_io {
-            Some(IoFailure::PermissionDenied | IoFailure::Transient) => primary_io,
-            _ => secondary_persistence_io.or(primary_io),
-        };
-        let kind = match io {
+        let kind = match migration_io_failure(error) {
             Some(IoFailure::PermissionDenied) => FailureKind::Permission,
             Some(IoFailure::Transient) => FailureKind::Busy,
             _ if revision.as_ref().is_some_and(RevisionFailure::is_newer) => {
@@ -226,7 +219,80 @@ impl StartupFailure {
     }
 }
 
+/// Preserve the original step IO classification when a later attempt to
+/// persist `Failed` also errors. The second failure is held outside `source()`
+/// by `ExecutionError::RecordFailure`, so normal error-chain scanning alone
+/// cannot detect its permission or lock status.
+pub(crate) fn migration_io_failure(error: &(dyn StdError + 'static)) -> Option<IoFailure> {
+    let primary = corrupt::error_io(error);
+    if matches!(
+        primary,
+        Some(IoFailure::PermissionDenied | IoFailure::Transient)
+    ) {
+        return primary;
+    }
+    let mut current = Some(error);
+    while let Some(cause) = current {
+        if let Some(ExecutionError::RecordFailure { persistence, .. }) =
+            cause.downcast_ref::<ExecutionError>()
+        {
+            if let Some(secondary) = corrupt::error_io(persistence.as_ref()) {
+                return Some(secondary);
+            }
+        }
+        current = cause.source();
+    }
+    primary
+}
+
 impl Report {
+    /// Convert a v2 migration-only Failure into the unchanged host-facing
+    /// startup report. Never trust the child-provided root or backup hint as
+    /// proof of recovery: the caller validates roots and the backup manifest.
+    pub(crate) fn from_migration_failure(
+        failure: MigrationFailure,
+        paths: &PathResolver,
+        backup: Option<&BackupInfo>,
+    ) -> Self {
+        let stage = match failure.stage {
+            FailureStage::RunnerConstruction => StartupStage::MigrationPrepare,
+            FailureStage::Backup | FailureStage::Migration => StartupStage::MigrationRun,
+        };
+        let kind = match failure.io_failure {
+            Some(IoFailure::PermissionDenied) => FailureKind::Permission,
+            Some(IoFailure::Transient) => FailureKind::Busy,
+            _ if failure
+                .revision
+                .as_ref()
+                .is_some_and(RevisionFailure::is_newer) =>
+            {
+                FailureKind::NewerVersion
+            }
+            _ => FailureKind::MigrationFailed,
+        };
+        let path = failure
+            .revision
+            .as_ref()
+            .map(|revision| revision.path().clone())
+            .or_else(|| failure.paths.last().cloned())
+            .or_else(|| Some(paths.app_config_dir().to_owned()));
+        let detail = failure.chain.join("\nCaused by: ");
+        Self {
+            failure: StartupFailure {
+                stage,
+                kind,
+                path,
+                detail,
+                revision: failure.revision,
+            },
+            version: env!("CARGO_PKG_VERSION").to_owned(),
+            logs_dir: paths.app_logs_dir(),
+            backups_dir: backup
+                .filter(|backup| backup.is_available())
+                .and_then(|backup| backup.path.parent().map(|path| path.to_owned())),
+        }
+    }
+
     pub(crate) fn from_error(
         error: &(dyn StdError + 'static),
         stage: StartupStage,

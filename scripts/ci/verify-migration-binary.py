@@ -40,7 +40,7 @@ def outcome(binary: Path, config: Path, data: Path, result: Path):
         f"stderr={process.stderr[:2000]!r}"
     )
     report = json.loads(result.read_bytes())
-    assert report["protocol_version"] == 1, report
+    assert report["protocol_version"] == 2, report
     return process.returncode, report["outcome"]
 
 
@@ -100,8 +100,9 @@ def verify(binary: Path):
         (config / "chimera-config.yaml").write_bytes(original)
         code, report = outcome(binary, config, data, root / "broken-result.json")
         assert code != 0 and report["status"] == "failure", report
-        assert report["report"]["failure"]["stage"] == "migration_run", report
+        assert report["report"]["stage"] == "migration", report
         assert report["report"]["backups_dir"] == str(data / "backups"), report
+        assert report["report"]["backup_available"], report
         verify_snapshot(data / "backups" / report["backup_name"])
         assert (config / "chimera-config.yaml").read_bytes() == original
         assert not (config / "application.yaml").exists()
@@ -113,9 +114,11 @@ def verify(binary: Path):
         (config / "migration-state.yaml").write_bytes(original)
         code, report = outcome(binary, config, data, root / "future-result.json")
         assert code != 0 and report["status"] == "failure", report
-        failure = report["report"]["failure"]
-        assert failure["stage"] == "migration_prepare" and failure["kind"] == "newer_version", failure
-        assert report["backup_name"] is None and report["report"]["backups_dir"] is None
+        failure = report["report"]
+        assert failure["stage"] == "runner_construction", failure
+        assert failure["revision"]["kind"] == "newer_store_schema", failure
+        assert not failure["backup_available"]
+        assert report["backup_name"] is None
         assert (config / "migration-state.yaml").read_bytes() == original
         assert not (config / "application.yaml").exists()
         print("PASS newer migration schema refusal without changes")
