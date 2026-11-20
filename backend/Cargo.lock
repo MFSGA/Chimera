@@ -1406,6 +1406,8 @@ name = "chimera-migration"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "chimera-contracts",
+ "chimera-paths",
  "chimera-persistence",
  "chrono",
  "semver 1.0.28",

@@ -14,10 +14,20 @@ pub use runner::Runner;
 
 pub use chimera_migration::{MigrationAdvice, MigrationId, MigrationState, ModuleId};
 
+/// Tauri integration adapter: platform path discovery and injected shared context.
+/// The migration itself uses the frontend-independent `chimera_migration::Ctx`.
 #[derive(Debug, Clone)]
 pub struct Ctx {
     paths: PathResolver,
-    hotkey_store_opener: Arc<dyn HotkeyStoreOpener>,
+    shared: chimera_migration::context::Ctx,
+}
+
+impl std::ops::Deref for Ctx {
+    type Target = chimera_migration::context::Ctx;
+
+    fn deref(&self) -> &Self::Target {
+        &self.shared
+    }
 }
 
 impl Ctx {
@@ -33,9 +43,13 @@ impl Ctx {
         paths: PathResolver,
         hotkey_store_opener: Arc<dyn HotkeyStoreOpener>,
     ) -> Self {
+        let migration_paths = chimera_migration::context::MigrationPaths::new(
+            paths.app_config_dir().to_path_buf(),
+            paths.app_data_dir().to_path_buf(),
+        );
         Self {
             paths,
-            hotkey_store_opener,
+            shared: chimera_migration::context::Ctx::new(migration_paths, hotkey_store_opener),
         }
     }
 
@@ -44,45 +58,14 @@ impl Ctx {
         Self::from_paths(PathResolver::with_base_dirs(app_config_dir, app_data_dir))
     }
 
-    /// The underlying path resolver, the single source of truth for app paths.
+    /// Preserve the document-spec function-pointer signature during the move.
+    pub fn profiles_path(&self) -> PathBuf {
+        self.shared.profiles_path()
+    }
+
+    /// Keep the existing Tauri backup and legacy integrations on the same roots.
     pub fn paths(&self) -> &PathResolver {
         &self.paths
-    }
-
-    pub fn hotkey_store_opener(&self) -> &dyn HotkeyStoreOpener {
-        self.hotkey_store_opener.as_ref()
-    }
-
-    pub fn profiles_path(&self) -> PathBuf {
-        self.paths.profiles_path()
-    }
-
-    pub fn chimera_config_path(&self) -> PathBuf {
-        self.paths.chimera_config_path()
-    }
-
-    pub fn application_config_path(&self) -> PathBuf {
-        self.paths.application_config_path()
-    }
-
-    pub fn session_state_path(&self) -> PathBuf {
-        self.paths.session_state_path()
-    }
-
-    pub fn clash_config_path(&self) -> PathBuf {
-        self.paths.clash_config_path()
-    }
-
-    pub fn clash_guard_overrides_path(&self) -> PathBuf {
-        self.paths.clash_guard_overrides_path()
-    }
-
-    pub fn storage_path(&self) -> PathBuf {
-        self.paths.storage_path()
-    }
-
-    pub fn state_path(&self) -> PathBuf {
-        self.paths.app_config_dir().join(store::STORE_FILE_NAME)
     }
 }
 
@@ -202,4 +185,37 @@ pub trait ModuleMigrator: Send + Sync {
 
 pub fn current_version() -> anyhow::Result<Version> {
     Version::parse(crate::consts::BUILD_INFO.pkg_version).map_err(Into::into)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shared_migration_paths_match_host_resolver_without_touching_disk() {
+        let root = tempfile::tempdir().unwrap();
+        let config = root.path().join("config not yet created");
+        let data = root.path().join("data not yet created");
+        let host = PathResolver::with_base_dirs(config.clone(), data.clone());
+        let ctx = Ctx::from_paths(host.clone());
+
+        assert_eq!(ctx.profiles_path(), host.profiles_path());
+        assert_eq!(ctx.chimera_config_path(), host.chimera_config_path());
+        assert_eq!(
+            ctx.application_config_path(),
+            host.application_config_path()
+        );
+        assert_eq!(ctx.session_state_path(), host.session_state_path());
+        assert_eq!(ctx.clash_config_path(), host.clash_config_path());
+        assert_eq!(
+            ctx.clash_guard_overrides_path(),
+            host.clash_guard_overrides_path()
+        );
+        assert_eq!(ctx.storage_path(), host.storage_path());
+        assert_eq!(ctx.state_path(), config.join("migration-state.yaml"));
+        assert_eq!(ctx.paths().app_config_dir(), config);
+        assert_eq!(ctx.paths().app_data_dir(), data);
+        assert!(!config.exists());
+        assert!(!data.exists());
+    }
 }

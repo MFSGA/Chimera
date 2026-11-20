@@ -13,6 +13,8 @@ test-support = []
 [dependencies]
 anyhow = "1"
 chimera-persistence = { path = "../chimera-persistence" }
+chimera-contracts = { path = "../chimera-contracts" }
+chimera-paths = { path = "../chimera-paths" }
 chrono = "0.4"
 semver = { version = "1", features = ["serde"] }
 serde.workspace = true

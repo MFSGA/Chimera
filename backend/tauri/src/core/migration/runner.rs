@@ -24,6 +24,34 @@ fn step_spec(step: &dyn MigrationStep) -> StepSpec<'static> {
     }
 }
 
+/// The shell-only verified backup producer, injected into the shared Runner.
+struct TauriBackupPort<'a> {
+    paths: &'a PathResolver,
+    from: Option<&'a Version>,
+    target: &'a Version,
+}
+
+impl core_runner::BackupPort for TauriBackupPort<'_> {
+    type Snapshot = BackupInfo;
+
+    fn create_snapshot(
+        &mut self,
+        ctx: &chimera_migration::context::Ctx,
+    ) -> anyhow::Result<BackupInfo> {
+        let storage_path = ctx.storage_path();
+        backup::create_backup(&BackupRequest {
+            paths: self.paths,
+            storage: StorageSource::File(&storage_path),
+            kind: BackupKind::Migration {
+                from: self.from,
+                target: self.target,
+            },
+            now: OffsetDateTime::now_utc(),
+        })
+        .context("failed to back up the config before migrating")
+    }
+}
+
 /// An on-disk revision written by a future build; never downgrade it.
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum RevisionError {
@@ -177,53 +205,22 @@ impl Runner {
         self.backup.as_ref()
     }
 
-    /// Snapshot all migration inputs before any pending step or document stamp
-    /// changes persistent configuration. Refuses to migrate if the snapshot fails.
-    /// Fresh installations with no existing data do not need a backup.
+    /// Shared Runner decides whether existing data needs a snapshot; Tauri
+    /// supplies the verified filesystem backup implementation via a port.
     fn ensure_backup(&mut self) -> anyhow::Result<()> {
-        if self.backup.is_some() || self.has_nothing_to_protect()? {
-            return Ok(());
-        }
-        let storage_path = self.ctx.storage_path();
-        let info = backup::create_backup(&BackupRequest {
+        let mut backup_port = TauriBackupPort {
             paths: self.ctx.paths(),
-            storage: StorageSource::File(&storage_path),
-            kind: BackupKind::Migration {
-                from: self.store.app.last_succeeded.as_ref(),
-                target: &self.target,
-            },
-            now: OffsetDateTime::now_utc(),
-        })
-        .context("failed to back up the config before migrating")?;
-        tracing::info!(path = %info.path.display(), "migration backup created before config rewrite");
-        self.backup = Some(info);
-        Ok(())
-    }
-
-    /// The first install has no existing config to protect. A migration-state
-    /// record created by baseline detection alone is not user source data.
-    fn has_nothing_to_protect(&self) -> anyhow::Result<bool> {
-        let storage_path = self.ctx.storage_path();
-        if crate::core::corrupt::config_node_exists(&storage_path)
-            .with_context(|| format!("failed to inspect {}", storage_path.display()))?
-        {
-            return Ok(false);
-        }
-        let config = self.ctx.paths().app_config_dir();
-        let entries = match std::fs::read_dir(config) {
-            Ok(entries) => entries,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(true),
-            Err(error) => {
-                return Err(error).with_context(|| format!("failed to list {}", config.display()));
-            }
+            from: self.store.app.last_succeeded.as_ref(),
+            target: &self.target,
         };
-        for entry in entries {
-            let entry = entry.with_context(|| format!("failed to inspect {}", config.display()))?;
-            if entry.file_name() != super::store::STORE_FILE_NAME {
-                return Ok(false);
-            }
+        if core_runner::ensure_backup(&self.ctx, &mut self.backup, &mut backup_port)? {
+            let info = self
+                .backup
+                .as_ref()
+                .expect("shared runner recorded a created backup");
+            tracing::info!(path = %info.path.display(), "migration backup created before config rewrite");
         }
-        Ok(true)
+        Ok(())
     }
 
     fn with_context(target: Version, force: bool, ctx: Ctx) -> anyhow::Result<Self> {
