@@ -102,6 +102,13 @@
 | LESSON-20261120-004 | 2026-11-20 | Connections / Main UI / Legacy E2E | ref DataPage 底部 dock 与虚拟表格留白；Legacy 分离；控件 data-slot、X11 子像素边界按真实 UI 验证 | Verified |
 | LESSON-20261120-005 | 2026-11-20 | Connections / Core / Virtualization E2E | ref 44px + 物理 spacer；48 条真实 Core 长流；Guard 有效 mixed-port 与 WebKit 双击驱动限制 | Verified |
 | LESSON-20261120-006 | 2026-11-20 | Connections / RPC Auth / Closed History | 不伪造 ref RPC proxy:write；详情本地化 formatBytes；真实 48 流归档 Closed/All 只读 E2E | Verified |
+| LESSON-20261120-007 | 2026-11-20 | Migration / child_result / macOS | 完整 arm64 binary 复现 result 路径软链接被原子 rename 替换（外部目标字节未改）；写前拒绝已有节点/链接/缺失父目录，独立实机 smoke 复验通过 | Mitigated |
+
+### LESSON-20261120-007：独立 Migration 子进程必须先验证私有结果文件
+
+- **复现证据**：`DIFF-104` 的 `backend/tauri/src/migration_child.rs::execute_to_file` 原先先运行生产 Runner，再调用 `chimera_persistence::write::atomic_write` 提交 JSON。`DIFF-105` 首次使用已链接 arm64 Mach-O binary 验收时，向 CLI 提供已存在的 `result.json` 符号链接，子进程报告成功并将原子写入重命名到该路径（软链接节点消失）；**链接目标的原始文件未被写入**。这不是用户配置丢失，但不满足内部一次性结果必须由父进程事先预留的语义。
+- **根因和修复**：通用 `atomic_write` 的语义是安全原子替换现有文件，而不是“仅创建新文件”。结果路径是独立的协议输出，不能直接沿用允许替换的持久化合同。`execute_to_file` 现于启动迁移前使用 `symlink_metadata` 拒绝任何已存在节点、父目录缺失/链接或非目录；写报告时再校验，改用共享 Migration 原子文件入口。父进程仍限定独立私有 TempDir，避免不可控目录的并发替换。
+- **防复发与范围**：`migration_child::tests::{occupied_result_node_rejects_migration_before_any_user_data_writes,existing_result_file_or_missing_parent_rejects_migration_before_running}` 和 `scripts/ci/verify-migration-binary.py` 的实际命令行场景核验外部节点字节与迁移状态均不改变。该手动 binary 验收未等同 Windows/Linux/GUI E2E 或 CI 通过；发布包另需验证签名和平台入口。
 
 ### LESSON-20261113-001/002：架构迁移要覆盖原生运行时与稀疏配置
 
