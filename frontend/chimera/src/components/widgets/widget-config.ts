@@ -7,6 +7,7 @@ export enum WidgetId {
   ProxyShortcuts = 'proxy-shortcuts',
   CoreShortcuts = 'core-shortcuts',
   ProxyMode = 'proxy-mode',
+  SubscriptionSchedule = 'subscription-schedule',
 }
 
 type TrafficConfig = {
@@ -41,6 +42,11 @@ export type WidgetConfigs = {
   [WidgetId.ProxyMode]: {
     type: WidgetId.ProxyMode;
     layout: 'focus' | 'flex';
+  };
+  [WidgetId.SubscriptionSchedule]: {
+    type: WidgetId.SubscriptionSchedule;
+    target: SubscriptionTarget;
+    showRecentRuns: boolean;
   };
 };
 
@@ -82,6 +88,11 @@ export const DEFAULT_WIDGET_CONFIGS: WidgetConfigs = {
   [WidgetId.ProxyMode]: {
     type: WidgetId.ProxyMode,
     layout: 'flex',
+  },
+  [WidgetId.SubscriptionSchedule]: {
+    type: WidgetId.SubscriptionSchedule,
+    target: { kind: 'current' },
+    showRecentRuns: true,
   },
 };
 
@@ -127,7 +138,24 @@ export function normalizeWidgetConfigStorage(
     const config = { ...defaults } as WidgetConfig;
     for (const [key, defaultValue] of Object.entries(defaults)) {
       const candidate = value[key];
-      if (typeof candidate === 'boolean' && typeof defaultValue === 'boolean') {
+      if (
+        key === 'target' &&
+        isRecord(candidate) &&
+        (candidate.kind === 'current' ||
+          (candidate.kind === 'fixed' &&
+            typeof candidate.profileUid === 'string' &&
+            candidate.profileUid.trim().length > 0))
+      ) {
+        Object.assign(config, {
+          target:
+            candidate.kind === 'current'
+              ? { kind: 'current' }
+              : { kind: 'fixed', profileUid: candidate.profileUid },
+        });
+      } else if (
+        typeof candidate === 'boolean' &&
+        typeof defaultValue === 'boolean'
+      ) {
         Object.assign(config, { [key]: candidate });
       } else if (key === 'samples' && typeof candidate === 'number') {
         const [min, max] = WIDGET_CONFIG_NUMBER_RANGES.samples;

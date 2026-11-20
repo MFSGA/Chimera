@@ -8,6 +8,7 @@ import ArrowDownwardRounded from '~icons/material-symbols/arrow-downward-rounded
 import ArrowUpwardRounded from '~icons/material-symbols/arrow-upward-rounded';
 import CloseRounded from '~icons/material-symbols/close-rounded';
 import DoneRounded from '~icons/material-symbols/done-rounded';
+import EventRepeatRounded from '~icons/material-symbols/event-repeat-rounded';
 import MemoryOutlineRounded from '~icons/material-symbols/memory-outline-rounded';
 import RouteRounded from '~icons/material-symbols/route-rounded';
 import SettingsEthernetRounded from '~icons/material-symbols/settings-ethernet-rounded';
@@ -30,6 +31,8 @@ const WIDGET_TITLE_MAP: Record<WidgetId, () => string> = {
   [WidgetId.ProxyShortcuts]: m.dashboard_widget_proxy_status,
   [WidgetId.CoreShortcuts]: m.dashboard_widget_core_status,
   [WidgetId.ProxyMode]: m.dashboard_widget_proxy_mode_title,
+  [WidgetId.SubscriptionSchedule]:
+    m.dashboard_widget_subscription_schedule_title,
 };
 
 const WIDGET_ICON_MAP: Record<
@@ -43,6 +46,7 @@ const WIDGET_ICON_MAP: Record<
   [WidgetId.ProxyShortcuts]: SettingsEthernetRounded,
   [WidgetId.CoreShortcuts]: MemoryOutlineRounded,
   [WidgetId.ProxyMode]: RouteRounded,
+  [WidgetId.SubscriptionSchedule]: EventRepeatRounded,
 };
 
 const widgetEntryAddVariants = cva('size-9 shrink-0 shadow-none', {

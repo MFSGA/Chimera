@@ -1,9 +1,110 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import type { ProfileItem_Serialize, SyncRunSummary } from '@chimera/interface';
 import {
   calculateSubscriptionQuota,
+  getRemoteFileConfigs,
+  latestFinishedRuns,
+  resolveProfileTarget,
   subscriptionExpiryTimestamp,
 } from '../src/components/widgets/dashboard-daily-utils';
+
+const remoteConfig = (uid: string): ProfileItem_Serialize =>
+  ({
+    uid,
+    name: uid,
+    type: 'config',
+    config: { type: 'file', source: { type: 'remote' } },
+  }) as ProfileItem_Serialize;
+
+const composition = (uid: string): ProfileItem_Serialize =>
+  ({
+    uid,
+    name: uid,
+    type: 'config',
+    config: { type: 'composition' },
+  }) as ProfileItem_Serialize;
+
+const transform = (uid: string): ProfileItem_Serialize =>
+  ({ uid, name: uid, type: 'transform' }) as ProfileItem_Serialize;
+
+test('resolves a remote profile without silently substituting composed or missing targets', () => {
+  const items = [
+    remoteConfig('remote-a'),
+    composition('combined'),
+    transform('script'),
+  ];
+  assert.deepEqual(
+    resolveProfileTarget(items, 'remote-a', { kind: 'current' }),
+    {
+      kind: 'selected',
+      profile: items[0],
+    },
+  );
+  assert.deepEqual(
+    resolveProfileTarget(items, 'combined', { kind: 'current' }),
+    {
+      kind: 'needs_selection',
+    },
+  );
+  assert.deepEqual(resolveProfileTarget(items, 'script', { kind: 'current' }), {
+    kind: 'unsupported',
+    profile: items[2],
+  });
+  assert.deepEqual(resolveProfileTarget(items, null, { kind: 'current' }), {
+    kind: 'needs_selection',
+  });
+  assert.deepEqual(
+    resolveProfileTarget(items, 'remote-a', {
+      kind: 'fixed',
+      profileUid: 'removed',
+    }),
+    { kind: 'missing' },
+  );
+  assert.deepEqual(
+    resolveProfileTarget(items, 'combined', {
+      kind: 'fixed',
+      profileUid: 'remote-a',
+    }),
+    { kind: 'selected', profile: items[0] },
+  );
+  assert.deepEqual(
+    getRemoteFileConfigs(items).map((item) => item.uid),
+    ['remote-a'],
+  );
+  assert.deepEqual(getRemoteFileConfigs(items, ['removed']), []);
+});
+
+test('recent summary runs exclude active work and sort large admission sequences exactly', () => {
+  const finished = {
+    kind: 'finished' as const,
+    outcome: 'succeeded' as const,
+    journal_degraded: false,
+  };
+  const summary = (id: string, sequence: string): SyncRunSummary => ({
+    id,
+    admission_sequence: sequence,
+    trigger: 'interval',
+    scheduled_at: null,
+    admitted_at: '2026-01-01T00:00:00Z',
+    finished_at: '2026-01-01T00:00:01Z',
+    state: finished,
+  });
+  const runs = [
+    summary('old', '9007199254740992'),
+    {
+      ...summary('active', '9007199254740995'),
+      state: { kind: 'running' as const },
+    },
+    summary('new', '9007199254740994'),
+    summary('middle', '9007199254740993'),
+  ];
+  assert.deepEqual(
+    latestFinishedRuns(runs, 2).map((run) => run.id),
+    ['new', 'middle'],
+  );
+  assert.deepEqual(latestFinishedRuns(runs, 0), []);
+});
 
 test('calculates remaining quota and percentage from both traffic directions', () => {
   assert.deepEqual(

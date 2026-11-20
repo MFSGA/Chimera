@@ -27,6 +27,7 @@ import {
   TrafficDownWidget,
   TrafficUpWidget,
 } from './widget-sparkline';
+import { SubscriptionScheduleWidget } from './widget-subscription-schedule';
 
 export { WidgetId } from './widget-config';
 
@@ -54,6 +55,7 @@ export const RENDER_MAP: Record<
   [WidgetId.ProxyShortcuts]: ProxyShortcutsWidget,
   [WidgetId.CoreShortcuts]: CoreShortcutsWidget,
   [WidgetId.ProxyMode]: ProxyModeWidget,
+  [WidgetId.SubscriptionSchedule]: SubscriptionScheduleWidget,
 };
 
 /**
@@ -126,6 +128,7 @@ export const WIDGET_MIN_SIZE_MAP: Record<
   [WidgetId.ProxyShortcuts]: { minW: 3, minH: 2 },
   [WidgetId.CoreShortcuts]: { minW: 4, minH: 2 },
   [WidgetId.ProxyMode]: { minW: 4, minH: 2 },
+  [WidgetId.SubscriptionSchedule]: { minW: 3, minH: 2 },
 };
 
 /** 持久化存储的布局数据结构 */

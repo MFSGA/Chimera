@@ -26,7 +26,10 @@ import {
   type WidgetConfig,
 } from './widget-config';
 import { ConfigGroup, ConfigRow } from './widget-config-row';
-import { WidgetOptionSelect } from './widget-reference-fields';
+import {
+  SubscriptionTargetField,
+  WidgetOptionSelect,
+} from './widget-reference-fields';
 
 type ChoiceOption<T extends string> = { value: T; label: string };
 
@@ -156,6 +159,24 @@ function ConfigFieldRows({
   onChange: (config: WidgetConfig) => void;
 }) {
   switch (config.type) {
+    case WidgetId.SubscriptionSchedule:
+      return (
+        <ConfigGroup>
+          <SubscriptionTargetField
+            target={config.target}
+            disabled={disabled}
+            onChange={(target) => onChange({ ...config, target })}
+          />
+          <Toggle
+            label={m.dashboard_widget_config_recent_runs()}
+            checked={config.showRecentRuns}
+            disabled={disabled}
+            onChange={(showRecentRuns) =>
+              onChange({ ...config, showRecentRuns })
+            }
+          />
+        </ConfigGroup>
+      );
     case WidgetId.ProxyMode:
       return (
         <ConfigGroup>

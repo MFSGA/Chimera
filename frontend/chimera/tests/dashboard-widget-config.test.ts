@@ -86,6 +86,49 @@ test('normalizes persisted widget settings and rejects invalid values', () => {
   assert.equal('unknown-0' in normalized.byInstance, false);
 });
 
+test('preserves only valid Subscription Schedule targets and history settings', () => {
+  const stored = normalizeWidgetConfigStorage({
+    version: 1,
+    byInstance: {
+      fixed: {
+        type: WidgetId.SubscriptionSchedule,
+        target: { kind: 'fixed', profileUid: 'remote-a' },
+        showRecentRuns: false,
+      },
+      empty: {
+        type: WidgetId.SubscriptionSchedule,
+        target: { kind: 'fixed', profileUid: '' },
+      },
+      malformed: {
+        type: WidgetId.SubscriptionSchedule,
+        target: { kind: 'unknown', profileUid: 'remote-a' },
+      },
+      follow: {
+        type: WidgetId.SubscriptionSchedule,
+        target: { kind: 'current', profileUid: 'ignored' },
+      },
+    },
+  });
+  assert.deepEqual(
+    getWidgetConfig(stored, 'fixed', WidgetId.SubscriptionSchedule),
+    {
+      type: WidgetId.SubscriptionSchedule,
+      target: { kind: 'fixed', profileUid: 'remote-a' },
+      showRecentRuns: false,
+    },
+  );
+  for (const id of ['empty', 'malformed']) {
+    assert.deepEqual(
+      getWidgetConfig(stored, id, WidgetId.SubscriptionSchedule).target,
+      { kind: 'current' },
+    );
+  }
+  assert.deepEqual(
+    getWidgetConfig(stored, 'follow', WidgetId.SubscriptionSchedule).target,
+    { kind: 'current' },
+  );
+});
+
 test('normalizes Proxy Mode layout without changing Proxy Shortcuts semantics', () => {
   const stored = normalizeWidgetConfigStorage({
     version: 1,
