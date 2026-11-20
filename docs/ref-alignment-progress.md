@@ -1,5 +1,13 @@
 # ref 对齐进度
 
+## DIFF-096：Profiles Migrator 完整生产模块迁入共享 crate（2026-11-20）
+
+- **上游来源与目标**：参照固定 `ref@c4b35e048` 的 `backend/nyanpasu-migration/src/modules/profiles.rs`，将 Tauri 原 `modules/profiles.rs` 中约 1,000 行生产逻辑完整迁入 `backend/chimera-migration/src/modules/profiles.rs`。本轮风险 **L2**（历史 profiles.yaml 升级、文档 stamp/回滚）；保持旧 `migration-state.yaml` schema 2、Chimera 专属 profiles domain schema、`0.24.1` 引入版本、现有四个步骤 ID 和 revision，不修改 ref / Runtime gitlink，不操作用户实际配置和系统代理。
+- **上游四步骤生产所有权**：共享 `ProfilesMigrator` 实现 Document 模块，保留 `profiles/null_value` rev1、`profiles/script_newtype` rev2、`profiles/clean_schema` rev3、`profiles/repair_schema` rev4，以及 `UNSTAMPED_CEILING=4` 和 `ProfilesDocument::SCHEMA_REVISION=4`。泛型 `ModuleMigrator<C>` / `MigrationStep<C>` 使用 `C: AsRef<chimera_migration::context::Ctx>`，Tauri 与共享模块共用**唯一一份** schema 判断、旧 `!script` 标签变换、域模型校验、订阅/外部 symlink/组合节点转换、状态检查和失败回滚生产实现；共用 `chimera-migration::document` 与 `fs` 的原子文件/修订 stamp 端口。`ProfilesFormat` 改由共享 crate 定义，但仍是 `chimera_persistence::format::StampedYamlFormat<ProfilesDocument>`，与此前 `chimera_core::format` 的 re-export 为同一类型。
+- **安全与兼容边界**：延续上游数据完整性策略：`clean_schema` 先保存 `profiles.yaml.bak`，转换后经 `chimera_config::profile::Profiles` 解析及 `validate()` 确认，再原子写出带旧注释头和 stamp 的配置；`repair_schema` 对已标记 rev3 但尚为旧 schema 的文件另留 `.recovery.bak`，不可静默重置或丢弃未知字段。回滚按原规则读备份并恢复；`migration-state.yaml` 仍由共享 Runner 持有。Tauri `core/migration/modules/profiles.rs` 只重导出共享生产类型与 `ProfilesFormat`，保留真实 Tauri Runner 的跨模块升级集成测试，未改变上游 UI 或 Legacy IPC。
+- **测试迁移与验证**：原 Profiles 纯数据/文件迁移回归测试共约 32 项随代码迁至共享 crate，涵盖远端配置选项、UID、文件路径越界、symlink、脚本、新旧 current/chain、组合配置、损坏/重复值拒绝、`.bak` 与回滚；一项真实 Runner 集成测试留在 Tauri。共享 `chimera-migration` **77/77**、Tauri `core::migration` **61/61**、Tauri 完整库 **1026/1026**（1 项原有忽略）、`cargo check --locked -p chimera --all-features --tests`、Rustfmt、commit Clippy、Git diff check 均通过。Tauri 单测数量下降因测试随生产所有权迁至共享 crate，不是删除验证。
+- **剩余差异与回滚**：Profiles、Typed Config 与 Storage 三个具体生产迁移模块现均由 `chimera-migration` 持有，Tauri 保留实际 Legacy Verge/Clash 转换、Session 恢复、宿主路径、备份生成/修剪与启动集成调度。迁移架构已经大幅收敛但不能声称 `ref` 完整 100% 对齐；仍需检查上游模块编排、错误合同、CLI/启动边界和真实老版本备份恢复。未验证 Windows/Linux、GUI E2E、真实用户数据及 GitHub CI。若发现生产兼容性回归，回滚本轮共享 Profiles 模块及 Tauri 重导出，不清理用户历史、迁移前备份和 `.corrupt-*` 证据。
+
 ## DIFF-095：Typed Config Migrator 生产所有权迁入共享 crate（2026-11-20）
 
 - **上游基线与范围**：以固定 `ref@c4b35e048` 的 `backend/nyanpasu-migration/src/modules/typed_config.rs` 为参考，将本地 `typed_config/split_legacy_config` rev1、`typed_config/repair_clash_config` rev2 的生产步骤与 typed 文件完整/缺失/部分配置识别迁入 `chimera-migration/src/modules/typed_config.rs`；风险 **L2**（启动时配置拆分、旧 clash 配置、Session 恢复）。不更新 `ref` 和 Runtime 子模块，不访问用户真实配置或修改本机系统服务。
