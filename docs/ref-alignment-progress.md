@@ -1,5 +1,14 @@
 # ref 对齐进度
 
+## DIFF-102：上游 v1.6.1 真实配置升级与隔离恢复验证、备份数据根边界修复（2026-11-20）
+
+- **固定参考与范围**：以 `ref@c4b35e048` 的 `nyanpasu-migration/src/fixtures/v1_6_1/{profiles.yaml,nyanpasu-config.yaml}` 和 `nyanpasu-migration/src/backup.rs` 的备份事务/manifest 为参照，在独立临时目录运行 Chimera 的**真实** Runner、Profiles/Typed Config/Storage 三组生产 migrator。风险 **L2**（升级前快照完整性与损坏快照报告）；不读取或写入当前用户配置、不改变 `ref` / Runtime 指针、迁移状态 schema 2、步骤 ID、manifest wire 格式或备份留存数量。
+- **端到端跨版本证明**：新增隔离迁移回归：直接加载上游 v1.6.1 Profiles 与 Verge YAML 样本，配以 Profiles 远端订阅配置/脚本节点和真实的 redb 用户数据；由实际 `Runner::with_paths(...).run_pending()` 完成旧配置升级，验证 Profiles rev4、Typed Config rev2、Storage rev2、三个 typed 文件及 `last_succeeded`。实际备份在任何 typed/Profiles 重写前保留原 YAML、各配置子文件和 `storage.db` 的确切字节与 manifest；借助已有**仅限测试** `restore_to_empty_sandbox` 恢复到全新隔离目录，重新以 redb 打开恢复后的数据库并核对真实原用户键。验证原升级目录未被恢复操作覆盖，备份经过 SHA-256 清单验证且仍可用。这个测试不代表生产恢复 UI 已实现，更不等于现场用户目录实机验证。
+- **发现的备份数据根漏洞**：原 `create_backup` 会先创建 `<data>/backups`，之后 `backup_storage` 才检查 `storage.db`；如果数据根目录本身为符号链接，即使 `storage.db` 看上去是常规文件，也可能先在链接指向的**外部目录**创建备份目录并复制外部数据。悬挂的数据根链接还可能被误判为数据库不存在。现新增 `validate_data_root`，在任何备份目录创建前拒绝链接或非目录节点，在创建目录后和 storage 文件复制/导出前重检，保留真正缺失的数据目录（仅配置备份）的正常路径。受拒绝路径不生成任何 committed 或 `.partial` 备份，也不变更外部用户文件。
+- **校验与修剪边界同步**：`prune_backups` 在遍历和删除前拒绝链接的数据根；`verify_backup` 在判定 `BackupInfo::is_available` 之前验证备份根的上一级数据根，而不只是 `backups/` 本身，避免一个已验证备份在数据目录被重定向后误被广告为可恢复。回归覆盖真实/悬挂链接、快照生成前拒绝、数据根重定向后的校验与修剪拒绝、原有效快照在另一路径保留，以及数据根真正缺失时正常创建配置备份。
+- **本地验证**：共享 Migration 库 **88/88**，Tauri 完整库 **1038/1038**（含本批新增 4 项备份/恢复测试；另 1 项原有忽略），`cargo check --locked -p chimera --all-features --tests`、Rustfmt、提交 Clippy 和 Git diff check 通过。覆盖 macOS 本地沙箱；未做真实生产目录回滚、Windows/Linux 实机、桌面 E2E、CI 最终完成态核查。未来若实现正式恢复，仍须设计离线所有权、显式用户确认、原配置留存和失败事务恢复；不能将现有只用于测试的解包函数直接开放为生产恢复动作。
+- **回滚约束与剩余差异**：出现兼容性回归时可回滚本轮数据根拒绝和端到端测试，但不得擅自删除迁移前备份、旧文档、未识别 `.partial` 或 `.corrupt-*` 证据。当前相对上游仍保留 Chimera 特有的带 SHA-256 的 manifest 与 Tauri 宿主 BackupPort，优先确保数据完整性而非机械复制上游的低验证逻辑。
+
 ## DIFF-101：Migration 状态加载与配置目录读取错误对齐、悬挂目录安全修复（2026-11-20）
 
 - **参考版本与目标**：继续以固定 `ref@c4b35e048` 的 `backend/nyanpasu-migration/src/runner.rs::Error::{LoadState,ReadConfigDirectory}` 为准，消除共享 Runner 状态文件加载和配置目录预备份检查中的纯字符串错误边界。本轮风险 **L2**（迁移启动前的读操作、备份前数据保护）。不改 `ref` / Runtime gitlink、不碰实际用户目录，不变更原有 `migration-state.yaml` schema 2、Stamp、step ID/revision 或备份格式。
