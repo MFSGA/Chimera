@@ -33,6 +33,7 @@ import {
   calculateResize,
   committedResizeItems,
   hasOverlap,
+  isUnchangedGridItem,
   shouldAnimateGridDrop,
 } from './utils';
 
@@ -138,6 +139,13 @@ export function DndGrid<T extends string = string>({
       }
 
       lastValidSnapRef.current = item;
+      // A prior drop has no animation state to carry into a new drag.
+      setDropInfoMap((prev) => {
+        if (!(item.id in prev)) return prev;
+        const next = { ...prev };
+        delete next[item.id];
+        return next;
+      });
       setActiveItem(item);
       setPreviewItem(item);
       setFrozenItems(items);
@@ -188,6 +196,18 @@ export function DndGrid<T extends string = string>({
       setActiveItem(null);
       setPreviewItem(null);
       setFrozenItems(null);
+      if (isUnchangedGridItem(activeItem, finalItem)) {
+        // An invalid collision or release on the starting cell is not a
+        // layout change; avoid a redundant KV write and landing animation.
+        setDropInfoMap((prev) => {
+          if (!(id in prev)) return prev;
+          const next = { ...prev };
+          delete next[id];
+          return next;
+        });
+        onInteractionChange?.(false);
+        return;
+      }
       const accepted = onLayoutChange?.(newItems);
       if (shouldAnimateGridDrop(accepted)) {
         setDropInfoMap((prev) => ({
@@ -221,6 +241,8 @@ export function DndGrid<T extends string = string>({
     setActiveItem(null);
     setPreviewItem(null);
     setFrozenItems(null);
+    // Cancelled previews must not replay old landing animations on recovery.
+    setDropInfoMap({});
     onInteractionChange?.(false);
   }, [onInteractionChange]);
 

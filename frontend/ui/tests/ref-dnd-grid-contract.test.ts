@@ -10,6 +10,7 @@ import {
   committedResizeItems,
   hasOverlap,
   isOverlap,
+  isUnchangedGridItem,
   shouldAnimateGridDrop,
 } from '../src/dnd-grid/utils';
 
@@ -94,6 +95,18 @@ test('pointer cancellation discards a valid resize preview without changing layo
   assert.equal(committedResizeItems(original, null, false), null);
 });
 
+test('a resize back to its starting bounds never writes a no-op layout', () => {
+  assert.equal(committedResizeItems([moving], { ...moving }, false), null);
+  assert.equal(
+    committedResizeItems([moving], { ...moving, id: 'removed' }, false),
+    null,
+  );
+  assert.deepEqual(
+    committedResizeItems([moving], { ...moving, h: moving.h + 1 }, false),
+    [{ ...moving, h: moving.h + 1 }],
+  );
+});
+
 test('a second resize starts from unchanged geometry after cancellation', () => {
   const original: DndGridItemType[] = [moving];
   const first = calculateResize(moving, 'right', 100, 0, 100, 100, 0, 6, 6);
@@ -119,4 +132,25 @@ test('rejected viewport or KV layout drops suppress successful-drop animation', 
   // Existing standalone grids may not report acceptance explicitly.
   assert.equal(shouldAnimateGridDrop(undefined), true);
   assert.equal(shouldAnimateGridDrop(true), true);
+});
+
+test('moving or resizing to the original grid geometry is a no-op', () => {
+  assert.equal(isUnchangedGridItem(moving, { ...moving }), true);
+  assert.equal(
+    isUnchangedGridItem(moving, { ...moving, x: moving.x + 1 }),
+    false,
+  );
+  assert.equal(
+    isUnchangedGridItem(moving, { ...moving, y: moving.y + 1 }),
+    false,
+  );
+  assert.equal(
+    isUnchangedGridItem(moving, { ...moving, w: moving.w + 1 }),
+    false,
+  );
+  assert.equal(
+    isUnchangedGridItem(moving, { ...moving, h: moving.h + 1 }),
+    false,
+  );
+  assert.equal(isUnchangedGridItem(moving, { ...moving, id: 'other' }), false);
 });
