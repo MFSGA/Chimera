@@ -1,5 +1,13 @@
 # ref 对齐进度
 
+## DIFF-107：共享 child_result FailureStage / Failure 与源错误链归集迁移（2026-11-20）
+
+- **固定上游/迁移目标**：以 `ref@c4b35e048` 的 `backend/nyanpasu-migration/src/child_result.rs::{FailureStage,Failure,Failure::from_error}` 为蓝本。遵照维护者本轮“**不用验证，继续迁移代码**”要求，继续真实迁移源代码，不单独运行单元测试、all-features check、构建、桌面 E2E 或 CI 状态查询。提交钩子按仓库现有设置自动运行的 Rustfmt/Clippy 属于提交行为，并非单独开展的新验收。
+- **共享 Failure 合同与来源**：在 `backend/chimera-migration/src/child_result.rs` 增加 `FailureStage::{RunnerConstruction,Backup,Migration}` 和结构化 `Failure {stage,config_dir,backups_dir,paths,revision,chain,backup_available,io_failure}`，保留上游字段与 JSON 序列化形式。`Failure::from_error` 遍历 `std::error::Error::source()`，收集完整文本因果链，并通过具体 `SchemaError`、`RevisionError`、`MigrationCheckError`、`ExecutionError`、shared persistence document write/evidence 类型定位修订信息及去重的相关路径；修订路径也被纳入文件列表。IO 结果由宿主平台分类器注入（共享 `chimera-utils::io::IoFailure` 的 serde 支持），无需让独立 Migration crate 依赖 Tauri、CoreManager、UI 或 redb 宿主错误。
+- **真正的 Tauri 生产调用适配**：`startup_failure::StartupFailure::from_error` 现在调用共享 `MigrationFailure::from_error`，使用其 `chain`、`revision` 和路径集合，删除 Tauri 中重复的 `SchemaError`、`RevisionError` 全部分支；宿主仍负责 BackupError、Session、文件保护证据、CoreHost、`ExecutionError::RecordFailure` 双重持久化故障的附加路径和 IO 分类，以及既有 `FailureKind`、`StartupStage` 和 UI 文案。共享收集器还在迁移之外的 startup 阶段使用，避免改变以前的 revision 诊断覆盖范围。
+- **wire 兼容与下一阶段**：保留前轮生产 `ChildOutcome<startup_failure::Report>`、现有 `protocol_version:1` JSON 和 `Report`（version/logs_dir/backup_dir）格式；没有未经验收就切换父子进程 wire 类型，也没有改变备份 manifest 校验或迁移写入顺序。共享 `Failure` 现用于宿主构造真实失败报告，而不是仅定义未调用的数据类型。后续在准备验证父/子双方协议的阶段，可进一步将 `ChildOutcome` 的报告载荷直接升级为共享 `Failure`，引入对应兼容版本及 Tauri `Report` 转换，并处理异常退出/崩溃展示。
+- **风险与回滚**：本轮风险 **L2**（启动失败错误分类和跨进程诊断）；改动限于共享 failure collector、Tauri 报告适配、共享 IO serde 依赖和锁文件，不修改 `ref`、Runtime 子模块或用户数据。无新增测试/编译的实际验证结果，本轮标记**待验**。遇到线上兼容故障只回滚本轮 collector/报告适配，不删除配置、迁移状态、已验证备份和 `.corrupt-*` 证据。
+
 ## DIFF-106：子进程结果协议与 RevisionFailure 从 Tauri 迁入共享 Migration（2026-11-20）
 
 - **目标/参考/范围**：固定 `ref@c4b35e048` 的 `backend/nyanpasu-migration/src/child_result.rs`，迁移真正属于共享 Migration 的 child-result 协议及 revision 错误合同。风险 **L2**（跨进程报告读写和原有配置迁移错误分类）。按照本轮维护者“**不用验证，继续迁移代码**”的指示，专注生产代码迁移，没有运行本轮新的测试、`cargo check`、完整构建或桌面 E2E；旧轮验证不能当作本轮的测试证据。
