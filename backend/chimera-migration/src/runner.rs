@@ -84,6 +84,26 @@ pub enum RevisionError {
         read: u64,
         supported: u64,
     },
+    #[error("{} is stamped at revision {read}, although {} records {module} as migrated to revision {applied}. The file may have been restored from a backup or rewritten by an older version. Restore it, or delete {} so the file is migrated again from its stamp.", path.display(), state_path.display(), state_path.display())]
+    DocumentBehindState {
+        path: std::path::PathBuf,
+        state_path: std::path::PathBuf,
+        module: String,
+        read: u64,
+        applied: u64,
+    },
+    #[error("{} has lost the `_nyanpasu` stamp it was written with; it may have been rewritten by an older version or edited by hand. Restore it from a backup, or delete {} so its revision is detected from its content.", path.display(), state_path.display())]
+    MissingDocumentStamp {
+        path: std::path::PathBuf,
+        state_path: std::path::PathBuf,
+    },
+    #[error("{reason}, although {} records {module} as migrated to revision {applied}. The files may have been moved, restored from a backup or rewritten by an older version. Restore them, or delete {} so the files on disk are detected and migrated again.", state_path.display(), state_path.display())]
+    FilesBehindState {
+        state_path: std::path::PathBuf,
+        module: String,
+        applied: u64,
+        reason: String,
+    },
 }
 
 /// Initialize each module from its stamped document or injected baseline.
@@ -200,17 +220,16 @@ pub fn reconcile_documents<C: 'static>(
                     .insert(module.module().to_string(), at_revision(stamped, true));
                 changed = true;
             }
-            (Some(stamped), Some(state)) if stamped < state.applied_revision => bail!(
-                "{} is stamped at revision {stamped}, although {} records {} as migrated \
-                     to revision {}. The file may have been restored from a backup or rewritten \
-                     by an older version. Restore it, or delete {} so the file is migrated \
-                     again from its stamp.",
-                path.display(),
-                state_path.display(),
-                module.module(),
-                state.applied_revision,
-                state_path.display()
-            ),
+            (Some(stamped), Some(state)) if stamped < state.applied_revision => {
+                return Err(RevisionError::DocumentBehindState {
+                    path,
+                    state_path: state_path.to_path_buf(),
+                    module: module.module().to_owned(),
+                    read: stamped,
+                    applied: state.applied_revision,
+                }
+                .into());
+            }
             (Some(_), Some(state)) => {
                 if !state.stamped {
                     store
@@ -224,14 +243,11 @@ pub fn reconcile_documents<C: 'static>(
             (None, Some(state))
                 if state.stamped || state.applied_revision > spec.unstamped_ceiling =>
             {
-                bail!(
-                    "{} has lost the `{}` stamp it was written with; it may have been \
-                         rewritten by an older version or edited by hand. Restore it from a \
-                         backup, or delete {} so its revision is detected from its content.",
-                    path.display(),
-                    chimera_persistence::format::STAMP_KEY,
-                    state_path.display()
-                )
+                return Err(RevisionError::MissingDocumentStamp {
+                    path,
+                    state_path: state_path.to_path_buf(),
+                }
+                .into());
             }
             // Written before stamps: `detect_baseline` and `files_behind`
             // still judge it, and `stamp_adopted_documents` stamps it once
@@ -275,15 +291,13 @@ pub fn verify_applied_revisions<C: 'static>(
             .files_behind(ctx, applied)
             .with_context(|| format!("failed to inspect the {} files", module.module()))?;
         if let Some(reason) = behind {
-            bail!(
-                "{reason}, although {} records {} as migrated to revision {applied}. The \
-                     files may have been moved, restored from a backup or rewritten by an older \
-                     version. Restore them, or delete {} so the files on disk are detected and \
-                     migrated again.",
-                state_path.display(),
-                module.module(),
-                state_path.display()
-            );
+            return Err(RevisionError::FilesBehindState {
+                state_path: state_path.to_path_buf(),
+                module: module.module().to_owned(),
+                applied,
+                reason,
+            }
+            .into());
         }
     }
     Ok(())
@@ -959,6 +973,52 @@ mod tests {
 
     fn transaction_registry() -> Registry<TransactionCtx> {
         Registry::new(vec![&TRANSACTION_MODULE]).unwrap()
+    }
+
+    struct InconsistentFilesModule;
+    static INCONSISTENT_FILES: InconsistentFilesModule = InconsistentFilesModule;
+    impl ModuleMigrator<TransactionCtx> for InconsistentFilesModule {
+        fn module(&self) -> &'static str {
+            "example"
+        }
+        fn detect_baseline(&self, _: &TransactionCtx) -> anyhow::Result<u64> {
+            Ok(0)
+        }
+        fn steps(&self) -> &'static [&'static dyn MigrationStep<TransactionCtx>] {
+            &TRANSACTION_STEPS
+        }
+        fn files_behind(&self, _: &TransactionCtx, applied: u64) -> anyhow::Result<Option<String>> {
+            Ok((applied != 0).then(|| "the expected example document is absent".to_owned()))
+        }
+    }
+
+    #[test]
+    fn files_behind_migration_state_returns_structured_integrity_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let state_path = dir.path().join("migration-state.yaml");
+        let mut store = MigrationStore::default();
+        store.modules.insert(
+            "example".to_owned(),
+            ModuleState {
+                applied_revision: 1,
+                baseline_revision: 1,
+                stamped: false,
+            },
+        );
+        store.flush_atomic(&state_path).unwrap();
+        let before = std::fs::read(&state_path).unwrap();
+        let error = verify_applied_revisions(
+            [&INCONSISTENT_FILES as &dyn ModuleMigrator<TransactionCtx>],
+            &TransactionCtx::default(),
+            &store,
+            &state_path,
+        )
+        .unwrap_err();
+        assert!(matches!(error.downcast_ref::<RevisionError>(),
+            Some(RevisionError::FilesBehindState {
+                state_path: path, module, applied: 1, reason,
+            }) if *path == state_path && module == "example" && reason.contains("expected example document")));
+        assert_eq!(std::fs::read(&state_path).unwrap(), before);
     }
 
     struct OtherTransactionStep;

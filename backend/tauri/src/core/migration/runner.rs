@@ -401,7 +401,11 @@ mod tests {
         let case = DocumentCase::new(Some(profiles_at(4, true)), CLEAN_PROFILES);
         let state = case.state();
 
-        let error = format!("{:#}", case.runner().unwrap_err());
+        let cause = case.runner().unwrap_err();
+        assert!(matches!(cause.downcast_ref::<RevisionError>(),
+            Some(RevisionError::MissingDocumentStamp { path, state_path })
+                if *path == case.ctx.profiles_path() && *state_path == case.ctx.state_path()));
+        let error = format!("{cause:#}");
 
         assert!(error.contains("lost the `_nyanpasu` stamp"), "{error}");
         assert!(error.contains(STORE_FILE_NAME), "{error}");
@@ -415,7 +419,11 @@ mod tests {
         let case = DocumentCase::new(Some(profiles_at(4, true)), &profiles);
         let state = case.state();
 
-        let error = format!("{:#}", case.runner().unwrap_err());
+        let cause = case.runner().unwrap_err();
+        assert!(matches!(cause.downcast_ref::<RevisionError>(),
+            Some(RevisionError::DocumentBehindState { path, state_path, module, read: 2, applied: 4 })
+                if *path == case.ctx.profiles_path() && *state_path == case.ctx.state_path() && module == "profiles"));
+        let error = format!("{cause:#}");
 
         assert!(error.contains("stamped at revision 2"), "{error}");
         assert!(error.contains("revision 4"), "{error}");
