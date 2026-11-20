@@ -15,7 +15,7 @@ use chimera_migration::{StepSpec, runner as core_runner};
 use semver::Version;
 use time::OffsetDateTime;
 
-fn step_spec(step: &dyn MigrationStep) -> StepSpec<'static> {
+fn step_spec(step: &dyn MigrationStep<Ctx>) -> StepSpec<'static> {
     StepSpec {
         id: step.id(),
         module: step.module(),
@@ -117,7 +117,7 @@ impl Runner {
         )
     }
 
-    pub fn advice_step(&self, step: &dyn MigrationStep) -> MigrationAdvice {
+    pub fn advice_step(&self, step: &dyn MigrationStep<Ctx>) -> MigrationAdvice {
         core_runner::advice_step(
             &self.store,
             step_spec(step),
@@ -127,7 +127,7 @@ impl Runner {
         )
     }
 
-    pub fn run_migration(&mut self, step: &dyn MigrationStep) -> anyhow::Result<()> {
+    pub fn run_migration(&mut self, step: &dyn MigrationStep<Ctx>) -> anyhow::Result<()> {
         println!("Running migration: {} ({})", step.id(), step.name());
         self.ensure_known_revisions()?;
         let advice = self.advice_step(step);
@@ -247,7 +247,7 @@ impl Runner {
         Ok(runner)
     }
 
-    fn modules(&self) -> Vec<&'static dyn ModuleMigrator> {
+    fn modules(&self) -> Vec<&'static dyn ModuleMigrator<Ctx>> {
         registry::modules()
             .filter(|module| self.profile_migrations_enabled || module.module() != "profiles")
             .collect()
@@ -436,7 +436,7 @@ impl Runner {
         Ok(())
     }
 
-    fn run_step(&mut self, step: &dyn MigrationStep) -> anyhow::Result<()> {
+    fn run_step(&mut self, step: &dyn MigrationStep<Ctx>) -> anyhow::Result<()> {
         match check_step(step, &self.ctx) {
             Ok(Some(StepCheck::Satisfied)) => {
                 println!("Migration {} is already satisfied, skipping.", step.id());
@@ -477,7 +477,7 @@ impl Runner {
         }
     }
 
-    fn finish_step(&mut self, step: &dyn MigrationStep, skipped: bool) -> anyhow::Result<()> {
+    fn finish_step(&mut self, step: &dyn MigrationStep<Ctx>, skipped: bool) -> anyhow::Result<()> {
         // Recorded in the same flush, so a stamp lost later is recognised as
         // lost even if the rest of the run never finishes.
         if let Some(spec) = document_spec(step.module())
@@ -497,7 +497,11 @@ impl Runner {
             .with_context(|| format!("failed to persist {} finished state", step.id()))
     }
 
-    fn record_failure(&mut self, step: &dyn MigrationStep, error: anyhow::Error) -> anyhow::Error {
+    fn record_failure(
+        &mut self,
+        step: &dyn MigrationStep<Ctx>,
+        error: anyhow::Error,
+    ) -> anyhow::Error {
         self.store.mark_failed(step_spec(step), &error);
         match self.store.flush_atomic(&self.ctx.state_path()) {
             Ok(()) => error,
@@ -513,7 +517,7 @@ impl Runner {
 /// check or the run is defective, which must not be recorded as completed.
 /// A document step must also leave its file in place and stamped, which a
 /// fallback check cannot tell.
-fn ensure_satisfied(step: &dyn MigrationStep, ctx: &Ctx) -> anyhow::Result<()> {
+fn ensure_satisfied(step: &dyn MigrationStep<Ctx>, ctx: &Ctx) -> anyhow::Result<()> {
     if let Some(spec) = document_spec(step.module()) {
         let file = fs::read_document(&(spec.path)(ctx), spec.document)
             .with_context(|| format!("failed to check {} after it ran", step.id()))?;
@@ -544,7 +548,7 @@ fn ensure_satisfied(step: &dyn MigrationStep, ctx: &Ctx) -> anyhow::Result<()> {
 /// revision is caught by [`ensure_satisfied`]. Unstamped files fall back to
 /// the step's check.
 fn check_step(
-    step: &dyn MigrationStep,
+    step: &dyn MigrationStep<Ctx>,
     ctx: &Ctx,
 ) -> Result<Option<StepCheck>, MigrationCheckError> {
     if let Some(spec) = document_spec(step.module()) {
@@ -560,7 +564,7 @@ fn check_step(
     step.check(ctx)
 }
 
-fn document_spec(module: &str) -> Option<DocumentSpec> {
+fn document_spec(module: &str) -> Option<DocumentSpec<Ctx>> {
     registry::modules()
         .find(|candidate| candidate.module() == module)
         .and_then(|candidate| match candidate.kind() {
@@ -569,7 +573,7 @@ fn document_spec(module: &str) -> Option<DocumentSpec> {
         })
 }
 
-fn head_revision(module: &dyn ModuleMigrator) -> u64 {
+fn head_revision(module: &dyn ModuleMigrator<Ctx>) -> u64 {
     module.steps().last().map_or(0, |step| step.revision())
 }
 
@@ -622,7 +626,7 @@ mod tests {
         fail: bool,
     }
 
-    impl MigrationStep for TestStep {
+    impl MigrationStep<Ctx> for TestStep {
         fn id(&self) -> &'static str {
             self.id
         }
@@ -853,7 +857,7 @@ mod tests {
 
     struct RemovesProfiles;
 
-    impl MigrationStep for RemovesProfiles {
+    impl MigrationStep<Ctx> for RemovesProfiles {
         fn id(&self) -> &'static str {
             "profiles/removes"
         }

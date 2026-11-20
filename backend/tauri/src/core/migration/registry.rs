@@ -1,27 +1,22 @@
-use super::{MigrationStep, ModuleMigrator, modules};
+use super::{Ctx, MigrationStep, ModuleMigrator, modules};
 use once_cell::sync::Lazy;
 
-pub static MODULES: Lazy<Vec<&'static dyn ModuleMigrator>> = Lazy::new(|| {
-    vec![
+pub static MODULES: Lazy<chimera_migration::registry::Registry<Ctx>> = Lazy::new(|| {
+    chimera_migration::registry::Registry::new(vec![
         &modules::profiles::MIGRATOR,
         &modules::typed_config::MIGRATOR,
-        // Match ref: application.yaml must exist before KV hotkeys are moved into it.
+        // Match ref: typed application.yaml must exist before moving KV hotkeys.
         &modules::storage::MIGRATOR,
-    ]
+    ])
+    .expect("migration registry has stable module and step identities")
 });
 
-pub fn modules() -> impl Iterator<Item = &'static dyn ModuleMigrator> {
-    MODULES.iter().copied()
+pub fn modules() -> impl Iterator<Item = &'static dyn ModuleMigrator<Ctx>> {
+    MODULES.modules()
 }
 
-fn get_migrations() -> Vec<&'static dyn MigrationStep> {
-    modules()
-        .flat_map(|module| module.steps().iter().copied())
-        .collect()
-}
-
-pub fn find_migration(id: &str) -> Option<&'static dyn MigrationStep> {
-    get_migrations().into_iter().find(|step| step.id() == id)
+pub fn find_migration(id: &str) -> Option<&'static dyn MigrationStep<Ctx>> {
+    MODULES.find_migration(id)
 }
 
 #[cfg(test)]

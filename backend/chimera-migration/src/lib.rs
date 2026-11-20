@@ -2,7 +2,10 @@
 //! The application shell injects paths, backup, and module implementations.
 
 pub mod context;
+pub mod document;
 pub mod fs;
+pub mod module;
+pub mod registry;
 pub mod runner;
 pub mod store;
 

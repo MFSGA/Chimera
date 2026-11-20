@@ -20,7 +20,7 @@ static NULL_VALUE: MigrateProfilesNullValue = MigrateProfilesNullValue;
 static SCRIPT_NEWTYPE: MigrateProfileScriptNewtype = MigrateProfileScriptNewtype;
 static CLEAN_SCHEMA: MigrateProfilesCleanSchema = MigrateProfilesCleanSchema;
 static REPAIR_SCHEMA: MigrateProfilesRepairSchema = MigrateProfilesRepairSchema;
-static STEPS: [&dyn MigrationStep; 4] =
+static STEPS: [&dyn MigrationStep<Ctx>; 4] =
     [&NULL_VALUE, &SCRIPT_NEWTYPE, &CLEAN_SCHEMA, &REPAIR_SCHEMA];
 
 /// Revisions up to here were written without a stamp. Frozen: the shape
@@ -40,12 +40,12 @@ pub type ProfilesFormat = StampedYamlFormat<ProfilesDocument>;
 
 pub struct ProfilesMigrator;
 
-impl ModuleMigrator for ProfilesMigrator {
+impl ModuleMigrator<Ctx> for ProfilesMigrator {
     fn module(&self) -> &'static str {
         "profiles"
     }
 
-    fn kind(&self) -> ModuleKind {
+    fn kind(&self) -> ModuleKind<Ctx> {
         ModuleKind::Document(DocumentSpec {
             document: ProfilesDocument::DOCUMENT,
             path: Ctx::profiles_path,
@@ -68,7 +68,7 @@ impl ModuleMigrator for ProfilesMigrator {
         Ok(0)
     }
 
-    fn steps(&self) -> &'static [&'static dyn MigrationStep] {
+    fn steps(&self) -> &'static [&'static dyn MigrationStep<Ctx>] {
         &STEPS
     }
 
@@ -92,7 +92,7 @@ impl ModuleMigrator for ProfilesMigrator {
 #[derive(Debug, Clone, Copy)]
 pub struct MigrateProfilesNullValue;
 
-impl MigrationStep for MigrateProfilesNullValue {
+impl MigrationStep<Ctx> for MigrateProfilesNullValue {
     fn id(&self) -> &'static str {
         "profiles/null_value"
     }
@@ -156,7 +156,7 @@ impl MigrationStep for MigrateProfilesNullValue {
 #[derive(Debug, Clone, Copy)]
 pub struct MigrateProfileScriptNewtype;
 
-impl MigrationStep for MigrateProfileScriptNewtype {
+impl MigrationStep<Ctx> for MigrateProfileScriptNewtype {
     fn id(&self) -> &'static str {
         "profiles/script_newtype"
     }
@@ -221,7 +221,7 @@ impl MigrationStep for MigrateProfileScriptNewtype {
 #[derive(Debug, Clone, Copy)]
 pub struct MigrateProfilesCleanSchema;
 
-impl MigrationStep for MigrateProfilesCleanSchema {
+impl MigrationStep<Ctx> for MigrateProfilesCleanSchema {
     fn id(&self) -> &'static str {
         "profiles/clean_schema"
     }
@@ -258,7 +258,7 @@ impl MigrationStep for MigrateProfilesCleanSchema {
 #[derive(Debug, Clone, Copy)]
 pub struct MigrateProfilesRepairSchema;
 
-impl MigrationStep for MigrateProfilesRepairSchema {
+impl MigrationStep<Ctx> for MigrateProfilesRepairSchema {
     fn id(&self) -> &'static str {
         "profiles/repair_schema"
     }

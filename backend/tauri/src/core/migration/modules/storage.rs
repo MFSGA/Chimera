@@ -20,7 +20,7 @@ pub static MIGRATOR: StorageMigrator = StorageMigrator;
 static VERSION_0_28_3: Lazy<Version> = Lazy::new(|| Version::parse("0.28.3").unwrap());
 static HOTKEYS_TO_KV: MigrateHotkeysToKv = MigrateHotkeysToKv;
 static HOTKEYS_TO_TYPED_CONFIG: MigrateHotkeysToTypedConfig = MigrateHotkeysToTypedConfig;
-static STEPS: [&dyn MigrationStep; 2] = [&HOTKEYS_TO_KV, &HOTKEYS_TO_TYPED_CONFIG];
+static STEPS: [&dyn MigrationStep<Ctx>; 2] = [&HOTKEYS_TO_KV, &HOTKEYS_TO_TYPED_CONFIG];
 
 const HOTKEYS_KEY: &str = "hotkeys";
 
@@ -60,7 +60,7 @@ pub enum Error {
 
 pub struct StorageMigrator;
 
-impl ModuleMigrator for StorageMigrator {
+impl ModuleMigrator<Ctx> for StorageMigrator {
     fn module(&self) -> &'static str {
         "storage"
     }
@@ -98,7 +98,7 @@ impl ModuleMigrator for StorageMigrator {
         Ok(current_revision())
     }
 
-    fn steps(&self) -> &'static [&'static dyn MigrationStep] {
+    fn steps(&self) -> &'static [&'static dyn MigrationStep<Ctx>] {
         &STEPS
     }
 }
@@ -106,7 +106,7 @@ impl ModuleMigrator for StorageMigrator {
 #[derive(Debug, Clone, Copy)]
 pub struct MigrateHotkeysToKv;
 
-impl MigrationStep for MigrateHotkeysToKv {
+impl MigrationStep<Ctx> for MigrateHotkeysToKv {
     fn id(&self) -> &'static str {
         "storage/hotkeys_to_kv"
     }
@@ -185,7 +185,7 @@ fn current_revision() -> u64 {
 #[derive(Debug, Clone, Copy)]
 pub struct MigrateHotkeysToTypedConfig;
 
-impl MigrationStep for MigrateHotkeysToTypedConfig {
+impl MigrationStep<Ctx> for MigrateHotkeysToTypedConfig {
     fn id(&self) -> &'static str {
         "storage/hotkeys_to_typed_config"
     }

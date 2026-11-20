@@ -1,129 +1,17 @@
-//! Migration filesystem adapters over the ref-aligned persistence crate.
-//!
-//! Chimera migration inputs may be externally managed, so the migration
-//! boundary refuses to replace symlinks or non-file nodes before delegating
-//! the actual atomic write to the shared persistence implementation.
+//! Tauri compatibility path for shared Migration document and YAML IO.
+//! The single source of truth lives in chimera-migration::document.
 
+#[cfg(test)]
 use super::MigrationCheckError;
-use chimera_core::format::{Inspected, StampError};
-use chimera_persistence::write as persistence_write;
-use serde::de::DeserializeOwned;
+pub(crate) use chimera_migration::document::{
+    DocumentFile, read_document, read_yaml_if_exists, try_exists, write_document,
+};
+#[cfg(test)]
+use chimera_migration::document::{read_document_with, read_yaml_if_exists_with};
+#[cfg(test)]
 use serde_yaml_ng::Mapping;
 use std::path::Path;
 
-/// Whether `path` exists, reporting an inaccessible parent as an error
-/// instead of the `false` that [`Path::exists`] would return.
-pub(crate) fn try_exists(path: &Path) -> Result<bool, MigrationCheckError> {
-    crate::core::corrupt::config_node_exists(path).map_err(|source| MigrationCheckError::Io {
-        path: path.to_path_buf(),
-        source,
-    })
-}
-
-/// Read optional migration input without discarding a present dangling link.
-/// NotFound from the read is only absence if the node itself is also absent.
-fn read_string_if_exists_with(
-    path: &Path,
-    read: impl FnMut() -> std::io::Result<String>,
-) -> Result<Option<String>, MigrationCheckError> {
-    match crate::core::corrupt::retry_io(read) {
-        Ok(raw) => Ok(Some(raw)),
-        Err(source) if source.kind() == std::io::ErrorKind::NotFound && !try_exists(path)? => {
-            Ok(None)
-        }
-        Err(source) => Err(MigrationCheckError::Io {
-            path: path.to_path_buf(),
-            source,
-        }),
-    }
-}
-
-/// The YAML document at `path`, or `None` when the file does not exist.
-pub(crate) fn read_yaml_if_exists<T: DeserializeOwned>(
-    path: &Path,
-) -> Result<Option<T>, MigrationCheckError> {
-    read_yaml_if_exists_with(path, || std::fs::read_to_string(path))
-}
-
-fn read_yaml_if_exists_with<T: DeserializeOwned>(
-    path: &Path,
-    read: impl FnMut() -> std::io::Result<String>,
-) -> Result<Option<T>, MigrationCheckError> {
-    let Some(raw) = read_string_if_exists_with(path, read)? else {
-        return Ok(None);
-    };
-    serde_yaml_ng::from_str(&raw)
-        .map(Some)
-        .map_err(|source| MigrationCheckError::Parse {
-            path: path.to_path_buf(),
-            source,
-        })
-}
-
-/// A document module's file, split into its stamp and content.
-pub(crate) struct DocumentFile {
-    pub raw: String,
-    /// `None` for a file written before its module adopted stamps.
-    pub schema_revision: Option<u64>,
-    pub payload: Mapping,
-}
-
-/// The file at `path` holding `document`, or `None` when it does not exist.
-/// A malformed stamp, or one naming another document, is an error.
-pub(crate) fn read_document(
-    path: &Path,
-    document: &str,
-) -> Result<Option<DocumentFile>, MigrationCheckError> {
-    read_document_with(path, document, || std::fs::read_to_string(path))
-}
-
-fn read_document_with(
-    path: &Path,
-    document: &str,
-    read: impl FnMut() -> std::io::Result<String>,
-) -> Result<Option<DocumentFile>, MigrationCheckError> {
-    let Some(raw) = read_string_if_exists_with(path, read)? else {
-        return Ok(None);
-    };
-    let stamp_error = |source| MigrationCheckError::Stamp {
-        path: path.to_path_buf(),
-        source,
-    };
-    let (schema_revision, payload) =
-        match chimera_core::format::inspect(&raw).map_err(stamp_error)? {
-            Inspected::Unstamped(payload) => (None, payload),
-            Inspected::Stamped { stamp, payload } => {
-                if stamp.document != document {
-                    return Err(stamp_error(StampError::WrongDocument {
-                        expected: document.to_owned(),
-                        found: stamp.document,
-                    }));
-                }
-                (Some(stamp.schema_revision), payload)
-            }
-        };
-    Ok(Some(DocumentFile {
-        raw,
-        schema_revision,
-        payload,
-    }))
-}
-
-/// Atomically write `payload` to `path`, stamped as `document` at
-/// `schema_revision`, so the content and its revision always change together.
-pub(crate) fn write_document(
-    path: &Path,
-    document: &str,
-    schema_revision: u64,
-    payload: Mapping,
-    prefix: Option<&str>,
-) -> anyhow::Result<()> {
-    chimera_migration::fs::validate_destination(path)?;
-    persistence_write::write_document(path, document, schema_revision, payload, prefix)?;
-    Ok(())
-}
-
-/// Atomically write a migration document using the shared safe destination policy.
 pub(crate) fn atomic_write(path: &Path, contents: &[u8]) -> anyhow::Result<()> {
     chimera_migration::fs::atomic_write(path, contents)
 }
