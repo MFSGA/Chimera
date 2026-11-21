@@ -56,6 +56,32 @@ pub(in crate::client) struct CompletedLifecycleOperation {
     pub(in crate::client) report: StartupReport,
 }
 
+/// A late authoritative source change is a replan request, not evidence
+/// that the preceding Core operation converged the latest durable target.
+fn committed_target_advanced(result: &anyhow::Result<()>) -> bool {
+    result.as_ref().err().is_some_and(|error| {
+        error
+            .downcast_ref::<workflow::ProfilesSourceAdvanced>()
+            .is_some()
+            || error
+                .downcast_ref::<crate::client::reconciler::attempt::CommittedTargetAdvanced>()
+                .is_some()
+    })
+}
+
+/// An obsolete Checked apply can have changed the actual Core process while
+/// another Source committed. Do not publish its stale port binding as the
+/// current desired Effects state; the sole Actor must first reconcile latest.
+/// Service/Shutdown observations remain independent of runtime convergence.
+fn refresh_effect_ports(
+    reconciled: bool,
+    service_observed: bool,
+    shutdown: bool,
+    source_advanced: bool,
+) -> bool {
+    (service_observed || shutdown) || (reconciled && !source_advanced)
+}
+
 fn completed_from_startup_report(report: StartupReport) -> CompletedLifecycleOperation {
     let result = report
         .outcome
@@ -1580,7 +1606,13 @@ impl Actor for ApplicationWorkflowActor {
                 reconciled,
             } => {
                 if state.active.as_ref().map(|operation| operation.response.id) == Some(id) {
-                    let refresh_runtime_binding = reconciled || service_probe.is_some() || shutdown;
+                    let source_advanced = committed_target_advanced(&result);
+                    let refresh_runtime_binding = refresh_effect_ports(
+                        reconciled,
+                        service_probe.is_some(),
+                        shutdown,
+                        source_advanced,
+                    );
                     let runtime_binding = if refresh_runtime_binding {
                         Some(workflow.lifecycle().effect_port_binding().await)
                     } else {
@@ -1734,14 +1766,7 @@ impl Actor for ApplicationWorkflowActor {
                         // continuation even if no new source notification arrives.
                         state.source_after_handoff = true;
                     }
-                    let source_advanced = result.as_ref().err().is_some_and(|error| {
-                        error
-                            .downcast_ref::<workflow::ProfilesSourceAdvanced>()
-                            .is_some()
-                            || error
-                                .downcast_ref::<crate::client::reconciler::attempt::CommittedTargetAdvanced>()
-                                .is_some()
-                    });
+
                     if let Some(error) = result.as_ref().err().and_then(|error| {
                         error.downcast_ref::<crate::client::reconciler::attempt::ServiceFallbackDeferred>()
                     }) {
@@ -1829,8 +1854,13 @@ impl Actor for ApplicationWorkflowActor {
                         && !state.uncertain
                         && !state.shutting_down
                     {
-                        // A superseded source is not a Core refusal: consume
-                        // the latest durable generation in another round.
+                        // A source superseded in flight is a *source*
+                        // reconciliation, not a user Retry of obsolete bytes.
+                        // Preserve the intent across an outstanding S2 lease
+                        // and use the existing one-owner ReconcileSource path.
+                        if source_advanced {
+                            state.source_dirty = true;
+                        }
                         state.mark_runtime_dirty(&myself);
                     }
                     if request_runtime_rebuild && !state.shutting_down {
@@ -14009,6 +14039,53 @@ mod tests {
         }
     }
 
+    #[test]
+    fn superseded_source_does_not_publish_stale_effect_ports_or_assert_convergence() {
+        let obsolete = Err(anyhow::Error::new(
+            crate::client::reconciler::attempt::CommittedTargetAdvanced,
+        ));
+        assert!(committed_target_advanced(&obsolete));
+        assert!(
+            !refresh_effect_ports(true, false, false, true),
+            "an advanced source must not receive its previous Core listener as a current effect"
+        );
+        assert!(
+            refresh_effect_ports(true, true, false, true),
+            "a separate Service observation must still publish its binding"
+        );
+        assert!(
+            refresh_effect_ports(false, false, true, true),
+            "Shutdown always needs to clear the previous runtime binding"
+        );
+        assert!(
+            refresh_effect_ports(true, false, false, false),
+            "a stable confirmed runtime continues publishing its ports"
+        );
+        let mut status = ReconcilerStatus::default();
+        let mut observed = SourceVersions::default();
+        observed.observe(SourceDomain::Profiles, 3);
+        status.begin(1);
+        status.finish(
+            1,
+            "SourceCommitted",
+            &observed,
+            RunIntent::Running,
+            &obsolete,
+            true,
+            false,
+            false,
+            false,
+            true,
+        );
+        assert!(
+            matches!(
+                status.conclusion,
+                chimera_core::client::reconciler::plan::Conclusion::Waiting { .. }
+            ),
+            "an obsolete successful physical Core mutation is not the desired source convergence"
+        );
+    }
+
     fn checked_entry(domain: SourceDomain, target: &str) -> CheckedRuntimeCandidate {
         CheckedRuntimeCandidate {
             domain,
@@ -14240,10 +14317,12 @@ mod tests {
         ) -> anyhow::Result<()> {
             self.reads.fetch_add(1, AtomicOrdering::Relaxed);
             let current = self.current.lock().unwrap();
-            anyhow::ensure!(
-                current.0 == domain && current.1 == version && current.2 == target,
-                "the authoritative current source does not match the checked target"
-            );
+            if current.0 != domain || current.1 != version || current.2 != target {
+                return Err(anyhow::Error::new(
+                    crate::client::reconciler::attempt::CommittedTargetAdvanced,
+                )
+                .context("the authoritative current source does not match the checked target"));
+            }
             Ok(())
         }
     }
@@ -14299,6 +14378,177 @@ mod tests {
             None
         }
         async fn on_profile_change(&self, _: bool) {}
+    }
+
+    /// Model a Core apply which has already accepted the exact checked bytes
+    /// but has not yet answered; source publishers remain free to commit while
+    /// the sole lifecycle Core operation is in flight.
+    struct DelayedCheckedCore {
+        accepted: Arc<Notify>,
+        release: Arc<Notify>,
+        submits: Mutex<Vec<(Vec<u8>, String)>>,
+    }
+
+    #[async_trait]
+    impl CoreLifecyclePort for DelayedCheckedCore {
+        async fn reconcile(&self, _: ClashConfig, _: ClashCore, _: RunType) -> anyhow::Result<()> {
+            anyhow::bail!("an explicit Checked apply cannot use the old builder")
+        }
+        async fn reconcile_prepared(
+            &self,
+            prepared: ports::PreparedRuntime,
+            core_spec: chimera_core_manager::CoreSpec,
+        ) -> anyhow::Result<()> {
+            self.submits.lock().unwrap().push((
+                prepared.snapshot.product_bytes().to_vec(),
+                core_spec.binary_path.to_string(),
+            ));
+            self.accepted.notify_one();
+            self.release.notified().await;
+            Ok(())
+        }
+        async fn stop(&self) -> anyhow::Result<()> {
+            Ok(())
+        }
+        async fn change_core(&self, _: ClashCore) -> anyhow::Result<()> {
+            Ok(())
+        }
+        async fn status(&self) -> anyhow::Result<CoreStatusSnapshot> {
+            Ok(CoreStatusSnapshot {
+                instance_id: None,
+                state: CoreState::Stopped(None),
+                state_changed_at: 0,
+                run_type: RunType::Normal,
+            })
+        }
+        fn recovery_notify(&self) -> Option<Arc<Notify>> {
+            None
+        }
+        async fn on_profile_change(&self, _: bool) {}
+    }
+
+    #[tokio::test]
+    async fn checked_runtime_refuses_latest_source_convergence_after_core_succeeded_on_old_bytes() {
+        let accepted = Arc::new(Notify::new());
+        let release = Arc::new(Notify::new());
+        let core = Arc::new(DelayedCheckedCore {
+            accepted: accepted.clone(),
+            release: release.clone(),
+            submits: Mutex::new(Vec::new()),
+        });
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let workflow = CoreLifecycleWorkflow::new(
+            ApplicationClient::legacy().unwrap(),
+            ClashConfigClient::legacy().unwrap(),
+            None,
+            core.clone(),
+            Arc::new(RecordingInstaller {
+                events: events.clone(),
+            }),
+            RuntimePaths::from_config_root(std::path::PathBuf::from("test-runtime-root")),
+            Arc::new(RecordingService { events }),
+        );
+        let authority =
+            TestSourceAuthority::for_source(SourceDomain::Profiles, 7, "checked-before-core");
+        let observed = authority.clone();
+        let prepared = checked_runtime_fixture("checked-before-core");
+        let original_bytes = prepared.snapshot.product_bytes().to_vec();
+        let spec = checked_mihomo_spec();
+        let binary = spec.binary_path.to_string();
+        let applying = tokio::spawn(async move {
+            workflow
+                .execute(
+                    Command::ApplyChecked {
+                        prepared,
+                        core_spec: spec,
+                        domain: SourceDomain::Profiles,
+                        version: 7,
+                        authority,
+                    },
+                    &mut None,
+                )
+                .await
+        });
+        tokio::time::timeout(Duration::from_secs(2), accepted.notified())
+            .await
+            .expect("the original bytes should have reached Core");
+        assert_eq!(
+            observed.reads.load(AtomicOrdering::Relaxed),
+            1,
+            "pre-Core source verification must precede the actual mutation"
+        );
+        // An independent source commit occurred while Core was applying.
+        observed.current.lock().unwrap().1 = 8;
+        release.notify_one();
+        let error = tokio::time::timeout(Duration::from_secs(2), applying)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap_err();
+        assert!(error.to_string().contains("authoritative current source"));
+        assert!(
+            error
+                .downcast_ref::<crate::client::reconciler::attempt::CommittedTargetAdvanced>()
+                .is_some(),
+            "the proven older Core receipt is not an applied latest target"
+        );
+        assert_eq!(observed.reads.load(AtomicOrdering::Relaxed), 2);
+        assert_eq!(
+            core.submits.lock().unwrap().as_slice(),
+            &[(original_bytes, binary)],
+            "the only Core owner submitted the original Checked bytes exactly once"
+        );
+    }
+
+    #[tokio::test]
+    async fn checked_runtime_can_converge_only_after_two_matching_authoritative_reads() {
+        let accepted = Arc::new(Notify::new());
+        let release = Arc::new(Notify::new());
+        let core = Arc::new(DelayedCheckedCore {
+            accepted: accepted.clone(),
+            release: release.clone(),
+            submits: Mutex::new(Vec::new()),
+        });
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let workflow = CoreLifecycleWorkflow::new(
+            ApplicationClient::legacy().unwrap(),
+            ClashConfigClient::legacy().unwrap(),
+            None,
+            core.clone(),
+            Arc::new(RecordingInstaller {
+                events: events.clone(),
+            }),
+            RuntimePaths::from_config_root(std::path::PathBuf::from("test-runtime-root")),
+            Arc::new(RecordingService { events }),
+        );
+        let authority = TestSourceAuthority::for_source(SourceDomain::Profiles, 9, "stable-target");
+        let observed = authority.clone();
+        let applying = tokio::spawn(async move {
+            workflow
+                .execute(
+                    Command::ApplyChecked {
+                        prepared: checked_runtime_fixture("stable-target"),
+                        core_spec: checked_mihomo_spec(),
+                        domain: SourceDomain::Profiles,
+                        version: 9,
+                        authority,
+                    },
+                    &mut None,
+                )
+                .await
+        });
+        tokio::time::timeout(Duration::from_secs(2), accepted.notified())
+            .await
+            .unwrap();
+        assert_eq!(observed.reads.load(AtomicOrdering::Relaxed), 1);
+        release.notify_one();
+        tokio::time::timeout(Duration::from_secs(2), applying)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert_eq!(observed.reads.load(AtomicOrdering::Relaxed), 2);
+        assert_eq!(core.submits.lock().unwrap().len(), 1);
     }
 
     fn checked_mihomo_spec() -> chimera_core_manager::CoreSpec {
@@ -14396,8 +14646,8 @@ mod tests {
         assert_eq!(submits.lock().unwrap().len(), 1);
         assert_eq!(
             authority.reads.load(AtomicOrdering::Relaxed),
-            1,
-            "only the executed checked candidate needs an authoritative final read"
+            2,
+            "the executed checked candidate requires both pre- and post-Core source reads"
         );
     }
 
