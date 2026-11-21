@@ -313,6 +313,9 @@ impl ChimeraClient {
                 shutdown.clone(),
                 &tasks,
             ))?;
+        let profile_content_source = Arc::new(crate::enhance::FsProfileContentSource::new(
+            paths.app_profiles_dir(),
+        ));
         let core_lifecycle =
             tauri::async_runtime::block_on(CoreLifecycleClient::spawn_with_profiles_and_content(
                 core.clone(),
@@ -320,10 +323,8 @@ impl ChimeraClient {
                 typed.clash_config.clone(),
                 Some(typed_profiles.snapshot_handle()),
                 Some(typed_profiles.content_reader()),
-                Some(Arc::new(crate::enhance::FsProfileContentSource::new(
-                    paths.app_profiles_dir(),
-                ))),
-                runtime_paths,
+                Some(profile_content_source.clone()),
+                runtime_paths.clone(),
                 Arc::new(chimera_os::core_install::FsBinaryInstaller::new(Arc::new(
                     crate::adapters::elevation::InteractiveElevationConsent,
                 ))),
@@ -331,14 +332,15 @@ impl ChimeraClient {
                 shutdown.clone(),
                 &tasks,
             ))?;
-        let profile_gate = Arc::new(reconciler::legacy_check::CandidateCheck::new(
-            core.clone(),
-            typed.application.clone(),
-            typed.clash_config.clone(),
+        let profile_gate = Arc::new(reconciler::composition::prepare_production_gate(
+            &typed.application,
+            &typed.clash_config,
             typed_profiles.content_reader(),
-            typed_profiles.snapshot_handle(),
-            core_lifecycle.clone(),
-        ));
+            profile_content_source,
+            runtime_paths,
+            &core_v2,
+            &core_lifecycle,
+        )?);
         tauri::async_runtime::block_on(
             mutations.connect_with_runtime_gate(core_lifecycle.clone(), profile_gate),
         )?;

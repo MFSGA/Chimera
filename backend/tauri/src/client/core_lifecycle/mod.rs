@@ -3521,16 +3521,11 @@ impl CoreLifecycleClient {
         }
     }
 
-    /// Admit a checked candidate to the existing *single* lifecycle mailbox.
-    /// This is not wired to the production gate until the CoreFacade executor
-    /// can apply these same bytes; the reply establishes true cache ownership,
-    /// not Core apply success.
-    /// Dispatch only an acknowledged, committed checked value through the
-    /// existing CoreLifecycle command queue. This is not exposed through the
-    /// production RuntimeGate until the latest source *content* has also
-    /// been authoritatively sampled by the new reconciler workflow.
-    /// The composition root, not the caller, owns the authoritative source
-    /// reader. Production cannot choose a permissive/fake verification port.
+    /// Explicitly dispatch an acknowledged, committed checked value through
+    /// the same lifecycle queue used by the Profiles production gate. The
+    /// canonical authority verifies the latest source content before and
+    /// after Core apply; the composition root owns that reader. An ACK is
+    /// proof of candidate ownership, not Core apply success.
     pub(in crate::client) async fn apply_checked_committed(
         &self,
         domain: SourceDomain,

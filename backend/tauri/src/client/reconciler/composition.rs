@@ -1,10 +1,9 @@
-//! Compose the pinned ref independent CandidateCheck from the *existing*
-//! source owners and Core-owned runtime session. Construction is read-only.
+//! Compose the pinned ref CandidateCheck from the existing source owners and
+//! Core-owned runtime session. Construction itself is read-only.
 //!
-//! This is deliberately separate from installation into MutationCoordinator:
-//! the old SourceCommitted mailbox still schedules its own rebuild, so
-//! installing the new gate before checked-source dispatch is migrated would
-//! create two builds for a single source commit.
+//! Profiles production installs this gate through MutationCoordinator and
+//! sends checked commits to the single CoreLifecycle mailbox. Application and
+//! Clash mutations still use their separate legacy runtime paths.
 
 use std::sync::Arc;
 
@@ -88,9 +87,9 @@ pub(in crate::client) struct CandidateGateSources {
     pub paths: RuntimePaths,
 }
 
-/// Assemble only from the live source owners and the canonical Core host.
-/// The returned gate is *not installed* until the legacy SourceCommitted
-/// branches for inline Application/Clash/Profiles commits are retired.
+/// Assemble the Profiles production gate from the live source owners and the
+/// canonical Core host. Only checked-source notifications consume its products;
+/// no legacy SourceCommitted rebuild is sent for the same Profiles commit.
 /// No fallback session or speculative source snapshot is ever constructed.
 pub(in crate::client) fn prepare_production_gate(
     application: &crate::client::application::ApplicationClient,

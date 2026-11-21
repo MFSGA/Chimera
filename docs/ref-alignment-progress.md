@@ -1,5 +1,12 @@
 # ref 对齐进度
 
+## DIFF-150（Runtime Reconciler）：Profiles 生产 Source Gate 切换到上游式 CandidateCheck（2026-11-21）
+
+- **目标 / 验收 / 非目标**：固定 `ref@c4b35e04870a9caa53f21d10af6fcfde4a6f4c01`，使生产 Profiles 写入调用 ref 型 `CandidateCheck::check`，并由同一个 CoreLifecycle Actor 接收 `Checked`、持久提交版本及 `ApplyChecked`；校验过的 CoreSpec、原字节与 Runtime Session 必须一致。保留 Application/Clash 旧提交流程、主/Legacy UI、Agent 和 Chimera Client/Service 支持；不更改 RPC、落盘格式、权限或宿主网络。
+- **路径 / 接线 / 共享所有权**：ref `backend/nyanpasu-core/src/client/mod.rs::NyanpasuClient::try_new` 中的 `reconciler::check::CandidateCheck::new` 与 `reconciler/{check,preparation}.rs` → Chimera `backend/tauri/src/client/mod.rs::ChimeraClient::try_new_with_args` 调用 `reconciler::composition::prepare_production_gate`；它使用 CoreLifecycle 提供的唯一 `RuntimePreparationSession`、真实 `RuntimeBuildService` / `CoreCheckValidator`，以及与 `LiveSourceAuthority` 共用的 `FsProfileContentSource`。`MutationCoordinator::source_committed` 只向新 Gate 发送 Profiles 的 `CheckedSourceCommitted`，不会同时触发旧 `SourceCommitted` 重建。无 canonical Session 时初始化返回错误，不悄悄回退到独立副本。
+- **风险 / 差异 / 恢复**：L2；只切换 Profiles Gate，不代表完整 ref `RuntimeReconciler` Actor、S2 Service、Effects 多域结算及 Application/Clash Gate 已迁移。失效、同域候选歧义和已前进的权威 Source 仍由唯一 CoreLifecycle Owner 保守重规划；真实安装 Service/TUN、跨平台 GUI 与发布包仍需独立验收。发生回归时可签名 revert 本轮 Source Gate 接线、注释与记录，不触碰已提交配置文件或 Core/Service 运行时资产。
+- **本地验证**：`cargo check --manifest-path backend/Cargo.toml -p chimera --lib --quiet` 通过；Reconciler 定向测试 **63/63** 通过；完整 `cargo test --manifest-path backend/Cargo.toml -p chimera --lib --quiet` 在包含 `pnpm`、Prettier 的 PATH 下 **1168/1168** 通过，另 1 个官方 bindings 更新测试按设计忽略。首次全量运行曾因当前开发助手 PATH 缺失 `pnpm` 导致 `typescript_bindings_are_fresh` 无法启动 Prettier，不是 bindings 内容失败；补齐既有工具路径后该测试单独及全量均通过，未改断言或测试。crate Rustfmt、Markdown Prettier 和 `git diff --check` 通过；无真实桌面/Service 验收。后续需验证 source check → durable commit → checked Core apply 的真实用户链路，以及其余域的统一 Gate Cutover。
+
 ## DIFF-149（Runtime Reconciler）：SourceCommitted 完成邮箱版本栅栏与 S2 新源续接（2026-11-21）
 
 - **固定基线与唯一执行者**：固定只读 `ref@c4b35e04870a9caa53f21d10af6fcfde4a6f4c01`，仍在 `master` 的现有 `CoreLifecycleClient → CoreLifecycleWorkflow → CoreFacade → LocalRuntimeHost` 迁移，不建分支、worktree 或第二个 Core mutator。生产 `MutationCoordinator` 暂时仍安装 `legacy_check`；本轮改动发生在已存在的 SourceCommitted/Checked 公用完成处理，不暗中启用新的 Gate。
