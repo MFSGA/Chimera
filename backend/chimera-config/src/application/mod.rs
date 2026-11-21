@@ -205,6 +205,12 @@ pub struct ChimeraAppConfig {
     #[serde(default)]
     #[patch(attribute(specta(optional)))]
     pub traffic_retention: TrafficRetention,
+    /// Ref network-specific capture policy, saved atomically as one document.
+    /// Remains disabled until the network observer and permission-scoped RPC
+    /// have a production owner in Chimera.
+    #[serde(default)]
+    #[patch(attribute(specta(optional)))]
+    pub network_automation: NetworkAutomation,
     /// PAC URL for automatic proxy configuration.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[patch(attribute(serde(default, with = "::serde_with::rust::double_option")))]
@@ -220,6 +226,18 @@ pub struct ChimeraAppConfig {
     pub use_legacy_ui: bool,
     #[patch(attribute(specta(optional)))]
     pub window_type: WindowType,
+}
+
+impl ChimeraAppConfig {
+    /// The generic settings IPC does not carry the sensitive network rule
+    /// document. Only a future permission-scoped RPC may return SSIDs,
+    /// gateway MACs, rule IDs or network-specific action preferences.
+    #[must_use]
+    pub fn unprivileged_settings_view(&self) -> Self {
+        let mut result = self.clone();
+        result.network_automation = NetworkAutomation::default();
+        result
+    }
 }
 
 impl Default for ChimeraAppConfig {
@@ -260,6 +278,7 @@ impl Default for ChimeraAppConfig {
             tray_menu_close_behavior: TrayMenuCloseBehavior::default(),
             network_statistic_widget: NetworkStatisticWidgetConfig::default(),
             traffic_retention: TrafficRetention::default(),
+            network_automation: NetworkAutomation::default(),
             pac_url: None,
             enable_tray_text: false,
             enable_tray_traffic: false,
@@ -273,6 +292,65 @@ impl Default for ChimeraAppConfig {
 mod tests {
     use super::*;
     use struct_patch::Status;
+
+    #[test]
+    fn network_automation_defaults_from_old_configs_and_replaces_as_a_whole() {
+        let mut value = serde_json::to_value(ChimeraAppConfig::default()).unwrap();
+        value.as_object_mut().unwrap().remove("network_automation");
+        let mut config: ChimeraAppConfig = serde_json::from_value(value).unwrap();
+        assert_eq!(config.network_automation, NetworkAutomation::default());
+
+        let patch: ChimeraAppConfigPatch = serde_json::from_str(
+            r#"{"network_automation":{"enabled":false,"default_actions":{"tun":"disable"}}}"#,
+        )
+        .unwrap();
+        config.apply(patch);
+        assert_eq!(
+            config.network_automation.default_actions,
+            MechanismActions {
+                tun: MechanismAction::Disable,
+                ..Default::default()
+            }
+        );
+        assert!(!config.network_automation.enabled);
+
+        let patch: ChimeraAppConfigPatch =
+            serde_json::from_str(r#"{"network_automation":{"rules":[]}}"#).unwrap();
+        config.apply(patch);
+        assert_eq!(config.network_automation, NetworkAutomation::default());
+    }
+
+    #[test]
+    fn generic_settings_view_redacts_all_network_rule_identifiers_and_conditions() {
+        let mut config = ChimeraAppConfig::default();
+        config.network_automation = serde_json::from_value(serde_json::json!({
+            "enabled": false,
+            "default_actions": { "system_proxy": "disable" },
+            "rules": [{
+                "id": "private-network-id",
+                "name": "Private network name",
+                "conditions": {
+                    "wifi_ssid": "private-wifi-ssid",
+                    "gateway_mac": "aa:bb:cc:dd:ee:ff"
+                }
+            }]
+        }))
+        .unwrap();
+        let view = config.unprivileged_settings_view();
+        assert_eq!(view.network_automation, NetworkAutomation::default());
+        assert_eq!(view.language, config.language);
+        assert_eq!(view.enable_system_proxy, config.enable_system_proxy);
+        let serialized = serde_json::to_string(&view).unwrap();
+        for sensitive in [
+            "private-network-id",
+            "Private network name",
+            "private-wifi-ssid",
+            "aa:bb:cc:dd:ee:ff",
+        ] {
+            assert!(!serialized.contains(sensitive), "leaked {sensitive}");
+        }
+        assert_eq!(config.network_automation.rules.len(), 1);
+    }
 
     #[test]
     fn local_ip_probe_is_opt_in_and_can_be_patched() {
