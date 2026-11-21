@@ -7,6 +7,49 @@
 //! if an apply or version observation fails.
 use std::future::Future;
 
+// Pure selection and connection-interruption policy copied from pinned
+// ref/client/reconciler/committed.rs. The service-release half follows with
+// the single RuntimeReconciler Actor, not as a second Core mutator.
+use super::inputs::RuntimeInputs;
+use chimera_config::{clash::config::overrides::Mode, profile::ProfileId};
+
+#[derive(Clone)]
+pub(super) struct Selection {
+    mode: Mode,
+    current: Option<ProfileId>,
+}
+impl Selection {
+    pub(super) fn of(inputs: &RuntimeInputs) -> Self {
+        Self {
+            mode: inputs.clash.overrides.mode(),
+            current: inputs.profiles.current.clone(),
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+pub(super) enum SelectionChange {
+    Mode,
+    Profile,
+}
+
+impl Selection {
+    pub(super) fn interruption(
+        &self,
+        previous: Option<&Self>,
+        clash: &chimera_config::clash::config::ClashConfig,
+    ) -> Option<SelectionChange> {
+        let previous = previous?;
+        if previous.mode != self.mode && clash.break_connection.on_mode_change {
+            Some(SelectionChange::Mode)
+        } else if previous.current != self.current && clash.break_connection.on_profile_change {
+            Some(SelectionChange::Profile)
+        } else {
+            None
+        }
+    }
+}
+
 /// The three source domains whose durable commits the runtime owner observes.
 /// Like ref's ConfigDomain, this is source identity, not a Core command.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -276,5 +319,68 @@ mod tests {
         .await;
         assert!(deferred.is_none());
         assert_eq!(calls.load(Ordering::Acquire), 1);
+    }
+}
+
+#[cfg(test)]
+mod ref_selection_tests {
+    use super::*;
+    use crate::client::reconciler::inputs::FrozenProfileContent;
+    use chimera_config::{
+        application::ChimeraAppConfig, clash::config::ClashConfig, profile::Profiles,
+    };
+    use std::sync::Arc;
+
+    fn inputs(clash: ClashConfig, profiles: Profiles) -> RuntimeInputs {
+        RuntimeInputs {
+            app: ChimeraAppConfig::default(),
+            clash,
+            profiles: Arc::new(profiles),
+            content: FrozenProfileContent::default(),
+        }
+    }
+
+    #[test]
+    fn no_prior_selection_does_not_interrupt_connections() {
+        let clash = ClashConfig::default();
+        let current = Selection::of(&inputs(clash.clone(), Profiles::default()));
+        assert!(current.interruption(None, &clash).is_none());
+    }
+
+    #[test]
+    fn mode_change_requires_explicit_interruption_policy() {
+        let mut clash = ClashConfig::default();
+        clash.break_connection.on_mode_change = false;
+        let before = Selection::of(&inputs(clash.clone(), Profiles::default()));
+        use struct_patch::Patch;
+        clash.overrides.apply(
+            chimera_config::clash::config::overrides::ClashGuardOverridesPatch {
+                mode: Some(Mode::Global),
+                ..Default::default()
+            },
+        );
+        let after = Selection::of(&inputs(clash.clone(), Profiles::default()));
+        assert!(after.interruption(Some(&before), &clash).is_none());
+        clash.break_connection.on_mode_change = true;
+        assert!(matches!(
+            after.interruption(Some(&before), &clash),
+            Some(SelectionChange::Mode)
+        ));
+    }
+
+    #[test]
+    fn profile_selection_change_requires_explicit_policy() {
+        let mut clash = ClashConfig::default();
+        clash.break_connection.on_profile_change = false;
+        let before = Selection::of(&inputs(clash.clone(), Profiles::default()));
+        let mut next_profiles = Profiles::default();
+        next_profiles.current = Some(chimera_config::profile::ProfileId("current-1".into()));
+        let after = Selection::of(&inputs(clash.clone(), next_profiles));
+        assert!(after.interruption(Some(&before), &clash).is_none());
+        clash.break_connection.on_profile_change = true;
+        assert!(matches!(
+            after.interruption(Some(&before), &clash),
+            Some(SelectionChange::Profile)
+        ));
     }
 }

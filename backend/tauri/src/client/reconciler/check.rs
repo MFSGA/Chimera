@@ -114,13 +114,7 @@ impl RuntimeGate for CandidateCheck {
         let core_spec = self
             .preparation
             .core_spec(&prepared.snapshot.target_core)
-            .map_err(|error| {
-                Arc::new(RuntimeError::CheckUnavailable {
-                    reason: RuntimeCheckUnavailable::CandidateUnavailable {
-                        reason: error.to_string(),
-                    },
-                })
-            })?;
+            .map_err(|source| Arc::new(RuntimeError::ResolveCoreBinary { source }))?;
         match self
             .validator
             .check(RuntimeCheckRequest {
@@ -153,7 +147,10 @@ mod tests {
     use super::*;
     use std::{
         collections::BTreeMap,
-        sync::{Arc, Mutex},
+        sync::{
+            Arc, Mutex,
+            atomic::{AtomicBool, Ordering},
+        },
     };
 
     use chimera_config::{
@@ -177,6 +174,7 @@ mod tests {
     #[derive(Default)]
     struct StubBuilder {
         prepared: Mutex<Vec<(bool, String)>>,
+        reject_core_spec: AtomicBool,
     }
 
     #[async_trait::async_trait]
@@ -185,7 +183,13 @@ mod tests {
             FrozenProfileContent::default()
         }
 
-        fn core_spec(&self, _: &ClashCore) -> Result<CoreSpec, CoreSpecError> {
+        fn core_spec(&self, core: &ClashCore) -> Result<CoreSpec, CoreSpecError> {
+            if self.reject_core_spec.load(Ordering::Relaxed) {
+                return Err(CoreSpecError::FindCoreBinary {
+                    core: *core,
+                    source: std::io::Error::new(std::io::ErrorKind::NotFound, "core unavailable"),
+                });
+            }
             Ok(CoreSpec {
                 kind: CoreKind::Mihomo,
                 binary_path: camino::Utf8PathBuf::from("/tmp/ref-test-mihomo"),
@@ -394,6 +398,24 @@ mod tests {
                 RuntimeCheckOutcome::Passed => unreachable!(),
             }
         }
+    }
+
+    #[tokio::test]
+    async fn missing_core_binary_preserves_typed_source_and_never_validates_or_commits() {
+        let (gate, builder, validator, inbox) = gate(RuntimeCheckOutcome::Passed, false).await;
+        builder.reject_core_spec.store(true, Ordering::Relaxed);
+        let error = gate.check(candidate()).await.unwrap_err();
+        assert!(matches!(
+            error.as_ref(),
+            RuntimeError::ResolveCoreBinary { .. }
+        ));
+        assert_eq!(error.core_kind(), Some(CoreErrorKind::BinaryNotFound));
+        assert_eq!(validator.checked.lock().unwrap().len(), 0);
+        assert!(inbox.checked.lock().unwrap().is_empty());
+        assert!(inbox.committed.lock().unwrap().is_empty());
+        let wire = serde_json::to_value(error).unwrap();
+        assert_eq!(wire["kind"], "resolve_core_binary");
+        assert_eq!(wire["source"]["kind"], "find_core_binary");
     }
 
     #[tokio::test]

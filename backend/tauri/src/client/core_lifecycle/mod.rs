@@ -20,8 +20,8 @@ use std::{
 
 use super::reconciler::{
     committed::{SourceDomain, SourceVersions},
+    legacy_status::ReconcilerStatus,
     release::{ReleaseObservation, ServiceReleaseDebt},
-    status::ReconcilerStatus,
 };
 use chimera_core::client::reconciler::plan::RunIntent;
 use ractor::{Actor, ActorProcessingErr, ActorRef, RpcReplyPort, rpc::CallResult};
