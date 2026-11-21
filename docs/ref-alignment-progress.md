@@ -1,5 +1,14 @@
 # ref 对齐进度
 
+## DIFF-148（Runtime Reconciler）：Checked Core 前后双 Source 身份确认与单一 Owner 最新目标恢复（2026-11-21）
+
+- **固定单一 Core 执行者及上游基线**：固定 `ref@c4b35e04870a9caa53f21d10af6fcfde4a6f4c01` 不变，在既有 `CoreLifecycleClient → CoreLifecycleWorkflow → CoreFacade → LocalRuntimeHost` 中直接扩充 `Command::ApplyChecked` 的生产执行逻辑；没有第二个 mutating Actor、分支、工作树或 Core 状态副本。
+- **Checked 原字节 Apply 的前后权威校验**：DIFF-144 原有执行前 `RuntimeSourceAuthority::verify(domain,version,target)` 继续防止已知过期的候选进入 Core；新增成功 Core 提交**之后**对相同 `(domain,version,target)` 的第二次权威检查。只有前后均匹配的 Checked Apply 才能从本次命令返回成功。如果另一个 Source 在 Core 处理中提交、Profiles 托管内容变化或其他最新目标身份前进，权威读取器返回带上下文的 `CommittedTargetAdvanced`，不能把已确实生效的**旧** Core 配置误报为**最新已提交** Runtime 收敛。Core 提交不会在后置验证里重放或隐式重建。
+- **Effects 只对当前目标结算**：`Message::Completed` 在计算并发送 Runtime port binding 给 `ApplicationWorkflow::runtime_bound` 之前识别 `ProfilesSourceAdvanced/CommittedTargetAdvanced`。源过期的 runtime 回合不向 Effects 发布已落后的端口绑定，也不调用 `runtime_reconciled()` 清除先前未结算的依赖；独立的 Service 探测、Shutdown 清理仍依其独立事件边界发布。`ReconcilerStatus::finish` 以 `Conclusion::Waiting` 而非 `Converged` 记录过期回合，避免 UI/提交回执使用旧目标声称已完成。
+- **S2/最新提交后续处理**：对于这类 Source 在 Core 过程中已前进的 `Completed`，现有唯一 Actor 把 `source_dirty=true` 连同既有 `mark_runtime_dirty()` 保留到下一次串行 `Command::ReconcileSource`，**而不是**仅发送普通 `Retry`；这能穿过 `owner_transition_pending()` 的 S2 服务所有权门闩继续等待和重新规划权威最新版本，不会抢先打开另一个 Core mutator。真正的 S2 Service 租约、Service 释放和实际新旧 Gate Cutover 仍沿现有路径，未声称整体迁移完成。
+- **回归覆盖**：新增异步 Core 模拟测试在 Checked 原字节已进入 Core、但尚未收到成功回执时修改权威 Source 版本，证实只有一次物理 Core 提交且二次校验返回 typed `CommittedTargetAdvanced`；不修改 Source 的对照测试验证前后两次校验均执行且可以成功。Effects/Status 测试验证过期 Source 不发布旧 Runtime 端口、不清掉独立 Service/Shutdown 事件，并维持 `Waiting` 非 `Converged`。原有 source-gated 原字节测试适配两次身份读取。实际已通过 `CARGO_INCREMENTAL=0 cargo check --manifest-path backend/Cargo.toml -p chimera --lib --quiet`；CoreLifecycle **140/140**、Reconciler **63/63**、LocalRuntimeHost **11/11**、chimera-core **426/426**，以及 `cargo test -p chimera --lib` **1166/1166**（另 1 个 bindings 更新测试按设计忽略）。Rustfmt、Clippy、签名和远端 CI 状态以实际提交/运行结果为准。
+- **明确剩余项**：生产 `MutationCoordinator` **仍使用 `legacy_check`**，新 Gate 及带域 Checked 邮箱未接管生产全部配置提交；同域提交身份精确对应、S2 Service 真机运行、Effects 多领域结算、旧代码退役及 Windows/Linux/macOS 真机验证仍未完成。
+
 ## DIFF-147（Runtime Reconciler）：按 Source 域绑定 Checked 候选，交错提交拒绝错误 Apply（2026-11-21）
 
 - **固定 ref 和单一 Owner**：保持 `ref@c4b35e04870a9caa53f21d10af6fcfde4a6f4c01` 未改动；在既有 `CoreLifecycleClient` 的单一 `ApplicationWorkflowActor` 中迁移新 CandidateCheck 的多 Source 检查/提交对应关系，没有新建 Core mutator、分支或 worktree，也不绕过上轮共享 Runtime Session 和原字节 Apply。
