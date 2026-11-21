@@ -20,6 +20,11 @@ use sha2::{Digest, Sha256};
 
 use super::ChimeraClient;
 
+// Upstream Runtime Values own these wire-stable values. The ref's four
+// runtime states and five phases are supplemented by Chimera's explicit
+// pending/recovery and multi-stage commit statuses in the shared crate.
+pub use chimera_contracts::runtime::{CommitReceipt, DegradationPhase, RuntimeCommitStatus};
+
 use crate::{
     client::utf8_path,
     config::{
@@ -141,39 +146,18 @@ pub struct Degradation {
     pub retryable: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
-#[serde(rename_all = "snake_case")]
-pub enum DegradationPhase {
-    LegacyMirror,
-    ProfileMaterialization,
-    RuntimeBuild,
-    RuntimeCheck,
-    RuntimePromote,
-    RuntimePublish,
-    RuntimeApply,
-    CoreRollback,
-    SystemEffect,
-    UiEffect,
-}
-
-/// A source commit and its critical runtime result. Peripheral owners settle separately.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
-pub struct CommitReceipt {
-    pub operation_id: Option<String>,
-    pub domain: String,
-    pub source_version: u64,
-    pub runtime: RuntimeCommitStatus,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
-#[serde(rename_all = "snake_case")]
-pub enum RuntimeCommitStatus {
-    Applied,
-    Deferred,
-    SavedInactive,
-    Unchanged,
-    Pending,
-    RecoveryRequired,
+impl Degradation {
+    /// The application retains the existing flat desktop IPC DTO while the
+    /// independent Core, Profiles, and Runtime owners use REF's typed reason.
+    /// Keep this the only place that discards a structured `reason.cause`.
+    pub fn from_shared(degradation: chimera_contracts::runtime::Degradation) -> Self {
+        Self {
+            phase: degradation.phase,
+            code: degradation.reason.code().into(),
+            message: degradation.message,
+            retryable: degradation.retryable,
+        }
+    }
 }
 
 pub const RUNTIME_CONFIG_DIR: &str = "runtime";
@@ -1428,6 +1412,57 @@ mod tests {
             Mapping::new(),
         ));
         assert!(lifecycle.publish_applied(second).is_err());
+    }
+}
+
+#[cfg(test)]
+mod shared_runtime_values_contract_tests {
+    use super::*;
+    use std::any::TypeId;
+
+    #[test]
+    fn desktop_receipt_status_and_phase_use_the_shared_ref_types() {
+        assert_eq!(
+            TypeId::of::<CommitReceipt>(),
+            TypeId::of::<chimera_contracts::runtime::CommitReceipt>()
+        );
+        assert_eq!(
+            TypeId::of::<RuntimeCommitStatus>(),
+            TypeId::of::<chimera_contracts::runtime::RuntimeCommitStatus>()
+        );
+        assert_eq!(
+            TypeId::of::<DegradationPhase>(),
+            TypeId::of::<chimera_contracts::runtime::DegradationPhase>()
+        );
+        let receipt = CommitReceipt {
+            operation_id: Some("core-lease".into()),
+            domain: "clash".into(),
+            source_version: 8,
+            runtime: RuntimeCommitStatus::RecoveryRequired,
+        };
+        let outcome = MutationOutcome::from_parts((), Vec::new()).with_commit(receipt);
+        let wire = serde_json::to_value(outcome).unwrap();
+        assert_eq!(wire["status"], "committed");
+        assert_eq!(wire["commits"][0]["runtime"], "recovery_required");
+        assert_eq!(wire["commits"][0]["source_version"], 8);
+    }
+
+    #[test]
+    fn typed_degradation_keeps_legacy_flat_ipc_shape() {
+        use chimera_contracts::runtime as shared;
+
+        let projected = Degradation::from_shared(shared::Degradation {
+            phase: shared::DegradationPhase::ProfileMaterialization,
+            reason: shared::DegradationReason::CleanupDeferred,
+            message: "fenced cleanup".into(),
+            retryable: true,
+        });
+        let wire = serde_json::to_value(projected).unwrap();
+        assert_eq!(wire["phase"], "profile_materialization");
+        assert_eq!(wire["code"], "cleanup_deferred");
+        assert_eq!(wire["message"], "fenced cleanup");
+        assert_eq!(wire["retryable"], true);
+        assert!(wire.get("reason").is_none());
     }
 }
 

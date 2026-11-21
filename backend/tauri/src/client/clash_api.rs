@@ -11,7 +11,7 @@ use anyhow::Result;
 use super::ChimeraClient;
 #[cfg(test)]
 use super::core_lifecycle::CoreLifecyclePort;
-use crate::client::runtime::{Degradation, DegradationPhase, MutationOutcome};
+use crate::client::runtime::{Degradation, MutationOutcome};
 use crate::core::{
     actor_v2::api::ApiClient,
     clash::{
@@ -22,9 +22,9 @@ use crate::core::{
 #[cfg(test)]
 use chimera_core::clash::ws::ClashApiClientSource;
 use chimera_core::client::clash_api::{config_item, rule_provider_item};
+use chimera_core::proxies_actor::ProxyMutationOutcome;
 #[cfg(test)]
 use chimera_core::proxies_actor::{CoreClient as ProxyCoreClient, ProxyApiClientSource};
-use chimera_core::proxies_actor::{ProxyDegradationPhase, ProxyMutationOutcome};
 
 /// Only injected legacy test clients need a facade-based API source.
 #[cfg(test)]
@@ -47,23 +47,7 @@ fn into_mutation_outcome(outcome: ProxyMutationOutcome) -> MutationOutcome<()> {
     // The shared core now returns ref's typed Committed/CommittedDegraded
     // outcome. Only the existing Tauri legacy wire still needs a flat code.
     let (_, typed) = outcome.into_parts();
-    let degradations = typed
-        .into_iter()
-        .map(|degradation| Degradation {
-            phase: match degradation.phase {
-                ProxyDegradationPhase::ProfileMaterialization => {
-                    DegradationPhase::ProfileMaterialization
-                }
-                ProxyDegradationPhase::RuntimeBuild => DegradationPhase::RuntimeBuild,
-                ProxyDegradationPhase::RuntimeApply => DegradationPhase::RuntimeApply,
-                ProxyDegradationPhase::SystemEffect => DegradationPhase::SystemEffect,
-                ProxyDegradationPhase::UiEffect => DegradationPhase::UiEffect,
-            },
-            code: degradation.reason.code().into(),
-            message: degradation.message,
-            retryable: degradation.retryable,
-        })
-        .collect();
+    let degradations = typed.into_iter().map(Degradation::from_shared).collect();
     MutationOutcome::from_parts((), degradations)
 }
 
