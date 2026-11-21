@@ -1,5 +1,12 @@
 # ref 对齐进度
 
+## DIFF-115：Core Actor Handoff 与 Service Command 兼容通路的退出所有权（2026-11-20）
+
+- **来源和范围**：固定 `ref@c4b35e048` 的 `nyanpasu-core/src/actor_v2/mod.rs` 和 `service_actor.rs`，以 Core Stop/Handoff、只读状态 Pump 与 Service Elevated 命令的实际所有权为界。风险 L2；不更改 Core 操作协议、迁移、备份和两个 gitlink。根据用户要求，本轮不额外运行测试、打包或 E2E。
+- **Core Actor**：保留上游对只读状态 Pump 的取消策略，但回收 JoinHandle 并传播意外 Panic。Handoff 可能已提交 Core Stop，不能当成普通订阅直接中断：Actor 意外退出时等待 stop-and-prove 任务，正常 HandoffStopped 消息处理时先 join 发出完成消息的任务，再更新 EndpointSlot/回复 Shutdown。原有 generation fence、StopUnconfirmed 及 I-R1 门禁不变。注意这属于 Chimera 的安全性适配，上游 `post_stop` 仍 abort Handoff，不能称为完全逐行一致。
+- **Service Command 单一 Owner**：生产 `setup.rs` 已使用上游 `ServiceClient` 和 `ServiceClientCommandPort`，由 ServiceActor + TaskTracker 负责高权限命令及关闭，不新建第二套 Owner。旧 `ServiceCommandActor` 只用于无生产 Core Router 的兼容/测试路径；新增 `drain_legacy_on_shutdown`，持有串行 Mutex，等待超时仍在执行的 OS 命令而非 abort，传播真实 Panic。关闭前未重新探测 OS 状态时保留 `unsettled`，不把等待完毕误认为 Service 已停止。兼容 Facade 的 `finish_shutdown` 调用此接口；生产 Port 默认不重复执行排空。
+- **测试定义和风险**：新增模拟超时 Service 命令的屏障测试源码，覆盖显式排空不取消命令、任务实际完成及未知状态 latch。按要求未运行。若 Core/Handoff 或 Service OS 操作迟迟不返回，退出会等待而不是假报取消；操作本身仍沿用既有超时预算。回滚本轮所有权改变不会删除配置、用户数据、migration-state、备份或 `.corrupt-*` 证据。
+
 ## DIFF-114：ServiceActor 超时命令与 Jobs 任务 JoinHandle 退出所有权对齐（2026-11-20）
 
 - **固定参考与迁移目标**：参照 `ref@c4b35e048` 的 `backend/nyanpasu-core/src/actor_v2/service_actor.rs::{tracked,reap_outstanding,post_stop}` 和 `backend/nyanpasu-runtime/crates/nyanpasu-jobs/src/{actor.rs,lib.rs}`，迁移真实 Service/Jobs 任务停止时的所有权与异常传播边界。风险 **L2**：高权限服务安装/更新/停止、Journal 关闭和正在运行的 Job 都可能跨调用者超时继续执行；不能通过单纯取消来声称 OS 状态已结算。按用户近期“专心迁移，不用验证”的要求，没有单独运行功能测试、整库构建、实际多平台测试或打包；提交钩子的 Rustfmt/Clippy 仅属仓库强制提交流程。
