@@ -9,13 +9,7 @@ use crate::core::actor_v2::api::ApiClient;
 
 /// Map the persisted app strategy to ref's core-owned connection scope.
 fn proxy_change_scope(strategy: ProxyChangeBreakMode, group: &str) -> Option<ConnectionScope> {
-    match strategy {
-        ProxyChangeBreakMode::Off => None,
-        ProxyChangeBreakMode::ProxyGroup => Some(ConnectionScope::ProxyGroup {
-            name: group.to_owned(),
-        }),
-        ProxyChangeBreakMode::All => Some(ConnectionScope::All),
-    }
+    ConnectionScope::for_proxy_change(strategy, group.to_owned())
 }
 
 /// Application compatibility surface for existing Tauri IPC and lifecycle calls.
@@ -28,14 +22,16 @@ impl ConnectionInterruptionService {
         group: &str,
     ) -> Result<()> {
         match proxy_change_scope(break_when, group) {
-            Some(scope) => interrupt_connections(api, &scope).await,
+            Some(scope) => interrupt_connections(api, &scope).await.map_err(Into::into),
             None => Ok(()),
         }
     }
 
     pub async fn on_profile_change(api: &ApiClient, break_when: bool) -> Result<()> {
         if break_when {
-            interrupt_connections(api, &ConnectionScope::All).await
+            interrupt_connections(api, &ConnectionScope::All)
+                .await
+                .map_err(Into::into)
         } else {
             Ok(())
         }
@@ -43,7 +39,9 @@ impl ConnectionInterruptionService {
 
     pub async fn on_mode_change(api: &ApiClient, break_when: bool) -> Result<()> {
         if break_when {
-            interrupt_connections(api, &ConnectionScope::All).await
+            interrupt_connections(api, &ConnectionScope::All)
+                .await
+                .map_err(Into::into)
         } else {
             Ok(())
         }
@@ -51,7 +49,7 @@ impl ConnectionInterruptionService {
 
     /// Keep the public compatibility entrypoint for multiple chain names.
     pub async fn interrupt_by_chain(api: &ApiClient, chains: &[&str]) -> Result<()> {
-        interrupt_by_chains(api, chains).await
+        interrupt_by_chains(api, chains).await.map_err(Into::into)
     }
 }
 

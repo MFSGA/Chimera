@@ -5,6 +5,7 @@
 //! lower host ownership is delegated to `core::actor_v2::CoreFacade`.
 
 pub(crate) mod adapters;
+pub(in crate::client) mod apply;
 pub(crate) mod ports;
 mod workflow;
 
