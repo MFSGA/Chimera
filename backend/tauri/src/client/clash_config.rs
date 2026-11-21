@@ -135,6 +135,18 @@ impl ClashConfigClient {
         }
     }
 
+    /// Read-only ref RuntimeGate source handle, shared with the exact
+    /// committing actor. An isolated fixture has no backing persisted manager.
+    pub(crate) fn committed_snapshot_handle(&self) -> anyhow::Result<StateSnapshot<ClashConfig>> {
+        match self.state.as_ref() {
+            ClashConfigStateBackend::Actor { snapshot, .. } => Ok(snapshot.clone()),
+            #[cfg(test)]
+            ClashConfigStateBackend::Static { .. } => {
+                anyhow::bail!("test-only Clash fixture has no persistent state handle")
+            }
+        }
+    }
+
     /// Read the immutable committed config+version pair without a writer
     /// Actor RPC; a queued source mutation may be awaiting CoreLifecycle.
     pub(crate) fn committed_runtime_source(&self) -> (ClashConfig, u64) {
