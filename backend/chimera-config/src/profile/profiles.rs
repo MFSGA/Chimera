@@ -118,14 +118,7 @@ impl Profiles {
     }
 
     pub fn remove_item_unchecked(&mut self, uid: &ProfileId) -> Option<ProfileItem> {
-        let removed = self.items.shift_remove(uid);
-        if removed.is_some() {
-            self.proxy_group_layouts.shift_remove(uid);
-            for folder in &mut self.folders {
-                folder.members.retain(|member| member != uid);
-            }
-        }
-        removed
+        self.items.shift_remove(uid)
     }
 
     pub fn reorder(&mut self, active_id: &ProfileId, over_id: &ProfileId) -> bool {
@@ -184,6 +177,20 @@ impl Profiles {
             removed_global_transforms,
             default_config,
             current_needs_activation,
+        }
+    }
+
+    /// Clears only a selection whose item is absent, preserving transforms and
+    /// selections of an existing item for the caller's ordinary validation.
+    pub fn clear_dangling_current(&mut self) -> Option<ProfileId> {
+        if self
+            .current
+            .as_ref()
+            .is_some_and(|id| !self.items.contains_key(id))
+        {
+            self.current.take()
+        } else {
+            None
         }
     }
 
@@ -573,5 +580,54 @@ mod items_serde {
         }
 
         Ok(map)
+    }
+}
+
+impl From<&Profiles> for ProfilesListing {
+    fn from(profiles: &Profiles) -> Self {
+        let Profiles {
+            // The private persisted generation counter.
+            revision: _,
+            current,
+            global_transforms,
+            // Clash field names, edited on the runtime page: full document only.
+            valid: _,
+            folders,
+            proxy_group_layouts,
+            items,
+        } = profiles;
+
+        Self {
+            current: current.clone(),
+            global_transforms: global_transforms.clone(),
+            folders: folders
+                .iter()
+                .map(|ProfileFolder { id, name, members }| ProfileFolder {
+                    id: id.clone(),
+                    name: name.clone(),
+                    members: members.clone(),
+                })
+                .collect(),
+            proxy_group_layouts: proxy_group_layouts
+                .iter()
+                .map(|(uid, ProxyGroupLayout { folders, ungrouped })| {
+                    (
+                        uid.clone(),
+                        ProxyGroupLayout {
+                            folders: folders
+                                .iter()
+                                .map(|ProxyGroupFolder { id, name, members }| ProxyGroupFolder {
+                                    id: id.clone(),
+                                    name: name.clone(),
+                                    members: members.clone(),
+                                })
+                                .collect(),
+                            ungrouped: ungrouped.clone(),
+                        },
+                    )
+                })
+                .collect(),
+            items: items.values().map(Into::into).collect(),
+        }
     }
 }

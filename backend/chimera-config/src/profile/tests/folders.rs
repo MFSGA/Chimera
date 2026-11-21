@@ -411,13 +411,31 @@ fn folders_round_trip_in_the_documented_wire_shape() {
 }
 
 #[test]
-fn deleting_config_removes_it_from_folder_without_discarding_other_members() {
+fn clearing_dangling_current_preserves_other_profile_references() {
+    let mut profiles = document();
+    profiles.current = Some(id("ghost"));
+    profiles.global_transforms = vec![id("t1")];
+    assert_eq!(profiles.clear_dangling_current(), Some(id("ghost")));
+    assert!(profiles.current.is_none());
+    assert_eq!(profiles.global_transforms, vec![id("t1")]);
+    assert_eq!(profiles.clear_dangling_current(), None);
+    profiles.current = Some(id("a"));
+    assert_eq!(profiles.clear_dangling_current(), None);
+    assert_eq!(profiles.current, Some(id("a")));
+    assert!(profiles.validate().is_ok());
+}
+
+#[test]
+fn removing_item_leaves_folder_cleanup_to_the_source_owner() {
     let mut profiles = document();
     profiles.folders = vec![folder("work", "Work", &["a", "b"])];
 
-    let removed = profiles.remove_item_unchecked(&id("a"));
-    assert!(removed.is_some());
-    assert_eq!(profiles.folders, vec![folder("work", "Work", &["b"])]);
-    assert!(profiles.validate().is_ok());
+    assert!(profiles.remove_item_unchecked(&id("a")).is_some());
+    assert_eq!(profiles.folders, vec![folder("work", "Work", &["a", "b"])]);
+    assert!(errors_of(profiles.validate()).iter().any(|error| matches!(
+        error,
+        ProfileValidationError::FolderMemberNotFound { folder, profile }
+            if folder == &fid("work") && profile == &id("a")
+    )));
     assert!(profiles.remove_item_unchecked(&id("missing")).is_none());
 }

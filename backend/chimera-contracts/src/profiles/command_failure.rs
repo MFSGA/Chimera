@@ -74,6 +74,19 @@ pub enum ProfileFailure {
     ProfileNotFound {
         uid: ProfileId,
     },
+    ProfileInUse {
+        uid: ProfileId,
+        referrers: Vec<ProfileId>,
+        current: bool,
+        global_transforms: bool,
+    },
+    ReorderListSizeMismatch {
+        expected: usize,
+        got: usize,
+    },
+    ReorderListDuplicate {
+        uid: ProfileId,
+    },
     ValidationFailed {
         errors: Vec<ProfileValidationError>,
     },
@@ -146,6 +159,45 @@ mod tests {
         assert_eq!(wire["expected"], 7);
         assert_eq!(wire["actual"], 8);
         assert_eq!(wire["cleanup"], "staging cleanup fenced");
+    }
+
+    #[test]
+    fn denied_deletion_preserves_profile_identity_and_referrers() {
+        let error = ProfileFailure::ProfileInUse {
+            uid: ProfileId("selected".into()),
+            referrers: vec![ProfileId("child".into())],
+            current: true,
+            global_transforms: false,
+        };
+        assert_eq!(
+            serde_json::to_value(error).unwrap(),
+            serde_json::json!({
+                "kind": "profile_in_use",
+                "uid": "selected",
+                "referrers": ["child"],
+                "current": true,
+                "global_transforms": false,
+            })
+        );
+    }
+
+    #[test]
+    fn reorder_failure_distinguishes_size_and_duplicate() {
+        assert_eq!(
+            serde_json::to_value(ProfileFailure::ReorderListSizeMismatch {
+                expected: 3,
+                got: 2
+            })
+            .unwrap(),
+            serde_json::json!({"kind": "reorder_list_size_mismatch", "expected": 3, "got": 2}),
+        );
+        assert_eq!(
+            serde_json::to_value(ProfileFailure::ReorderListDuplicate {
+                uid: ProfileId("same".into())
+            })
+            .unwrap(),
+            serde_json::json!({"kind": "reorder_list_duplicate", "uid": "same"}),
+        );
     }
 
     #[test]
