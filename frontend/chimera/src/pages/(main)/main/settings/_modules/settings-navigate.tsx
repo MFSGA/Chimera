@@ -9,13 +9,17 @@ import {
 import { Link, useLinkProps } from '@tanstack/react-router';
 import DataObjectRounded from '~icons/material-symbols/data-object-rounded';
 import DeployedCodeRounded from '~icons/material-symbols/deployed-code-rounded';
+import DesktopWindowsRounded from '~icons/material-symbols/desktop-windows-rounded';
 import FrameBugOutlineRounded from '~icons/material-symbols/frame-bug-outline-rounded';
+import KeyboardRounded from '~icons/material-symbols/keyboard-rounded';
 import LanRounded from '~icons/material-symbols/lan-rounded';
+import PaletteRounded from '~icons/material-symbols/palette-rounded';
+import PublicRounded from '~icons/material-symbols/public-rounded';
+import ReceiptLongRounded from '~icons/material-symbols/receipt-long-rounded';
 import SettingsEthernet from '~icons/material-symbols/settings-ethernet-rounded';
 import SettingsRounded from '~icons/material-symbols/settings-rounded';
 import SwapHorizRounded from '~icons/material-symbols/swap-horiz-rounded';
 import TuneRounded from '~icons/material-symbols/tune-rounded';
-import ViewQuilt from '~icons/material-symbols/view-quilt-rounded';
 import type { ComponentProps, ForwardedRef, ReactNode } from 'react';
 import ChimeraIcon from '@root/backend/tauri/icons/icon.png';
 import * as m from '@/paraglide/messages';
@@ -115,11 +119,39 @@ export default function SettingsNavigate() {
       </NavigationListGroup>
       <NavigationListGroup label={m.settings_label_chimera()}>
         <SettingsNavigationItem
-          to="/main/settings/user-interface"
+          to="/main/settings/chimera/interface"
           color="pink"
-          icon={<ViewQuilt />}
+          icon={<PaletteRounded />}
           label={m.settings_label_user_interface()}
           description={m.settings_label_user_interface_description()}
+        />
+        <SettingsNavigationItem
+          to="/main/settings/chimera/tray"
+          color="cyan"
+          icon={<DesktopWindowsRounded />}
+          label={m.settings_label_tray()}
+          description={m.settings_label_tray_description()}
+        />
+        <SettingsNavigationItem
+          to="/main/settings/chimera/shortcuts"
+          color="neutral"
+          icon={<KeyboardRounded />}
+          label={m.settings_chimera_keyboard_shortcuts()}
+          description={m.settings_label_shortcuts_description()}
+        />
+        <SettingsNavigationItem
+          to="/main/settings/chimera/logs"
+          color="orange"
+          icon={<ReceiptLongRounded />}
+          label={m.settings_label_logs()}
+          description={m.settings_label_logs_description()}
+        />
+        <SettingsNavigationItem
+          to="/main/settings/chimera/public-ip"
+          color="blue"
+          icon={<PublicRounded />}
+          label={m.settings_label_public_ip()}
+          description={m.settings_label_public_ip_description()}
         />
         <SettingsNavigationItem
           to="/main/settings/chimera"
