@@ -113,6 +113,7 @@ pub(in crate::client) enum Command {
         core_spec: chimera_core_manager::CoreSpec,
         domain: super::super::reconciler::committed::SourceDomain,
         version: u64,
+        authority: Arc<dyn crate::client::reconciler::authority::RuntimeSourceAuthority>,
     },
     /// One source notification requests a latest-committed-target round.
     ReconcileSource,
@@ -703,8 +704,19 @@ impl CoreLifecycleWorkflow {
             Command::ApplyChecked {
                 prepared,
                 core_spec,
-                ..
-            } => self.core.reconcile_prepared(prepared, core_spec).await,
+                domain,
+                version,
+                authority,
+            } => {
+                let target = prepared.target.as_deref().ok_or_else(|| {
+                    anyhow::anyhow!("checked runtime has no source target identity")
+                })?;
+                // The final authoritative document/file read happens after
+                // this command owns the sole serialized Core lifecycle slot,
+                // immediately before the CoreFacade can submit anything.
+                authority.verify(domain, version, target).await?;
+                self.core.reconcile_prepared(prepared, core_spec).await
+            }
             Command::StartCore => self.reconcile_with_trigger(Trigger::Start).await,
             #[cfg(test)]
             Command::StartupReconcile {
