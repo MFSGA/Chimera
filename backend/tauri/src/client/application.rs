@@ -171,6 +171,20 @@ impl ApplicationClient {
         Config::verge().latest().clone()
     }
 
+    /// Read the source document and its monotonic version from one committed
+    /// snapshot without messaging the writer Actor. A Core apply that calls
+    /// back into a writer waiting for the lifecycle mailbox can deadlock.
+    pub(crate) fn committed_runtime_source(&self) -> (ChimeraAppConfig, u64) {
+        match self.inner.as_ref() {
+            ApplicationClientInner::Actor { snapshot, .. } => {
+                let observed = snapshot.load();
+                (observed.state.clone(), *observed.version)
+            }
+            #[cfg(test)]
+            ApplicationClientInner::Static { state, .. } => state.read().clone(),
+        }
+    }
+
     pub(crate) fn get_typed(&self) -> ChimeraAppConfig {
         match self.inner.as_ref() {
             ApplicationClientInner::Actor { snapshot, .. } => snapshot.load().state.clone(),

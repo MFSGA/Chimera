@@ -135,6 +135,19 @@ impl ClashConfigClient {
         }
     }
 
+    /// Read the immutable committed config+version pair without a writer
+    /// Actor RPC; a queued source mutation may be awaiting CoreLifecycle.
+    pub(crate) fn committed_runtime_source(&self) -> (ClashConfig, u64) {
+        match self.state.as_ref() {
+            ClashConfigStateBackend::Actor { snapshot, .. } => {
+                let observed = snapshot.load();
+                (observed.state.clone(), *observed.version)
+            }
+            #[cfg(test)]
+            ClashConfigStateBackend::Static { state } => state.read().clone(),
+        }
+    }
+
     fn get_typed(&self) -> ClashConfig {
         match self.state.as_ref() {
             ClashConfigStateBackend::Actor { snapshot, .. } => snapshot.load().state.clone(),
