@@ -30,6 +30,35 @@ impl std::fmt::Display for CoreFailure {
 
 impl std::error::Error for CoreFailure {}
 
+/// A candidate validation had no authoritative verdict. `Backend` is the
+/// exact pinned-ref wire case; the other branches retain Chimera's distinct
+/// no-endpoint, unavailable input, and skipped/not-owed boundaries.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[serde(tag = "cause", rename_all = "snake_case")]
+pub enum RuntimeCheckUnavailable {
+    Backend {
+        kind: Option<CoreErrorKind>,
+        message: String,
+        retryable: bool,
+    },
+    CandidateUnavailable {
+        reason: String,
+    },
+    NoEndpoint {
+        reason: String,
+    },
+    HostUnsupported {
+        host: String,
+        reason: String,
+    },
+    NotChecked {
+        reason: String,
+    },
+    Other {
+        reason: String,
+    },
+}
+
 /// Ref runtime errors whose real causes are already available in the shared
 /// Core metadata layer. Other source-carrying variants are added only when
 /// their domain owner has migrated and can supply the exact error type.
@@ -108,6 +137,15 @@ pub enum RuntimeError {
     #[snafu(display("the committed configuration is not in effect: {reason}"))]
     ConfigurationNotInEffect { reason: String },
 
+    #[snafu(display("the core rejected the configuration: {message}"))]
+    CoreRejectedConfig {
+        core_kind: Option<CoreErrorKind>,
+        message: String,
+    },
+
+    #[snafu(display("the configuration could not be checked: {reason:?}"))]
+    CheckUnavailable { reason: RuntimeCheckUnavailable },
+
     #[snafu(display("the runtime submission is unobserved: {failure}"))]
     SubmissionUnobserved {
         #[snafu(source)]
@@ -153,6 +191,8 @@ impl RuntimeError {
             Self::ShuttingDown
             | Self::OwnerUnresponsive { .. }
             | Self::ConfigurationNotInEffect { .. }
+            | Self::CoreRejectedConfig { .. }
+            | Self::CheckUnavailable { .. }
             | Self::ServiceHostsCore
             | Self::NoRuntimeConfig
             | Self::RuntimeSnapshotChanged
@@ -191,6 +231,28 @@ mod tests {
         assert_eq!(wire["failure"]["kind"], "apply_failed");
         assert_eq!(wire["failure"]["operation_id"], "operation-1");
         assert_eq!(wire["failure"]["retryable"], false);
+    }
+
+    #[test]
+    fn candidate_check_refusal_and_backend_failure_have_distinct_ref_wire_shapes() {
+        let rejected = RuntimeError::CoreRejectedConfig {
+            core_kind: Some(CoreErrorKind::ConfigCheckFailed),
+            message: "bad candidate".into(),
+        };
+        let rejected_wire = serde_json::to_value(&rejected).unwrap();
+        assert_eq!(rejected_wire["kind"], "core_rejected_config");
+        assert_eq!(rejected_wire["core_kind"], "config_check_failed");
+        let unavailable = RuntimeError::CheckUnavailable {
+            reason: RuntimeCheckUnavailable::Backend {
+                kind: Some(CoreErrorKind::BackendUnavailable),
+                message: "endpoint offline".into(),
+                retryable: true,
+            },
+        };
+        let unavailable_wire = serde_json::to_value(&unavailable).unwrap();
+        assert_eq!(unavailable_wire["kind"], "check_unavailable");
+        assert_eq!(unavailable_wire["reason"]["cause"], "backend");
+        assert_eq!(unavailable_wire["reason"]["retryable"], true);
     }
 
     #[test]
