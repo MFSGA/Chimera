@@ -2130,11 +2130,44 @@ impl Actor for ApplicationWorkflowActor {
                 state.reconciler.send_modify(|status| {
                     status.observe_source_only(domain, version);
                 });
-                if previous.is_some_and(|seen| seen >= version) {
+                if previous == Some(version) {
                     // Notifications are at-least-once; an already observed
                     // version must never run a second checked or legacy Core
                     // apply just because the cache was consumed by the first.
                     tracing::debug!(?domain, version, "duplicate checked commit ignored");
+                } else if previous.is_some_and(|seen| seen > version) {
+                    // A source-only commit may have published a newer version
+                    // before this checked CAS receipt reached the mailbox.
+                    // Do not silently lose the earlier runtime intent: the
+                    // authoritative *latest* source must be reconciled once.
+                    state.checked.pending.retain(|entry| entry.domain != domain);
+                    if state.run_intent == RunIntent::Running
+                        && !state.uncertain
+                        && !state.shutting_down
+                    {
+                        if state.startup_owner_unproven
+                            || state.startup_owner_unproven_shared.load(Ordering::Acquire)
+                            || state.owner_transition_pending()
+                        {
+                            state.source_after_handoff = true;
+                            if state.startup_owner_unproven
+                                || state.startup_owner_unproven_shared.load(Ordering::Acquire)
+                            {
+                                state.request_startup_recovery(&myself);
+                            } else {
+                                state.replan_retained_source_on_service_change(&myself);
+                            }
+                        } else {
+                            state.source_dirty = true;
+                            state.mark_runtime_dirty(&myself);
+                        }
+                    }
+                    tracing::debug!(
+                        ?domain,
+                        version,
+                        ?previous,
+                        "stale checked receipt requires latest source recovery"
+                    );
                 } else if state.seen_sources.version(domain) != Some(version) {
                     tracing::debug!(
                         ?domain,
@@ -4012,7 +4045,7 @@ impl CoreLifecycleClient {
     pub(super) async fn patch_application_config(
         &self,
         patch: chimera_config::application::ChimeraAppConfigPatch,
-    ) -> anyhow::Result<Vec<crate::client::runtime::Degradation>> {
+    ) -> anyhow::Result<workflow::ApplicationPatchResult> {
         let (degradations, settled) = tokio::sync::oneshot::channel();
         self.execute(Command::PatchApplicationConfig {
             patch,

@@ -43,6 +43,68 @@ use super::{
     },
 };
 
+/// The Source commit is final even when the runtime is still pending in the
+/// checked Core mailbox. Never report pending checked work as an inline apply.
+pub(in crate::client) struct ApplicationPatchResult {
+    pub(in crate::client) degradations: Vec<crate::client::runtime::Degradation>,
+    /// Exact CAS version associated with the ACKed checked bytes.
+    pub(in crate::client) checked_version: Option<u64>,
+}
+
+/// Use the ref checked-source handoff only for a local-host enhancement
+/// update. Core selection and Service ownership changes still require the
+/// specialized legacy handoff until their ref workflows migrate together.
+fn checked_application_patch_eligible(
+    patch: &ChimeraAppConfigPatch,
+    previous: &ChimeraAppConfig,
+    service_connected: bool,
+) -> bool {
+    patch.enable_builtin_enhanced.is_some()
+        && patch.core.is_none()
+        && patch.enable_service_mode.is_none()
+        && !previous.enable_service_mode
+        && !service_connected
+}
+
+#[cfg(test)]
+mod checked_application_route_tests {
+    use super::*;
+
+    #[test]
+    fn only_local_enhancement_requests_may_use_checked_apply() {
+        let mut previous = ChimeraAppConfig::default();
+        previous.enable_service_mode = false;
+        let mut patch = ChimeraAppConfigPatch {
+            enable_builtin_enhanced: Some(!previous.enable_builtin_enhanced),
+            ..Default::default()
+        };
+        assert!(checked_application_patch_eligible(&patch, &previous, false));
+        assert!(
+            !checked_application_patch_eligible(&patch, &previous, true),
+            "a connected Service host retains its dedicated handoff"
+        );
+        previous.enable_service_mode = true;
+        assert!(!checked_application_patch_eligible(
+            &patch, &previous, false
+        ));
+        previous.enable_service_mode = false;
+        patch.core = Some(previous.core);
+        assert!(!checked_application_patch_eligible(
+            &patch, &previous, false
+        ));
+        patch.core = None;
+        patch.enable_service_mode = Some(false);
+        assert!(!checked_application_patch_eligible(
+            &patch, &previous, false
+        ));
+        patch.enable_service_mode = None;
+        patch.enable_builtin_enhanced = None;
+        assert!(!checked_application_patch_eligible(
+            &patch, &previous, false
+        ));
+    }
+}
+
 /// An older source generation became stale while the single runtime actor
 /// was building or applying it. The actor must schedule another latest-source
 /// round, but must not blindly retry arbitrary Core apply failures.
@@ -64,7 +126,7 @@ pub(in crate::client) enum Command {
         service_connected: bool,
         /// Reply after the source commit; runtime failures are degradations,
         /// not evidence that the committed application.yaml rolled back.
-        degradations: tokio::sync::oneshot::Sender<Vec<crate::client::runtime::Degradation>>,
+        degradations: tokio::sync::oneshot::Sender<ApplicationPatchResult>,
         /// Captured by the old actor completion path until the ref single
         /// Reconciler owns both source-version and applied-target status.
         runtime_converged: Arc<AtomicBool>,
@@ -812,10 +874,15 @@ impl CoreLifecycleWorkflow {
                 degradations,
                 runtime_converged,
             } => self
-                .patch_application_config(patch, service_connected)
+                .patch_application_config_with_result(patch, service_connected)
                 .await
                 .map(|result| {
-                    runtime_converged.store(result.is_empty(), Ordering::Release);
+                    // Checked Apply is a separate queued Core operation. The
+                    // source-command completion cannot mark it Converged.
+                    runtime_converged.store(
+                        result.checked_version.is_none() && result.degradations.is_empty(),
+                        Ordering::Release,
+                    );
                     let _ = degradations.send(result);
                 }),
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -2120,27 +2187,45 @@ impl CoreLifecycleWorkflow {
     /// The ref source transition: a checked target is persisted before any
     /// running Core mutation. Only CoreLifecycle owns the later apply; no
     /// independent actor or second runtime writer is spawned by this path.
+    #[cfg(test)]
     pub(super) async fn patch_application_config(
         &self,
         patch: ChimeraAppConfigPatch,
         service_connected: bool,
     ) -> anyhow::Result<Vec<crate::client::runtime::Degradation>> {
+        Ok(self
+            .patch_application_config_with_result(patch, service_connected)
+            .await?
+            .degradations)
+    }
+
+    pub(super) async fn patch_application_config_with_result(
+        &self,
+        patch: ChimeraAppConfigPatch,
+        service_connected: bool,
+    ) -> anyhow::Result<ApplicationPatchResult> {
         if !crate::client::application_workflow::impact::application_patch_requires_reconcile(
             &patch,
             service_connected,
         ) {
             self.application.patch_typed(patch).await?;
-            return Ok(Vec::new());
+            return Ok(ApplicationPatchResult {
+                degradations: Vec::new(),
+                checked_version: None,
+            });
         }
 
         let previous = self.application.get().await?;
+        let use_checked = self.checked_gate.get().is_some()
+            && checked_application_patch_eligible(&patch, &previous.state, service_connected);
         let mut candidate = previous.state.clone();
         candidate.apply(patch);
         let prepared = self.application.prepare_replace(candidate.clone()).await?;
 
-        // Ref RuntimeGate::check: a preflight is read-only. Unlike the old
-        // application workflow, it cannot perform Reconcile/host handoff.
-        self.check_application_candidate(candidate.clone(), service_connected)
+        // The ref check ACKs *exact* prepared bytes with the one Core owner.
+        // For an eligible local-host update we will notify CheckedSourceCommitted
+        // after durable CAS; all host switch paths retain their old apply.
+        self.check_application_candidate(candidate.clone(), service_connected, use_checked)
             .await?;
 
         let committed = self
@@ -2160,6 +2245,28 @@ impl CoreLifecycleWorkflow {
             }
         };
 
+        if use_checked {
+            // Like the upstream source owner, publish the exact durable CAS
+            // version immediately. The one CoreLifecycle Actor receives the
+            // checked notice while this command is active, and dispatches
+            // ApplyChecked only after this source command finishes. No UI
+            // callback is needed to make a successful source commit observable.
+            use crate::state::mutation::RuntimeGate as _;
+            let gate = self
+                .checked_gate
+                .get()
+                .expect("checked gate admitted this commit");
+            gate.committed(
+                chimera_contracts::mutation::ConfigDomain::Application,
+                chimera_core::state::Version::new(committed_version),
+            );
+            // Do not run the legacy inline reconcile on this same version.
+            return Ok(ApplicationPatchResult {
+                degradations: Vec::new(),
+                checked_version: Some(committed_version),
+            });
+        }
+
         // Source publication is complete. Ref's committed-target reconciler
         // always consumes the latest version; until the full actor is ported,
         // fence this compatibility apply before and after CoreLifecycle work.
@@ -2177,9 +2284,15 @@ impl CoreLifecycleWorkflow {
                 message = %degradation.message,
                 "application source committed; runtime reconcile deferred"
             );
-            Ok(vec![degradation])
+            Ok(ApplicationPatchResult {
+                degradations: vec![degradation],
+                checked_version: None,
+            })
         } else {
-            Ok(Vec::new())
+            Ok(ApplicationPatchResult {
+                degradations: Vec::new(),
+                checked_version: None,
+            })
         }
     }
 
@@ -2190,8 +2303,9 @@ impl CoreLifecycleWorkflow {
         &self,
         app: ChimeraAppConfig,
         service_connected: bool,
+        use_checked: bool,
     ) -> anyhow::Result<()> {
-        use crate::state::mutation::{DomainChange, RuntimeCandidate};
+        use crate::state::mutation::{DomainChange, RuntimeCandidate, RuntimeGate as _};
 
         if self.profiles.is_none() {
             // Only isolated test adapters may omit the authoritative Profiles
@@ -2208,9 +2322,13 @@ impl CoreLifecycleWorkflow {
             staged: Default::default(),
         };
         if let Some(gate) = self.checked_gate.get() {
-            // Application still owns its legacy postcommit host transition.
-            // Use the same ref builder and Core check as Profiles/Clash but
-            // do not enqueue Checked bytes until that apply path is retired.
+            if use_checked {
+                // The ACK proves that one Core owner retained the exact
+                // validated candidate before the source is made durable.
+                return gate.check(candidate).await.map_err(anyhow::Error::new);
+            }
+            // Core selection and Service mode still use legacy postcommit
+            // transitions; avoid an orphaned Checked inbox entry for them.
             return gate
                 .validate_only(candidate)
                 .await

@@ -704,7 +704,7 @@ impl ChimeraClient {
         )?;
 
         let service_connected = crate::core::service::ipc::get_ipc_state().is_connected();
-        let mut degradations =
+        let (mut degradations, checked_version) =
             if super::application_workflow::impact::application_patch_requires_reconcile(
                 &patch,
                 service_connected,
@@ -713,25 +713,31 @@ impl ChimeraClient {
                 // Source commit is serialized by the one CoreLifecycle owner.
                 // Its post-commit Core errors return as degradations, never as a
                 // false report that the application.yaml write did not happen.
-                self.inner
+                let report = self
+                    .inner
                     .core_lifecycle
                     .patch_application_config(patch)
-                    .await?
+                    .await?;
+                (report.degradations, report.checked_version)
             } else {
                 self.inner.application.patch_typed(patch).await?;
-                Vec::new()
+                (Vec::new(), None)
             };
+        // The source-owning lifecycle workflow already published a Checked
+        // notice for its exact CAS version. Do not replay it through the UI
+        // facade: an additional notice could race the next source commit.
         let snapshot = self.inner.application.get().await?;
-        // Ref RuntimeGate::committed: durable source publication is observed
-        // by the one lifecycle mailbox. The successful inline apply is not
-        // replayed; only retryable postcommit failures request convergence.
-        self.inner.core_lifecycle.source_committed(
-            super::reconciler::committed::SourceDomain::Application,
-            snapshot.version,
-            degradations
-                .iter()
-                .any(|item| item.code == "application_runtime_deferred" && item.retryable),
-        );
+        if checked_version.is_none() {
+            // Already-applied legacy domains only publish their source version.
+            // Retryable postcommit failures still request owner convergence.
+            self.inner.core_lifecycle.source_committed(
+                super::reconciler::committed::SourceDomain::Application,
+                snapshot.version,
+                degradations
+                    .iter()
+                    .any(|item| item.code == "application_runtime_deferred" && item.retryable),
+            );
+        }
         self.configure_app_update(&snapshot.state);
 
         // Keep the legacy Verge file current while existing service and agent
