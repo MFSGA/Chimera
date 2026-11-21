@@ -16,7 +16,6 @@ use crate::{
     client::{
         core_lifecycle::ports::{PreparedRuntime, RuntimePreparationPort},
         ports::SessionPortResolver,
-        runtime::RuntimeRevisionAllocator,
     },
     state::mutation::{DomainChange, RuntimeCandidate, RuntimeGate},
 };
@@ -46,8 +45,9 @@ pub(in crate::client) struct Args {
     pub clash: StateSnapshot<ClashConfig>,
     pub profile_content: crate::state::mutation::ProfileContentReader,
     pub builder: Arc<dyn RuntimeBuildPort>,
-    pub ports: Arc<SessionPortResolver>,
-    pub revisions: RuntimeRevisionAllocator,
+    /// Both handles must originate from the actual Core owner. Splitting
+    /// the allocator and resolver would silently fork the runtime session.
+    pub session: crate::client::ports::RuntimePreparationSession,
     pub validator: Arc<dyn RuntimeValidatorPort>,
     pub workflow: Arc<dyn CheckedCandidatePort>,
 }
@@ -59,13 +59,11 @@ impl CandidateCheck {
             clash,
             profile_content,
             builder,
-            ports,
-            revisions,
+            session,
             validator,
             workflow,
         } = args;
-        let preparation =
-            RuntimePreparation::new(profile_content, builder, ports).with_revisions(revisions);
+        let preparation = RuntimePreparation::new(profile_content, builder, session);
         Self {
             application,
             clash,
@@ -312,10 +310,13 @@ mod tests {
                 ProfileContentLock::default(),
             ),
             builder: builder.clone(),
-            ports: Arc::new(SessionPortResolver::new(Arc::new(
-                RuntimeLifecycle::default(),
-            ))),
-            revisions: RuntimeRevisionAllocator::default(),
+            session: {
+                let lifecycle = Arc::new(RuntimeLifecycle::default());
+                crate::client::ports::RuntimePreparationSession {
+                    revisions: lifecycle.revision_allocator(),
+                    ports: Arc::new(SessionPortResolver::new(lifecycle)),
+                }
+            },
             validator: validator.clone(),
             workflow: inbox.clone(),
         });

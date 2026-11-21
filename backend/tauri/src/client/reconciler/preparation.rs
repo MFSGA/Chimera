@@ -26,22 +26,19 @@ pub(in crate::client) struct RuntimePreparation {
 }
 
 impl RuntimePreparation {
+    /// Require one live Core-owned session at construction: there is no
+    /// fall-back per-builder revision allocator or disconnected port cache.
     pub fn new(
         profile_content: crate::state::mutation::ProfileContentReader,
         builder: Arc<dyn RuntimeBuildPort>,
-        ports: Arc<SessionPortResolver>,
+        session: crate::client::ports::RuntimePreparationSession,
     ) -> Self {
         Self {
             profile_content,
             builder,
-            ports,
-            revisions: runtime::RuntimeRevisionAllocator::new(),
+            ports: session.ports,
+            revisions: session.revisions,
         }
-    }
-
-    pub(super) fn with_revisions(mut self, revisions: runtime::RuntimeRevisionAllocator) -> Self {
-        self.revisions = revisions;
-        self
     }
 
     #[cfg(test)]
@@ -257,11 +254,13 @@ mod tests {
             ProfileContentLock::default(),
         );
         let builder = Arc::new(RecordingBuildPort::default());
-        let ports = Arc::new(SessionPortResolver::new(Arc::new(
-            RuntimeLifecycle::default(),
-        )));
+        let lifecycle = Arc::new(RuntimeLifecycle::default());
+        let session = crate::client::ports::RuntimePreparationSession {
+            revisions: lifecycle.revision_allocator(),
+            ports: Arc::new(SessionPortResolver::new(lifecycle)),
+        };
         (
-            RuntimePreparation::new(reader, builder.clone(), ports),
+            RuntimePreparation::new(reader, builder.clone(), session),
             builder,
         )
     }

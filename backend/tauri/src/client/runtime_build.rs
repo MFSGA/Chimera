@@ -222,10 +222,12 @@ mod tests {
             .unwrap();
         let reader =
             ProfileContentReader::new(manager.snapshot_handle(), ProfileContentLock::default());
-        let resolver = Arc::new(SessionPortResolver::new(Arc::new(
-            RuntimeLifecycle::default(),
-        )));
-        let preparation = RuntimePreparation::new(reader, builder, resolver);
+        let lifecycle = Arc::new(RuntimeLifecycle::default());
+        let session = crate::client::ports::RuntimePreparationSession {
+            revisions: lifecycle.revision_allocator(),
+            ports: Arc::new(SessionPortResolver::new(lifecycle)),
+        };
+        let preparation = RuntimePreparation::new(reader, builder, session);
         let app = ChimeraAppConfig {
             core: ClashCore::Mihomo,
             enable_builtin_enhanced: false,
