@@ -11,21 +11,30 @@ use chimera_ipc::{
     types::ServiceStatus,
 };
 
-/// Ref's currently pending/runtime-error shape is confined to the planner;
-/// Chimera will connect its typed core-lifecycle error at the one owner
-/// boundary, not force it into the legacy IPC wire now.
-#[derive(Debug, thiserror::Error)]
-#[error("configuration not in effect: {reason}")]
-pub struct RuntimeError {
-    reason: String,
-}
+// Use the upstream RuntimeError owner rather than flattening every Core
+// failure into an unclassified string. The Tauri UI projection remains a
+// separate compatibility boundary; the reconciler retains typed causes.
+use chimera_contracts::runtime_error::CoreFailure;
+pub use chimera_contracts::runtime_error::RuntimeError;
 
-impl RuntimeError {
-    /// Preserve a typed reconciler conclusion without exposing planner fields.
-    pub fn new(reason: impl Into<String>) -> Self {
-        Self {
-            reason: reason.into(),
+/// Convert the real Core Manager error at the executor/observer boundary.
+/// Do not invent a kind for unrelated failures: they retain their exact
+/// diagnostic reason as ConfigurationNotInEffect until a domain type exists.
+pub fn runtime_apply_error(error: &anyhow::Error, uncertain: bool) -> RuntimeError {
+    if let Some(core_error) = error.downcast_ref::<CoreError>() {
+        let failure = CoreFailure {
+            kind: core_error.kind,
+            message: core_error.message.clone(),
+            retryable: core_error.retryable,
+            operation_id: core_error.operation_id.as_ref().map(ToString::to_string),
+        };
+        if uncertain {
+            RuntimeError::SubmissionUnobserved { failure }
+        } else {
+            RuntimeError::ApplyRuntime { failure }
         }
+    } else {
+        RuntimeError::new(error.to_string())
     }
 }
 
@@ -152,7 +161,7 @@ pub enum Step {
 
 fn waiting(reason: String) -> Step {
     Step::Idle(Conclusion::Waiting {
-        cause: Arc::new(RuntimeError { reason }),
+        cause: Arc::new(RuntimeError::new(reason)),
     })
 }
 
@@ -216,9 +225,9 @@ pub fn plan(facts: &Facts) -> Step {
     {
         let cause = match &attempt.outcome {
             AttemptOutcome::Refused(cause) | AttemptOutcome::Unknown(cause) => cause.clone(),
-            AttemptOutcome::Applied => Arc::new(RuntimeError {
-                reason: "the core stopped with a failure for this target".to_owned(),
-            }),
+            AttemptOutcome::Applied => Arc::new(RuntimeError::new(
+                "the core stopped with a failure for this target",
+            )),
         };
         return Step::Idle(Conclusion::NotInEffect { cause });
     }
@@ -672,10 +681,45 @@ mod tests {
             Step::Apply => "Apply",
         }
     }
+    #[test]
+    fn real_core_failure_preserves_kind_retryability_and_operation_identity() {
+        use chimera_core_manager::{CoreErrorKind, OperationId};
+
+        let operation = OperationId {
+            nanos: 0x1234,
+            pid: 1,
+            counter: 9,
+        };
+        let core_error = CoreError::new(CoreErrorKind::ApplyFailed, "bad candidate", false)
+            .with_operation(operation);
+        let wrapped = anyhow::Error::new(core_error).context("runtime command failed");
+
+        let cause = runtime_apply_error(&wrapped, false);
+        assert_eq!(cause.core_kind(), Some(CoreErrorKind::ApplyFailed));
+        assert!(!cause.retryable());
+        let wire = serde_json::to_value(&cause).unwrap();
+        assert_eq!(wire["kind"], "apply_runtime");
+        assert_eq!(wire["failure"]["kind"], "apply_failed");
+        assert_eq!(wire["failure"]["operation_id"], operation.to_string());
+        assert_eq!(wire["failure"]["message"], "bad candidate");
+
+        let unobserved = runtime_apply_error(&wrapped, true);
+        assert_eq!(unobserved.core_kind(), Some(CoreErrorKind::ApplyFailed));
+        assert_eq!(
+            serde_json::to_value(&unobserved).unwrap()["kind"],
+            "submission_unobserved"
+        );
+    }
+
+    #[test]
+    fn non_core_failure_is_not_given_a_fabricated_machine_kind() {
+        let cause = runtime_apply_error(&anyhow::anyhow!("staging cleanup is pending"), false);
+        assert!(cause.core_failure().is_none());
+        assert!(cause.to_string().contains("staging cleanup is pending"));
+    }
+
     fn refusal() -> Arc<RuntimeError> {
-        Arc::new(RuntimeError {
-            reason: "application failed".to_owned(),
-        })
+        Arc::new(RuntimeError::new("application failed"))
     }
 
     #[test]
