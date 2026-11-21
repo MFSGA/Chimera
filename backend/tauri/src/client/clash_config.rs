@@ -584,10 +584,23 @@ impl ChimeraClient {
         };
         use crate::state::mutation::{DomainChange, RuntimeCandidate, RuntimeGate as _};
 
-        // The ref gate captures the committed Profile document and its files
-        // under one fence while checking this proposed Clash source. Reuse
-        // its one check implementation; leave postcommit runtime application
-        // with the existing CoreLifecycle owner until Clash's actor migrates.
+        let proposed = RuntimeCandidate {
+            change: DomainChange::Clash {
+                candidate: Arc::new(candidate),
+            },
+            staged: Default::default(),
+        };
+        if let Some(gate) = &self.inner.checked_gate {
+            // Share the production Profiles gate's upstream builder, source
+            // snapshots and Core validator. Clash still has an inline legacy
+            // apply, so never queue Checked bytes for a commit it cannot
+            // deliver through CheckedSourceCommitted yet.
+            return gate
+                .validate_only(proposed)
+                .await
+                .map_err(anyhow::Error::new);
+        }
+        // Isolated legacy fixtures have no canonical Core runtime session.
         let checker = super::reconciler::legacy_check::CandidateCheck::new(
             self.inner.core.clone(),
             self.inner.application.clone(),
@@ -596,15 +609,7 @@ impl ChimeraClient {
             profiles.snapshot_handle(),
             self.inner.core_lifecycle.clone(),
         );
-        checker
-            .check(RuntimeCandidate {
-                change: DomainChange::Clash {
-                    candidate: Arc::new(candidate),
-                },
-                staged: Default::default(),
-            })
-            .await
-            .map_err(anyhow::Error::new)
+        checker.check(proposed).await.map_err(anyhow::Error::new)
     }
 
     pub(crate) fn get_clash_config(&self) -> Result<ClashConfig> {

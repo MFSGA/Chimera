@@ -204,6 +204,9 @@ struct ChimeraClientInner {
     streams_shutdown: tokio_util::sync::CancellationToken,
     proxies: chimera_core::proxies_actor::ProxiesClient,
     typed_profiles: Option<profiles::ProfilesClient>,
+    /// The one candidate checker shared by the Profiles gate and legacy
+    /// Clash read-only preflight during the staged ref source cutover.
+    checked_gate: Option<Arc<reconciler::check::CandidateCheck>>,
     profile_service: Arc<ProfileFileService>,
     system_dns: Arc<dyn SystemDnsCache>,
     traffic_store: parking_lot::Mutex<Option<Arc<dyn chimera_traffic::TrafficStore>>>,
@@ -342,7 +345,7 @@ impl ChimeraClient {
             &core_lifecycle,
         )?);
         tauri::async_runtime::block_on(
-            mutations.connect_with_runtime_gate(core_lifecycle.clone(), profile_gate),
+            mutations.connect_with_runtime_gate(core_lifecycle.clone(), profile_gate.clone()),
         )?;
         let streams_shutdown = shutdown.child_token();
         let streams =
@@ -396,6 +399,7 @@ impl ChimeraClient {
             proxies,
             profile_service,
             Some(typed_profiles),
+            Some(profile_gate),
             system_dns,
             ui_sink,
             Some(app_updater),
@@ -530,6 +534,7 @@ impl ChimeraClient {
             proxies,
             profile_service,
             None,
+            None,
             system_dns,
             ui_sink,
             None,
@@ -560,6 +565,7 @@ impl ChimeraClient {
         proxies: chimera_core::proxies_actor::ProxiesClient,
         profile_service: Arc<ProfileFileService>,
         typed_profiles: Option<profiles::ProfilesClient>,
+        checked_gate: Option<Arc<reconciler::check::CandidateCheck>>,
         system_dns: Arc<dyn SystemDnsCache>,
         ui_sink: Arc<dyn UiEventSink>,
         app_updater: Option<AppUpdateClient>,
@@ -604,6 +610,7 @@ impl ChimeraClient {
             streams_shutdown,
             proxies,
             typed_profiles,
+            checked_gate,
             profile_service,
             system_dns,
             traffic_store: parking_lot::Mutex::new(None),

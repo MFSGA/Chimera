@@ -80,9 +80,21 @@ impl CandidateCheck {
     }
 }
 
-#[async_trait::async_trait]
-impl RuntimeGate for CandidateCheck {
-    async fn check(&self, candidate: RuntimeCandidate) -> Result<(), Arc<RuntimeError>> {
+impl CandidateCheck {
+    /// The same strict ref preparation and Core validation shared by every
+    /// source. Only a production RuntimeGate check may admit the result into
+    /// the owner's Checked mailbox; legacy postcommit paths cannot do so.
+    async fn validate(
+        &self,
+        candidate: RuntimeCandidate,
+    ) -> Result<
+        (
+            ConfigDomain,
+            PreparedRuntime,
+            chimera_core_manager::CoreSpec,
+        ),
+        Arc<RuntimeError>,
+    > {
         let domain = match &candidate.change {
             DomainChange::Application { .. } => ConfigDomain::Application,
             DomainChange::Clash { .. } => ConfigDomain::Clash,
@@ -135,20 +147,35 @@ impl RuntimeGate for CandidateCheck {
             })
             .await
         {
-            RuntimeCheckOutcome::Passed => {
-                self.workflow.checked(domain, prepared, core_spec).await?
-            }
+            RuntimeCheckOutcome::Passed => Ok((domain, prepared, core_spec)),
             RuntimeCheckOutcome::Rejected { kind, message } => {
-                return Err(Arc::new(RuntimeError::CoreRejectedConfig {
+                Err(Arc::new(RuntimeError::CoreRejectedConfig {
                     core_kind: kind,
                     message,
-                }));
+                }))
             }
             RuntimeCheckOutcome::Unavailable(reason) => {
-                return Err(Arc::new(RuntimeError::CheckUnavailable { reason }));
+                Err(Arc::new(RuntimeError::CheckUnavailable { reason }))
             }
         }
-        Ok(())
+    }
+
+    /// Migration bridge for legacy postcommit Application/Clash workflows:
+    /// use the upstream candidate builder and validator, but do not enqueue
+    /// checked bytes that the old apply path cannot consume safely yet.
+    pub(in crate::client) async fn validate_only(
+        &self,
+        candidate: RuntimeCandidate,
+    ) -> Result<(), Arc<RuntimeError>> {
+        self.validate(candidate).await.map(|_| ())
+    }
+}
+
+#[async_trait::async_trait]
+impl RuntimeGate for CandidateCheck {
+    async fn check(&self, candidate: RuntimeCandidate) -> Result<(), Arc<RuntimeError>> {
+        let (domain, prepared, core_spec) = self.validate(candidate).await?;
+        self.workflow.checked(domain, prepared, core_spec).await
     }
 
     fn committed(&self, domain: ConfigDomain, version: Version) {
@@ -383,6 +410,39 @@ mod tests {
         assert_eq!(
             inbox.committed.lock().unwrap().as_slice(),
             &[(ConfigDomain::Application, Version::new(7))]
+        );
+    }
+
+    #[tokio::test]
+    async fn read_only_clash_validation_does_not_admit_checked_bytes() {
+        let (gate, builder, validator, inbox) = gate(RuntimeCheckOutcome::Passed, false).await;
+        let clash = RuntimeCandidate {
+            change: DomainChange::Clash {
+                candidate: Arc::new(ClashConfig::default()),
+            },
+            staged: BTreeMap::new(),
+        };
+        gate.validate_only(clash).await.unwrap();
+        assert_eq!(builder.prepared.lock().unwrap().len(), 1);
+        assert_eq!(validator.checked.lock().unwrap().len(), 1);
+        assert!(inbox.checked.lock().unwrap().is_empty());
+        assert!(inbox.domains.lock().unwrap().is_empty());
+        assert!(inbox.committed.lock().unwrap().is_empty());
+
+        // The real RuntimeGate path still admits a newly validated candidate;
+        // validation-only calls never populate or consume its Checked inbox.
+        gate.check(RuntimeCandidate {
+            change: DomainChange::Clash {
+                candidate: Arc::new(ClashConfig::default()),
+            },
+            staged: BTreeMap::new(),
+        })
+        .await
+        .unwrap();
+        assert_eq!(inbox.checked.lock().unwrap().len(), 1);
+        assert_eq!(
+            inbox.domains.lock().unwrap().as_slice(),
+            &[ConfigDomain::Clash]
         );
     }
 

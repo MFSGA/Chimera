@@ -1,5 +1,12 @@
 # ref 对齐进度
 
+## DIFF-151（Runtime Reconciler）：Clash 预提交校验复用上游候选构建，但暂不发出 Checked 入队（2026-11-21）
+
+- **目标 / 范围 / 非目标**：仍以只读 `ref@c4b35e04870a9caa53f21d10af6fcfde4a6f4c01` 为基线；共享 ref `client/reconciler/check.rs::CandidateCheck` 的完整输入捕获、构建、CoreSpec 解析、CoreValidator 判定，使现有生产 Clash typed/raw/override 写入口使用 Profiles 已连接的同一 Session 与 checker。Clash 当前依旧通过旧 postcommit CoreLifecycle 执行器处理 Core 应用与模式变化后的连接中断，因此**不能提前投递 `Checked` 候选**，避免新旧两个 runtime 处理路径重复 Apply。Application 的旧预检与提交路径、本轮不动的 legacy UI、Agent、Service 与持久化格式均保持不变。
+- **路径 / 符号映射**：ref `backend/nyanpasu-core/src/client/reconciler/{check,preparation}.rs::CandidateCheck` → Chimera `backend/tauri/src/client/reconciler/check.rs::CandidateCheck::{validate,validate_only,check}`；`backend/tauri/src/client/mod.rs::ChimeraClientInner.checked_gate` 保存与生产 `MutationCoordinator` 安装的同一个 `Arc<CandidateCheck>`，而非另建一套 Runtime builder；`backend/tauri/src/client/clash_config.rs::check_clash_runtime_candidate` 调用只读 `validate_only`。正式 `RuntimeGate::check` 继续在验证成功后同步给唯一 CoreLifecycle Checked 邮箱 ACK。测试 fixture 无 canonical Session 时保留既有 legacy 检验接口，不伪造生产 Session。
+- **安全边界 / 风险 / 回滚**：L2（Clash 预提交检查使用上游构建语义与真实 Core Actor 校验）；`validate_only` 不提交 Source、不发布 Runtime 产品、不分配第二个 Runtime owner，也不缓存 Checked 候选。两个检查路径共享同一条严格验证逻辑，只有生产 Gate check 发送 `workflow.checked`；避免未经接管的 Clash 候选充满最多 32 条的 Checked 收件箱。下一轮必须把 Clash/Application 的 durable source 通知、postcommit Effects/Mode 结算与 `Command::ApplyChecked` 改为单一执行路径，随后删除 `legacy_check`；对两个源域不能声称已经完成完整 Gate Cutover。回滚本轮验证接线与 `validate_only` 即可，不影响已持久化用户数据。
+- **本地验证**：新增 `read_only_clash_validation_does_not_admit_checked_bytes` 检查构建器、validator、空 Checked/Committed 收件箱及后续正常入队。`CARGO_INCREMENTAL=0 cargo check --manifest-path backend/Cargo.toml -p chimera --lib --quiet` 通过；`CARGO_INCREMENTAL=0 cargo test --manifest-path backend/Cargo.toml -p chimera --lib --quiet` **1169/1169 通过**（1 项官方 TypeScript bindings 更新测试按设计忽略）；Rustfmt 与 `git diff --check` 通过。Clippy、签名、远端 CI 以实际提交结果为准。未运行真实 Service/TUN 或跨平台 GUI E2E。
+
 ## DIFF-150（Runtime Reconciler）：Profiles 生产 Source Gate 切换到上游式 CandidateCheck（2026-11-21）
 
 - **目标 / 验收 / 非目标**：固定 `ref@c4b35e04870a9caa53f21d10af6fcfde4a6f4c01`，使生产 Profiles 写入调用 ref 型 `CandidateCheck::check`，并由同一个 CoreLifecycle Actor 接收 `Checked`、持久提交版本及 `ApplyChecked`；校验过的 CoreSpec、原字节与 Runtime Session 必须一致。保留 Application/Clash 旧提交流程、主/Legacy UI、Agent 和 Chimera Client/Service 支持；不更改 RPC、落盘格式、权限或宿主网络。
