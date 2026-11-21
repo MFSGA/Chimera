@@ -476,10 +476,9 @@ pub struct CoreActorState {
     events_tx: broadcast::Sender<CoreStatusProjection>,
     pump: Option<tokio::task::JoinHandle<()>>,
     stop_wait: Duration,
-    /// The stop leg of a handoff in flight. Owned here so the actor's own
-    /// termination takes it down with the pump: it holds the source endpoint,
-    /// an `ActorRef` and the caller's reply port, and a hung call would keep
-    /// all three alive past the mailbox.
+    /// The stop-and-prove leg of a handoff in flight. Unlike the read-only
+    /// status pump, an admitted Core stop must settle before the actor drops
+    /// the previous owner's endpoint. The stop leg has its own I/O bounds.
     handoff: Option<tokio::task::JoinHandle<()>>,
     status_timeout: Duration,
     /// A timed-out network mutation may have reached the OS. There is no
@@ -747,13 +746,33 @@ impl Actor for CoreActor {
         state.api.take();
         // The pump outlives the mailbox otherwise: it holds an `ActorRef` and
         // an endpoint, and a status read in flight keeps both alive.
+        let mut first_panic = None;
         if let Some(pump) = state.pump.take() {
+            // Status reads do not change the Core owner, so cancelling this
+            // subscription is safe. An unexpected panic still belongs to
+            // the router's supervision rather than being silently ignored.
             pump.abort();
-            let _ = pump.await;
+            if let Err(error) = pump.await
+                && let Ok(panic) = error.try_into_panic()
+            {
+                first_panic = Some(panic);
+            }
         }
         if let Some(handoff) = state.handoff.take() {
-            handoff.abort();
-            let _ = handoff.await;
+            // Unlike a status pump, this task already owns stop-and-prove.
+            // Do not abort a partially admitted Core stop at actor exit:
+            // retain its endpoint/operation ownership until it finishes.
+            if let Err(error) = handoff.await {
+                match error.try_into_panic() {
+                    Ok(panic) if first_panic.is_none() => first_panic = Some(panic),
+                    Ok(_) => tracing::error!("another Core owner task panicked during stop"),
+                    Err(error) => tracing::warn!(%error, "Core handoff stop task was cancelled"),
+                }
+            }
+        }
+        // Do not let a pump panic detach a still-owned Core Stop.
+        if let Some(panic) = first_panic {
+            std::panic::resume_unwind(panic);
         }
         Ok(())
     }
@@ -1128,7 +1147,8 @@ impl Actor for CoreActor {
                 result,
                 reply,
             } => {
-                self.handoff_stopped(&myself, state, generation, result, reply);
+                self.handoff_stopped(&myself, state, generation, result, reply)
+                    .await;
             }
 
             CoreActorMessage::EndpointEvent {
@@ -1188,7 +1208,11 @@ impl Actor for CoreActor {
                 }
                 if let Some(pump) = state.pump.take() {
                     pump.abort();
-                    let _ = pump.await;
+                    if let Err(error) = pump.await
+                        && let Ok(panic) = error.try_into_panic()
+                    {
+                        std::panic::resume_unwind(panic);
+                    }
                 }
                 if matches!(state.slot, EndpointSlot::HandingOff { .. }) {
                     // A stop for this very runtime is already in flight.
@@ -1354,7 +1378,7 @@ impl CoreActor {
     }
 
     /// The handoff's second half, back inside the mailbox.
-    fn handoff_stopped(
+    async fn handoff_stopped(
         &self,
         myself: &ActorRef<CoreActorMessage>,
         state: &mut CoreActorState,
@@ -1376,8 +1400,15 @@ impl CoreActor {
             return;
         }
         let (from, target, source_down) = (from.clone(), target.clone(), source_down.clone());
-        // Its own message; nothing is left to cancel.
-        state.handoff = None;
+        // The handoff task sent this completion before returning. Join it
+        // before releasing the previous owner's slot or confirming shutdown.
+        // Simply dropping the handle would discard a late fatal panic.
+        if let Some(handoff) = state.handoff.take()
+            && let Err(error) = handoff.await
+            && let Ok(panic) = error.try_into_panic()
+        {
+            std::panic::resume_unwind(panic);
+        }
 
         if !state.pending_shutdown.is_empty() {
             let _ = reply.send(Err(CoreError::new(
