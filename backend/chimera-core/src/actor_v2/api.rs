@@ -800,7 +800,7 @@ impl ApiLease {
     /// Stop one instance-bound API lease and reap the owned monitor. Dropping
     /// remains fail-closed for unexpected owner unwinding, but normal Core
     /// transitions must not silently discard a monitor's fatal JoinError.
-    pub(in crate::actor_v2) async fn stop(mut self) -> Result<(), tokio::task::JoinError> {
+    pub async fn stop(mut self) -> Result<(), tokio::task::JoinError> {
         self.client.revoke();
         self.monitor.abort();
         match (&mut self.monitor).await {

@@ -124,6 +124,17 @@ impl ApiLease {
             _lease: lease,
         }
     }
+
+    /// Compatibility-only lease retirement. The production Client uses the
+    /// ref CoreActor, not this extra facade cache. Keep its sole monitor
+    /// owned until its revocation has actually completed.
+    pub(crate) async fn stop(self) {
+        if let Err(error) = self._lease.stop().await
+            && let Ok(panic) = error.try_into_panic()
+        {
+            std::panic::resume_unwind(panic);
+        }
+    }
 }
 
 #[cfg(test)]
