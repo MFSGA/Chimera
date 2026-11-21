@@ -27,6 +27,9 @@ pub trait ServiceCommandPort: Send + Sync + 'static {
     async fn command(&self, command: ServiceCommand) -> Result<(), ServiceCommandError>;
     async fn command_settled(&self) -> bool;
     async fn try_reap_finished(&self) -> bool;
+    /// Only the legacy fallback needs this extra ownership drain: the ref
+    /// ServiceActor already owns its shutdown through TaskTracker.
+    async fn drain_legacy_on_shutdown(&self) {}
     async fn uninstall(&self) -> anyhow::Result<()>;
     async fn daemon_not_running(&self) -> bool;
 }
@@ -50,6 +53,9 @@ impl ServiceCommandPort for ServiceCommandActor {
     }
     async fn try_reap_finished(&self) -> bool {
         Self::try_reap_finished(self).await
+    }
+    async fn drain_legacy_on_shutdown(&self) {
+        Self::drain_legacy_on_shutdown(self).await
     }
     async fn uninstall(&self) -> anyhow::Result<()> {
         Self::uninstall(self).await

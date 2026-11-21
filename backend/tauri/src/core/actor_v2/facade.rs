@@ -1312,6 +1312,13 @@ impl CoreFacade {
                 tracing::warn!(%error, "local executor shutdown also failed");
             }
         }
+        // The production facade delegates Service to the ref ServiceActor,
+        // whose separate TaskTracker watcher already drains it. Only a
+        // facade constructed without that router (legacy/test fallback)
+        // must explicitly join its retained elevated helper here.
+        if self.core_router.is_none() {
+            self.service_commands.drain_legacy_on_shutdown().await;
+        }
         result
     }
 
