@@ -6,6 +6,7 @@ pub mod core_version;
 pub mod elevation;
 pub mod mutation;
 pub mod net;
+pub mod ports;
 pub mod profiles;
 pub mod publish;
 pub mod runtime;

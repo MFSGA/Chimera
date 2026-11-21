@@ -675,7 +675,7 @@ impl CoreManager {
             .lifecycle
             .port_resolver
             .resolve_candidate(clash)
-            .map_err(RuntimeRestartError::Prepare)?;
+            .map_err(|source| RuntimeRestartError::Prepare(source.into()))?;
 
         let revision = self
             .lifecycle

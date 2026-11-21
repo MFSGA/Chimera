@@ -134,6 +134,20 @@ pub enum RuntimeError {
         failure: CoreFailure,
     },
 
+    #[snafu(display("could not publish the runtime configuration: {source}"))]
+    PublishRuntime {
+        source: crate::publish::PublishRuntimeError,
+    },
+
+    #[snafu(display("could not resolve the ports of the runtime: {source}"))]
+    ResolvePort {
+        source: crate::ports::PortResolveError,
+    },
+
+    /// The core restored its previous configuration; this is not a successful apply.
+    #[snafu(display("the core would not start this configuration and kept the previous one"))]
+    CoreRolledBack { reason: Option<String> },
+
     #[snafu(display("the committed configuration is not in effect: {reason}"))]
     ConfigurationNotInEffect { reason: String },
 
@@ -191,6 +205,9 @@ impl RuntimeError {
             Self::ShuttingDown
             | Self::OwnerUnresponsive { .. }
             | Self::ConfigurationNotInEffect { .. }
+            | Self::PublishRuntime { .. }
+            | Self::ResolvePort { .. }
+            | Self::CoreRolledBack { .. }
             | Self::CoreRejectedConfig { .. }
             | Self::CheckUnavailable { .. }
             | Self::ServiceHostsCore
@@ -253,6 +270,30 @@ mod tests {
         assert_eq!(unavailable_wire["kind"], "check_unavailable");
         assert_eq!(unavailable_wire["reason"]["cause"], "backend");
         assert_eq!(unavailable_wire["reason"]["retryable"], true);
+    }
+
+    #[test]
+    fn upstream_port_resolution_failure_stays_typed_in_runtime_error() {
+        let error = RuntimeError::ResolvePort {
+            source: crate::ports::PortResolveError::PortConflict {
+                first: crate::ports::PortField::Mixed,
+                second: crate::ports::PortField::Redir,
+                port: 7890,
+            },
+        };
+        assert_eq!(
+            serde_json::to_value(&error).unwrap(),
+            serde_json::json!({
+                "kind": "resolve_port",
+                "source": {
+                    "kind": "port_conflict",
+                    "first": "mixed",
+                    "second": "redir",
+                    "port": 7890,
+                }
+            })
+        );
+        assert_eq!(error.core_failure(), None);
     }
 
     #[test]
