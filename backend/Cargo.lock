@@ -1215,6 +1215,7 @@ dependencies = [
  "serde_yaml_ng",
  "similar",
  "slab",
+ "snafu",
  "specta",
  "struct-patch",
  "strum",
