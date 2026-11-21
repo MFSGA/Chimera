@@ -1,5 +1,14 @@
 # ref 对齐进度
 
+## DIFF-144（Runtime Reconciler）：生产执行前读取权威 Source 版本与内容身份（2026-11-21）
+
+- **固定 ref/唯一执行所有权**：保持 `ref@c4b35e04870a9caa53f21d10af6fcfde4a6f4c01` 不变，对齐上游 `reconciler/{workflow.rs,apply.rs}` 的最新提交目标防护；没有创建第二个 Runtime Actor、分支或工作树。新的 `ApplyChecked` 仍由已有 `CoreLifecycleClient` 的唯一 mutating 命令槽调用 CoreFacade；继续维持上轮的原字节提交、Core 修订 CAS、Host generation CAS 及确认后出版。
+- **权威目标身份读取器 `client/reconciler/authority.rs`**：定义必须显式注入的 `RuntimeSourceAuthority`、`LiveSourceAuthority`，在执行前读取已提交 Application/Clash 文档+单调版本、Profiles 文档及当前依赖闭包内的托管文件，再通过与上游一致的 `RuntimeInputs::target_key()` 重算完整目标身份。Profiles 文档与托管内容统一在原 `ProfileContentReader::committed()` 读锁内读取，防止 Profiles 写事务的文件提升与文档发布之间出现混搭。Application、Clash 在读取前后各采样一次，Profiles 在释放读锁后再检查一次版本；任何版本变动、内容摘要不匹配、托管文件读失败或缺失校验器都明确拒绝 Core Apply，不做隐式回退或重新构建另一份配置。读取器只观察源，不持有任何 Core mutation owner。
+- **避免写 Actor 循环等待**：`ApplicationClient::committed_runtime_source()`、`ClashConfigClient::committed_runtime_source()` 从已有只读 `StateSnapshot` 一次性读取 `(document,version)`，不向可能正在等待 CoreLifecycle 的源 Actor 发送 `get` RPC。测试的 Static 后端同样在一把锁下返回内容及版本。
+- **执行链安全装配**：`CoreLifecycleWorkflow::Command::ApplyChecked` 现在强制携带 Authority port，并在已取得唯一 CoreLifecycle 执行槽后、调用 `CoreLifecyclePort::reconcile_prepared` 之前执行 `verify(domain,version,checked_target)`；错误直接终止、不会提交 Core。生产 `CoreLifecycleClient::spawn_with_profiles_and_content` 将 Application/Clash Source 快照与 Profiles 内容读锁配成唯一可信 `LiveSourceAuthority`，组合根 `client/mod.rs` 注入 `FsProfileContentSource(paths.app_profiles_dir())`。正式 `apply_checked_committed()` 不接受调用者提供的伪造/放行读取器；无安装时明确失败。仅测试内部 helper 可以提供确定性的模拟 Authority，验证 mailbox 顺序及拒绝路径。
+- **验收**：`cargo check --manifest-path backend/Cargo.toml -p chimera --lib` 通过；`cargo test -p chimera --lib client::reconciler::` **61/61**、`-p chimera --lib client::core_lifecycle::tests::` **132/132**、`-p chimera-core --lib` **426/426**。新增实时 Source Authority 测试覆盖相同提交目标、错误版本、错误目标、托管文件字节变化、文件缺失和 Profile 版本单调变动；Actor 测试验证邮箱版本没有变化但权威内容变化时拒绝 Core；生产装配测试用实际 Profiles state manager 和组合时注入的 Source 读取器，确认 Profiles 新版本的通知即使延迟也不会重复执行旧 Checked Runtime。`rustfmt`、Clippy 和 GPG 签名以实际提交为准。
+- **明确未切换项**：本轮是已经接入 CoreLifecycle 唯一执行槽的真实权威验证及生产组装，**但 `MutationCoordinator` 仍使用 `legacy_check::CandidateCheck`，生产尚未调用新 `apply_checked_committed`**。新 `CandidateCheck` 还须与 `LocalRuntimeHost` 共享 Runtime revision/已确认端口基线；上游 staged content 集合与提交后权威 dependency closure 的目标身份规则需要统一；同时需处理提交与实际应用之间的并发 Source 更新、Service S2 Owner/Host 迁移和 Effects，完成整个 Actor mailbox 后才能安全切换生产 Source Gate 并清理 `legacy_*`。未执行真机 Service、全平台 GUI E2E 或发布包验收。
+
 ## DIFF-143（Runtime Reconciler）：接通原字节 Core Apply 与单一 Actor 执行路径（2026-11-21）
 
 - **基准与所有权**：固定 `ref@c4b35e04870a9caa53f21d10af6fcfde4a6f4c01` 未修改。对照 `ref/client/reconciler/{apply.rs,workflow.rs,mod.rs}` 和 `actor_v2/facade.rs::reconcile`，继续使用现有 CoreLifecycle 作为唯一 Runtime mutating owner，未启动第二个 Actor、未创建分支或 worktree。
