@@ -16,17 +16,8 @@ use chimera_utils::core::CoreType;
 /// It has no mutable Core state and cannot trigger an apply or publication.
 pub type CoreSpecResolver = dyn Fn(&ClashCore) -> Result<CoreSpec, CoreSpecError> + Send + Sync;
 
-#[derive(Debug, thiserror::Error)]
-pub enum CoreSpecError {
-    #[error("could not find the {core} core binary: {source}")]
-    FindCoreBinary {
-        core: ClashCore,
-        #[source]
-        source: std::io::Error,
-    },
-    #[error("core executable path is not valid UTF-8: {}", .path.to_string_lossy())]
-    InvalidPath { path: PathBuf },
-}
+// The typed source error now lives in the shared ref values layer.
+pub use chimera_contracts::core_spec::CoreSpecError;
 
 /// Ref's typed choice to the concrete core process manager identity.
 /// `ChimeraClientAlpha` uses the ChimeraClient manager kind with an independent

@@ -26,15 +26,9 @@ use chimera_ipc::api::{
     status::CoreStateDetail,
 };
 
-/// Which controller owns the runtime. The app perceives the difference in
-/// exactly two places: this tag on the endpoint slot, and the handoff
-/// protocol.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, specta::Type)]
-#[serde(rename_all = "snake_case")]
-pub enum ExecutionHost {
-    Local,
-    Service,
-}
+// The pinned upstream execution-host identity lives in the shared runtime
+// values layer; retain this path for existing CoreActor endpoint consumers.
+pub use chimera_contracts::execution_host::ExecutionHost;
 
 /// The host's canonical core status, projected field by field for the app.
 /// No field here is ever derived by the router itself.

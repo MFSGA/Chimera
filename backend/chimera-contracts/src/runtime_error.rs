@@ -104,6 +104,13 @@ pub enum RuntimeError {
         failure: CoreFailure,
     },
 
+    #[snafu(display("could not move the runtime to the {host:?} execution host: {failure}"))]
+    MoveHost {
+        host: crate::execution_host::ExecutionHost,
+        #[snafu(source)]
+        failure: CoreFailure,
+    },
+
     #[snafu(display("could not install the service: {failure}"))]
     InstallService {
         #[snafu(source)]
@@ -132,6 +139,26 @@ pub enum RuntimeError {
     UninstallService {
         #[snafu(source)]
         failure: CoreFailure,
+    },
+
+    #[snafu(display("could not find the core to run: {source}"))]
+    ResolveCoreBinary {
+        source: crate::core_spec::CoreSpecError,
+    },
+
+    #[snafu(display("could not install the core binary: {source}"))]
+    InstallCoreBinary {
+        source: crate::core_install::InstallCoreBinaryError,
+    },
+
+    #[snafu(display("could not prepare the service install command: {source}"))]
+    PrepareServiceInstallPrompt {
+        source: crate::service::ServiceCommandError,
+    },
+
+    #[snafu(display("could not read the version of the core: {source}"))]
+    ReadCoreVersion {
+        source: crate::core_version::CoreVersionError,
     },
 
     #[snafu(display("could not publish the runtime configuration: {source}"))]
@@ -201,11 +228,16 @@ impl RuntimeError {
             | Self::StopService { failure }
             | Self::RestartService { failure }
             | Self::UninstallService { failure }
+            | Self::MoveHost { failure, .. }
             | Self::SubmissionUnobserved { failure } => Some(failure),
             Self::ShuttingDown
             | Self::OwnerUnresponsive { .. }
             | Self::ConfigurationNotInEffect { .. }
             | Self::PublishRuntime { .. }
+            | Self::ResolveCoreBinary { .. }
+            | Self::InstallCoreBinary { .. }
+            | Self::PrepareServiceInstallPrompt { .. }
+            | Self::ReadCoreVersion { .. }
             | Self::ResolvePort { .. }
             | Self::CoreRolledBack { .. }
             | Self::CoreRejectedConfig { .. }
@@ -218,7 +250,11 @@ impl RuntimeError {
     }
 
     pub fn core_kind(&self) -> Option<CoreErrorKind> {
-        self.core_failure().and_then(|failure| failure.kind)
+        if matches!(self, Self::ResolveCoreBinary { .. }) {
+            Some(CoreErrorKind::BinaryNotFound)
+        } else {
+            self.core_failure().and_then(|failure| failure.kind)
+        }
     }
 
     pub fn retryable(&self) -> bool {
@@ -294,6 +330,44 @@ mod tests {
             })
         );
         assert_eq!(error.core_failure(), None);
+    }
+
+    #[test]
+    fn ref_host_change_keeps_real_failure_kind_and_host_wire() {
+        let failure = CoreFailure {
+            kind: Some(CoreErrorKind::BackendUnavailable),
+            message: "service endpoint lost".into(),
+            retryable: true,
+            operation_id: Some("service-handoff-7".into()),
+        };
+        let err = RuntimeError::MoveHost {
+            host: crate::execution_host::ExecutionHost::Service,
+            failure,
+        };
+        assert_eq!(err.core_kind(), Some(CoreErrorKind::BackendUnavailable));
+        assert!(err.retryable());
+        let wire = serde_json::to_value(err).unwrap();
+        assert_eq!(wire["kind"], "move_host");
+        assert_eq!(wire["host"], "service");
+        assert_eq!(wire["failure"]["kind"], "backend_unavailable");
+        assert_eq!(wire["failure"]["operation_id"], "service-handoff-7");
+    }
+
+    #[test]
+    fn missing_core_binary_is_typed_and_not_plausibly_retryable() {
+        let error = RuntimeError::ResolveCoreBinary {
+            source: crate::core_spec::CoreSpecError::FindCoreBinary {
+                core: chimera_config::application::ClashCore::ChimeraClientAlpha,
+                source: std::io::Error::new(std::io::ErrorKind::NotFound, "missing core"),
+            },
+        };
+        assert_eq!(error.core_kind(), Some(CoreErrorKind::BinaryNotFound));
+        assert!(!error.retryable());
+        let wire = serde_json::to_value(error).unwrap();
+        assert_eq!(wire["kind"], "resolve_core_binary");
+        assert_eq!(wire["source"]["kind"], "find_core_binary");
+        assert_eq!(wire["source"]["core"], "chimera-client-alpha");
+        assert!(wire["source"].get("source").is_none());
     }
 
     #[test]
