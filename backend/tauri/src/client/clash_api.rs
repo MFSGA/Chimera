@@ -44,15 +44,22 @@ pub(crate) fn proxy_core_client(core: Arc<dyn CoreLifecyclePort>) -> ProxyCoreCl
 }
 
 fn into_mutation_outcome(outcome: ProxyMutationOutcome) -> MutationOutcome<()> {
-    let degradations = outcome
-        .degradations
+    // The shared core now returns ref's typed Committed/CommittedDegraded
+    // outcome. Only the existing Tauri legacy wire still needs a flat code.
+    let (_, typed) = outcome.into_parts();
+    let degradations = typed
         .into_iter()
         .map(|degradation| Degradation {
             phase: match degradation.phase {
+                ProxyDegradationPhase::ProfileMaterialization => {
+                    DegradationPhase::ProfileMaterialization
+                }
+                ProxyDegradationPhase::RuntimeBuild => DegradationPhase::RuntimeBuild,
+                ProxyDegradationPhase::RuntimeApply => DegradationPhase::RuntimeApply,
                 ProxyDegradationPhase::SystemEffect => DegradationPhase::SystemEffect,
                 ProxyDegradationPhase::UiEffect => DegradationPhase::UiEffect,
             },
-            code: degradation.code,
+            code: degradation.reason.code().into(),
             message: degradation.message,
             retryable: degradation.retryable,
         })
@@ -233,5 +240,36 @@ impl ChimeraClient {
 
     pub(crate) fn notify_proxy_rearranged(&self) {
         self.inner.proxies.notify_rearranged();
+    }
+}
+
+#[cfg(test)]
+mod shared_proxy_outcome_tests {
+    use super::*;
+    use chimera_contracts::runtime::{
+        Degradation as SharedDegradation, DegradationPhase as SharedPhase,
+        DegradationReason as SharedReason, InterruptFailure,
+    };
+
+    #[test]
+    fn shared_typed_proxy_reason_keeps_the_existing_desktop_wire() {
+        let typed = ProxyMutationOutcome::from_parts(
+            (),
+            vec![SharedDegradation {
+                phase: SharedPhase::SystemEffect,
+                reason: SharedReason::ProxyInterruptionFailed {
+                    cause: InterruptFailure::Protocol,
+                },
+                message: "delete rejected".into(),
+                retryable: false,
+            }],
+        );
+        let projected = into_mutation_outcome(typed);
+        let json = serde_json::to_value(&projected).unwrap();
+        assert_eq!(json["status"], "committed_degraded");
+        assert_eq!(json["degradations"][0]["code"], "proxy_interruption_failed");
+        assert_eq!(json["degradations"][0]["phase"], "system_effect");
+        assert_eq!(json["degradations"][0]["retryable"], false);
+        assert!(json["degradations"][0].get("reason").is_none());
     }
 }

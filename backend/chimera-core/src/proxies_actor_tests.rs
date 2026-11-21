@@ -303,7 +303,16 @@ async fn an_unpin_whose_interruption_fails_is_degraded_not_failed() {
         .await
         .unwrap();
     assert_eq!(outcome.degradations().len(), 1);
-    assert_eq!(outcome.degradations()[0].code, "proxy_interruption_failed");
+    assert_eq!(
+        outcome.degradations()[0].reason.code(),
+        "proxy_interruption_failed"
+    );
+    assert!(matches!(
+        outcome.degradations()[0].reason,
+        ProxyDegradationReason::ProxyInterruptionFailed {
+            cause: InterruptFailure::Protocol
+        }
+    ));
     assert!(
         outcome.degradations()[0]
             .message
@@ -543,7 +552,10 @@ async fn successful_mutation_with_failed_refresh_is_explicit_and_clears_cache() 
         .select(GROUP.into(), NODE.into(), ProxyChangeBreakMode::All)
         .await
         .unwrap();
-    assert_eq!(outcome.degradations()[0].code, "proxy_cache_refresh_failed");
+    assert_eq!(
+        outcome.degradations()[0].reason.code(),
+        "proxy_cache_refresh_failed"
+    );
     assert!(client.snapshot().nodes.is_empty());
     assert_eq!(
         fixture
@@ -687,7 +699,10 @@ async fn interruption_failure_preserves_selection_and_refreshes_cache() {
             .await
             .unwrap();
         assert_eq!(outcome.degradations().len(), 1);
-        assert_eq!(outcome.degradations()[0].code, "proxy_interruption_failed");
+        assert_eq!(
+            outcome.degradations()[0].reason.code(),
+            "proxy_interruption_failed"
+        );
         assert!(!outcome.degradations()[0].retryable);
         assert_eq!(*fixture.selected.lock().unwrap(), NODE);
         assert!(!client.snapshot().nodes.is_empty());
@@ -1042,4 +1057,18 @@ async fn snapshot_from_replaced_but_not_yet_revoked_core_is_not_published() {
     );
     assert!(client.snapshot().nodes.is_empty());
     server.abort();
+}
+
+#[test]
+fn proxy_interruption_causes_keep_the_upstream_classification() {
+    for (error, expected) in [
+        (ApiError::Stale, InterruptFailure::Stale),
+        (ApiError::Timeout, InterruptFailure::Timeout),
+        (
+            ApiError::Unavailable("disconnected".into()),
+            InterruptFailure::Unavailable,
+        ),
+    ] {
+        assert_eq!(interrupt_failure(&anyhow::Error::new(error)), expected);
+    }
 }

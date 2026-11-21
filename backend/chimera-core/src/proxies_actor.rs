@@ -19,10 +19,31 @@ use tokio::{sync::watch, time::Instant};
 use tokio_util::{sync::CancellationToken, task::TaskTracker};
 
 use crate::{
-    actor_v2::api::ApiClient,
+    actor_v2::api::{ApiClient, ApiError},
     clash::proxies::{NativeProxies as Proxies, ProxyProviderSummary},
     connections::{ConnectionScope, interrupt_connections},
 };
+
+// The ref's source-committed outcome is owned by shared Runtime Values,
+// not redefined in the proxy Actor and adapted again into a string DTO.
+use chimera_contracts::runtime::MutationOutcome;
+pub use chimera_contracts::runtime::{
+    Degradation as ProxyDegradation, DegradationPhase as ProxyDegradationPhase,
+    DegradationReason as ProxyDegradationReason, InterruptFailure,
+};
+pub type ProxyMutationOutcome = MutationOutcome<()>;
+
+/// Preserve the typed cause of a source-instance interruption instead of
+/// reducing every controller failure to the same string code.
+fn interrupt_failure(error: &anyhow::Error) -> InterruptFailure {
+    match error.downcast_ref::<ApiError>() {
+        Some(ApiError::Stale) => InterruptFailure::Stale,
+        Some(ApiError::Timeout) => InterruptFailure::Timeout,
+        Some(ApiError::Unavailable(_)) => InterruptFailure::Unavailable,
+        Some(ApiError::Protocol(_)) => InterruptFailure::Protocol,
+        None => InterruptFailure::Unavailable,
+    }
+}
 
 /// Host adapter for obtaining the current instance-bound controller lease.
 /// The actor and its cache remain independent of Tauri and Service IPC.
@@ -59,31 +80,6 @@ impl CoreClient {
 
     async fn api_client(&self) -> Result<ApiClient> {
         self.0.api_client().await
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ProxyDegradationPhase {
-    SystemEffect,
-    UiEffect,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ProxyDegradation {
-    pub phase: ProxyDegradationPhase,
-    pub code: String,
-    pub message: String,
-    pub retryable: bool,
-}
-
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct ProxyMutationOutcome {
-    pub degradations: Vec<ProxyDegradation>,
-}
-
-impl ProxyMutationOutcome {
-    pub fn degradations(&self) -> &[ProxyDegradation] {
-        &self.degradations
     }
 }
 
@@ -441,7 +437,9 @@ impl State {
         if let Err(error) = interruption {
             degradations.push(ProxyDegradation {
                 phase: ProxyDegradationPhase::SystemEffect,
-                code: "proxy_interruption_failed".into(),
+                reason: ProxyDegradationReason::ProxyInterruptionFailed {
+                    cause: interrupt_failure(&error),
+                },
                 message: format!(
                     "{}, but source-instance connection interruption failed: {error}",
                     change.done()
@@ -458,12 +456,12 @@ impl State {
                 .await?;
             degradations.push(ProxyDegradation {
                 phase: ProxyDegradationPhase::UiEffect,
-                code: "proxy_cache_refresh_failed".into(),
+                reason: ProxyDegradationReason::ProxyCacheRefreshFailed,
                 message: format!("{}, but cache refresh failed: {error}", change.done()),
                 retryable: true,
             });
         }
-        Ok(ProxyMutationOutcome { degradations })
+        Ok(ProxyMutationOutcome::from_parts((), degradations))
     }
 }
 
