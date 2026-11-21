@@ -1,5 +1,13 @@
 # ref 对齐进度
 
+## DIFF-114：ServiceActor 超时命令与 Jobs 任务 JoinHandle 退出所有权对齐（2026-11-20）
+
+- **固定参考与迁移目标**：参照 `ref@c4b35e048` 的 `backend/nyanpasu-core/src/actor_v2/service_actor.rs::{tracked,reap_outstanding,post_stop}` 和 `backend/nyanpasu-runtime/crates/nyanpasu-jobs/src/{actor.rs,lib.rs}`，迁移真实 Service/Jobs 任务停止时的所有权与异常传播边界。风险 **L2**：高权限服务安装/更新/停止、Journal 关闭和正在运行的 Job 都可能跨调用者超时继续执行；不能通过单纯取消来声称 OS 状态已结算。按用户近期“专心迁移，不用验证”的要求，没有单独运行功能测试、整库构建、实际多平台测试或打包；提交钩子的 Rustfmt/Clippy 仅属仓库强制提交流程。
+- **ServiceActor 超时后台命令不得脱离所有权**：现有 `ServiceActorState::tracked()` 已按照上游将超过 `command_timeout` 的变更任务放入 `outstanding: Option<(ServiceCommandKind,JoinHandle<...>)>`，后续消息通过 `refuse_while_running()` 拦截冲突变更；但旧 `post_stop` 只中断 HealthTimer，然后丢弃 `outstanding`，这会让仍在执行的高权限 OS 命令脱离 Actor。现在 `post_stop` 在停止 timer 后，**take 并 await 该 outstanding JoinHandle 至真正结束，不调用 abort**，记录成功或业务失败、区分取消与真正 Panic；真实 Panic 通过 `JoinError::try_into_panic` / `resume_unwind` 向 Actor 监督机制传播。Timer 意外 Panic 也不再直接忽略。这样一次 Service 变更在退出时依旧只有一个明确的 Owner，保持上游已存在的命令防重入及状态门禁；如果底层 OS 命令永久不返回，Stop 也会等待，并不虚构安全取消语义。
+- **JobsActor 执行、维护与退出排空**：此前 `Msg::Done`、`Msg::MaintenanceDone` 和 `post_stop` 多次 `let _ = task.await` 静默忽略 `JoinError`。新增 `collect_join_failure`：对已取消的任务仅警告，对真正 Panic 保留原始 payload；普通完成和维护任务在撤销 run/fault/log 状态后再传播不可恢复的 Panic。`post_stop` 先 cancel TickTimer，再 await 所有已接纳 Job（不 `abort`）和 Maintenance；**收集首个真实 Panic，但要等所有任务都归还所有权且发送 `closed` 信号后再 resume_unwind**，避免传播第一处故障时留下其他任务继续写入 Journal。已由 DIFF-112 转为 durable `Outcome::Failed("panicked")` 的业务 Handler Panic 仍属于正常完成，不会上升到 fatal。
+- **JobsService 生命周期和 Journal Worker**：`start_with_clock` 的 Journal 初始化失败路径和 `JobsService::drain` 过去也忽略 Worker/Actor 的 `JoinError`。现在在关闭路径分别归还 Actor 及 Journal Worker，直到两者全部完成才传播原始 fatal panic，保留 `shutdown_timeout` 在超时后保留可重试的 owner handle 的既有合同；日志与已创建的 RunID 不会因错误传播被提前丢弃。原有主动 `Shutdown` 发送取消信号后继续排空协作式任务、阻止新 run，未改变权限、数据库文件或服务命令顺序。
+- **剩余差异与风险**：这是基于上游 Service 命令所有权原则和 Jobs 关闭模型的 Chimera 补齐，不是声称上游本来逐字传播所有 Jobs Panic。JobsActor 和 ServiceActor 可能因长时间未完成的后台命令延迟退出，调用方超时仍只表示其等待已耗尽，不能将正在执行的命令重试为新 OS 写操作。后续需要对未跟踪的后台 spawn、Actor supervision 的终止回收进一步迁移。**本轮未独立验证运行行为**；若回滚，应成组撤回此轮 Join 所有权改变，保留现有配置、Profiles、持久化决议、migration-state、快照和 `.corrupt-*` 证据。`ref` 与 Runtime gitlink 不变。
+
 ## DIFF-113：Effects 与 CoreLifecycle Actor 停止时的 in-flight 任务所有权对齐（2026-11-20）
 
 - **固定上游/核心差异**：依据 `ref@c4b35e048` 的 `backend/nyanpasu-core/src/client/effects/actor.rs::post_stop` 以及 `backend/nyanpasu-core/src/actor_v2/service_actor.rs` 的 JoinHandle fatal panic 传播语义。风险 **L2**（OS 副作用/系统代理与透明代理切换、Core/Profile 事务在停止时被抢断、Actor 意外终止）；只修改两个已有拥有者的真实生产生命周期，保留现有 `ref` 和 Runtime 子模块指针。用户此前要求**只做代码迁移、不额外测试**，故不主动运行单测、全量构建、打包或 CI；强制提交钩子的 Rustfmt/Clippy 属于提交步骤而非独立 E2E 验收。
