@@ -5,11 +5,13 @@ import { Card, CardContent } from '@chimera/ui/card';
 import { useDndGridContext } from '@chimera/ui/dnd-grid';
 import TextMarquee from '@chimera/ui/text-marquee';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@chimera/ui/tooltip';
+import { useMutationState } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
 import DataUsageRounded from '~icons/material-symbols/data-usage-rounded';
 import RefreshRounded from '~icons/material-symbols/refresh-rounded';
 import { useReducedMotion } from 'motion/react';
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { profileRefreshGuard } from '@/features/dashboard/widget-operation-guard';
 import * as m from '@/paraglide/messages';
 import { getLocale } from '@/paraglide/runtime';
 import { formatDate, formatRelativeTime } from '@/utils/date';
@@ -191,6 +193,15 @@ function SubscriptionQuotaLive({
     ? resolveProfileTarget(profiles, query.data.current, config.target)
     : null;
   const profile = resolution?.kind === 'selected' ? resolution.profile : null;
+  const pendingProfileIds = useMutationState({
+    filters: { mutationKey: ['updateProfile'], status: 'pending' },
+    select: (mutation) =>
+      (mutation.state.variables as { uid?: string } | undefined)?.uid,
+  });
+  const profileRefreshPending =
+    profile != null &&
+    (pendingProfileIds.includes(profile.uid) ||
+      profileRefreshGuard.isPending(profile.uid));
   const subscription =
     profile?.type === 'config' && profile.config.type === 'file'
       ? profile.config.source.type === 'remote'
@@ -208,58 +219,64 @@ function SubscriptionQuotaLive({
       !profile ||
       disabled ||
       update.isPending ||
+      profileRefreshPending ||
       checkingStatus ||
       (actionState === 'unconfirmed' && !checkedAfterUnconfirmed)
     ) {
       return;
     }
-    setActionState('idle');
-    setCheckedAfterUnconfirmed(false);
-    setCheckFailed(false);
-    try {
-      const outcome = await update.mutateAsync({
-        uid: profile.uid,
-        option: null,
-      });
-      setActionState(
-        outcome.status === 'committed_degraded' ? 'degraded' : 'idle',
-      );
-    } catch (error) {
-      setActionState(
-        error instanceof MutationUnconfirmedError ? 'unconfirmed' : 'failed',
-      );
-      if (error instanceof MutationUnconfirmedError) {
-        setCheckingStatus(true);
-        try {
-          const checked = await query.refetch();
-          setCheckFailed(checked.isError || checked.data == null);
-        } catch {
-          setCheckFailed(true);
-        } finally {
-          setCheckingStatus(false);
+    await profileRefreshGuard.run(profile.uid, async () => {
+      setActionState('idle');
+      setCheckedAfterUnconfirmed(false);
+      setCheckFailed(false);
+      try {
+        const outcome = await update.mutateAsync({
+          uid: profile.uid,
+          option: null,
+        });
+        setActionState(
+          outcome.status === 'committed_degraded' ? 'degraded' : 'idle',
+        );
+      } catch (error) {
+        setActionState(
+          error instanceof MutationUnconfirmedError ? 'unconfirmed' : 'failed',
+        );
+        if (error instanceof MutationUnconfirmedError) {
+          setCheckingStatus(true);
+          try {
+            const checked = await query.refetch();
+            setCheckFailed(checked.isError || checked.data == null);
+          } catch {
+            setCheckFailed(true);
+          } finally {
+            setCheckingStatus(false);
+          }
         }
       }
-    }
+    });
   };
 
   const checkStatus = async () => {
-    if (disabled || checkingStatus) return;
-    setCheckingStatus(true);
-    setCheckFailed(false);
-    try {
-      const result = await query.refetch();
-      if (result.isError || result.data == null) {
+    if (disabled || checkingStatus || profileRefreshPending) return;
+    if (!profile) return;
+    await profileRefreshGuard.run(profile.uid, async () => {
+      setCheckingStatus(true);
+      setCheckFailed(false);
+      try {
+        const result = await query.refetch();
+        if (result.isError || result.data == null) {
+          setCheckFailed(true);
+          setCheckedAfterUnconfirmed(false);
+        } else {
+          setCheckedAfterUnconfirmed(true);
+        }
+      } catch {
         setCheckFailed(true);
         setCheckedAfterUnconfirmed(false);
-      } else {
-        setCheckedAfterUnconfirmed(true);
+      } finally {
+        setCheckingStatus(false);
       }
-    } catch {
-      setCheckFailed(true);
-      setCheckedAfterUnconfirmed(false);
-    } finally {
-      setCheckingStatus(false);
-    }
+    });
   };
 
   const statusText = () => {
@@ -363,8 +380,17 @@ function SubscriptionQuotaLive({
                     className="size-7"
                     icon
                     aria-label={refreshLabel}
-                    disabled={disabled || update.isPending || checkingStatus}
-                    loading={update.isPending || checkingStatus}
+                    disabled={
+                      disabled ||
+                      update.isPending ||
+                      profileRefreshPending ||
+                      checkingStatus
+                    }
+                    loading={
+                      update.isPending ||
+                      profileRefreshPending ||
+                      checkingStatus
+                    }
                     onClick={needsCheck ? checkStatus : refresh}
                   >
                     <RefreshRounded className="size-4" />

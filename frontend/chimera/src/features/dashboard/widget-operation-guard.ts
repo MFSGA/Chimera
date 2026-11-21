@@ -22,3 +22,7 @@ export function createWidgetOperationGuard() {
 }
 
 export const providerUpdateGuard = createWidgetOperationGuard();
+
+/** Subscription Quota and Schedule widgets can target the same profile.
+ * A refresh and its uncertain-result reconciliation are one operation. */
+export const profileRefreshGuard = createWidgetOperationGuard();

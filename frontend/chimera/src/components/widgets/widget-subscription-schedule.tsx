@@ -12,7 +12,7 @@ import { useDndGridContext } from '@chimera/ui/dnd-grid';
 import TextMarquee from '@chimera/ui/text-marquee';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@chimera/ui/tooltip';
 import { cn } from '@chimera/utils';
-import { useQueryClient } from '@tanstack/react-query';
+import { useMutationState, useQueryClient } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
 import ErrorOutlineRounded from '~icons/material-symbols/error-outline-rounded';
 import EventRepeatRounded from '~icons/material-symbols/event-repeat-rounded';
@@ -21,6 +21,7 @@ import SyncRounded from '~icons/material-symbols/sync-rounded';
 import dayjs from 'dayjs';
 import { motion, useReducedMotion } from 'motion/react';
 import { useState } from 'react';
+import { profileRefreshGuard } from '@/features/dashboard/widget-operation-guard';
 import { isWidgetQueryReconciled } from '@/features/dashboard/widget-query-reconciliation';
 import * as m from '@/paraglide/messages';
 import type { WidgetComponentProps } from './consts';
@@ -134,6 +135,14 @@ function SubscriptionScheduleTarget({
   const [checkedAfterUnconfirmed, setCheckedAfterUnconfirmed] = useState(false);
   const [checkingStatus, setCheckingStatus] = useState(false);
   const [checkFailed, setCheckFailed] = useState(false);
+  const pendingProfileIds = useMutationState({
+    filters: { mutationKey: ['updateProfile'], status: 'pending' },
+    select: (mutation) =>
+      (mutation.state.variables as { uid?: string } | undefined)?.uid,
+  });
+  const profileRefreshPending =
+    pendingProfileIds.includes(profileUid) ||
+    profileRefreshGuard.isPending(profileUid);
   const activeRun = status.data?.active[0];
   const completed = latestFinishedRuns(
     runs.data?.pages.flatMap((page) => page.items) ?? [],
@@ -186,81 +195,86 @@ function SubscriptionScheduleTarget({
     if (
       disabled ||
       update.isPending ||
+      profileRefreshPending ||
       checkingStatus ||
       (actionState === 'unconfirmed' && !checkedAfterUnconfirmed)
     ) {
       return;
     }
-    setActionState('idle');
-    setCheckedAfterUnconfirmed(false);
-    setCheckFailed(false);
-    try {
-      const outcome = await update.mutateAsync({
-        uid: profileUid,
-        option: null,
-      });
-      setActionState(
-        outcome.status === 'committed_degraded' ? 'degraded' : 'idle',
-      );
-      await Promise.all([
-        queryClient.invalidateQueries({
-          queryKey: ['profile-sync-status-summary', profileUid],
-        }),
-        queryClient.invalidateQueries({
-          queryKey: ['profile-sync-runs-summary', profileUid],
-        }),
-        queryClient.invalidateQueries({
-          queryKey: ['profile-sync-runs', profileUid],
-        }),
-      ]);
-    } catch (error) {
-      setActionState(
-        error instanceof MutationUnconfirmedError ? 'unconfirmed' : 'failed',
-      );
-      if (error instanceof MutationUnconfirmedError) {
-        setCheckingStatus(true);
-        try {
-          const [statusResult, runsResult] = await Promise.all([
-            status.refetch(),
-            runs.refetch(),
-          ]);
-          setCheckFailed(
-            !isWidgetQueryReconciled(statusResult) ||
-              !isWidgetQueryReconciled(runsResult),
-          );
-        } catch {
-          setCheckFailed(true);
-        } finally {
-          setCheckingStatus(false);
+    await profileRefreshGuard.run(profileUid, async () => {
+      setActionState('idle');
+      setCheckedAfterUnconfirmed(false);
+      setCheckFailed(false);
+      try {
+        const outcome = await update.mutateAsync({
+          uid: profileUid,
+          option: null,
+        });
+        setActionState(
+          outcome.status === 'committed_degraded' ? 'degraded' : 'idle',
+        );
+        await Promise.all([
+          queryClient.invalidateQueries({
+            queryKey: ['profile-sync-status-summary', profileUid],
+          }),
+          queryClient.invalidateQueries({
+            queryKey: ['profile-sync-runs-summary', profileUid],
+          }),
+          queryClient.invalidateQueries({
+            queryKey: ['profile-sync-runs', profileUid],
+          }),
+        ]);
+      } catch (error) {
+        setActionState(
+          error instanceof MutationUnconfirmedError ? 'unconfirmed' : 'failed',
+        );
+        if (error instanceof MutationUnconfirmedError) {
+          setCheckingStatus(true);
+          try {
+            const [statusResult, runsResult] = await Promise.all([
+              status.refetch(),
+              runs.refetch(),
+            ]);
+            setCheckFailed(
+              !isWidgetQueryReconciled(statusResult) ||
+                !isWidgetQueryReconciled(runsResult),
+            );
+          } catch {
+            setCheckFailed(true);
+          } finally {
+            setCheckingStatus(false);
+          }
         }
       }
-    }
+    });
   };
 
   const checkStatus = async () => {
-    if (disabled || checkingStatus) return;
-    setCheckingStatus(true);
-    setCheckFailed(false);
-    try {
-      const [statusResult, runsResult] = await Promise.all([
-        status.refetch(),
-        runs.refetch(),
-      ]);
-      if (
-        !isWidgetQueryReconciled(statusResult) ||
-        !isWidgetQueryReconciled(runsResult)
-      ) {
+    if (disabled || checkingStatus || profileRefreshPending) return;
+    await profileRefreshGuard.run(profileUid, async () => {
+      setCheckingStatus(true);
+      setCheckFailed(false);
+      try {
+        const [statusResult, runsResult] = await Promise.all([
+          status.refetch(),
+          runs.refetch(),
+        ]);
+        if (
+          !isWidgetQueryReconciled(statusResult) ||
+          !isWidgetQueryReconciled(runsResult)
+        ) {
+          setCheckFailed(true);
+          setCheckedAfterUnconfirmed(false);
+        } else {
+          setCheckedAfterUnconfirmed(true);
+        }
+      } catch {
         setCheckFailed(true);
         setCheckedAfterUnconfirmed(false);
-      } else {
-        setCheckedAfterUnconfirmed(true);
+      } finally {
+        setCheckingStatus(false);
       }
-    } catch {
-      setCheckFailed(true);
-      setCheckedAfterUnconfirmed(false);
-    } finally {
-      setCheckingStatus(false);
-    }
+    });
   };
 
   return (
@@ -289,10 +303,11 @@ function SubscriptionScheduleTarget({
                 disabled={
                   disabled ||
                   update.isPending ||
+                  profileRefreshPending ||
                   checkingStatus ||
                   (actionState === 'unconfirmed' && !checkedAfterUnconfirmed)
                 }
-                loading={update.isPending}
+                loading={update.isPending || profileRefreshPending}
                 onClick={refresh}
               >
                 <RefreshRounded className="size-4" />
@@ -508,8 +523,8 @@ function SubscriptionScheduleTarget({
                 <Button
                   variant="basic"
                   className="h-7 min-w-0 self-start px-2 text-xs"
-                  disabled={disabled || checkingStatus}
-                  loading={checkingStatus}
+                  disabled={disabled || checkingStatus || profileRefreshPending}
+                  loading={checkingStatus || profileRefreshPending}
                   onClick={checkStatus}
                 >
                   {m.dashboard_widget_operation_check()}
