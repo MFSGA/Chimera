@@ -79,6 +79,8 @@ import { Route as mainMainSettingsClashCoreManagerIndexRouteImport } from './pag
 import { Route as mainMainSettingsClashCoreIndexRouteImport } from './pages/(main)/main/settings/clash/core/index'
 import { Route as mainMainSettingsClashNetworkIndexRouteImport } from './pages/(main)/main/settings/clash/network/index'
 import { Route as mainMainSettingsClashRuntimeIndexRouteImport } from './pages/(main)/main/settings/clash/runtime/index'
+import { Route as mainMainSettingsSystemProxyIndexRouteImport } from './pages/(main)/main/settings/system/proxy/index'
+import { Route as mainMainSettingsSystemServiceIndexRouteImport } from './pages/(main)/main/settings/system/service/index'
 
 const legacyRouteRoute = legacyRouteRouteImport.update({
   id: '/(legacy)',
@@ -466,6 +468,18 @@ const mainMainSettingsClashRuntimeIndexRoute =
     path: '/runtime/',
     getParentRoute: () => mainMainSettingsClashRouteRoute,
   } as any)
+const mainMainSettingsSystemProxyIndexRoute =
+  mainMainSettingsSystemProxyIndexRouteImport.update({
+    id: '/proxy/',
+    path: '/proxy/',
+    getParentRoute: () => mainMainSettingsSystemRouteRoute,
+  } as any)
+const mainMainSettingsSystemServiceIndexRoute =
+  mainMainSettingsSystemServiceIndexRouteImport.update({
+    id: '/service/',
+    path: '/service/',
+    getParentRoute: () => mainMainSettingsSystemRouteRoute,
+  } as any)
 
 export interface FileRoutesByFullPath {
   '/editor': typeof editorEditorRouteRouteWithChildren
@@ -496,7 +510,7 @@ export interface FileRoutesByFullPath {
   '/main/settings/chimera': typeof mainMainSettingsChimeraRouteRouteWithChildren
   '/main/settings/clash': typeof mainMainSettingsClashRouteRouteWithChildren
   '/main/settings/debug': typeof mainMainSettingsDebugRouteRouteWithChildren
-  '/main/settings/system': typeof mainMainSettingsSystemRouteRoute
+  '/main/settings/system': typeof mainMainSettingsSystemRouteRouteWithChildren
   '/main/settings/user-interface': typeof mainMainSettingsUserInterfaceRouteRoute
   '/main/settings/web-ui': typeof mainMainSettingsWebUiRouteRoute
   '/main/proxies/$name': typeof mainMainProxiesNameRoute
@@ -536,6 +550,8 @@ export interface FileRoutesByFullPath {
   '/main/settings/clash/core/': typeof mainMainSettingsClashCoreIndexRoute
   '/main/settings/clash/network/': typeof mainMainSettingsClashNetworkIndexRoute
   '/main/settings/clash/runtime/': typeof mainMainSettingsClashRuntimeIndexRoute
+  '/main/settings/system/proxy/': typeof mainMainSettingsSystemProxyIndexRoute
+  '/main/settings/system/service/': typeof mainMainSettingsSystemServiceIndexRoute
 }
 export interface FileRoutesByTo {
   '/editor': typeof editorEditorRouteRouteWithChildren
@@ -556,7 +572,7 @@ export interface FileRoutesByTo {
   '/main/settings/about': typeof mainMainSettingsAboutRouteRoute
   '/main/settings/chimera': typeof mainMainSettingsChimeraRouteRouteWithChildren
   '/main/settings/clash': typeof mainMainSettingsClashRouteRouteWithChildren
-  '/main/settings/system': typeof mainMainSettingsSystemRouteRoute
+  '/main/settings/system': typeof mainMainSettingsSystemRouteRouteWithChildren
   '/main/settings/user-interface': typeof mainMainSettingsUserInterfaceRouteRoute
   '/main/settings/web-ui': typeof mainMainSettingsWebUiRouteRoute
   '/main/proxies/$name': typeof mainMainProxiesNameRoute
@@ -596,6 +612,8 @@ export interface FileRoutesByTo {
   '/main/settings/clash/core': typeof mainMainSettingsClashCoreIndexRoute
   '/main/settings/clash/network': typeof mainMainSettingsClashNetworkIndexRoute
   '/main/settings/clash/runtime': typeof mainMainSettingsClashRuntimeIndexRoute
+  '/main/settings/system/proxy': typeof mainMainSettingsSystemProxyIndexRoute
+  '/main/settings/system/service': typeof mainMainSettingsSystemServiceIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -629,7 +647,7 @@ export interface FileRoutesById {
   '/(main)/main/settings/chimera': typeof mainMainSettingsChimeraRouteRouteWithChildren
   '/(main)/main/settings/clash': typeof mainMainSettingsClashRouteRouteWithChildren
   '/(main)/main/settings/debug': typeof mainMainSettingsDebugRouteRouteWithChildren
-  '/(main)/main/settings/system': typeof mainMainSettingsSystemRouteRoute
+  '/(main)/main/settings/system': typeof mainMainSettingsSystemRouteRouteWithChildren
   '/(main)/main/settings/user-interface': typeof mainMainSettingsUserInterfaceRouteRoute
   '/(main)/main/settings/web-ui': typeof mainMainSettingsWebUiRouteRoute
   '/(main)/main/proxies/$name': typeof mainMainProxiesNameRoute
@@ -669,6 +687,8 @@ export interface FileRoutesById {
   '/(main)/main/settings/clash/core/': typeof mainMainSettingsClashCoreIndexRoute
   '/(main)/main/settings/clash/network/': typeof mainMainSettingsClashNetworkIndexRoute
   '/(main)/main/settings/clash/runtime/': typeof mainMainSettingsClashRuntimeIndexRoute
+  '/(main)/main/settings/system/proxy/': typeof mainMainSettingsSystemProxyIndexRoute
+  '/(main)/main/settings/system/service/': typeof mainMainSettingsSystemServiceIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -741,6 +761,8 @@ export interface FileRouteTypes {
     | '/main/settings/clash/core/'
     | '/main/settings/clash/network/'
     | '/main/settings/clash/runtime/'
+    | '/main/settings/system/proxy/'
+    | '/main/settings/system/service/'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/editor'
@@ -801,6 +823,8 @@ export interface FileRouteTypes {
     | '/main/settings/clash/core'
     | '/main/settings/clash/network'
     | '/main/settings/clash/runtime'
+    | '/main/settings/system/proxy'
+    | '/main/settings/system/service'
   id:
     | '__root__'
     | '/(legacy)'
@@ -873,6 +897,8 @@ export interface FileRouteTypes {
     | '/(main)/main/settings/clash/core/'
     | '/(main)/main/settings/clash/network/'
     | '/(main)/main/settings/clash/runtime/'
+    | '/(main)/main/settings/system/proxy/'
+    | '/(main)/main/settings/system/service/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -1373,6 +1399,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof mainMainSettingsClashRuntimeIndexRouteImport
       parentRoute: typeof mainMainSettingsClashRouteRoute
     }
+    '/(main)/main/settings/system/proxy/': {
+      id: '/(main)/main/settings/system/proxy/'
+      path: '/proxy'
+      fullPath: '/main/settings/system/proxy/'
+      preLoaderRoute: typeof mainMainSettingsSystemProxyIndexRouteImport
+      parentRoute: typeof mainMainSettingsSystemRouteRoute
+    }
+    '/(main)/main/settings/system/service/': {
+      id: '/(main)/main/settings/system/service/'
+      path: '/service'
+      fullPath: '/main/settings/system/service/'
+      preLoaderRoute: typeof mainMainSettingsSystemServiceIndexRouteImport
+      parentRoute: typeof mainMainSettingsSystemRouteRoute
+    }
   }
 }
 
@@ -1582,12 +1622,30 @@ const mainMainSettingsDebugRouteRouteWithChildren =
     mainMainSettingsDebugRouteRouteChildren,
   )
 
+interface mainMainSettingsSystemRouteRouteChildren {
+  mainMainSettingsSystemProxyIndexRoute: typeof mainMainSettingsSystemProxyIndexRoute
+  mainMainSettingsSystemServiceIndexRoute: typeof mainMainSettingsSystemServiceIndexRoute
+}
+
+const mainMainSettingsSystemRouteRouteChildren: mainMainSettingsSystemRouteRouteChildren =
+  {
+    mainMainSettingsSystemProxyIndexRoute:
+      mainMainSettingsSystemProxyIndexRoute,
+    mainMainSettingsSystemServiceIndexRoute:
+      mainMainSettingsSystemServiceIndexRoute,
+  }
+
+const mainMainSettingsSystemRouteRouteWithChildren =
+  mainMainSettingsSystemRouteRoute._addFileChildren(
+    mainMainSettingsSystemRouteRouteChildren,
+  )
+
 interface mainMainSettingsRouteRouteChildren {
   mainMainSettingsAboutRouteRoute: typeof mainMainSettingsAboutRouteRoute
   mainMainSettingsChimeraRouteRoute: typeof mainMainSettingsChimeraRouteRouteWithChildren
   mainMainSettingsClashRouteRoute: typeof mainMainSettingsClashRouteRouteWithChildren
   mainMainSettingsDebugRouteRoute: typeof mainMainSettingsDebugRouteRouteWithChildren
-  mainMainSettingsSystemRouteRoute: typeof mainMainSettingsSystemRouteRoute
+  mainMainSettingsSystemRouteRoute: typeof mainMainSettingsSystemRouteRouteWithChildren
   mainMainSettingsUserInterfaceRouteRoute: typeof mainMainSettingsUserInterfaceRouteRoute
   mainMainSettingsWebUiRouteRoute: typeof mainMainSettingsWebUiRouteRoute
   mainMainSettingsIndexRoute: typeof mainMainSettingsIndexRoute
@@ -1599,7 +1657,8 @@ const mainMainSettingsRouteRouteChildren: mainMainSettingsRouteRouteChildren = {
     mainMainSettingsChimeraRouteRouteWithChildren,
   mainMainSettingsClashRouteRoute: mainMainSettingsClashRouteRouteWithChildren,
   mainMainSettingsDebugRouteRoute: mainMainSettingsDebugRouteRouteWithChildren,
-  mainMainSettingsSystemRouteRoute: mainMainSettingsSystemRouteRoute,
+  mainMainSettingsSystemRouteRoute:
+    mainMainSettingsSystemRouteRouteWithChildren,
   mainMainSettingsUserInterfaceRouteRoute:
     mainMainSettingsUserInterfaceRouteRoute,
   mainMainSettingsWebUiRouteRoute: mainMainSettingsWebUiRouteRoute,

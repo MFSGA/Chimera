@@ -1,5 +1,5 @@
 import { useIsAppImage, useSetting } from '@chimera/interface';
-import { createFileRoute } from '@tanstack/react-router';
+import { createFileRoute, Outlet, useMatchRoute } from '@tanstack/react-router';
 import { AnimatePresence } from 'motion/react';
 import {
   SystemProxyButton,
@@ -163,6 +163,12 @@ const SystemTools = () => {
 
 function RouteComponent() {
   const isAppImage = useIsAppImage();
+  const matchRoute = useMatchRoute();
+
+  // Keep the original composite page for existing desktop and legacy routes.
+  if (!matchRoute({ to: '/main/settings/system', fuzzy: false })) {
+    return <Outlet />;
+  }
 
   return (
     <>

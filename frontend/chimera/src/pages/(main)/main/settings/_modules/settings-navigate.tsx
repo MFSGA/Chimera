@@ -14,12 +14,13 @@ import FrameBugOutlineRounded from '~icons/material-symbols/frame-bug-outline-ro
 import KeyboardRounded from '~icons/material-symbols/keyboard-rounded';
 import LanRounded from '~icons/material-symbols/lan-rounded';
 import PaletteRounded from '~icons/material-symbols/palette-rounded';
+import PowerSettingsNewRounded from '~icons/material-symbols/power-settings-new-rounded';
 import PublicRounded from '~icons/material-symbols/public-rounded';
 import ReceiptLongRounded from '~icons/material-symbols/receipt-long-rounded';
-import SettingsEthernet from '~icons/material-symbols/settings-ethernet-rounded';
 import SettingsRounded from '~icons/material-symbols/settings-rounded';
 import SwapHorizRounded from '~icons/material-symbols/swap-horiz-rounded';
 import TuneRounded from '~icons/material-symbols/tune-rounded';
+import VpnLockRounded from '~icons/material-symbols/vpn-lock-rounded';
 import type { ComponentProps, ForwardedRef, ReactNode } from 'react';
 import ChimeraIcon from '@root/backend/tauri/icons/icon.png';
 import * as m from '@/paraglide/messages';
@@ -73,11 +74,18 @@ export default function SettingsNavigate() {
     <NavigationList aria-label={m.navbar_label_settings()}>
       <NavigationListGroup label={m.settings_label_system()}>
         <SettingsNavigationItem
-          to="/main/settings/system"
+          to="/main/settings/system/proxy"
           color="blue"
-          icon={<SettingsEthernet />}
-          label={m.settings_label_system()}
-          description={m.settings_label_system_description()}
+          icon={<VpnLockRounded />}
+          label={m.settings_label_proxy()}
+          description={m.settings_label_proxy_description()}
+        />
+        <SettingsNavigationItem
+          to="/main/settings/system/service"
+          color="green"
+          icon={<PowerSettingsNewRounded />}
+          label={m.settings_label_service()}
+          description={m.settings_label_service_description()}
         />
       </NavigationListGroup>
       <NavigationListGroup label={m.settings_label_clash_settings()}>
