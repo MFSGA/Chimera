@@ -1,24 +1,3 @@
-/**
- * Dashboard Sparkline 趋势图 Widget
- *
- * 迁移自 ref: `src/components/widgets/widget-sparkline.tsx`
- *
- * 四个 Widget 组件，使用 Sparkline 趋势图展示实时数据：
- * 1. TrafficDownWidget — 下行流量趋势（附带总流量）
- * 2. TrafficUpWidget — 上行流量趋势（附带总流量）
- * 3. ConnectionsWidget — 连接数趋势
- * 4. MemoryWidget — 内存使用趋势
- *
- * 使用 @chimera/interface 的 hooks 获取实时数据：
- * - useClashTraffic：上下行流量数据（每秒更新）
- * - useClashConnections：连接数和总流量汇总
- * - useClashMemory：内存使用数据（mihomo 核心时可用）
- *
- * 适配说明：
- * - Sparkline 组件已迁移至 @/components/ui/sparkline
- * - 接口包路径改为 @chimera/interface
- */
-
 import {
   MAX_CONNECTIONS_HISTORY,
   MAX_MEMORY_HISTORY,
@@ -26,65 +5,53 @@ import {
   useClashConnections,
   useClashMemory,
   useClashTraffic,
-  type ClashConnectionsSnapshot,
 } from '@chimera/interface';
 import { Card, CardContent } from '@chimera/ui/card';
+import { useDndGridContext } from '@chimera/ui/dnd-grid';
 import { Sparkline } from '@chimera/ui/sparkline';
-import TextMarquee from '@chimera/ui/text-marquee';
 import { cn } from '@chimera/utils';
 import ArrowDownwardRounded from '~icons/material-symbols/arrow-downward-rounded';
 import ArrowUpwardRounded from '~icons/material-symbols/arrow-upward-rounded';
 import MemoryOutlineRounded from '~icons/material-symbols/memory-outline-rounded';
 import SettingsEthernetRounded from '~icons/material-symbols/settings-ethernet-rounded';
-import { filesize } from 'filesize';
-import type { ComponentProps, ComponentType } from 'react';
+import type { ComponentProps, ReactNode } from 'react';
 import * as m from '@/paraglide/messages';
+import { formatBytes } from '@/utils/format-bytes';
 import type { WidgetComponentProps } from './consts';
 import { useWidgetConfig } from './provider';
 import { WidgetId } from './widget-config';
 import WidgetItem, { type WidgetItemProps } from './widget-item';
+import {
+  connectionCount,
+  connectionSamples,
+  padSparklineData,
+  trafficSamples,
+} from './widget-sparkline-model';
+import { WidgetMeta, WidgetMetric, WidgetTitle } from './widget-ui';
 
-/**
- * 填充数据数组
- * 当数据不足 max 长度时，在数组前补零以达到 max 长度
- */
-const padData = (data: (number | undefined)[] = [], max: number) =>
-  Array(Math.max(0, max - data.length))
-    .fill(0)
-    .concat(data.slice(-max));
-
-/**
- * SparklineCard — 趋势图卡片容器
- *
- * 包装 WidgetItem 和 Sparkline 组件，提供：
- * - 背景趋势图（Sparkline 占满整个卡片背景）
- * - 前景内容（标题、数值、底部信息）在 z-index 上层
- */
 function SparklineCard({
   id,
   minH = 2,
   minW = 2,
   maxW,
   maxH,
-  data,
-  showChart = true,
-  widgetType,
+  chart,
   className,
   children,
   onCloseClick,
+  widgetType,
   ...props
 }: ComponentProps<typeof Card> & {
-  data: number[];
-  showChart?: boolean;
+  chart: ReactNode;
 } & WidgetItemProps) {
   return (
     <WidgetItem
       id={id}
+      widgetType={widgetType}
       minH={minH}
       minW={minW}
       maxW={maxW}
       maxH={maxH}
-      widgetType={widgetType}
       onCloseClick={onCloseClick}
     >
       <Card
@@ -94,9 +61,7 @@ function SparklineCard({
         data-widget-id={id}
         {...props}
       >
-        {showChart && (
-          <Sparkline data={data} className="absolute inset-0 z-0" />
-        )}
+        {chart}
 
         <CardContent
           className="relative z-10 flex size-full flex-col justify-between"
@@ -109,225 +74,351 @@ function SparklineCard({
   );
 }
 
-/**
- * SparklineCardTitle — 标题行（图标 + 文本）
- */
-function SparklineCardTitle({
-  icon: Icon,
-  className,
-  children,
-  ...props
-}: ComponentProps<'div'> & {
-  icon: ComponentType<{ className?: string }>;
+// Samples arrive several times a second. Only these leaves read them, so a
+// sample re-renders the chart and the figures, not the widget around them.
+
+const chartClass = 'absolute inset-0 z-0';
+const previewDownloadTraffic = [
+  180_000, 240_000, 210_000, 420_000, 360_000, 510_000, 460_000, 720_000,
+];
+const previewUploadTraffic = [
+  45_000, 60_000, 52_000, 90_000, 78_000, 120_000, 135_000, 180_000,
+];
+const previewConnections = [4, 6, 5, 8, 7, 10, 9, 12];
+const previewMemory = [420, 448, 462, 456, 492, 510, 536, 560].map(
+  (mebibytes) => mebibytes * 1024 * 1024,
+);
+
+function TrafficPreview({
+  direction,
+  unit,
+  showTotal,
+}: {
+  direction: 'up' | 'down';
+  unit: 'bytes' | 'bits';
+  showTotal: boolean;
 }) {
-  return (
-    <div
-      className={cn('flex items-center gap-2', className)}
-      data-slot="widget-sparkline-card-title"
-      {...props}
-    >
-      <Icon className="size-5 shrink-0" />
-      <TextMarquee className="font-bold">{children}</TextMarquee>
-    </div>
-  );
-}
+  const latest = direction === 'down' ? 720_000 : 180_000;
+  const total = direction === 'down' ? 86_400_000 : 12_800_000;
 
-/**
- * SparklineCardContent — 主要数值显示
- */
-function SparklineCardContent({ className, ...props }: ComponentProps<'div'>) {
   return (
-    <div
-      className={cn('text-2xl font-bold text-nowrap text-shadow-md', className)}
-      data-slot="widget-sparkline-card-content"
-      {...props}
-    />
-  );
-}
-
-/**
- * SparklineCardBottom — 底部次要信息
- */
-function SparklineCardBottom({ className, ...props }: ComponentProps<'div'>) {
-  return (
-    <div
-      className={cn(
-        'text-shadow-background h-5 text-sm text-nowrap text-shadow-xs',
-        className,
+    <>
+      <WidgetTitle
+        data-slot="widget-sparkline-card-title"
+        icon={direction === 'down' ? ArrowDownwardRounded : ArrowUpwardRounded}
+      >
+        {direction === 'down'
+          ? m.dashboard_widget_traffic_download()
+          : m.dashboard_widget_traffic_upload()}
+      </WidgetTitle>
+      <WidgetMetric data-slot="widget-sparkline-card-content">
+        {formatBytes(latest, {
+          standard: unit === 'bits' ? 'si' : 'iec',
+          bits: unit === 'bits',
+        })}
+        /s
+      </WidgetMetric>
+      {showTotal && (
+        <WidgetMeta data-slot="widget-sparkline-card-bottom">
+          {m.dashboard_widget_traffic_total({
+            value: formatBytes(total),
+          })}
+        </WidgetMeta>
       )}
-      data-slot="widget-sparkline-card-bottom"
-      {...props}
+    </>
+  );
+}
+
+function TrafficChart({ direction }: { direction: 'up' | 'down' }) {
+  const { data: clashTraffic } = useClashTraffic();
+
+  return (
+    <Sparkline
+      data={trafficSamples(clashTraffic, direction, MAX_TRAFFIC_HISTORY)}
+      className={chartClass}
     />
   );
 }
 
-/**
- * TrafficDownWidget — 下行流量趋势
- *
- * 显示：
- * - Sparkline 趋势图（下行速率历史）
- * - 当前下行速率（filesize 格式化）
- * - 总下载量（从连接汇总数据中获取）
- */
+function TrafficRate({
+  direction,
+  unit,
+}: {
+  direction: 'up' | 'down';
+  unit: 'bytes' | 'bits';
+}) {
+  const { data: clashTraffic } = useClashTraffic();
+
+  return (
+    <>
+      {formatBytes(clashTraffic?.at(-1)?.[direction] ?? 0, {
+        standard: unit === 'bits' ? 'si' : 'iec',
+        bits: unit === 'bits',
+      })}
+      /s
+    </>
+  );
+}
+
+function TrafficTotal({ field }: { field: 'downloadTotal' | 'uploadTotal' }) {
+  const { data: clashConnections } = useClashConnections();
+
+  const total = clashConnections?.at(-1)?.[field];
+
+  return (
+    total !== undefined &&
+    m.dashboard_widget_traffic_total({
+      value: formatBytes(total),
+    })
+  );
+}
+
 export function TrafficDownWidget({ id, onCloseClick }: WidgetComponentProps) {
   const config = useWidgetConfig(id, WidgetId.TrafficDown);
-  const { data: clashTraffic } = useClashTraffic();
-  const { data: clashConnections } = useClashConnections();
-  const total = clashConnections?.at(-1)?.downloadTotal;
+  const { sourceOnly, isOverlay } = useDndGridContext();
+
+  if (sourceOnly || isOverlay) {
+    return (
+      <SparklineCard
+        id={id}
+        widgetType={WidgetId.TrafficDown}
+        chart={
+          config.showChart && (
+            <Sparkline data={previewDownloadTraffic} className={chartClass} />
+          )
+        }
+        onCloseClick={onCloseClick}
+      >
+        <TrafficPreview
+          direction="down"
+          unit={config.unit}
+          showTotal={config.showTotal}
+        />
+      </SparklineCard>
+    );
+  }
 
   return (
     <SparklineCard
       id={id}
       widgetType={WidgetId.TrafficDown}
-      showChart={config.showChart}
-      data={padData(
-        clashTraffic?.map((item) => item.down),
-        MAX_TRAFFIC_HISTORY,
-      )}
+      chart={config.showChart && <TrafficChart direction="down" />}
       onCloseClick={onCloseClick}
     >
-      <SparklineCardTitle icon={ArrowDownwardRounded}>
+      <WidgetTitle
+        data-slot="widget-sparkline-card-title"
+        icon={ArrowDownwardRounded}
+      >
         {m.dashboard_widget_traffic_download()}
-      </SparklineCardTitle>
+      </WidgetTitle>
 
-      <SparklineCardContent>
-        {filesize(clashTraffic?.at(-1)?.down ?? 0, {
-          standard: config.unit === 'bits' ? 'si' : 'iec',
-          bits: config.unit === 'bits',
-        })}
-        /s
-      </SparklineCardContent>
+      <WidgetMetric data-slot="widget-sparkline-card-content">
+        <TrafficRate direction="down" unit={config.unit} />
+      </WidgetMetric>
 
       {config.showTotal && (
-        <SparklineCardBottom>
-          {total !== undefined &&
-            m.dashboard_widget_traffic_total({
-              value: filesize(total, { standard: 'iec' }),
-            })}
-        </SparklineCardBottom>
+        <WidgetMeta data-slot="widget-sparkline-card-bottom">
+          <TrafficTotal field="downloadTotal" />
+        </WidgetMeta>
       )}
     </SparklineCard>
   );
 }
 
-/**
- * TrafficUpWidget — 上行流量趋势
- *
- * 显示：
- * - Sparkline 趋势图（上行速率历史）
- * - 当前上行速率（filesize 格式化）
- * - 总上传量（从连接汇总数据中获取）
- */
 export function TrafficUpWidget({ id, onCloseClick }: WidgetComponentProps) {
   const config = useWidgetConfig(id, WidgetId.TrafficUp);
-  const { data: clashTraffic } = useClashTraffic();
-  const { data: clashConnections } = useClashConnections();
-  const total = clashConnections?.at(-1)?.uploadTotal;
+  const { sourceOnly, isOverlay } = useDndGridContext();
+
+  if (sourceOnly || isOverlay) {
+    return (
+      <SparklineCard
+        id={id}
+        widgetType={WidgetId.TrafficUp}
+        chart={
+          config.showChart && (
+            <Sparkline data={previewUploadTraffic} className={chartClass} />
+          )
+        }
+        onCloseClick={onCloseClick}
+      >
+        <TrafficPreview
+          direction="up"
+          unit={config.unit}
+          showTotal={config.showTotal}
+        />
+      </SparklineCard>
+    );
+  }
 
   return (
     <SparklineCard
       id={id}
       widgetType={WidgetId.TrafficUp}
-      showChart={config.showChart}
-      data={padData(
-        clashTraffic?.map((item) => item.up),
-        MAX_TRAFFIC_HISTORY,
-      )}
+      chart={config.showChart && <TrafficChart direction="up" />}
       onCloseClick={onCloseClick}
     >
-      <SparklineCardTitle icon={ArrowUpwardRounded}>
+      <WidgetTitle
+        data-slot="widget-sparkline-card-title"
+        icon={ArrowUpwardRounded}
+      >
         {m.dashboard_widget_traffic_upload()}
-      </SparklineCardTitle>
+      </WidgetTitle>
 
-      <SparklineCardContent>
-        {filesize(clashTraffic?.at(-1)?.up ?? 0, {
-          standard: config.unit === 'bits' ? 'si' : 'iec',
-          bits: config.unit === 'bits',
-        })}
-        /s
-      </SparklineCardContent>
+      <WidgetMetric data-slot="widget-sparkline-card-content">
+        <TrafficRate direction="up" unit={config.unit} />
+      </WidgetMetric>
 
       {config.showTotal && (
-        <SparklineCardBottom>
-          {total !== undefined &&
-            m.dashboard_widget_traffic_total({
-              value: filesize(total, { standard: 'iec' }),
-            })}
-        </SparklineCardBottom>
+        <WidgetMeta data-slot="widget-sparkline-card-bottom">
+          <TrafficTotal field="uploadTotal" />
+        </WidgetMeta>
       )}
     </SparklineCard>
   );
 }
 
-/**
- * ConnectionsWidget — 连接数趋势
- *
- * 显示：
- * - Sparkline 趋势图（连接数历史）
- * - 当前连接数
- */
+function ConnectionsChart({ samples }: { samples: number }) {
+  const { data: clashConnections } = useClashConnections();
+
+  return (
+    <Sparkline
+      data={connectionSamples(
+        clashConnections,
+        Math.min(MAX_CONNECTIONS_HISTORY, samples),
+      )}
+      className={chartClass}
+    />
+  );
+}
+
+function ConnectionsCount() {
+  const { data: clashConnections } = useClashConnections();
+
+  return <>{connectionCount(clashConnections?.at(-1))}</>;
+}
+
 export function ConnectionsWidget({ id, onCloseClick }: WidgetComponentProps) {
   const config = useWidgetConfig(id, WidgetId.Connections);
-  const { data: clashConnections } = useClashConnections();
+  const { sourceOnly, isOverlay } = useDndGridContext();
+
+  if (sourceOnly || isOverlay) {
+    return (
+      <SparklineCard
+        id={id}
+        widgetType={WidgetId.Connections}
+        chart={
+          config.showChart && (
+            <Sparkline data={previewConnections} className={chartClass} />
+          )
+        }
+        onCloseClick={onCloseClick}
+      >
+        <WidgetTitle
+          data-slot="widget-sparkline-card-title"
+          icon={SettingsEthernetRounded}
+        >
+          {m.dashboard_widget_connections()}
+        </WidgetTitle>
+        <WidgetMetric data-slot="widget-sparkline-card-content">
+          12
+        </WidgetMetric>
+        <WidgetMeta data-slot="widget-sparkline-card-bottom" />
+      </SparklineCard>
+    );
+  }
 
   return (
     <SparklineCard
       id={id}
       widgetType={WidgetId.Connections}
-      showChart={config.showChart}
-      data={padData(
-        clashConnections?.map(
-          (item: ClashConnectionsSnapshot) => item.connections?.length ?? 0,
-        ),
-        Math.min(MAX_CONNECTIONS_HISTORY, config.samples),
-      )}
+      chart={config.showChart && <ConnectionsChart samples={config.samples} />}
       onCloseClick={onCloseClick}
     >
-      <SparklineCardTitle icon={SettingsEthernetRounded}>
+      <WidgetTitle
+        data-slot="widget-sparkline-card-title"
+        icon={SettingsEthernetRounded}
+      >
         {m.dashboard_widget_connections()}
-      </SparklineCardTitle>
+      </WidgetTitle>
 
-      <SparklineCardContent>
-        {clashConnections?.at(-1)?.connections?.length ?? 0}
-      </SparklineCardContent>
+      <WidgetMetric data-slot="widget-sparkline-card-content">
+        <ConnectionsCount />
+      </WidgetMetric>
 
-      <SparklineCardBottom />
+      <WidgetMeta data-slot="widget-sparkline-card-bottom" />
     </SparklineCard>
   );
 }
 
-/**
- * MemoryWidget — 内存使用趋势
- *
- * 显示：
- * - Sparkline 趋势图（内存使用历史）
- * - 当前内存使用量（filesize 格式化）
- * - 仅在 mihomo 核心支持时显示有效数据
- */
+function MemoryChart({ samples }: { samples: number }) {
+  const { data: clashMemory } = useClashMemory();
+
+  return (
+    <Sparkline
+      data={padSparklineData(
+        clashMemory?.map((item) => item.inuse),
+        Math.min(MAX_MEMORY_HISTORY, samples),
+      )}
+      className={chartClass}
+    />
+  );
+}
+
+function MemoryInUse() {
+  const { data: clashMemory } = useClashMemory();
+
+  return <>{formatBytes(clashMemory?.at(-1)?.inuse ?? 0)}</>;
+}
+
 export function MemoryWidget({ id, onCloseClick }: WidgetComponentProps) {
   const config = useWidgetConfig(id, WidgetId.Memory);
-  const { data: clashMemory } = useClashMemory();
+  const { sourceOnly, isOverlay } = useDndGridContext();
+
+  if (sourceOnly || isOverlay) {
+    return (
+      <SparklineCard
+        id={id}
+        widgetType={WidgetId.Memory}
+        chart={
+          config.showChart && (
+            <Sparkline data={previewMemory} className={chartClass} />
+          )
+        }
+        onCloseClick={onCloseClick}
+      >
+        <WidgetTitle
+          data-slot="widget-sparkline-card-title"
+          icon={MemoryOutlineRounded}
+        >
+          {m.dashboard_widget_memory()}
+        </WidgetTitle>
+        <WidgetMetric data-slot="widget-sparkline-card-content">
+          {formatBytes(previewMemory.at(-1)!)}
+        </WidgetMetric>
+        <WidgetMeta data-slot="widget-sparkline-card-bottom" />
+      </SparklineCard>
+    );
+  }
 
   return (
     <SparklineCard
       id={id}
       widgetType={WidgetId.Memory}
-      showChart={config.showChart}
-      data={padData(
-        clashMemory?.map((item) => item.inuse),
-        Math.min(MAX_MEMORY_HISTORY, config.samples),
-      )}
+      chart={config.showChart && <MemoryChart samples={config.samples} />}
       onCloseClick={onCloseClick}
     >
-      <SparklineCardTitle icon={MemoryOutlineRounded}>
+      <WidgetTitle
+        data-slot="widget-sparkline-card-title"
+        icon={MemoryOutlineRounded}
+      >
         {m.dashboard_widget_memory()}
-      </SparklineCardTitle>
+      </WidgetTitle>
 
-      <SparklineCardContent>
-        {filesize(clashMemory?.at(-1)?.inuse ?? 0, { standard: 'iec' })}
-      </SparklineCardContent>
+      <WidgetMetric data-slot="widget-sparkline-card-content">
+        <MemoryInUse />
+      </WidgetMetric>
 
-      <SparklineCardBottom />
+      <WidgetMeta data-slot="widget-sparkline-card-bottom" />
     </SparklineCard>
   );
 }
