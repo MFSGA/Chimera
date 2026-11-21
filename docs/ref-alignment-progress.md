@@ -1,5 +1,13 @@
 # ref 对齐进度
 
+## DIFF-149（Runtime Reconciler）：SourceCommitted 完成邮箱版本栅栏与 S2 新源续接（2026-11-21）
+
+- **固定基线与唯一执行者**：固定只读 `ref@c4b35e04870a9caa53f21d10af6fcfde4a6f4c01`，仍在 `master` 的现有 `CoreLifecycleClient → CoreLifecycleWorkflow → CoreFacade → LocalRuntimeHost` 迁移，不建分支、worktree 或第二个 Core mutator。生产 `MutationCoordinator` 暂时仍安装 `legacy_check`；本轮改动发生在已存在的 SourceCommitted/Checked 公用完成处理，不暗中启用新的 Gate。
+- **修复 Core 回合完成邮箱里的新提交竞态**：DIFF-148 已在工作线程中增加 Checked Core 前后的权威 Source 校验，但新 `SourceCommitted` 消息仍可能在最后一次校验之后、同一 Actor 读取 `Message::Completed` 之前被接收。`ActiveOperation::observed_sources` 记录本回合启动时的单调 Source 版本；`source_committed_during_round` 对比它与 Actor 现有 `seen_sources`，只针对 `trigger=SourceCommitted` 的源应用回合判定消息级新提交。若旧 Worker 返回 `Ok` 但当前 Actor 已接收了新版本，转换为带上下文的 typed `CommittedTargetAdvanced`，然后才计算 Effects 端口刷新、状态结论和响应；不得以旧 Core 物理成功推出最新已提交配置 `Converged`。
+- **S2 所有权、Effects 与续接**：延用 `CommittedTargetAdvanced` 现有的唯一 Core Owner 后续重规划语义：旧回合不清掉 `source_after_handoff`、不清理待恢复依赖、不发布旧 Runtime listener bindings，而将 `source_dirty` 保留到现有 `Command::ReconcileSource`（有 S2 Pending/Startup 租约时继续等待）；独立的 ServiceReadiness、Stop 和 ServiceRelease 不由 Source 版本差异篡改其原本结算。任何适用的重试仍须经过现有 Startup/FollowService/Service 发布约束，不创建额外 Core 执行通道。
+- **跨域交错实际测试**：新增 `checked_core_completion_with_new_mailbox_source_requires_latest_reconcile`，在真正的 CoreLifecycle Actor 里先提交 Profiles v7 的 Checked 原字节并让模拟 Core 暂停返回；随后另一个 Application v1 durable notice 进入**同一邮箱**，通过只读版本 RPC 确认已被 Actor 处理，再释放 Core。测试 Authority 故意保留旧 Profiles v7 且前后两次校验均成功，证明只有 Actor 的完成阶段可以发现这次竞态；测试必须观察到 typed `CommittedTargetAdvanced`、首次 `Waiting` 与随后自动 latest `SourceCommitted` 重规划，且 Checked bytes 只提交一次。纯测试另验证跨域版本变化和 Service/Stop/ServiceRelease 各自的事件分类互不混淆。
+- **明确剩余工作**：生产 `MutationCoordinator` **尚未切换新 CandidateCheck**；同域并发检查身份、S2 Service 真机处理以及 Effects 的完整跨域统一结算、旧 Gate 清理和跨平台实机发布仍需后续完成。实际 `CARGO_INCREMENTAL=0 cargo check --manifest-path backend/Cargo.toml -p chimera --lib --quiet` 通过；`cargo test -p chimera --lib client::core_lifecycle::tests::` **142/142**、`client::reconciler::` **63/63**、`core::actor_v2::local_runtime::tests::` **11/11**、`cargo test -p chimera-core --lib` **426/426**，`cargo test -p chimera --lib` 全量 **1168/1168**（另 1 个官方 Specta bindings 更新测试按设计忽略）。远端 CI 尚需等 GitHub Actions 运行结果。
+
 ## DIFF-148（Runtime Reconciler）：Checked Core 前后双 Source 身份确认与单一 Owner 最新目标恢复（2026-11-21）
 
 - **固定单一 Core 执行者及上游基线**：固定 `ref@c4b35e04870a9caa53f21d10af6fcfde4a6f4c01` 不变，在既有 `CoreLifecycleClient → CoreLifecycleWorkflow → CoreFacade → LocalRuntimeHost` 中直接扩充 `Command::ApplyChecked` 的生产执行逻辑；没有第二个 mutating Actor、分支、工作树或 Core 状态副本。
