@@ -25,8 +25,11 @@ use crate::{
 /// This contract intentionally does NOT provide a no-op implementation. The
 /// source commit may proceed only if that owner has retained the exact checked
 /// product and can later pair it with a committed source version.
+#[async_trait::async_trait]
 pub(in crate::client) trait CheckedCandidatePort: Send + Sync + 'static {
-    fn checked(&self, candidate: PreparedRuntime) -> Result<(), Arc<RuntimeError>>;
+    /// Admission is acknowledged by the sole runtime owner before source commit.
+    /// An enqueued-but-unhandled message is not proof of ownership.
+    async fn checked(&self, candidate: PreparedRuntime) -> Result<(), Arc<RuntimeError>>;
     fn source_committed(&self, domain: ConfigDomain, version: Version);
 }
 
@@ -123,7 +126,7 @@ impl RuntimeGate for CandidateCheck {
             })
             .await
         {
-            RuntimeCheckOutcome::Passed => self.workflow.checked(prepared)?,
+            RuntimeCheckOutcome::Passed => self.workflow.checked(prepared).await?,
             RuntimeCheckOutcome::Rejected { kind, message } => {
                 return Err(Arc::new(RuntimeError::CoreRejectedConfig {
                     core_kind: kind,
@@ -248,8 +251,9 @@ mod tests {
         reject: bool,
     }
 
+    #[async_trait::async_trait]
     impl CheckedCandidatePort for RecordingInbox {
-        fn checked(&self, candidate: PreparedRuntime) -> Result<(), Arc<RuntimeError>> {
+        async fn checked(&self, candidate: PreparedRuntime) -> Result<(), Arc<RuntimeError>> {
             if self.reject {
                 return Err(Arc::new(RuntimeError::ShuttingDown));
             }

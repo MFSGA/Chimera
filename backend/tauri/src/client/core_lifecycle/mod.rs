@@ -202,6 +202,12 @@ pub(crate) use ports::{
 };
 
 enum Message {
+    /// Pinned ref RuntimeReconciler::Message::Checked, kept in the existing
+    /// single CoreLifecycle mailbox until its prepared-apply path is ported.
+    Checked {
+        prepared: ports::PreparedRuntime,
+        reply: RpcReplyPort<Result<(), Arc<chimera_contracts::runtime_error::RuntimeError>>>,
+    },
     ConnectApplicationWorkflow {
         workflow: ApplicationWorkflow,
         reply: RpcReplyPort<anyhow::Result<()>>,
@@ -254,6 +260,10 @@ enum Message {
     #[cfg(test)]
     ReadSourceVersionsForTest {
         reply: RpcReplyPort<SourceVersions>,
+    },
+    #[cfg(test)]
+    ReadCheckedForTest {
+        reply: RpcReplyPort<Option<(Option<String>, String, Vec<u8>)>>,
     },
     StartupRecoveryFinished {
         succeeded: bool,
@@ -340,6 +350,9 @@ struct ApplicationWorkflowState {
     /// rather than waiting for another source commit to be delivered.
     source_after_handoff: bool,
     run_intent: RunIntent,
+    /// A checked-but-not-yet-committed product. This is only an inbox cache;
+    /// the old Core executor does not currently submit it.
+    checked: Option<ports::PreparedRuntime>,
     seen_sources: SourceVersions,
     service_recovery_inflight: bool,
     service_handoff_maintenance: Option<String>,
@@ -880,6 +893,9 @@ impl ApplicationWorkflowState {
 
     fn close(&mut self) {
         self.shutting_down = true;
+        // A checked document that was never committed is not a running Core
+        // receipt; discard it instead of carrying it past shutdown.
+        self.checked = None;
         self.dirty = false;
         self.source_dirty = false;
         self.source_after_handoff = false;
@@ -1262,6 +1278,7 @@ impl Actor for ApplicationWorkflowActor {
             source_dirty: false,
             source_after_handoff: false,
             run_intent: RunIntent::Running,
+            checked: None,
             seen_sources: SourceVersions::default(),
             service_recovery_inflight: false,
             service_handoff_maintenance: None,
@@ -1280,6 +1297,20 @@ impl Actor for ApplicationWorkflowActor {
         state: &mut Self::State,
     ) -> Result<(), ActorProcessingErr> {
         match message {
+            Message::Checked { prepared, reply } => {
+                // Unlike a bare cast, this acknowledgement proves that the
+                // owner actually retained the exact document and digest.
+                // Do not let a closed or uncertain owner authorize a commit.
+                let result = if state.shutting_down || state.uncertain {
+                    Err(Arc::new(
+                        chimera_contracts::runtime_error::RuntimeError::ShuttingDown,
+                    ))
+                } else {
+                    state.checked = Some(prepared);
+                    Ok(())
+                };
+                let _ = reply.send(result);
+            }
             Message::ConnectApplicationWorkflow {
                 workflow: incoming,
                 reply,
@@ -1884,6 +1915,16 @@ impl Actor for ApplicationWorkflowActor {
             Message::ReadSourceVersionsForTest { reply } => {
                 let _ = reply.send(state.seen_sources.clone());
             }
+            #[cfg(test)]
+            Message::ReadCheckedForTest { reply } => {
+                let _ = reply.send(state.checked.as_ref().map(|prepared| {
+                    (
+                        prepared.target.clone(),
+                        prepared.intent.digest.clone(),
+                        prepared.snapshot.product_bytes().to_vec(),
+                    )
+                }));
+            }
             Message::DirtyTick => {
                 state.dirty_tick_scheduled = false;
                 if state.run_intent == RunIntent::Stopped || state.uncertain || state.shutting_down
@@ -2183,6 +2224,7 @@ impl Actor for ApplicationWorkflowActor {
                 }
             }
         }
+        state.checked = None;
         state.reconciler.send_modify(ReconcilerStatus::close);
         Ok(())
     }
@@ -3090,6 +3132,55 @@ impl CoreLifecycleClient {
             CoreLifecycleClientInner::Actor { reconciler, .. } => reconciler.borrow().clone(),
             #[cfg(test)]
             CoreLifecycleClientInner::Direct { .. } => ReconcilerStatus::default(),
+        }
+    }
+
+    /// Admit a checked candidate to the existing *single* lifecycle mailbox.
+    /// This is not wired to the production gate until the CoreFacade executor
+    /// can apply these same bytes; the reply establishes true cache ownership,
+    /// not Core apply success.
+    pub(in crate::client) async fn checked_candidate(
+        &self,
+        prepared: ports::PreparedRuntime,
+    ) -> Result<(), Arc<chimera_contracts::runtime_error::RuntimeError>> {
+        use chimera_contracts::runtime_error::RuntimeError;
+        match self.0.as_ref() {
+            CoreLifecycleClientInner::Actor { actor_ref, .. } => {
+                let operation_id = chimera_core_manager::OperationId::generate();
+                match actor_ref
+                    .call(|reply| Message::Checked { prepared, reply }, None)
+                    .await
+                {
+                    Ok(CallResult::Success(result)) => result,
+                    // The message never entered the Actor, so no candidate
+                    // could have been accepted.
+                    Err(ractor::MessagingErr::SendErr(Message::Checked { .. })) => {
+                        Err(Arc::new(RuntimeError::ShuttingDown))
+                    }
+                    // A delivered request without an ACK may have been
+                    // accepted. Do not turn an uncertain ownership outcome
+                    // into a definitely closed owner.
+                    _ => Err(Arc::new(RuntimeError::OwnerUnresponsive {
+                        operation_id: operation_id.to_string(),
+                    })),
+                }
+            }
+            #[cfg(test)]
+            CoreLifecycleClientInner::Direct { .. } => Err(Arc::new(RuntimeError::ShuttingDown)),
+        }
+    }
+
+    #[cfg(test)]
+    async fn checked_for_tests(&self) -> Option<(Option<String>, String, Vec<u8>)> {
+        let CoreLifecycleClientInner::Actor { actor_ref, .. } = self.0.as_ref() else {
+            return None;
+        };
+        match actor_ref
+            .call(|reply| Message::ReadCheckedForTest { reply }, None)
+            .await
+        {
+            Ok(CallResult::Success(snapshot)) => snapshot,
+            _ => None,
         }
     }
 
@@ -13465,6 +13556,121 @@ mod tests {
         core.uncertain.store(false, AtomicOrdering::Release);
         assert!(workflow.conclude_attempt(None));
         assert!(!workflow.has_unresolved_attempt());
+    }
+
+    fn checked_runtime_fixture(target: &str) -> ports::PreparedRuntime {
+        use chimera_core::actor_v2::intent::RuntimeIntentBuilder;
+        use chimera_core_manager::{LocalIpcPolicy, LocalIpcSettings};
+        let snapshot = Arc::new(crate::client::runtime::RuntimeSnapshot::new(
+            crate::client::runtime::RuntimeRevisionAllocator::new()
+                .allocate()
+                .unwrap(),
+            ClashCore::Mihomo,
+            b"mode: rule\n".to_vec(),
+            serde_yaml::Mapping::new(),
+        ));
+        let intent = Arc::new(RuntimeIntentBuilder::build(
+            (&ClashCore::Mihomo).into(),
+            Arc::from(std::str::from_utf8(snapshot.product_bytes()).unwrap()),
+            LocalIpcSettings {
+                policy: LocalIpcPolicy::Prefer,
+                keep_http_controller: true,
+            },
+        ));
+        ports::PreparedRuntime {
+            snapshot,
+            intent,
+            ports: crate::client::ports::CandidatePortBindings::default(),
+            target: Some(target.into()),
+        }
+    }
+
+    #[tokio::test]
+    async fn ref_checked_message_is_acknowledged_by_the_single_owner_before_source_notice() {
+        use crate::client::reconciler::committed::SourceDomain;
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let client = CoreLifecycleClient::spawn(
+            Arc::new(RecordingCore {
+                events: events.clone(),
+                stop_started: Arc::new(Notify::new()),
+                release_stop: Arc::new(Notify::new()),
+                recovery_notify: Arc::new(Notify::new()),
+                run_type: RunType::Normal,
+            }),
+            ApplicationClient::legacy().unwrap(),
+            ClashConfigClient::legacy().unwrap(),
+            RuntimePaths::from_config_root(std::path::PathBuf::from("test-runtime-root")),
+        )
+        .await
+        .unwrap();
+
+        let prepared = checked_runtime_fixture("precommit-source-a");
+        let expected = (
+            prepared.target.clone(),
+            prepared.intent.digest.clone(),
+            prepared.snapshot.product_bytes().to_vec(),
+        );
+        client.checked_candidate(prepared).await.unwrap();
+        assert_eq!(client.checked_for_tests().await, Some(expected.clone()));
+        assert!(
+            events.lock().unwrap().is_empty(),
+            "a checked message must not apply Core"
+        );
+
+        // The upstream ordering is Checked then SourceCommitted. The legacy
+        // owner is deliberately not told to rebuild until the actual v2 apply
+        // consumer is switched on, so this tests ordering without dual apply.
+        client.source_committed(SourceDomain::Profiles, 7, false);
+        assert_eq!(client.checked_for_tests().await, Some(expected));
+        assert_eq!(
+            client
+                .reconciler_status()
+                .seen
+                .version(SourceDomain::Profiles),
+            Some(7),
+        );
+        assert!(
+            events.lock().unwrap().is_empty(),
+            "notice did not start another Core executor"
+        );
+
+        client
+            .checked_candidate(checked_runtime_fixture("precommit-source-b"))
+            .await
+            .unwrap();
+        let newer = client.checked_for_tests().await.unwrap();
+        assert_eq!(newer.0.as_deref(), Some("precommit-source-b"));
+        assert_eq!(newer.2, b"mode: rule\n");
+    }
+
+    #[tokio::test]
+    async fn ref_checked_message_is_refused_after_owner_shutdown() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let client = CoreLifecycleClient::spawn(
+            Arc::new(ConfirmedStoppedCore {
+                events,
+                run_type: RunType::Normal,
+            }),
+            ApplicationClient::legacy().unwrap(),
+            ClashConfigClient::legacy().unwrap(),
+            RuntimePaths::from_config_root(std::path::PathBuf::from("test-runtime-root")),
+        )
+        .await
+        .unwrap();
+        client
+            .checked_candidate(checked_runtime_fixture("never-committed"))
+            .await
+            .unwrap();
+        client.shutdown().await.unwrap();
+        let error = client
+            .checked_candidate(checked_runtime_fixture("after-close"))
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            error.as_ref(),
+            chimera_contracts::runtime_error::RuntimeError::ShuttingDown
+        ));
+        assert!(client.checked_for_tests().await.is_none());
     }
 
     #[tokio::test]
