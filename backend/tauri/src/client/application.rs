@@ -852,13 +852,17 @@ impl ChimeraClient {
         let runtime_deferred = degradations
             .iter()
             .any(|item| item.code == "clash_runtime_deferred");
-        self.inner.core_lifecycle.source_committed(
-            super::reconciler::committed::SourceDomain::Clash,
-            snapshot.version,
-            degradations
-                .iter()
-                .any(|item| item.code == "clash_runtime_deferred" && item.retryable),
-        );
+        if report.checked_version.is_none() {
+            // Checked typed builder flags publish their exact CAS version
+            // through the source owner. No legacy notice may replay Core.
+            self.inner.core_lifecycle.source_committed(
+                super::reconciler::committed::SourceDomain::Clash,
+                snapshot.version,
+                degradations
+                    .iter()
+                    .any(|item| item.code == "clash_runtime_deferred" && item.retryable),
+            );
+        }
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
         {
             let app = self.get_app_config()?;

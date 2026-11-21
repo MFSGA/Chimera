@@ -287,6 +287,16 @@ impl CheckedRuntimeInbox {
         Ok(())
     }
 
+    /// Failed source CAS cannot authorize Core Apply. Without an operation
+    /// token, discard every uncommitted proposal in that domain: another
+    /// racing successful CAS will conservatively rebuild the latest source.
+    /// Never discard checks admitted for the other source domains.
+    fn discard_domain(&mut self, domain: SourceDomain) -> usize {
+        let before = self.pending.len();
+        self.pending.retain(|entry| entry.domain != domain);
+        before - self.pending.len()
+    }
+
     fn matching_count(&self, domain: SourceDomain, target: Option<&str>) -> usize {
         self.pending
             .iter()
@@ -340,6 +350,11 @@ enum Message {
     Checked {
         checked: CheckedRuntimeCandidate,
         reply: RpcReplyPort<Result<(), Arc<chimera_contracts::runtime_error::RuntimeError>>>,
+    },
+    /// A checked candidate was never persisted; revoke its domain before
+    /// the next durable SourceCommitted can consume stale uncommitted bytes.
+    AbortChecked {
+        domain: SourceDomain,
     },
     /// Install the single production ref CandidateCheck on the existing
     /// lifecycle workflow before any Application source mutation can run.
@@ -1485,6 +1500,10 @@ impl Actor for ApplicationWorkflowActor {
         state: &mut Self::State,
     ) -> Result<(), ActorProcessingErr> {
         match message {
+            Message::AbortChecked { domain } => {
+                let count = state.checked.discard_domain(domain);
+                tracing::debug!(?domain, count, "discarded uncommitted checked candidates");
+            }
             Message::InstallCandidateGate { gate, reply } => {
                 let result = if state.shutting_down {
                     Err(anyhow::anyhow!("core lifecycle is shutting down"))
@@ -3742,6 +3761,22 @@ impl CoreLifecycleClient {
             if watch.changed().await.is_err() {
                 return watch.borrow().clone();
             }
+        }
+    }
+
+    /// Conservative rollback for a failed source CAS after the Core owner
+    /// acknowledged check admission. The abort and source notices share its
+    /// one ordered mailbox; on cross-request same-domain ambiguity, the next
+    /// successful commit falls back to authoritative latest-source recovery.
+    pub(in crate::client) fn abort_uncommitted_checked(&self, domain: SourceDomain) {
+        match self.0.as_ref() {
+            CoreLifecycleClientInner::Actor { actor_ref, .. } => {
+                if actor_ref.cast(Message::AbortChecked { domain }).is_err() {
+                    tracing::debug!(?domain, "checked abort skipped: Core owner is unavailable");
+                }
+            }
+            #[cfg(test)]
+            CoreLifecycleClientInner::Direct { .. } => {}
         }
     }
 
@@ -14301,6 +14336,30 @@ mod tests {
     }
 
     #[test]
+    fn failed_source_cas_discards_only_its_domain_checked_proposals() {
+        let mut inbox = CheckedRuntimeInbox::default();
+        inbox
+            .accept(checked_entry(SourceDomain::Profiles, "profile-proposal"))
+            .unwrap();
+        inbox
+            .accept(checked_entry(SourceDomain::Clash, "uncommitted-A"))
+            .unwrap();
+        inbox
+            .accept(checked_entry(SourceDomain::Clash, "uncommitted-B"))
+            .unwrap();
+        inbox
+            .accept(checked_entry(SourceDomain::Application, "app-proposal"))
+            .unwrap();
+
+        assert_eq!(inbox.discard_domain(SourceDomain::Clash), 2);
+        assert_eq!(inbox.discard_domain(SourceDomain::Clash), 0);
+        assert_eq!(inbox.matching_count(SourceDomain::Clash, None), 0);
+        assert_eq!(inbox.matching_count(SourceDomain::Profiles, None), 1);
+        assert_eq!(inbox.matching_count(SourceDomain::Application, None), 1);
+        assert_eq!(inbox.pending.len(), 2);
+    }
+
+    #[test]
     fn checked_inbox_ack_is_bounded_and_missing_target_is_not_authorized() {
         let mut inbox = CheckedRuntimeInbox::default();
         let mut without_target = checked_entry(SourceDomain::Application, "some-target");
@@ -14328,6 +14387,49 @@ mod tests {
             MAX_CHECKED_PENDING,
             "failed ACK must never replace or evict a previously authorized candidate"
         );
+    }
+
+    #[tokio::test]
+    async fn aborted_source_cas_removes_proposal_in_real_core_owner_mailbox() {
+        let submits = Arc::new(Mutex::new(Vec::new()));
+        let client = CoreLifecycleClient::spawn(
+            Arc::new(ExactCheckedCore {
+                submits: submits.clone(),
+            }),
+            ApplicationClient::legacy().unwrap(),
+            ClashConfigClient::legacy().unwrap(),
+            RuntimePaths::from_config_root(std::path::PathBuf::from("test-runtime-root")),
+        )
+        .await
+        .unwrap();
+
+        client
+            .checked_candidate_for_domain(
+                SourceDomain::Profiles,
+                checked_runtime_fixture("profile-still-authorized"),
+                checked_mihomo_spec(),
+            )
+            .await
+            .unwrap();
+        client
+            .checked_candidate_for_domain(
+                SourceDomain::Clash,
+                checked_runtime_fixture("clash-cas-failed"),
+                checked_mihomo_spec(),
+            )
+            .await
+            .unwrap();
+        client.abort_uncommitted_checked(SourceDomain::Clash);
+
+        // The RPC follows the abort cast on this exact actor mailbox.
+        let (target, _, _) = client
+            .checked_for_tests()
+            .await
+            .expect("another source domain remains authorized");
+        assert_eq!(target.as_deref(), Some("profile-still-authorized"));
+        client.abort_uncommitted_checked(SourceDomain::Profiles);
+        assert!(client.checked_for_tests().await.is_none());
+        assert!(submits.lock().unwrap().is_empty());
     }
 
     #[tokio::test]

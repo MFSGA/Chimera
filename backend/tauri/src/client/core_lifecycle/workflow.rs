@@ -2235,12 +2235,24 @@ impl CoreLifecycleWorkflow {
         let committed_version = match committed {
             Ok(crate::state::ConditionalReplaceResult::Replaced(snapshot)) => snapshot.version,
             Ok(crate::state::ConditionalReplaceResult::Conflict { actual_version }) => {
+                if use_checked {
+                    self.checked_gate
+                        .get()
+                        .expect("checked Application gate admitted this proposal")
+                        .abort_uncommitted(chimera_contracts::mutation::ConfigDomain::Application);
+                }
                 anyhow::bail!(
                     "application config version conflict: expected {}, actual {actual_version}",
                     previous.version
                 );
             }
             Err(error) => {
+                if use_checked {
+                    self.checked_gate
+                        .get()
+                        .expect("checked Application gate admitted this proposal")
+                        .abort_uncommitted(chimera_contracts::mutation::ConfigDomain::Application);
+                }
                 return Err(error.context("failed to commit checked application config"));
             }
         };

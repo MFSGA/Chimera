@@ -76,6 +76,11 @@ impl CheckedCandidatePort for CoreLifecycleCheckedInbox {
         self.owner
             .checked_source_committed(Self::source_domain(domain), *version);
     }
+
+    fn abort_uncommitted(&self, domain: chimera_contracts::mutation::ConfigDomain) {
+        self.owner
+            .abort_uncommitted_checked(Self::source_domain(domain));
+    }
 }
 
 pub(in crate::client) struct CandidateGateSources {
@@ -246,6 +251,7 @@ mod tests {
         fn source_committed(&self, domain: ConfigDomain, version: Version) {
             self.source_notices.lock().unwrap().push((domain, version));
         }
+        fn abort_uncommitted(&self, _domain: ConfigDomain) {}
     }
     #[derive(Default)]
     struct RecordingValidator(Mutex<Vec<(String, Vec<u8>)>>);

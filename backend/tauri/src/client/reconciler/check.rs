@@ -36,6 +36,10 @@ pub(in crate::client) trait CheckedCandidatePort: Send + Sync + 'static {
         core_spec: chimera_core_manager::CoreSpec,
     ) -> Result<(), Arc<RuntimeError>>;
     fn source_committed(&self, domain: ConfigDomain, version: Version);
+    /// Failed source CAS after an ACK must not leave a permanent proposal.
+    /// Until the ref operation token travels through every source actor,
+    /// conservatively abort the entire matching domain only.
+    fn abort_uncommitted(&self, domain: ConfigDomain);
 }
 
 pub(in crate::client) struct CandidateCheck {
@@ -168,6 +172,10 @@ impl CandidateCheck {
         candidate: RuntimeCandidate,
     ) -> Result<(), Arc<RuntimeError>> {
         self.validate(candidate).await.map(|_| ())
+    }
+
+    pub(in crate::client) fn abort_uncommitted(&self, domain: ConfigDomain) {
+        self.workflow.abort_uncommitted(domain);
     }
 }
 
@@ -309,6 +317,7 @@ mod tests {
         fn source_committed(&self, domain: ConfigDomain, version: Version) {
             self.committed.lock().unwrap().push((domain, version));
         }
+        fn abort_uncommitted(&self, _domain: ConfigDomain) {}
     }
 
     async fn gate(

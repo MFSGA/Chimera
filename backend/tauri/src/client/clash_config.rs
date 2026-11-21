@@ -62,6 +62,9 @@ enum ClashConfigStateBackend {
 pub(super) struct ClashCommitReport {
     pub(super) snapshot: ClashConfigSnapshot,
     pub(super) reaches_runtime: bool,
+    /// Exact CAS version already notified through ref RuntimeGate::committed.
+    /// The caller must not replay the legacy SourceCommitted on this version.
+    pub(super) checked_version: Option<u64>,
     pub(super) degradations: Vec<Degradation>,
 }
 
@@ -339,6 +342,13 @@ impl ClashConfigClient {
         owner: &ChimeraClient,
         patch: ClashConfigPatch,
     ) -> Result<ClashCommitReport> {
+        if let Some(gate) = owner.inner.checked_gate.as_ref() {
+            let app = owner.get_app_config()?;
+            let service_connected = crate::core::service::ipc::get_ipc_state().is_connected();
+            if checked_clash_patch_eligible(&patch, &app, service_connected) {
+                return self.patch_typed_config_checked(patch, gate).await;
+            }
+        }
         let candidate_patch = patch.clone();
         self.patch_typed_config_with(
             patch,
@@ -358,6 +368,74 @@ impl ClashConfigClient {
             },
         )
         .await
+    }
+
+    /// The first Clash source-owner cutover: a strictly limited set of local
+    /// config-builder flags has no TUN, port, host, or mode-side effects.
+    /// The same ref CandidateCheck ACKs the exact bytes before CAS, then the
+    /// durable source owner publishes its *own* version to one Core mailbox.
+    async fn patch_typed_config_checked(
+        &self,
+        patch: ClashConfigPatch,
+        gate: &Arc<super::reconciler::check::CandidateCheck>,
+    ) -> Result<ClashCommitReport> {
+        use crate::state::mutation::{DomainChange, RuntimeCandidate, RuntimeGate as _};
+        let before = self.get_snapshot().await?;
+        let mut next = before.state.clone();
+        next.apply(patch);
+        let prepared = self.prepare_replace(next.clone()).await?;
+        gate.check(RuntimeCandidate {
+            change: DomainChange::Clash {
+                candidate: Arc::new(next),
+            },
+            staged: Default::default(),
+        })
+        .await
+        .map_err(anyhow::Error::new)?;
+        let snapshot = match self
+            .replace_prepared_if_version(before.version, prepared)
+            .await
+        {
+            Ok(ConditionalReplaceResult::Replaced(snapshot)) => snapshot,
+            Ok(ConditionalReplaceResult::Conflict { actual_version }) => {
+                gate.abort_uncommitted(chimera_contracts::mutation::ConfigDomain::Clash);
+                bail!(
+                    "clash config version conflict: expected {}, actual {actual_version}",
+                    before.version,
+                );
+            }
+            Err(error) => {
+                gate.abort_uncommitted(chimera_contracts::mutation::ConfigDomain::Clash);
+                return Err(error.context("checked Clash source CAS did not confirm a commit"));
+            }
+        };
+        // The source is now durable. Notify the only Core owner before any
+        // optional mirror write can fail; do not perform a legacy inline apply.
+        gate.committed(
+            chimera_contracts::mutation::ConfigDomain::Clash,
+            chimera_core::state::Version::new(snapshot.version),
+        );
+        let mut degradations = Vec::new();
+        if let Err(error) = (|| {
+            Config::clash().data().save_config()?;
+            Config::verge().data().save_file()?;
+            Ok::<(), anyhow::Error>(())
+        })() {
+            degradations.push(Degradation {
+                phase: DegradationPhase::LegacyMirror,
+                code: "legacy_clash_mirror_write_failed".into(),
+                message: format!(
+                    "Clash source was saved, but legacy mirror persistence failed: {error:#}"
+                ),
+                retryable: true,
+            });
+        }
+        Ok(ClashCommitReport {
+            checked_version: Some(snapshot.version),
+            snapshot,
+            reaches_runtime: true,
+            degradations,
+        })
     }
 
     async fn patch_typed_config_with<Check, CheckFuture, Apply, ApplyFuture, Save>(
@@ -448,6 +526,7 @@ impl ClashConfigClient {
         Ok(ClashCommitReport {
             snapshot,
             reaches_runtime,
+            checked_version: None,
             degradations,
         })
     }
@@ -826,6 +905,33 @@ async fn update_core_config(client: &ChimeraClient) -> Result<()> {
     }
 }
 
+/// Admit only two source flags that feed RuntimeBuildService without changing
+/// the listener, execution host, TUN lifecycle, override mode, or other
+/// one-shot effects. Comparing the residual patch with a default patch also
+/// excludes explicit same-value commands on other fields.
+fn checked_clash_patch_eligible(
+    patch: &ClashConfigPatch,
+    app: &chimera_config::application::ChimeraAppConfig,
+    service_connected: bool,
+) -> bool {
+    if app.enable_service_mode || service_connected {
+        return false;
+    }
+    if patch.enable_clash_fields.is_none() && patch.expand_include_all.is_none() {
+        return false;
+    }
+    let mut remainder = patch.clone();
+    remainder.enable_clash_fields = None;
+    remainder.expand_include_all = None;
+    match (
+        serde_yaml::to_value(&remainder),
+        serde_yaml::to_value(ClashConfig::new_empty_patch()),
+    ) {
+        (Ok(remainder), Ok(empty)) => remainder == empty,
+        _ => false,
+    }
+}
+
 fn should_reconcile_clash_patch(
     before: &ClashConfig,
     after: &ClashConfig,
@@ -844,6 +950,36 @@ mod tests {
     use super::*;
     use crate::state::mirror::{NoopPreparedLegacyMirror, PreparedLegacyMirror};
     use std::sync::{Arc, Mutex};
+
+    #[test]
+    fn checked_clash_route_admits_only_local_builder_flags() {
+        let mut app = chimera_config::application::ChimeraAppConfig::default();
+        app.enable_service_mode = false;
+        let mut patch = ClashConfig::new_empty_patch();
+        patch.enable_clash_fields = Some(true);
+        assert!(checked_clash_patch_eligible(&patch, &app, false));
+        assert!(!checked_clash_patch_eligible(&patch, &app, true));
+        app.enable_service_mode = true;
+        assert!(!checked_clash_patch_eligible(&patch, &app, false));
+        app.enable_service_mode = false;
+
+        patch.expand_include_all = Some(false);
+        assert!(checked_clash_patch_eligible(&patch, &app, false));
+        patch.enable_clash_fields = None;
+        assert!(checked_clash_patch_eligible(&patch, &app, false));
+        patch.expand_include_all = None;
+        assert!(!checked_clash_patch_eligible(&patch, &app, false));
+
+        patch.enable_clash_fields = Some(true);
+        patch.enable_tun_mode = Some(false);
+        assert!(!checked_clash_patch_eligible(&patch, &app, false));
+        patch.enable_tun_mode = None;
+        patch.web_ui_list = Some(Vec::new());
+        assert!(!checked_clash_patch_eligible(&patch, &app, false));
+        patch.web_ui_list = None;
+        patch.mixed_port.start_port = Some(chimera_config::clash::config::DEFAULT_MIXED_PORT);
+        assert!(!checked_clash_patch_eligible(&patch, &app, false));
+    }
 
     struct RecordingBridge {
         mirrored_tun: Arc<Mutex<Option<bool>>>,
