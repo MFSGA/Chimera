@@ -3,6 +3,7 @@ use std::{
     any::Any,
     collections::hash_map::DefaultHasher,
     hash::Hasher,
+    io::{self, Write},
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -83,6 +84,22 @@ pub struct ProxyMutationOutcome {
 impl ProxyMutationOutcome {
     pub fn degradations(&self) -> &[ProxyDegradation] {
         &self.degradations
+    }
+}
+
+/// Feed the JSON serializer directly into the app-view fingerprint, as
+/// upstream does with a Write-compatible hasher. Retain Chimera's existing
+/// DefaultHasher algorithm without allocating a second complete JSON buffer.
+struct FingerprintSink<'a>(&'a mut DefaultHasher);
+
+impl Write for FingerprintSink<'_> {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        self.0.write(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
     }
 }
 
@@ -220,6 +237,44 @@ impl State {
         resume_monitor_panic(fatal);
     }
 
+    /// A successful HTTP response is not enough authority to publish or
+    /// report a Core mutation. Check that its originating capability is
+    /// still the one the CoreActor serves, even if its asynchronous revocation
+    /// monitor has not delivered an event yet. Never retry a submitted write.
+    async fn require_source_instance(
+        &mut self,
+        api: &ApiClient,
+        stage: &'static str,
+    ) -> Result<()> {
+        let checked = tokio::select! {
+            biased;
+            _ = self.shutdown.cancelled() => {
+                anyhow::bail!("{stage}: proxy owner shut down; Core outcome must be reconciled")
+            }
+            _ = api.cancelled() => {
+                anyhow::bail!("{stage}: Core API lease retired; outcome must be reconciled")
+            }
+            result = tokio::time::timeout(Duration::from_secs(30), self.core.api_client()) => {
+                match result {
+                    Ok(Ok(current)) if api.same_instance(&current) => Ok(()),
+                    Ok(Ok(_)) => anyhow::bail!("{stage}: Core instance changed; outcome must be reconciled"),
+                    Ok(Err(error)) => Err(error).context(format!("{stage}: current Core authority unavailable; outcome must be reconciled")),
+                    Err(_) => anyhow::bail!("{stage}: current Core authority check timed out; outcome must be reconciled"),
+                }
+            }
+        };
+        if let Err(error) = checked {
+            self.clear().await;
+            return Err(error);
+        }
+        // The controller can be retired immediately after the IPC check.
+        if self.shutdown.is_cancelled() || api.is_revoked() {
+            self.clear().await;
+            anyhow::bail!("{stage}: Core authority retired; outcome must be reconciled");
+        }
+        Ok(())
+    }
+
     async fn read(&mut self, actor: &ActorRef<Message>, force: bool) -> Result<Arc<Snapshot>> {
         let api = match self.core.api_client().await {
             Ok(api) => api,
@@ -259,9 +314,10 @@ impl State {
                 .into_iter()
                 .map(|(name, provider)| (name, ProxyProviderSummary::from(provider)))
                 .collect();
-            // Hash the application view without retaining its serialized bytes.
+            // Match the upstream streaming serializer: never allocate an
+            // extra copy of the whole proxy/provider payload for the hash.
             let mut fingerprint = DefaultHasher::new();
-            fingerprint.write(&serde_json::to_vec(&(&proxies, &providers))?);
+            serde_json::to_writer(FingerprintSink(&mut fingerprint), &(&proxies, &providers))?;
             anyhow::ensure!(
                 !api.is_revoked(),
                 "core instance retired during proxy assembly"
@@ -281,6 +337,8 @@ impl State {
         .await;
         match result {
             Ok(snapshot) => {
+                self.require_source_instance(&api, "proxy snapshot publication")
+                    .await?;
                 // Retire the old monitor before publishing the new Core lease.
                 let fatal = cancel_owned_task(&mut self.monitor, "proxy API monitor").await;
                 resume_monitor_panic(fatal);
@@ -354,19 +412,13 @@ impl State {
             RouteChange::ClearFixed => api.clear_proxy_selection(&group_name).await,
         }
         .map_err(anyhow::Error::from);
-        // A controller may finish the write while its owning application is shutting down.
-        // Never start follow-up connection interruption or publish a success for that retired
-        // owner; the next owner must reconcile the controller state independently.
-        anyhow::ensure!(
-            !self.shutdown.is_cancelled(),
-            "proxy owner shut down during route mutation"
-        );
+        // A submitted write may have reached its controller even if a Host
+        // handoff follows. Never continue effects or report a normal success
+        // from an API that is no longer the active Core's authority.
+        self.require_source_instance(&api, "route mutation completion")
+            .await?;
         self.reread_after_rejection(actor, api.clone(), applied)
             .await?;
-        anyhow::ensure!(
-            !self.shutdown.is_cancelled(),
-            "proxy owner shut down before route effects"
-        );
         // Keep every follow-up on the change's revocable source capability.
         let interruption = match strategy {
             ProxyChangeBreakMode::Off => Ok(()),
@@ -381,13 +433,10 @@ impl State {
             }
             ProxyChangeBreakMode::All => interrupt_connections(&api, &ConnectionScope::All).await,
         };
-        // Interruption can suspend while the owner is retired. Do not refresh or
-        // report success from that old owner, even if the controller already closed
-        // some connections. The replacement owner must reconcile independently.
-        anyhow::ensure!(
-            !self.shutdown.is_cancelled(),
-            "proxy owner shut down during connection interruption"
-        );
+        // Interruption can suspend during a Host handoff; even when the
+        // controller closed connections, the old owner cannot claim success.
+        self.require_source_instance(&api, "route connection interruption")
+            .await?;
         let mut degradations = Vec::new();
         if let Err(error) = interruption {
             degradations.push(ProxyDegradation {
@@ -400,7 +449,13 @@ impl State {
                 retryable: false,
             });
         }
-        if let Err(error) = self.refresh(actor, api).await {
+        let refreshed = self.refresh(actor, api.clone()).await;
+        if let Err(error) = refreshed {
+            // A transient refresh failure is a UI degradation. A retired
+            // source is not: the write result is no longer proven for the
+            // current Core and must not be reported as normal success.
+            self.require_source_instance(&api, "route refresh failure")
+                .await?;
             degradations.push(ProxyDegradation {
                 phase: ProxyDegradationPhase::UiEffect,
                 code: "proxy_cache_refresh_failed".into(),
@@ -537,20 +592,22 @@ impl Actor for ProxiesActor {
                         ProviderAction::Healthcheck => api.healthcheck_proxy_provider(&name).await,
                     }
                     .map_err(anyhow::Error::from);
-                    // The controller may have applied the request before the owner retired.
-                    // Do not reread or publish from that retired owner, and never replay it.
-                    anyhow::ensure!(
-                        !state.shutdown.is_cancelled(),
-                        "proxy owner shut down during provider mutation"
-                    );
+                    // The controller may have completed an update even if
+                    // ownership changed before the response. Never replay
+                    // a provider write against the next Host.
+                    state
+                        .require_source_instance(&api, "provider mutation completion")
+                        .await?;
                     state
                         .reread_after_rejection(&actor, api.clone(), requested)
                         .await?;
-                    anyhow::ensure!(
-                        !state.shutdown.is_cancelled(),
-                        "proxy owner shut down before provider refresh"
-                    );
-                    state.refresh(&actor, api).await.context(match action {
+                    let refreshed = state.refresh(&actor, api.clone()).await;
+                    if refreshed.is_err() {
+                        state
+                            .require_source_instance(&api, "provider refresh failure")
+                            .await?;
+                    }
+                    refreshed.context(match action {
                         ProviderAction::Update => {
                             "provider update succeeded but cache refresh failed"
                         }
