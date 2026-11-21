@@ -23,7 +23,7 @@ pub use storage::JobStore;
 #[cfg(feature = "redb-store")]
 pub use storage::RedbJobStore;
 
-use actor::{Args, JobsActor, Msg};
+use actor::{Args, JobsActor, Msg, collect_join_failure};
 use journal::{Journal, JournalWorker};
 use ractor::{Actor, ActorRef, RpcReplyPort};
 use std::{sync::Arc, time::Duration};
@@ -81,7 +81,11 @@ impl JobsService {
             .await
         {
             drop(worker.client);
-            let _ = worker.task.await;
+            let mut fatal = None;
+            collect_join_failure(worker.task.await, "journal startup", &mut fatal);
+            if let Some(panic) = fatal {
+                std::panic::resume_unwind(panic);
+            }
             return Err(error);
         }
         let limits = Arc::new(limits);
@@ -159,20 +163,26 @@ impl JobsService {
             .wait_for(|closed| *closed)
             .await
             .map_err(|_| Error::Stopped)?;
+        let mut fatal = None;
         if let Some(task) = self.actor.as_mut() {
-            let _ = task.await;
+            collect_join_failure(task.await, "Jobs actor", &mut fatal);
         }
         self.actor.take();
         if !self.stop_sent {
             client.journal.close().await;
             self.stop_sent = true;
         }
-        // Poll by reference: a timeout must leave the worker handle owned here.
+        // Poll by reference: a timeout must retain the worker handle here.
+        // Once shutdown completes, reap both owners before propagating any
+        // fatal panic, or a journal writer could outlive its shutdown scope.
         if let Some(task) = self.worker.as_mut() {
-            let _ = task.await;
+            collect_join_failure(task.await, "journal worker", &mut fatal);
         }
         self.worker.take();
         self.client.take();
+        if let Some(panic) = fatal {
+            std::panic::resume_unwind(panic);
+        }
         Ok(ShutdownReport {
             remaining: Vec::new(),
             journal_degraded: false,
