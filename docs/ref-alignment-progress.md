@@ -1,5 +1,13 @@
 # ref 对齐进度
 
+## DIFF-116：Core API Lease、状态 Pump 与 Handoff 资源所有权迁移（2026-11-20）
+
+- **固定来源/范围**：参照 `ref@c4b35e048` 的 `backend/nyanpasu-core/src/actor_v2/{mod.rs,api.rs}`。原上游 CoreActor 独占 API Lease、状态订阅 Pump 和 Handoff；本轮沿用其实例绑定、永久撤销、两阶段 Stop 及 generation fence 语义，补齐 Chimera 显式任务回收。风险 L2（Host 变更、API 鉴权、订阅取消及 Actor 停止），不更改用户配置、Runtime 或 `ref` gitlink。维护者要求继续迁移、不额外运行测试或打包；提交钩子不等于运行验收。
+- **ApiLease 正式退出接口**：`chimera-core/src/actor_v2/api.rs::ApiLease::stop` 对旧授权先 `revoke()`，再 `abort()` 并 await Monitor `JoinHandle`，将真实 JoinError/Panic 返回给 Owner；正常取消视为预期。意外状态 Drop 仍保留上游 fail-closed 撤销行为，但正常 CoreActor 生命周期不再直接 `state.api.take()` 丢弃监视任务。原 `stop_for_test` 转而复用正式退出接口。
+- **CoreActor 实际所有权**：`CoreActorState::retire_api` 统一执行撤销和 Join，已接入 API binding 替换、binding 查询失败或端点不再 Connected、EndpointDown 降级、Shutdown、Handoff 提交及 Host Adopt。CoreActor `post_stop` 先撤销所有 API Clone 授权，再依次排空 Pump/Handoff，最终 Join API Monitor 后传播第一个致命 Panic，避免异常处理本身中断已提交的 Core Stop。Host `adopt()` 现在 async，旧 generation 的只读状态 Pump 会先 abort + join，再发布新实例；保留旧状态 frame 被 generation fence 拒绝的上游机制，并且不改变 Core 变更/Stop 的业务结果判定。
+- **WebSocket 流授权撤销**：共享 `ApiClient::execute_stream_frame` 的前后权威 binding 检查加入已有 30 秒 API deadline 和撤销优先 `tokio::select!`；`forward_api_stream` 每个 sample 的授权检查同样受撤销与 deadline 约束。这样旧 Core 在 status stream 中挂起的 IPC 鉴权不会阻挡永久撤销，避免 Host 替换后旧 WebSocket 继续转发新的帧。不存在成功后自动重放写入；定时检查和 CoreActor API lease 保持上游契约。
+- **源码回归定义/待验**：新增显式 `ApiLease::stop()` 取消所有共享 Clone 并 Join Monitor 的 Rust 测试定义；本轮未运行任何功能测试、打包或桌面 E2E。上游 `ApiLease` 默认依赖 Drop 撤销/abort，而 Chimera 的显式 Join、前台 Core Actor await 和流读取超时为额外安全适配；不能误称逐行一致。后续仍需实际平台验证 GUI/授权切换和其它后台任务退出。若回滚，本轮的显式 Monitor Join 与调用点应同步回滚，不删除用户数据、证据、迁移状态或备份。
+
 ## DIFF-115：Core Actor Handoff 与 Service Command 兼容通路的退出所有权（2026-11-20）
 
 - **来源和范围**：固定 `ref@c4b35e048` 的 `nyanpasu-core/src/actor_v2/mod.rs` 和 `service_actor.rs`，以 Core Stop/Handoff、只读状态 Pump 与 Service Elevated 命令的实际所有权为界。风险 L2；不更改 Core 操作协议、迁移、备份和两个 gitlink。根据用户要求，本轮不额外运行测试、打包或 E2E。
