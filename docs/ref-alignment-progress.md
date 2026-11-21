@@ -1,5 +1,13 @@
 # ref 对齐进度
 
+## DIFF-118：ProxiesActor 旧 Host 失效事件隔离与 API Monitor 所有权迁移（2026-11-20）
+
+- **固定上游与目标**：对照 `ref@c4b35e048` 中 `backend/nyanpasu-core/src/proxies.rs` 与 `backend/nyanpasu-core/src/actor_v2/api.rs` 的单 Core Lease、代理缓存 generation fence、失效订阅监控。Chimera 原有 ProxiesActor 已保留 ref 的单线程 Actor、`same_instance`、缓存快照与失效消息；这轮补齐的是本地 Host 切换通知和 Monitor 退出所有权，不另造 API 控制器。风险 L2（WebSocket 与代理缓存的旧 Host 数据、订阅通知及 Actor 退出）；不修改配置、Runtime、`ref` gitlink 和真实代理写命令协议。按用户持续要求，不单独执行功能测试、打包或 GUI E2E，仓库提交钩子只作为正常 Git 提交条件。
+- **API 订阅 Monitor 的显式回收**：新增 `cancel_owned_task` 与原始 Panic payload 转发，在代理快照重读、缓存清空、手动 Invalidate、Host instance 替换和 Actor `post_stop` 时取消并 await Monitor `JoinHandle`，区分正常取消与致命 Panic。终止时也取消并回收只读的 10 秒刷新 Timer，再清空已发布的代理缓存，最后才传播首个未处理的任务 Panic。意外 Actor State Drop 仍保留 fail-closed abort 兜底。与 ref 一样只用单个实例绑定 Core API Lease，不把业务请求复制到第二个 Core。
+- **旧 Host 事件严格 fencing**：过去仅成功刷新时递增 `generation`，主动清空与清理旧实例时没有推进该 fence；现 `invalidate_cache` 在取消/回收旧 Monitor 后也推进 generation，旧 `Message::Invalidated(old_generation)` 永不作用于后续新缓存。`refresh` 在新缓存发布前回收旧 Monitor，重新检查 `shutdown` 和 `snapshot.api.is_revoked()`，若状态已变化则主动清空缓存并拒绝发布；缓存命中前同样检查当前 lease 与 shutdown，不能在关闭路径复用旧 Host 数据。仍保留原有 `refresh_queued` 合并、失败后重新读取而不自动重放写入的上游语义。
+- **相同数据的新实例也需要通知**：ref 的原始 `fingerprint` 通常只看代理列表内容，Chimera 使用独立的 Proxy API 订阅消费方；当 Host handoff 后新旧 Core 返回内容相同的组列表时，UI/Proxy 操作仍应重新绑定新的 Core Lease。现在刷新通知条件由“快照字节不同”扩展为“快照字节不同或 `!same_instance`”，避免把跨 Host 的真实身份变更误当作无变化；不改变代理节点排列/延迟和操作结果。
+- **源代码回归和剩余边界**：新增两项未执行的 `proxies_actor_tests.rs` 验收源码：旧 generation 的迟到失效消息不得删除新的实例缓存；新 Core 即使返回完全相同的代理组，也应发出订阅变更通知。生产 WebSocket Actor 的日志/流 Worker join 已由 DIFF-117 处理，此轮不重复修改。尚未执行独立全量编译、实际 macOS/Windows/Linux Host Handoff 或多客户端 UI E2E；若需回滚应保留实例绑定的 API、Profiles、迁移状态、备份及 `.corrupt-*` 证据，不重放不确定的代理写操作。
+
 ## DIFF-117：Core API Monitor、WebSocket Worker 与旧实例缓存的退出回收（2026-11-20）
 
 - **固定来源/风险**：参考 `ref@c4b35e048` 中 `backend/nyanpasu-core/src/{actor_v2/api.rs,clash/ws.rs}` 的单实例 API Lease、WebSocket Worker 与 Actor 停止所有权语义。在 DIFF-116 已完成 CoreActor API Monitor 显式退休与状态 Pump 回收后，继续处理 Chimera `clash/ws.rs` 尚未 join 的日志、重连、详情订阅以及多 socket worker。风险 L2（日志流重订阅、旧 Host 事件与 Panic 传播）；仍依维护者要求不额外运行单测、全量构建、桌面 E2E 或打包，仓库强制提交钩子仅是提交流程。
