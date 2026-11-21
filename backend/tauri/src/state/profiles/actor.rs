@@ -11,7 +11,10 @@ use chimera_config::profile::{
     RemoteProfileOptions, RemoteProfileOptionsPatch, RemoteSyncInterval, ScriptRuntime,
     SubscriptionInfo, TransformDefinition,
 };
-use chimera_contracts::profiles::{command_failure::ProfileFailure, error::ProfileFileError};
+use chimera_contracts::profiles::{
+    command_failure::{MaterializationOperation, ProfileContentError, ProfileFailure},
+    error::{ProfileFileError, SubscriptionFetchError},
+};
 use chimera_core::state::{PersistentStateManager, ReplaceIfVersionResult, Version};
 use chimera_core_manager::OperationId;
 use ractor::{Actor, ActorProcessingErr, ActorRef, RpcReplyPort};
@@ -101,8 +104,20 @@ pub enum ProfilesError {
     #[error("profile materialization failed: {context}: {source}")]
     MaterializationFile {
         context: &'static str,
+        operation: Option<MaterializationOperation>,
         #[source]
         source: ProfileFileError,
+    },
+    #[error("subscription download failed for {url}: {source}")]
+    FetchSubscription {
+        url: url::Url,
+        #[source]
+        source: SubscriptionFetchError,
+    },
+    #[error("the downloaded content is not a valid profile: {source}")]
+    ProfileContentRejected {
+        #[source]
+        source: ProfileContentError,
     },
     #[error("profiles actor rpc failed: {0}")]
     Rpc(String),
@@ -154,6 +169,8 @@ impl ProfilesError {
             | Self::SourceTransaction { .. }
             | Self::Materialization(_)
             | Self::MaterializationFile { .. }
+            | Self::FetchSubscription { .. }
+            | Self::ProfileContentRejected { .. }
             | Self::Rpc(_)
             | Self::ProfileSyncJobs(_)
             | Self::ShuttingDown => None,
@@ -257,6 +274,17 @@ pub(crate) enum RefreshOrigin {
     Scheduled,
 }
 
+/// A download/validation failure retains its original typed cause across
+/// the actor mailbox, while legacy mock/adapter errors keep their old text.
+#[derive(Debug)]
+pub enum RefreshFailureSource {
+    Subscription {
+        url: url::Url,
+        source: SubscriptionFetchError,
+    },
+    Content(ProfileContentError),
+}
+
 #[derive(Debug)]
 pub enum RefreshOutcome {
     Succeeded {
@@ -271,6 +299,7 @@ pub enum RefreshOutcome {
     },
     Failed {
         message: String,
+        source: Option<RefreshFailureSource>,
     },
 }
 
@@ -677,7 +706,16 @@ impl ProfilesActor {
         error: impl Into<anyhow::Error>,
     ) -> ProfilesError {
         match error.into().downcast::<ProfileFileError>() {
-            Ok(source) => ProfilesError::MaterializationFile { context, source },
+            Ok(source) => ProfilesError::MaterializationFile {
+                context,
+                operation: match context {
+                    "prepare materialization" => Some(MaterializationOperation::PrepareFileFirst),
+                    "discard staged resource" => Some(MaterializationOperation::Compensate),
+                    "prepare cleanup" => Some(MaterializationOperation::PrepareCleanup),
+                    _ => None,
+                },
+                source,
+            },
             Err(error) => ProfilesError::Materialization(format!("{context}: {error}")),
         }
     }
@@ -1288,10 +1326,30 @@ impl ProfilesActor {
         }
     }
 
-    fn validate_fetched_content(
+    /// Keep the original YAML parser failure, not a guessed content error.
+    /// Both import and scheduled refresh use exactly this validator before
+    /// any materialized file or source transaction can be written.
+    fn fetch_failure(
+        message: String,
+        source: Option<RefreshFailureSource>,
+        importing: bool,
+    ) -> ProfilesError {
+        match source {
+            Some(RefreshFailureSource::Subscription { url, source }) => {
+                ProfilesError::FetchSubscription { url, source }
+            }
+            Some(RefreshFailureSource::Content(source)) => {
+                ProfilesError::ProfileContentRejected { source }
+            }
+            None if importing => ProfilesError::ImportFailed { message },
+            None => ProfilesError::RefreshFailed { message },
+        }
+    }
+
+    fn validate_fetched_content_typed(
         definition: &ProfileDefinition,
         content: &str,
-    ) -> Result<(), String> {
+    ) -> Result<(), ProfileContentError> {
         let needs_yaml = match definition {
             ProfileDefinition::Config { .. } => true,
             ProfileDefinition::Transform { transform } => {
@@ -1300,22 +1358,44 @@ impl ProfilesActor {
         };
         if needs_yaml {
             let mapping = serde_yaml::from_str::<serde_yaml::Mapping>(content)
-                .map_err(|e| format!("downloaded content is not a YAML mapping: {e}"))?;
-            // Legacy subscription semantics (remote.rs BC): a Config
-            // subscription must actually carry proxies, otherwise arbitrary
-            // mappings (e.g. `{}`) get persisted and can be auto-activated.
+                .map_err(|source| ProfileContentError::NotYamlMapping { source })?;
             if matches!(definition, ProfileDefinition::Config { .. })
                 && !mapping.contains_key("proxies")
                 && !mapping.contains_key("proxy-providers")
             {
-                return Err("subscription does not contain `proxies` or `proxy-providers`".into());
+                return Err(ProfileContentError::MissingProxies);
             }
             Ok(())
         } else if content.trim().is_empty() {
-            Err("downloaded script is empty".into())
+            Err(ProfileContentError::EmptyScript)
         } else {
             Ok(())
         }
+    }
+
+    /// Legacy call sites still need the exact historical text for sync jobs
+    /// and old GUI consumers. Typed callers retain the actual source instead.
+    fn content_error_message(error: &ProfileContentError) -> String {
+        match error {
+            ProfileContentError::NotYamlMapping { source } => {
+                format!("downloaded content is not a YAML mapping: {source}")
+            }
+            ProfileContentError::ReserializeYaml { source } => {
+                format!("could not reserialize the YAML mapping: {source}")
+            }
+            ProfileContentError::MissingProxies => {
+                "subscription does not contain `proxies` or `proxy-providers`".into()
+            }
+            ProfileContentError::EmptyScript => "downloaded script is empty".into(),
+        }
+    }
+
+    fn validate_fetched_content(
+        definition: &ProfileDefinition,
+        content: &str,
+    ) -> Result<(), String> {
+        Self::validate_fetched_content_typed(definition, content)
+            .map_err(|error| Self::content_error_message(&error))
     }
 
     /// design §17 five reference categories. Item-level referrers plus the two
@@ -1934,13 +2014,27 @@ impl Actor for ProfilesActor {
                     // definition that was replaced meanwhile.
                     let fetch = async {
                         tracing::info!(target: "chimera::profile_sync", stage = "download", "Downloading profile");
-                        let fetched = fetcher
-                            .fetch(&url, &option)
-                            .await
-                            .map_err(|e| format!("download failed: {e}"))?;
-                        Self::validate_fetched_content(&definition, &fetched.content)?;
+                        let fetched = fetcher.fetch(&url, &option).await.map_err(|error| {
+                            let message = format!("download failed: {error}");
+                            let source =
+                                error
+                                    .downcast::<SubscriptionFetchError>()
+                                    .ok()
+                                    .map(|source| RefreshFailureSource::Subscription {
+                                        url: url.clone(),
+                                        source,
+                                    });
+                            (message, source)
+                        })?;
+                        Self::validate_fetched_content_typed(&definition, &fetched.content)
+                            .map_err(|source| {
+                                (
+                                    Self::content_error_message(&source),
+                                    Some(RefreshFailureSource::Content(source)),
+                                )
+                            })?;
                         tracing::info!(target: "chimera::profile_sync", stage = "validated", "Profile content validated");
-                        Ok::<_, String>((
+                        Ok::<_, (String, Option<RefreshFailureSource>)>((
                             fetched.subscription,
                             fetched.suggested_update_interval_minutes,
                             fetched.content,
@@ -1963,7 +2057,7 @@ impl Actor for ProfilesActor {
                             content,
                             filename,
                         },
-                        Err(message) => RefreshOutcome::Failed { message },
+                        Err((message, source)) => RefreshOutcome::Failed { message, source },
                     };
                     let _ = actor.cast(ProfilesActorMessage::CommitRefreshed {
                         uid: commit_uid,
@@ -2004,8 +2098,8 @@ impl Actor for ProfilesActor {
                 let reply = pending.reply;
                 let commit = async {
                     match outcome {
-                        RefreshOutcome::Failed { message } => {
-                            Err(ProfilesError::RefreshFailed { message })
+                        RefreshOutcome::Failed { message, source } => {
+                            Err(Self::fetch_failure(message, source, false))
                         }
                         RefreshOutcome::Succeeded {
                             subscription,
@@ -2170,15 +2264,29 @@ impl Actor for ProfilesActor {
                 // Actor shutdown / cast failure remains safe: pending state drops.
                 tokio::spawn(async move {
                     let fetch_result = tokio::spawn(async move {
-                        let fetched = fetcher
-                            .fetch(&url, &option)
-                            .await
-                            .map_err(|e| format!("download failed: {e}"))?;
-                        Self::validate_fetched_content(
+                        let fetched = fetcher.fetch(&url, &option).await.map_err(|error| {
+                            let message = format!("download failed: {error}");
+                            let source =
+                                error
+                                    .downcast::<SubscriptionFetchError>()
+                                    .ok()
+                                    .map(|source| RefreshFailureSource::Subscription {
+                                        url: url.clone(),
+                                        source,
+                                    });
+                            (message, source)
+                        })?;
+                        Self::validate_fetched_content_typed(
                             &definition_for_validation,
                             &fetched.content,
-                        )?;
-                        Ok::<_, String>((
+                        )
+                        .map_err(|source| {
+                            (
+                                Self::content_error_message(&source),
+                                Some(RefreshFailureSource::Content(source)),
+                            )
+                        })?;
+                        Ok::<_, (String, Option<RefreshFailureSource>)>((
                             fetched.subscription,
                             fetched.suggested_update_interval_minutes,
                             fetched.content,
@@ -2198,7 +2306,7 @@ impl Actor for ProfilesActor {
                             content,
                             filename,
                         },
-                        Ok(Err(message)) => RefreshOutcome::Failed { message },
+                        Ok(Err((message, source))) => RefreshOutcome::Failed { message, source },
                         // Do not downcast panic payloads; emit a stable diagnostic.
                         Err(join_error) => RefreshOutcome::Failed {
                             message: if join_error.is_panic() {
@@ -2206,6 +2314,7 @@ impl Actor for ProfilesActor {
                             } else {
                                 "subscription fetch task cancelled".into()
                             },
+                            source: None,
                         },
                     };
                     let _ = actor.cast(ProfilesActorMessage::CommitImported { token, outcome });
@@ -2222,8 +2331,8 @@ impl Actor for ProfilesActor {
                 }
 
                 let result = match outcome {
-                    RefreshOutcome::Failed { message } => {
-                        Err(ProfilesError::ImportFailed { message })
+                    RefreshOutcome::Failed { message, source } => {
+                        Err(Self::fetch_failure(message, source, true))
                     }
                     RefreshOutcome::Succeeded {
                         subscription,
@@ -2642,10 +2751,16 @@ mod tests {
             source: std::io::Error::other("filesystem permission denied"),
         };
         let error = ProfilesActor::materialization_error("prepare materialization", source);
-        let ProfilesError::MaterializationFile { context, source } = &error else {
+        let ProfilesError::MaterializationFile {
+            context,
+            operation,
+            source,
+        } = &error
+        else {
             panic!("typed ProfileFileError must survive the materialization boundary");
         };
         assert_eq!(*context, "prepare materialization");
+        assert_eq!(*operation, Some(MaterializationOperation::PrepareFileFirst));
         assert!(source.to_string().contains("profiles/materialized.yaml"));
         assert!(
             std::error::Error::source(&error)
@@ -2653,6 +2768,49 @@ mod tests {
                 .to_string()
                 .contains("profiles/materialized.yaml")
         );
+    }
+
+    #[test]
+    fn typed_content_validation_keeps_original_yaml_and_expected_ref_reason() {
+        let definition = config_definition();
+        let error = ProfilesActor::validate_fetched_content_typed(&definition, "[")
+            .expect_err("invalid YAML must be rejected before source commit");
+        assert!(matches!(error, ProfileContentError::NotYamlMapping { .. }));
+        assert!(std::error::Error::source(&error).is_some());
+        assert_eq!(
+            serde_json::to_value(&error).unwrap(),
+            serde_json::json!({ "kind": "not_yaml_mapping" }),
+        );
+        let missing = ProfilesActor::validate_fetched_content_typed(&definition, "{}")
+            .expect_err("remote config must have proxies or providers");
+        assert!(matches!(missing, ProfileContentError::MissingProxies));
+        assert_eq!(
+            serde_json::to_value(missing).unwrap(),
+            serde_json::json!({ "kind": "missing_proxies" }),
+        );
+    }
+
+    #[test]
+    fn real_subscription_fetch_source_survives_mailbox_settlement() {
+        let source = SubscriptionFetchError::SubscriptionHttpStatus { status: 403 };
+        let error = ProfilesActor::fetch_failure(
+            "download failed: 403".into(),
+            Some(RefreshFailureSource::Subscription {
+                url: url::Url::parse("https://example.com/sub.yaml").unwrap(),
+                source,
+            }),
+            false,
+        );
+        assert!(matches!(
+            &error,
+            ProfilesError::FetchSubscription {
+                source: SubscriptionFetchError::SubscriptionHttpStatus { status: 403 },
+                ..
+            }
+        ));
+        assert!(std::error::Error::source(&error).is_some());
+        let unknown = ProfilesActor::fetch_failure("download failed: other".into(), None, true);
+        assert!(matches!(unknown, ProfilesError::ImportFailed { .. }));
     }
 
     #[test]
