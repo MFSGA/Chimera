@@ -1,10 +1,12 @@
 //! Shared source-committed mutation results.
 //!
-//! Port of the proxy-relevant part of the pinned ref
-//! `nyanpasu-runtime-values/src/runtime.rs`. Other RuntimeError- and
-//! ProfilesError-bearing degradation reasons still belong to the later
-//! cross-domain migration; the desktop's existing wire DTO is unchanged.
+//! Port of the dependency-independent parts of pinned ref
+//! `nyanpasu-runtime-values/src/runtime.rs`. Rich RuntimeError- and
+//! ProfilesError-bearing reasons remain with their owning domains; Chimera's
+//! additional runtime states and phases are retained for desktop wire parity.
 use serde::{Deserialize, Serialize};
+
+use crate::profiles::ports::ProfileDegradationCode;
 
 /// A source commit and its critical runtime outcome. Side effects settle
 /// separately and cannot undo a committed source mutation.
@@ -23,6 +25,10 @@ pub enum RuntimeCommitStatus {
     Deferred,
     SavedInactive,
     Unchanged,
+    /// Chimera's explicitly unproven async runtime state.
+    Pending,
+    /// Chimera's durable recovery-required state.
+    RecoveryRequired,
 }
 
 /// REF's committed/committed-degraded shape, independent of Tauri or IPC.
@@ -133,14 +139,22 @@ pub struct Degradation {
     pub retryable: bool,
 }
 
-/// Typed REF degradation reasons used by the proxy source mutation owner.
-/// Other reasons requiring upstream RuntimeError/ProfilesError are intentionally
-/// not represented by lossy string placeholders in this shared contract.
+/// Dependency-independent typed REF degradation reasons.
+/// Variants requiring a complete RuntimeError/ProfilesError are deliberately
+/// not represented with placeholder strings or fabricated error causes.
 #[derive(Debug, Clone, Serialize, specta::Type)]
 #[serde(tag = "code", rename_all = "snake_case")]
 pub enum DegradationReason {
+    ModeInterruptionFailed { cause: InterruptFailure },
+    ProfileInterruptionFailed { cause: InterruptFailure },
     ProxyInterruptionFailed { cause: InterruptFailure },
     ProxyCacheRefreshFailed,
+    JournalInvalid,
+    JobsJournalUnavailable,
+    MaterializationDeferred,
+    CleanupDeferred,
+    HttpServerUnavailable,
+    LocalSocketUnavailable,
 }
 
 impl DegradationReason {
@@ -148,8 +162,29 @@ impl DegradationReason {
     /// reason owns this mapping, rather than each UI adapter inventing one.
     pub const fn code(&self) -> &'static str {
         match self {
+            Self::ModeInterruptionFailed { .. } => "mode_interruption_failed",
+            Self::ProfileInterruptionFailed { .. } => "profile_interruption_failed",
             Self::ProxyInterruptionFailed { .. } => "proxy_interruption_failed",
             Self::ProxyCacheRefreshFailed => "proxy_cache_refresh_failed",
+            Self::JournalInvalid => "journal_invalid",
+            Self::JobsJournalUnavailable => "jobs_journal_unavailable",
+            Self::MaterializationDeferred => "materialization_deferred",
+            Self::CleanupDeferred => "cleanup_deferred",
+            Self::HttpServerUnavailable => "http_server_unavailable",
+            Self::LocalSocketUnavailable => "local_socket_unavailable",
+        }
+    }
+}
+
+/// Source-of-truth mapping: the same shared profile port owns both its
+/// retryability and the public structured reason. Tauri only projects the
+/// existing flat `code` field at its IPC boundary.
+impl From<ProfileDegradationCode> for DegradationReason {
+    fn from(code: ProfileDegradationCode) -> Self {
+        match code {
+            ProfileDegradationCode::JournalInvalid => Self::JournalInvalid,
+            ProfileDegradationCode::MaterializationDeferred => Self::MaterializationDeferred,
+            ProfileDegradationCode::CleanupDeferred => Self::CleanupDeferred,
         }
     }
 }
@@ -166,9 +201,16 @@ pub enum InterruptFailure {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "snake_case")]
 pub enum DegradationPhase {
+    /// Chimera keeps legacy config mirror errors separate from runtime apply.
+    LegacyMirror,
     ProfileMaterialization,
     RuntimeBuild,
+    /// Chimera's distinct validate/check/promote/publish transaction stages.
+    RuntimeCheck,
+    RuntimePromote,
+    RuntimePublish,
     RuntimeApply,
+    CoreRollback,
     SystemEffect,
     UiEffect,
 }
@@ -203,6 +245,42 @@ mod tests {
         );
         assert_eq!(degraded["degradations"][0]["reason"]["cause"], "timeout");
         assert_eq!(degraded["degradations"][0]["phase"], "system_effect");
+    }
+
+    #[test]
+    fn profile_reason_mapping_matches_ref_codes_and_retryable_port() {
+        for (source, expected) in [
+            (ProfileDegradationCode::JournalInvalid, "journal_invalid"),
+            (
+                ProfileDegradationCode::MaterializationDeferred,
+                "materialization_deferred",
+            ),
+            (ProfileDegradationCode::CleanupDeferred, "cleanup_deferred"),
+        ] {
+            let reason = DegradationReason::from(source);
+            assert_eq!(reason.code(), expected);
+            assert_eq!(serde_json::to_value(&reason).unwrap()["code"], expected);
+        }
+    }
+
+    #[test]
+    fn chimera_runtime_states_and_phases_keep_legacy_serde_values() {
+        assert_eq!(
+            serde_json::to_value(RuntimeCommitStatus::RecoveryRequired).unwrap(),
+            "recovery_required"
+        );
+        assert_eq!(
+            serde_json::to_value(RuntimeCommitStatus::Pending).unwrap(),
+            "pending"
+        );
+        assert_eq!(
+            serde_json::to_value(DegradationPhase::RuntimePublish).unwrap(),
+            "runtime_publish"
+        );
+        assert_eq!(
+            serde_json::to_value(DegradationPhase::LegacyMirror).unwrap(),
+            "legacy_mirror"
+        );
     }
 
     #[test]
