@@ -326,7 +326,7 @@ impl ChimeraClient {
                 shutdown.clone(),
                 &tasks,
             ))?;
-        let profile_gate = Arc::new(reconciler::check::CandidateCheck::new(
+        let profile_gate = Arc::new(reconciler::legacy_check::CandidateCheck::new(
             core.clone(),
             typed.application.clone(),
             typed.clash_config.clone(),

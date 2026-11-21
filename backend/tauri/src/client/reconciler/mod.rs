@@ -5,10 +5,11 @@
 
 pub(in crate::client) mod adapters;
 pub(crate) mod attempt;
-pub(crate) mod check;
+pub(in crate::client) mod check;
 pub(crate) mod committed;
 pub(crate) mod decision;
 pub(in crate::client) mod inputs;
+pub(crate) mod legacy_check;
 pub(in crate::client) mod legacy_preparation;
 pub(crate) mod mutation;
 pub(in crate::client) mod ports;
@@ -16,4 +17,5 @@ pub(in crate::client) mod preparation;
 pub(crate) mod profiles;
 pub(crate) mod proof;
 pub(crate) mod release;
+
 pub(crate) mod status;

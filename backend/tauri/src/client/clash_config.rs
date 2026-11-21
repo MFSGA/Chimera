@@ -563,7 +563,7 @@ impl ChimeraClient {
         // under one fence while checking this proposed Clash source. Reuse
         // its one check implementation; leave postcommit runtime application
         // with the existing CoreLifecycle owner until Clash's actor migrates.
-        let checker = super::reconciler::check::CandidateCheck::new(
+        let checker = super::reconciler::legacy_check::CandidateCheck::new(
             self.inner.core.clone(),
             self.inner.application.clone(),
             self.inner.clash_config.clone(),

@@ -2843,7 +2843,7 @@ mod tests {
         use chimera_core_manager::{CoreError, CoreErrorKind};
 
         let refusal = ProfilesActor::runtime_gate_failure(
-            crate::client::reconciler::check::typed_gate_error(
+            crate::client::reconciler::legacy_check::typed_gate_error(
                 "profiles",
                 anyhow::Error::new(RuntimeCheckFailure::from_core_error(CoreError::new(
                     CoreErrorKind::ConfigCheckFailed,
@@ -2872,7 +2872,7 @@ mod tests {
         );
 
         let unavailable = ProfilesActor::runtime_gate_failure(
-            crate::client::reconciler::check::typed_gate_error(
+            crate::client::reconciler::legacy_check::typed_gate_error(
                 "profiles",
                 anyhow::Error::new(RuntimeCheckFailure::from_core_error(CoreError::new(
                     CoreErrorKind::BackendUnavailable,
@@ -2902,7 +2902,7 @@ mod tests {
     #[test]
     fn unknown_validator_error_does_not_forge_an_explicit_core_rejection() {
         let error = ProfilesActor::runtime_gate_failure(
-            crate::client::reconciler::check::typed_gate_error(
+            crate::client::reconciler::legacy_check::typed_gate_error(
                 "profiles",
                 anyhow::anyhow!("candidate input resolver could not be reached"),
             ),
