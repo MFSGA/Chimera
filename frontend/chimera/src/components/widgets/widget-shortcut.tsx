@@ -29,11 +29,9 @@ import {
 } from '@/components/settings/system-proxy';
 import { OS } from '@/consts';
 import {
-  getCoreStatusBadgeMessage,
-  getRoutedCoreStatusMessage,
-  isRoutedCoreRunning,
-} from '@/features/dashboard/core-service-status';
-import { visibleProxyShortcutButtons } from '@/features/dashboard/proxy-shortcut-buttons';
+  proxyShortcutPreviewStatus,
+  visibleProxyShortcutButtons,
+} from '@/features/dashboard/proxy-shortcut-buttons';
 import { getProxyStatus } from '@/features/dashboard/proxy-status';
 import { useTransparentProxyAction } from '@/features/system-proxy/use-proxy-settings';
 import useCoreIcon from '@/hooks/use-core-icon';
@@ -43,6 +41,10 @@ import { coreControllerChannel } from './dashboard-core-channel';
 import { useWidgetConfig } from './provider';
 import { WidgetId, type WidgetConfigs } from './widget-config';
 import WidgetItem from './widget-item';
+import {
+  coreShortcutBadgeMessage,
+  coreShortcutCardPresentation,
+} from './widget-shortcut-status';
 import { WidgetHeader, WidgetTitle } from './widget-ui';
 
 /** Resolve the actual network state; an unapplied transparent config is not active. */
@@ -146,6 +148,7 @@ export function ProxyShortcutsWidget({
     config.order,
     linuxDesktop,
   );
+  const previewStatus = proxyShortcutPreviewStatus(buttons);
 
   return (
     <WidgetItem
@@ -164,14 +167,22 @@ export function ProxyShortcutsWidget({
             <Button
               variant="raised"
               disabled
-              className="bg-primary-container text-on-primary-container flex h-6 min-w-0 items-center px-2 text-xs"
+              className={cn(
+                'flex h-6 min-w-0 items-center px-2 text-xs',
+                previewStatus === 'disabled'
+                  ? 'bg-secondary-container text-on-secondary-container'
+                  : previewStatus === 'tun' || previewStatus === 'transparent'
+                    ? 'bg-tertiary-container text-on-tertiary-container'
+                    : 'bg-primary-container text-on-primary-container',
+              )}
             >
-              {config.buttons.length === 1 && config.buttons[0] === 'tun'
+              {previewStatus === 'tun'
                 ? m.dashboard_widget_proxy_status_success_tun()
-                : config.buttons.length === 1 &&
-                    config.buttons[0] === 'transparent'
+                : previewStatus === 'transparent'
                   ? m.settings_clash_transparent_proxy_label()
-                  : m.dashboard_widget_proxy_status_success_system()}
+                  : previewStatus === 'disabled'
+                    ? m.dashboard_widget_proxy_status_disabled()
+                    : m.dashboard_widget_proxy_status_success_system()}
             </Button>
           </WidgetHeader>
         ) : (
@@ -231,33 +242,29 @@ export function ProxyShortcutsWidget({
 
 /** Build the explanatory badge for the current core/service state. */
 const CoreStatusBadge = () => {
-  const {
-    query: { data: serviceStatus },
-  } = useSystemService();
+  const { query: serviceQuery } = useSystemService();
+  const serviceStatus = serviceQuery.data;
   const routedCoreStatusQuery = useCoreActorStatus();
   const coreStatusQuery = useCoreStatus({
     enabled: !routedCoreStatusQuery.data,
   });
 
-  const message = useMemo<string>(
-    () =>
-      routedCoreStatusQuery.data
-        ? getRoutedCoreStatusMessage(routedCoreStatusQuery.data)
-        : !coreStatusQuery.data
-          ? m.common_loading()
-          : getCoreStatusBadgeMessage({
-              coreState: coreStatusQuery.data?.status,
-              serviceStatus: serviceStatus?.status,
-              serviceCoreState: serviceStatus?.server?.core_infos?.state,
-            }),
-    [serviceStatus, coreStatusQuery.data, routedCoreStatusQuery.data],
-  );
+  const message = coreShortcutBadgeMessage({
+    actor: routedCoreStatusQuery.data,
+    actorLoading: routedCoreStatusQuery.isPending,
+    actorFailed: routedCoreStatusQuery.isError,
+    legacyCoreState: coreStatusQuery.data?.status,
+    legacyFailed: coreStatusQuery.isError,
+    serviceStatus: serviceStatus?.status,
+    serviceCoreState: serviceStatus?.server?.core_infos?.state,
+    serviceFailed: serviceQuery.isError,
+  });
 
   return (
     <div
       className={cn(
-        'flex h-6 min-w-0 items-center rounded-full text-sm',
-        'bg-surface-variant/50',
+        'flex h-6 max-w-full min-w-0 items-center rounded-full text-xs font-medium',
+        'bg-secondary-container/50 text-on-secondary-container',
       )}
       data-slot="core-status-badge"
     >
@@ -282,16 +289,16 @@ const CurrentCoreCard = ({
   const coreStatusQuery = useCoreStatus({ enabled: !actorStatusQuery.data });
   const actorStatus = actorStatusQuery.data;
   const channel = coreControllerChannel(actorStatus?.controller);
-  const isRunning = actorStatus
-    ? isRoutedCoreRunning(actorStatus)
-    : coreStatusQuery.data?.status === 'Running';
-  const displayStatus = actorStatus
-    ? getRoutedCoreStatusMessage(actorStatus)
-    : !coreStatusQuery.data
-      ? m.common_loading()
-      : isRunning
-        ? m.dashboard_widget_core_status_running()
-        : m.dashboard_widget_core_status_stopped();
+  const presentation = coreShortcutCardPresentation({
+    actor: actorStatus,
+    actorLoading: actorStatusQuery.isPending,
+    actorFailed: actorStatusQuery.isError,
+    legacyCoreState: coreStatusQuery.data?.status,
+    legacyFailed: coreStatusQuery.isError,
+  });
+  const isRunning = presentation.kind === 'running';
+  const isTerminal =
+    presentation.kind === 'running' || presentation.kind === 'stopped';
 
   return (
     <Button
@@ -348,16 +355,21 @@ const CurrentCoreCard = ({
               'flex shrink-0 items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium',
               isRunning
                 ? 'bg-primary-container text-on-primary-container'
-                : 'bg-surface-variant text-on-surface-variant',
+                : presentation.kind === 'error'
+                  ? 'bg-error-container text-on-error-container'
+                  : 'bg-surface-variant text-on-surface-variant',
             )}
             data-slot="core-status"
+            data-state={presentation.kind}
           >
-            <span
-              className="size-1.5 shrink-0 rounded-full bg-current"
-              aria-hidden="true"
-              data-slot="core-status-indicator"
-            />
-            <span data-slot="core-status-text">{displayStatus}</span>
+            {isTerminal && (
+              <span
+                className="size-1.5 shrink-0 rounded-full bg-current"
+                aria-hidden="true"
+                data-slot="core-status-indicator"
+              />
+            )}
+            <span data-slot="core-status-text">{presentation.message}</span>
           </div>
         </div>
         {config.showChannel && (
