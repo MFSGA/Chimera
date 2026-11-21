@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use anyhow::Context as _;
 use chimera_config::clash::config::{ClashConfig, ClashConfigPatch};
+use chimera_core_manager::OperationId;
 use chimera_state_engine::{PersistentStateManager, ReplaceIfVersionResult, Version};
 use ractor::{Actor, ActorProcessingErr, ActorRef, RpcReplyPort};
 use struct_patch::Patch;
@@ -9,6 +10,7 @@ use struct_patch::Patch;
 use super::{
     ConditionalReplaceResult,
     mirror::{ClashLegacyBridge, PreparedTypedReplace},
+    mutation::impact,
 };
 
 /// Snapshot of the saved Clash configuration domain, not live Clash runtime API state.
@@ -16,6 +18,9 @@ use super::{
 pub struct ClashConfigSnapshot {
     pub state: ClashConfig,
     pub version: u64,
+    /// Whether this durable source commit changes the runtime target.
+    pub reaches_runtime: bool,
+    pub(crate) operation_id: Option<OperationId>,
 }
 
 pub struct ClashConfigActorArgs {
@@ -60,6 +65,8 @@ impl ClashConfigActor {
         ClashConfigSnapshot {
             state: snapshot.state.clone(),
             version: *snapshot.version.as_ref(),
+            reaches_runtime: false,
+            operation_id: None,
         }
     }
 
@@ -79,13 +86,29 @@ impl ClashConfigActor {
         next: ClashConfig,
     ) -> anyhow::Result<ClashConfigSnapshot> {
         let (next, mirror) = Self::prepare_replace(state, next)?.into_parts();
-        state
+        let current = state.manager.snapshot_handle().load();
+        let reaches_runtime = impact::reaches_runtime(&current.state, &next, &[]);
+        let version = current.version;
+        drop(current);
+        match state
             .manager
-            .upsert(next)
+            .replace_if_version(version, next)
             .await
-            .context("failed to persist clash config")?;
-        mirror.apply();
-        Ok(Self::snapshot(state))
+            .context("failed to persist clash config")?
+        {
+            ReplaceIfVersionResult::Replaced => {
+                mirror.apply();
+                let mut snapshot = Self::snapshot(state);
+                snapshot.reaches_runtime = reaches_runtime;
+                snapshot.operation_id = reaches_runtime.then(OperationId::generate);
+                Ok(snapshot)
+            }
+            ReplaceIfVersionResult::Conflict { actual_version } => anyhow::bail!(
+                "clash config version conflict: expected {}, actual {}",
+                *version.as_ref(),
+                *actual_version.as_ref()
+            ),
+        }
     }
 
     async fn replace_prepared_if_version(
@@ -94,6 +117,9 @@ impl ClashConfigActor {
         prepared: PreparedTypedReplace<ClashConfig>,
     ) -> anyhow::Result<ConditionalReplaceResult<ClashConfigSnapshot>> {
         let (next, mirror) = prepared.into_parts();
+        let current = state.manager.snapshot_handle().load();
+        let reaches_runtime = impact::reaches_runtime(&current.state, &next, &[]);
+        drop(current);
         match state
             .manager
             .replace_if_version(Version::new(expected_version), next)
@@ -102,7 +128,10 @@ impl ClashConfigActor {
         {
             ReplaceIfVersionResult::Replaced => {
                 mirror.apply();
-                Ok(ConditionalReplaceResult::Replaced(Self::snapshot(state)))
+                let mut snapshot = Self::snapshot(state);
+                snapshot.reaches_runtime = reaches_runtime;
+                snapshot.operation_id = reaches_runtime.then(OperationId::generate);
+                Ok(ConditionalReplaceResult::Replaced(snapshot))
             }
             ReplaceIfVersionResult::Conflict { actual_version } => {
                 Ok(ConditionalReplaceResult::Conflict {
@@ -177,6 +206,18 @@ mod tests {
     use struct_patch::Patch;
     use tempfile::tempdir;
 
+    struct NoopClashMirror;
+
+    impl ClashLegacyBridge for NoopClashMirror {
+        fn prepare(&self, _snap: &ClashConfig) -> anyhow::Result<Box<dyn PreparedLegacyMirror>> {
+            Ok(Box::new(crate::state::mirror::NoopPreparedLegacyMirror))
+        }
+
+        fn snapshot_legacy(&self) -> anyhow::Result<ClashConfig> {
+            Ok(ClashConfig::default())
+        }
+    }
+
     /// Test-only double that fails every Clash legacy mirror preparation.
     struct FailingClashMirror;
 
@@ -218,6 +259,62 @@ mod tests {
             CallResult::SenderError => anyhow::bail!("clash config actor reply dropped"),
             CallResult::Timeout => anyhow::bail!("clash config actor call timed out"),
         }
+    }
+
+    #[tokio::test]
+    async fn actor_commit_reports_runtime_impact_only_for_changed_clash_inputs() {
+        let (actor, dir) = spawn_actor(Arc::new(NoopClashMirror)).await;
+        let before = get_snapshot(&actor).await.unwrap();
+        assert!(!before.reaches_runtime);
+        assert!(before.operation_id.is_none());
+
+        let mut ui_patch = ClashConfig::new_empty_patch();
+        ui_patch.web_ui_list = Some(vec!["https://dashboard.example/".into()]);
+        let ui = match actor
+            .call(
+                |reply| ClashConfigActorMessage::Patch {
+                    patch: ui_patch,
+                    reply,
+                },
+                None,
+            )
+            .await
+            .unwrap()
+        {
+            CallResult::Success(Ok(snapshot)) => snapshot,
+            other => panic!("empty typed Clash patch must commit: {other:?}"),
+        };
+        assert!(!ui.reaches_runtime);
+        assert!(ui.operation_id.is_none());
+        assert!(ui.version > before.version);
+
+        let mut runtime_patch = ClashConfig::new_empty_patch();
+        runtime_patch.enable_tun_mode = Some(!ui.state.enable_tun_mode);
+        let runtime = match actor
+            .call(
+                |reply| ClashConfigActorMessage::Patch {
+                    patch: runtime_patch,
+                    reply,
+                },
+                None,
+            )
+            .await
+            .unwrap()
+        {
+            CallResult::Success(Ok(snapshot)) => snapshot,
+            other => panic!("TUN source mutation must commit: {other:?}"),
+        };
+        assert!(runtime.reaches_runtime);
+        assert!(runtime.operation_id.is_some());
+        assert!(runtime.version > ui.version);
+        let persisted: ClashConfig = serde_yaml_ng::from_slice(
+            &std::fs::read(dir.path().join("clash-config.yaml")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(persisted.enable_tun_mode, runtime.state.enable_tun_mode);
+        let reread = get_snapshot(&actor).await.unwrap();
+        assert!(!reread.reaches_runtime);
+        assert!(reread.operation_id.is_none());
     }
 
     #[tokio::test]

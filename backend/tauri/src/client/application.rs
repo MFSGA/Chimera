@@ -197,6 +197,8 @@ impl ApplicationClient {
                 Ok(ApplicationSnapshot {
                     state: source.0.clone(),
                     version: source.1,
+                    reaches_runtime: false,
+                    operation_id: None,
                 })
             }
         }
@@ -221,11 +223,16 @@ impl ApplicationClient {
                     .1
                     .checked_add(1)
                     .context("test application version overflow")?;
+                let before = source.0.clone();
                 source.0.apply(patch);
+                let reaches_runtime =
+                    crate::state::mutation::impact::reaches_runtime(&before, &source.0, &[]);
                 source.1 = next_version;
                 Ok(ApplicationSnapshot {
                     state: source.0.clone(),
                     version: source.1,
+                    reaches_runtime,
+                    operation_id: reaches_runtime.then(chimera_core_manager::OperationId::generate),
                 })
             }
         }
@@ -293,6 +300,8 @@ impl ApplicationClient {
                     .checked_add(1)
                     .context("test application version overflow")?;
                 let (next, mirror) = prepared.into_parts();
+                let reaches_runtime =
+                    crate::state::mutation::impact::reaches_runtime(&source.0, &next, &[]);
                 source.0 = next.clone();
                 source.1 = next_version;
                 let version = source.1;
@@ -301,6 +310,8 @@ impl ApplicationClient {
                 Ok(ConditionalReplaceResult::Replaced(ApplicationSnapshot {
                     state: next,
                     version,
+                    reaches_runtime,
+                    operation_id: reaches_runtime.then(chimera_core_manager::OperationId::generate),
                 }))
             }
         }

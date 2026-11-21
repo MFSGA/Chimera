@@ -8,8 +8,9 @@ use std::{sync::Arc, time::Duration};
 use anyhow::Context as _;
 use camino::Utf8PathBuf;
 use chimera_config::profile::{
-    FolderId, ProfileDefinition, ProfileId, ProfileLayout, ProfileMetadata, ProfileMetadataPatch,
-    Profiles, ProxyGroupLayout, RemoteProfileOptions, RemoteProfileOptionsPatch,
+    FolderId, NewProfileRequest, ProfileDefinition, ProfileId, ProfileLayout, ProfileMetadata,
+    ProfileMetadataPatch, Profiles, ProxyGroupLayout, RemoteProfileOptions,
+    RemoteProfileOptionsPatch,
 };
 use chimera_core::state::{PersistentStateManagerSetup, StateSnapshot};
 use ractor::{Actor, ActorRef, RpcReplyPort, rpc::CallResult};
@@ -18,8 +19,8 @@ use tokio_util::{sync::CancellationToken, task::TaskTracker};
 use crate::{
     core::migration::modules::profiles::ProfilesFormat,
     state::profiles::{
-        CommitReport, NewProfileRequest, ProfilesActor, ProfilesActorArgs, ProfilesActorMessage,
-        ProfilesError, ReorderOp,
+        CommitReport, ProfilesActor, ProfilesActorArgs, ProfilesActorMessage, ProfilesError,
+        ReorderOp,
         ports::{ProfileFsPort, ProfileMaterializationPort, SubscriptionFetcher},
     },
 };
@@ -142,19 +143,34 @@ impl ProfilesClient {
         let mut loaded = manager.snapshot().as_ref().clone();
         let repair = loaded.repair_folders();
         let proxy_group_repair = loaded.repair_proxy_group_layouts();
+        let dangling_current = loaded.clear_dangling_current();
         if !repair.is_empty() || !proxy_group_repair.is_empty() {
             tracing::warn!(
                 ?repair,
                 ?proxy_group_repair,
-                "repaired malformed profile presentation folders"
+                "repaired malformed profile arrangements"
             );
+        }
+        if !repair.is_empty() || !proxy_group_repair.is_empty() || dangling_current.is_some() {
+            if dangling_current.is_some() {
+                loaded.validate().map_err(|errors| {
+                    anyhow::anyhow!("profiles.yaml failed validation after repair: {errors:?}")
+                })?;
+            }
             loaded
                 .bump_revision()
-                .context("failed to advance profiles revision after repairing folders")?;
+                .context("failed to advance profiles revision after repairing arrangements")?;
             manager
                 .upsert(loaded)
                 .await
-                .context("failed to persist repaired profile folders")?;
+                .context("failed to persist repaired profile arrangements")?;
+            if let Some(id) = &dangling_current {
+                tracing::warn!(
+                    original_id = %id,
+                    action = "clear_dangling_current",
+                    "cleared missing selected profile"
+                );
+            }
         }
 
         let snapshot = manager.snapshot_handle();
@@ -3345,10 +3361,26 @@ mod tests {
             })
             .await
             .unwrap();
+        client
+            .set_proxy_group_layout(
+                ProfileId("cfg1".into()),
+                ProxyGroupLayout {
+                    folders: vec![],
+                    ungrouped: vec!["Proxy".into()],
+                },
+            )
+            .await
+            .unwrap();
         let report = client.delete(ProfileId("cfg1".into())).await.unwrap();
         assert_eq!(
             report.snapshot.folders,
             vec![test_folder("f1", "Work", &["cfg2"])]
+        );
+        assert!(
+            !report
+                .snapshot
+                .proxy_group_layouts
+                .contains_key(&ProfileId("cfg1".into()))
         );
         assert!(report.snapshot.validate().is_ok());
     }
@@ -3394,7 +3426,7 @@ mod tests {
 
     #[tokio::test]
     async fn reorder_move_and_by_list() {
-        let (client, _dir) = seeded_client().await;
+        let (client, dir) = seeded_client().await;
         let report = client
             .reorder(ReorderOp::Move {
                 active: ProfileId("cfg2".into()),
@@ -3417,11 +3449,19 @@ mod tests {
         let uids: Vec<_> = report.snapshot.items.keys().map(|u| u.0.clone()).collect();
         assert_eq!(uids, vec!["ovl1", "cfg1", "cfg2"]);
 
+        let before = client.snapshot();
+        let persisted = std::fs::read(temp_profiles_path(&dir)).unwrap();
         let err = client
             .reorder(ReorderOp::ByList(vec![ProfileId("cfg1".into())]))
             .await
             .unwrap_err();
-        assert!(matches!(err, ProfilesError::InvalidReorderList { .. }));
+        assert!(matches!(
+            err,
+            ProfilesError::ReorderListSizeMismatch {
+                expected: 3,
+                got: 1
+            }
+        ));
 
         let err = client
             .reorder(ReorderOp::ByList(vec![
@@ -3431,7 +3471,12 @@ mod tests {
             ]))
             .await
             .unwrap_err();
-        assert!(matches!(err, ProfilesError::InvalidReorderList { .. }));
+        assert!(
+            matches!(err, ProfilesError::ReorderListDuplicate { uid } if uid == ProfileId("cfg1".into()))
+        );
+        assert_eq!(client.snapshot().revision(), before.revision());
+        assert_eq!(profile_order(&client.snapshot()), profile_order(&before));
+        assert_eq!(std::fs::read(temp_profiles_path(&dir)).unwrap(), persisted);
     }
 
     #[tokio::test]
@@ -3511,26 +3556,120 @@ mod tests {
         );
     }
 
+    struct CommittedVersionGate {
+        path: Utf8PathBuf,
+        checks: std::sync::atomic::AtomicUsize,
+        versions: std::sync::Mutex<Vec<chimera_core::state::Version>>,
+    }
+
+    #[async_trait::async_trait]
+    impl crate::state::mutation::RuntimeGate for CommittedVersionGate {
+        async fn check(
+            &self,
+            candidate: crate::state::mutation::RuntimeCandidate,
+        ) -> Result<(), Arc<chimera_contracts::runtime_error::RuntimeError>> {
+            let crate::state::mutation::DomainChange::Profiles { candidate } = candidate.change
+            else {
+                panic!("Profiles source must submit the Profiles candidate");
+            };
+            assert_eq!(candidate.current, Some(ProfileId("cfg1".into())));
+            let persisted: Profiles =
+                serde_yaml_ng::from_slice(&std::fs::read(&self.path).unwrap()).unwrap();
+            assert!(
+                persisted.current.is_none(),
+                "pre-commit checks must not publish"
+            );
+            self.checks
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(())
+        }
+
+        fn committed(
+            &self,
+            domain: chimera_contracts::mutation::ConfigDomain,
+            version: chimera_core::state::Version,
+        ) {
+            assert_eq!(domain, chimera_contracts::mutation::ConfigDomain::Profiles);
+            let persisted: Profiles =
+                serde_yaml_ng::from_slice(&std::fs::read(&self.path).unwrap()).unwrap();
+            assert_eq!(persisted.current, Some(ProfileId("cfg1".into())));
+            self.versions.lock().unwrap().push(version);
+        }
+    }
+
+    #[tokio::test]
+    async fn runtime_gate_receives_one_committed_version_only_after_profile_is_persisted() {
+        let mutations = MutationCoordinator::isolated();
+        let dir = tempdir().unwrap();
+        let path = temp_profiles_path(&dir);
+        let client = ProfilesClient::new(
+            mutations.clone(),
+            path.clone(),
+            Arc::new(MockProfileFsPort::new()),
+            Arc::new(MockSubscriptionFetcher::new()),
+            test_materialization_port(),
+        )
+        .await
+        .unwrap();
+        client.replace(seeded_profiles()).await.unwrap();
+        let gate = Arc::new(CommittedVersionGate {
+            path,
+            checks: std::sync::atomic::AtomicUsize::new(0),
+            versions: std::sync::Mutex::new(Vec::new()),
+        });
+        mutations.install_test_runtime_gate(gate.clone());
+
+        let report = client
+            .set_current(Some(ProfileId("cfg1".into())))
+            .await
+            .unwrap();
+        assert_eq!(gate.checks.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(
+            *gate.versions.lock().unwrap(),
+            vec![chimera_core::state::Version::new(
+                report.receipt.source_version
+            )]
+        );
+
+        let mut patch = ProfileMetadata::new_empty_patch();
+        patch.name = Some("Metadata-only".into());
+        client
+            .patch_metadata(ProfileId("cfg1".into()), patch)
+            .await
+            .unwrap();
+        assert_eq!(gate.checks.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(gate.versions.lock().unwrap().len(), 1);
+    }
+
     struct RejectingRuntimeGate;
 
     #[async_trait::async_trait]
     impl crate::state::mutation::RuntimeGate for RejectingRuntimeGate {
+        fn committed(
+            &self,
+            _: chimera_contracts::mutation::ConfigDomain,
+            _: chimera_core::state::Version,
+        ) {
+            panic!("rejected runtime candidate must not commit");
+        }
+
         async fn check(
             &self,
             candidate: crate::state::mutation::RuntimeCandidate,
-        ) -> anyhow::Result<()> {
+        ) -> Result<(), Arc<chimera_contracts::runtime_error::RuntimeError>> {
+            assert!(matches!(
+                candidate.change,
+                crate::state::mutation::DomainChange::Profiles { .. }
+            ));
             assert_eq!(
                 candidate.staged.get("cfg1.yaml").map(String::as_str),
                 Some("proxies: []\n"),
                 "ref CandidateCheck must receive the frozen proposed bytes"
             );
-            Err(anyhow::Error::new(
-                crate::client::reconciler::check::RuntimeGateVerdict {
-                    domain: "profiles".into(),
-                    record: crate::client::application_workflow::mutation::CheckRecord::Rejected(
-                        "Core rejected candidate".into(),
-                    ),
-                    source: None,
+            Err(Arc::new(
+                chimera_contracts::runtime_error::RuntimeError::CoreRejectedConfig {
+                    core_kind: Some(chimera_core_manager::CoreErrorKind::ConfigCheckFailed),
+                    message: "Core rejected candidate".into(),
                 },
             ))
         }
@@ -3588,18 +3727,26 @@ mod tests {
 
     #[async_trait::async_trait]
     impl crate::state::mutation::RuntimeGate for UnavailableRuntimeGate {
+        fn committed(
+            &self,
+            _: chimera_contracts::mutation::ConfigDomain,
+            _: chimera_core::state::Version,
+        ) {
+            panic!("unavailable runtime gate must not commit");
+        }
+
         async fn check(
             &self,
             _candidate: crate::state::mutation::RuntimeCandidate,
-        ) -> anyhow::Result<()> {
-            Err(anyhow::Error::new(
-                crate::client::application_workflow::mutation::RuntimeCheckFailure::from_core_error(
-                    chimera_core_manager::CoreError::new(
-                        chimera_core_manager::CoreErrorKind::BackendUnavailable,
-                        "core validation service is not reachable",
-                        true,
-                    ),
-                ),
+        ) -> Result<(), Arc<chimera_contracts::runtime_error::RuntimeError>> {
+            Err(Arc::new(
+                chimera_contracts::runtime_error::RuntimeError::CheckUnavailable {
+                    reason: chimera_contracts::runtime_error::RuntimeCheckUnavailable::Backend {
+                        kind: Some(chimera_core_manager::CoreErrorKind::BackendUnavailable),
+                        message: "core validation service is not reachable".into(),
+                        retryable: true,
+                    },
+                },
             ))
         }
     }
@@ -3744,10 +3891,12 @@ mod tests {
         let err = client.delete(ProfileId("ovl1".into())).await.unwrap_err();
         match err {
             ProfilesError::ProfileInUse {
+                uid,
                 referrers,
                 current,
                 global_transforms,
             } => {
+                assert_eq!(uid, ProfileId("ovl1".into()));
                 assert_eq!(referrers, vec![ProfileId("cfg1".into())]);
                 assert!(!current);
                 assert!(!global_transforms);
@@ -3804,10 +3953,12 @@ mod tests {
         let err = client.delete(ProfileId("cfg1".into())).await.unwrap_err();
         match err {
             ProfilesError::ProfileInUse {
+                uid,
                 referrers,
                 current,
                 global_transforms,
             } => {
+                assert_eq!(uid, ProfileId("cfg1".into()));
                 assert_eq!(referrers, vec![ProfileId("comp".into())]);
                 assert!(!current);
                 assert!(!global_transforms);
@@ -3833,10 +3984,12 @@ mod tests {
         let err = client.delete(ProfileId("cfg1".into())).await.unwrap_err();
         match err {
             ProfilesError::ProfileInUse {
+                uid,
                 referrers,
                 current,
                 global_transforms,
             } => {
+                assert_eq!(uid, ProfileId("cfg1".into()));
                 assert!(referrers.is_empty());
                 assert!(current);
                 assert!(!global_transforms);
@@ -3951,12 +4104,48 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn startup_repairs_dangling_current_without_discarding_profiles() {
+        let dir = tempdir().unwrap();
+        let path = temp_profiles_path(&dir);
+        let mut profiles = seeded_profiles();
+        profiles.current = Some(ProfileId("ghost".into()));
+        for _ in 0..7 {
+            profiles.bump_revision().unwrap();
+        }
+        let body = serde_yaml_ng::to_string(&profiles).unwrap();
+        std::fs::write(
+            &path,
+            format!("_nyanpasu:\n  document: profiles\n  schema_revision: 4\n{body}"),
+        )
+        .unwrap();
+
+        let client = ProfilesClient::new(
+            crate::state::mutation::MutationCoordinator::isolated(),
+            path.clone(),
+            Arc::new(MockProfileFsPort::new()),
+            Arc::new(MockSubscriptionFetcher::new()),
+            test_materialization_port(),
+        )
+        .await
+        .expect("dangling selected profile must be repaired");
+        let snapshot = client.snapshot();
+        assert!(snapshot.current.is_none());
+        assert_eq!(snapshot.items.len(), 3);
+        assert_eq!(snapshot.revision(), 8);
+        assert!(snapshot.validate().is_ok());
+        let persisted = std::fs::read_to_string(&path).unwrap();
+        assert!(!persisted.contains("current: ghost"), "{persisted}");
+        assert!(persisted.contains("revision: 8"), "{persisted}");
+        assert!(persisted.contains("cfg1"), "{persisted}");
+    }
+
+    #[tokio::test]
     async fn load_fails_fast_on_invalid_document() {
         let dir = tempdir().unwrap();
         let path = temp_profiles_path(&dir);
         std::fs::write(
             &path,
-            "_nyanpasu:\n  document: profiles\n  schema_revision: 4\ncurrent: ghost\nitems:\n- uid: a\n  name: A\n  type: config\n  config:\n    type: file\n    source:\n      type: local\n      binding:\n        type: managed\n        file: a.yaml\n",
+            "_nyanpasu:\n  document: profiles\n  schema_revision: 4\ncurrent: a\nglobal_transforms:\n- ghost\nitems:\n- uid: a\n  name: A\n  type: config\n  config:\n    type: file\n    source:\n      type: local\n      binding:\n        type: managed\n        file: a.yaml\n",
         )
         .unwrap();
         let result = ProfilesClient::new(

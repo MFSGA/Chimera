@@ -6,11 +6,25 @@
 //! their prepared documents before asking the lifecycle to reconcile.
 
 use anyhow::Result;
+use chimera_config::{
+    application::ChimeraAppConfig, clash::config::ClashConfig, profile::Profiles,
+};
+use chimera_contracts::{
+    mutation::ConfigDomain,
+    runtime_error::{RuntimeCheckUnavailable, RuntimeError},
+};
+use chimera_core::state::{StateSnapshot, Version};
 
-use crate::client::{
-    application_workflow::mutation::{CheckRecord, RuntimeCheckFailure},
-    core_lifecycle::ports::CoreLifecyclePort,
-    reconciler::{inputs::RuntimeInputs, preparation::RuntimePreparation},
+use crate::{
+    client::{
+        application_workflow::{
+            mutation::{CheckRecord, RuntimeCheckFailure},
+            ports::{RuntimeCheckOutcome, RuntimeCheckUnavailable as GateUnavailable},
+        },
+        core_lifecycle::{CoreLifecycleClient, ports::CoreLifecyclePort},
+        reconciler::{inputs::RuntimeInputs, preparation::RuntimePreparation},
+    },
+    state::mutation::{DomainChange, ProfileContentReader, RuntimeCandidate},
 };
 
 /// Freeze the full candidate input *before* invoking the independent Core
@@ -65,6 +79,89 @@ impl RuntimeGateVerdict {
             source: Some(error),
         }
     }
+
+    /// Convert one source verdict into the ref's typed RuntimeGate failure.
+    fn runtime_error(&self) -> RuntimeError {
+        let detailed = self
+            .source
+            .as_ref()
+            .and_then(|error| error.downcast_ref::<RuntimeCheckFailure>());
+        let rejected = matches!(&self.record, CheckRecord::Rejected(_))
+            || detailed.is_some_and(|failure| {
+                matches!(failure.outcome, RuntimeCheckOutcome::Rejected { .. })
+            });
+        if rejected {
+            let (core_kind, message) = match detailed.map(|failure| &failure.outcome) {
+                Some(RuntimeCheckOutcome::Rejected { kind, message }) => (*kind, message.clone()),
+                _ => (
+                    None,
+                    match &self.record {
+                        CheckRecord::Rejected(message) => message.clone(),
+                        _ => self.to_string(),
+                    },
+                ),
+            };
+            RuntimeError::CoreRejectedConfig { core_kind, message }
+        } else {
+            let reason = match detailed.map(|failure| &failure.outcome) {
+                Some(RuntimeCheckOutcome::Unavailable(GateUnavailable::Backend {
+                    kind,
+                    message,
+                    retryable,
+                })) => RuntimeCheckUnavailable::Backend {
+                    kind: *kind,
+                    message: message.clone(),
+                    retryable: *retryable,
+                },
+                Some(RuntimeCheckOutcome::Unavailable(GateUnavailable::CandidateUnavailable {
+                    reason,
+                })) => RuntimeCheckUnavailable::CandidateUnavailable {
+                    reason: reason.clone(),
+                },
+                Some(RuntimeCheckOutcome::Unavailable(GateUnavailable::NoEndpoint { reason })) => {
+                    RuntimeCheckUnavailable::NoEndpoint {
+                        reason: reason.clone(),
+                    }
+                }
+                Some(RuntimeCheckOutcome::Unavailable(GateUnavailable::HostUnsupported {
+                    host,
+                    reason,
+                })) => RuntimeCheckUnavailable::HostUnsupported {
+                    host: format!("{host:?}"),
+                    reason: reason.clone(),
+                },
+                _ => match &self.record {
+                    CheckRecord::Skipped(reason) | CheckRecord::Unserviceable(reason) => {
+                        RuntimeCheckUnavailable::NotChecked {
+                            reason: reason.clone(),
+                        }
+                    }
+                    CheckRecord::NotOwed => RuntimeCheckUnavailable::NotChecked {
+                        reason: "candidate check not owed".into(),
+                    },
+                    _ => RuntimeCheckUnavailable::Other {
+                        reason: self.to_string(),
+                    },
+                },
+            };
+            RuntimeError::CheckUnavailable { reason }
+        }
+    }
+}
+
+pub(crate) fn typed_gate_error(domain: &str, error: anyhow::Error) -> std::sync::Arc<RuntimeError> {
+    std::sync::Arc::new(RuntimeGateVerdict::from_error(domain, error).runtime_error())
+}
+
+fn typed_gate_record(domain: &str, record: CheckRecord) -> std::sync::Arc<RuntimeError> {
+    std::sync::Arc::new(
+        RuntimeGateVerdict {
+            domain: domain.into(),
+            record,
+            source: None,
+        }
+        .runtime_error(),
+    )
 }
 
 /// A source may commit a runtime-affecting candidate only after a real pass.
@@ -80,12 +177,77 @@ pub(crate) fn require_passed(record: CheckRecord, domain: &str) -> Result<()> {
     }
 }
 
+/// The one ref-style read-only admission path for all three candidate
+/// documents. Source owners supply their proposed domain document; the other
+/// two domains use their committed versions. For Application/Clash, the
+/// Profiles document and file bytes are captured under the same content fence.
+/// This function never persists a source or applies a running Core.
+fn domain_name(change: &DomainChange) -> &'static str {
+    match change {
+        DomainChange::Application { .. } => "application",
+        DomainChange::Clash { .. } => "clash",
+        DomainChange::Profiles { .. } => "profiles",
+    }
+}
+
+pub(crate) async fn check_domain_candidate(
+    core: &dyn CoreLifecyclePort,
+    committed_app: ChimeraAppConfig,
+    committed_clash: ClashConfig,
+    profiles: &StateSnapshot<Profiles>,
+    profile_content: Option<&ProfileContentReader>,
+    candidate: RuntimeCandidate,
+    service_connected: bool,
+) -> Result<(), std::sync::Arc<RuntimeError>> {
+    let domain = domain_name(&candidate.change);
+    let app = match &candidate.change {
+        DomainChange::Application { candidate } => candidate.as_ref().clone(),
+        _ => committed_app,
+    };
+    let clash = match &candidate.change {
+        DomainChange::Clash { candidate } => candidate.as_ref().clone(),
+        _ => committed_clash,
+    };
+    let profiles_dir =
+        crate::utils::dirs::app_profiles_dir().map_err(|error| typed_gate_error(domain, error))?;
+    let source = crate::enhance::FsProfileContentSource::new(profiles_dir);
+    let preparation = RuntimePreparation::new(profile_content, Some(profiles), &source);
+    let inputs = match &candidate.change {
+        DomainChange::Profiles {
+            candidate: proposed,
+        } => {
+            preparation
+                .capture_inputs(app, clash, proposed.clone(), candidate.staged)
+                .await
+        }
+        _ => preparation
+            .capture_committed_inputs(app, clash)
+            .await
+            .map(|mut inputs| {
+                for (path, content) in candidate.staged {
+                    inputs.content.0.insert(path, Ok(content));
+                }
+                inputs
+            }),
+    }
+    .map_err(|error| typed_gate_error(domain, error))?;
+    let checked = check_candidate(core, inputs, service_connected)
+        .await
+        .map_err(|error| typed_gate_error(domain, error))?;
+    match checked {
+        CheckRecord::Passed => Ok(()),
+        other => Err(typed_gate_record(domain, other)),
+    }
+}
+
 /// Ref CandidateCheck boundary adapted to Chimera's typed source clients.
 pub(crate) struct CandidateCheck {
     core: std::sync::Arc<dyn CoreLifecyclePort>,
     application: super::super::application::ApplicationClient,
     clash: super::super::clash_config::ClashConfigClient,
     profile_content: crate::state::mutation::ProfileContentReader,
+    profiles: StateSnapshot<Profiles>,
+    lifecycle: CoreLifecycleClient,
 }
 
 impl CandidateCheck {
@@ -94,43 +256,57 @@ impl CandidateCheck {
         application: super::super::application::ApplicationClient,
         clash: super::super::clash_config::ClashConfigClient,
         profile_content: crate::state::mutation::ProfileContentReader,
+        profiles: StateSnapshot<Profiles>,
+        lifecycle: CoreLifecycleClient,
     ) -> Self {
         Self {
             core,
             application,
             clash,
             profile_content,
+            profiles,
+            lifecycle,
         }
     }
 }
 
 #[async_trait::async_trait]
 impl crate::state::mutation::RuntimeGate for CandidateCheck {
-    async fn check(&self, candidate: crate::state::mutation::RuntimeCandidate) -> Result<()> {
-        let profiles_dir = crate::utils::dirs::app_profiles_dir()
-            .map_err(|error| RuntimeGateVerdict::from_error("profiles", error))?;
-        let source = crate::enhance::FsProfileContentSource::new(profiles_dir);
-        let clash = self
-            .clash
-            .get()
-            .map_err(|error| RuntimeGateVerdict::from_error("profiles", error))?;
-        let inputs = RuntimePreparation::new(Some(&self.profile_content), None, &source)
-            .capture_inputs(
-                self.application.get_typed(),
-                clash,
-                candidate.profiles,
-                candidate.staged,
-            )
-            .await
-            .map_err(|error| RuntimeGateVerdict::from_error("profiles", error))?;
-        let checked = check_candidate(
+    async fn check(
+        &self,
+        candidate: crate::state::mutation::RuntimeCandidate,
+    ) -> Result<(), std::sync::Arc<RuntimeError>> {
+        let domain = domain_name(&candidate.change);
+        let clash = match &candidate.change {
+            DomainChange::Clash { candidate } => candidate.as_ref().clone(),
+            _ => self
+                .clash
+                .get()
+                .map_err(|error| typed_gate_error(domain, error))?,
+        };
+        check_domain_candidate(
             self.core.as_ref(),
-            inputs,
+            self.application.get_typed(),
+            clash,
+            &self.profiles,
+            Some(&self.profile_content),
+            candidate,
             crate::core::service::ipc::get_ipc_state().is_connected(),
         )
         .await
-        .map_err(|error| RuntimeGateVerdict::from_error("profiles", error))?;
-        require_passed(checked, "profiles")
+    }
+
+    fn committed(&self, domain: ConfigDomain, version: Version) {
+        use crate::client::reconciler::committed::SourceDomain;
+        let source = match domain {
+            ConfigDomain::Application => SourceDomain::Application,
+            ConfigDomain::Clash => SourceDomain::Clash,
+            ConfigDomain::Profiles => SourceDomain::Profiles,
+        };
+        // Only a durable, published source commit reaches this path. The
+        // existing lifecycle mailbox still owns runtime application/retry.
+        self.lifecycle
+            .source_committed(source, *version.as_ref(), true);
     }
 }
 
@@ -299,6 +475,55 @@ mod tests {
         );
         assert!(matches!(opaque.record, CheckRecord::Unserviceable(_)));
         assert!(opaque.source.is_some());
+    }
+
+    #[test]
+    fn shared_domain_gate_preserves_rejection_vs_unchecked_evidence() {
+        use chimera_core_manager::{CoreError, CoreErrorKind};
+
+        let rejected = typed_gate_error(
+            "application",
+            anyhow::Error::new(RuntimeCheckFailure::from_core_error(CoreError::new(
+                CoreErrorKind::ConfigCheckFailed,
+                "invalid proposed application",
+                false,
+            ))),
+        );
+        assert!(matches!(
+            rejected.as_ref(),
+            RuntimeError::CoreRejectedConfig {
+                core_kind: Some(CoreErrorKind::ConfigCheckFailed),
+                ..
+            }
+        ));
+        let unavailable = typed_gate_error(
+            "clash",
+            anyhow::Error::new(RuntimeCheckFailure::from_core_error(CoreError::new(
+                CoreErrorKind::BackendUnavailable,
+                "validator disconnected",
+                true,
+            ))),
+        );
+        assert!(matches!(
+            unavailable.as_ref(),
+            RuntimeError::CheckUnavailable {
+                reason: RuntimeCheckUnavailable::Backend {
+                    retryable: true,
+                    kind: Some(CoreErrorKind::BackendUnavailable),
+                    ..
+                }
+            }
+        ));
+        for skipped in [
+            CheckRecord::NotOwed,
+            CheckRecord::Skipped("not supported".into()),
+            CheckRecord::Unserviceable("no verdict".into()),
+        ] {
+            assert!(matches!(
+                typed_gate_record("profiles", skipped).as_ref(),
+                RuntimeError::CheckUnavailable { .. }
+            ));
+        }
     }
 
     #[test]

@@ -2144,20 +2144,31 @@ impl CoreLifecycleWorkflow {
         app: ChimeraAppConfig,
         service_connected: bool,
     ) -> anyhow::Result<()> {
-        let Some(_) = &self.profiles else {
-            // In compatibility-only tests no typed Profiles source is wired.
+        use crate::state::mutation::{DomainChange, RuntimeCandidate};
+
+        let Some(profiles) = &self.profiles else {
+            // Compatibility-only tests instantiate no typed Profiles source.
             return Ok(());
         };
-        let inputs = self
-            .capture_committed_profile_inputs_for(app, self.clash.get()?)
-            .await?;
-        let check = crate::client::reconciler::check::check_candidate(
+        // Share the exact REF-style DomainChange admission path with the
+        // production Profiles/Clash gate. The CoreLifecycle mailbox still
+        // serializes source persistence and the subsequent runtime apply.
+        crate::client::reconciler::check::check_domain_candidate(
             self.core.as_ref(),
-            inputs,
+            self.application.get_typed(),
+            self.clash.get()?,
+            profiles,
+            self.content_reader.as_ref(),
+            RuntimeCandidate {
+                change: DomainChange::Application {
+                    candidate: Arc::new(app),
+                },
+                staged: Default::default(),
+            },
             service_connected,
         )
-        .await?;
-        crate::client::reconciler::check::require_passed(check, "application")
+        .await
+        .map_err(anyhow::Error::new)
     }
 
     async fn reconcile_application(

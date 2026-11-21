@@ -162,6 +162,8 @@ impl ClashConfigClient {
                 Ok(ClashConfigSnapshot {
                     state: source.0.clone(),
                     version: source.1,
+                    reaches_runtime: false,
+                    operation_id: None,
                 })
             }
         }
@@ -229,6 +231,8 @@ impl ClashConfigClient {
                     .checked_add(1)
                     .context("test Clash version overflow")?;
                 let (next, mirror) = prepared.into_parts();
+                let reaches_runtime =
+                    crate::state::mutation::impact::reaches_runtime(&source.0, &next, &[]);
                 source.0 = next.clone();
                 source.1 = next_version;
                 let version = source.1;
@@ -237,6 +241,8 @@ impl ClashConfigClient {
                 Ok(ConditionalReplaceResult::Replaced(ClashConfigSnapshot {
                     state: next,
                     version,
+                    reaches_runtime,
+                    operation_id: reaches_runtime.then(chimera_core_manager::OperationId::generate),
                 }))
             }
         }
@@ -384,6 +390,10 @@ impl ClashConfigClient {
             ),
         };
 
+        debug_assert!(
+            !snapshot.reaches_runtime || reaches_runtime,
+            "a durable Clash Runtime input change must be validated before publication"
+        );
         let mut degradations = Vec::new();
         if reaches_runtime {
             // The source is durable now. A newer source version prevents an
@@ -471,9 +481,7 @@ impl ClashConfigClient {
         let plan = plan_clash_patch(&patch, &current, &next)?;
         validate_mixed_port_change(&plan, &current)?;
         validate_external_controller_change(owner, &plan, &current, &next).await?;
-        let reaches_runtime =
-            crate::client::application_workflow::impact::classify_clash(&current, &next)
-                != crate::client::application_workflow::impact::RuntimeImpact::None;
+        let reaches_runtime = crate::state::mutation::impact::reaches_runtime(&current, &next, &[]);
         let mode_changed = plan.mode_changed;
         let break_on_mode_change = plan.break_on_mode_change;
         let report = self
@@ -549,35 +557,29 @@ impl ChimeraClient {
             #[cfg(not(test))]
             bail!("runtime candidate check requires the typed Profiles source");
         };
-        let directory = crate::utils::dirs::app_profiles_dir()?;
-        let source = crate::enhance::FsProfileContentSource::new(directory);
-        let (profiles, content) = profiles
-            .content_reader()
-            .committed(|snapshot| async move {
-                let profiles = Arc::new(snapshot.state.clone());
-                let frozen =
-                    crate::client::reconciler::inputs::FrozenProfileContent::capture_content(
-                        &profiles,
-                        &source,
-                        Default::default(),
-                    );
-                (profiles, frozen)
+        use crate::state::mutation::{DomainChange, RuntimeCandidate, RuntimeGate as _};
+
+        // The ref gate captures the committed Profile document and its files
+        // under one fence while checking this proposed Clash source. Reuse
+        // its one check implementation; leave postcommit runtime application
+        // with the existing CoreLifecycle owner until Clash's actor migrates.
+        let checker = super::reconciler::check::CandidateCheck::new(
+            self.inner.core.clone(),
+            self.inner.application.clone(),
+            self.inner.clash_config.clone(),
+            profiles.content_reader(),
+            profiles.snapshot_handle(),
+            self.inner.core_lifecycle.clone(),
+        );
+        checker
+            .check(RuntimeCandidate {
+                change: DomainChange::Clash {
+                    candidate: Arc::new(candidate),
+                },
+                staged: Default::default(),
             })
-            .await;
-        let app = self.get_app_config()?;
-        let inputs = crate::client::reconciler::inputs::RuntimeInputs {
-            app: app.clone(),
-            clash: candidate,
-            profiles,
-            content,
-        };
-        let result = super::reconciler::check::check_candidate(
-            self.inner.core.as_ref(),
-            inputs,
-            crate::core::service::ipc::get_ipc_state().is_connected(),
-        )
-        .await?;
-        super::reconciler::check::require_passed(result, "Clash")
+            .await
+            .map_err(anyhow::Error::new)
     }
 
     pub(crate) fn get_clash_config(&self) -> Result<ClashConfig> {
@@ -799,8 +801,10 @@ fn should_reconcile_clash_patch(
     after: &ClashConfig,
     patch: &ClashConfigPatch,
 ) -> bool {
-    crate::client::application_workflow::impact::classify_clash(before, after)
-        != crate::client::application_workflow::impact::RuntimeImpact::None
+    // ref source-impact projection decides whether built runtime inputs moved.
+    // Preserve the legacy explicit-request intent when an unchanged runtime
+    // field is resubmitted to retry an outstanding desired configuration.
+    crate::state::mutation::impact::reaches_runtime(before, after, &[])
         || crate::client::application_workflow::impact::RequestedRuntimeFields::of_clash(patch)
             .names_any()
 }

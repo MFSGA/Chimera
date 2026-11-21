@@ -5,11 +5,11 @@ use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use chimera_config::profile::{
     ConfigDefinition, ExternalMode, FileConfig, FolderId, LocalBinding, ManagedProfilePath,
-    MaterializedFile, ProfileDefinition, ProfileDependencyIndex, ProfileFolder, ProfileId,
-    ProfileItem, ProfileLayout, ProfileMetadata, ProfileMetadataPatch, ProfileRevisionError,
-    ProfileSource, ProfileValidationError, Profiles, ProxyGroupFolder, ProxyGroupLayout,
-    RemoteProfileOptions, RemoteProfileOptionsPatch, RemoteSyncInterval, ScriptRuntime,
-    SubscriptionInfo, TransformDefinition,
+    MaterializedFile, NewProfileRequest, ProfileDefinition, ProfileDependencyIndex, ProfileFolder,
+    ProfileId, ProfileItem, ProfileLayout, ProfileMetadata, ProfileMetadataPatch,
+    ProfileRevisionError, ProfileSource, ProfileValidationError, Profiles, ProxyGroupFolder,
+    ProxyGroupLayout, RemoteProfileOptions, RemoteProfileOptionsPatch, RemoteSyncInterval,
+    ScriptRuntime, SubscriptionInfo, TransformDefinition,
 };
 use chimera_contracts::profiles::{
     command_failure::{
@@ -58,9 +58,10 @@ pub enum ProfilesError {
     #[error("profile not found: {0}")]
     ProfileNotFound(ProfileId),
     #[error(
-        "profile is referenced and cannot be deleted (referrers: {referrers:?}, current: {current}, global_transforms: {global_transforms})"
+        "profile {uid} is referenced and cannot be deleted (referrers: {referrers:?}, current: {current}, global_transforms: {global_transforms})"
     )]
     ProfileInUse {
+        uid: ProfileId,
         referrers: Vec<ProfileId>,
         /// Referenced by the document-level `current` selection.
         current: bool,
@@ -71,8 +72,10 @@ pub enum ProfilesError {
     ProfileHasNoFile,
     #[error("validation failed: {0:?}")]
     ValidationFailed(Vec<ProfileValidationError>),
-    #[error("invalid reorder list: {reason}")]
-    InvalidReorderList { reason: String },
+    #[error("the reorder list has {got} entries, expected {expected}")]
+    ReorderListSizeMismatch { expected: usize, got: usize },
+    #[error("the reorder list repeats {uid}")]
+    ReorderListDuplicate { uid: ProfileId },
     #[error("profile is not a remote profile")]
     NotARemoteProfile,
     #[error("file not writable: {reason}")]
@@ -195,9 +198,27 @@ impl ProfilesError {
             }),
             Self::ProfileHasNoFile => Some(ProfileFailure::ProfileHasNoFile),
             Self::NotARemoteProfile => Some(ProfileFailure::NotARemoteProfile),
-            Self::ProfileInUse { .. }
-            | Self::InvalidReorderList { .. }
-            | Self::FileNotWritable { .. }
+            Self::ProfileInUse {
+                uid,
+                referrers,
+                current,
+                global_transforms,
+            } => Some(ProfileFailure::ProfileInUse {
+                uid: uid.clone(),
+                referrers: referrers.clone(),
+                current: *current,
+                global_transforms: *global_transforms,
+            }),
+            Self::ReorderListSizeMismatch { expected, got } => {
+                Some(ProfileFailure::ReorderListSizeMismatch {
+                    expected: *expected,
+                    got: *got,
+                })
+            }
+            Self::ReorderListDuplicate { uid } => {
+                Some(ProfileFailure::ReorderListDuplicate { uid: uid.clone() })
+            }
+            Self::FileNotWritable { .. }
             | Self::RefreshFailed { .. }
             | Self::ImportFailed { .. }
             | Self::Persist(_)
@@ -225,24 +246,6 @@ pub struct MaterializationRecoveryFailure {
     pub cleanup: Option<anyhow::Error>,
 }
 
-/// Retain a non-cloneable check error as the original source of the REF
-/// CommitAborted. `anyhow` owns the underlying structured Core/Gate errors;
-/// keep that chain accessible instead of reporting only its Display text.
-#[derive(Debug)]
-struct CandidateCheckSource(anyhow::Error);
-
-impl std::fmt::Display for CandidateCheckSource {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
-
-impl std::error::Error for CandidateCheckSource {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        self.0.chain().next()
-    }
-}
-
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
 pub struct CommitReport {
@@ -256,17 +259,6 @@ pub struct CommitReport {
     /// Server-generated uid (D13); set by Add / import commit, consumed by
     /// facade auto-activation (design §9).
     pub created: Option<ProfileId>,
-}
-
-#[derive(Debug, Clone, serde::Deserialize, specta::Type)]
-pub struct NewProfileRequest {
-    pub metadata: ProfileMetadata,
-    /// Add rewrites the materialized path to `{uid}.{ext}`.
-    pub definition: ProfileDefinition,
-    /// Folder the new Config joins in the same durable commit.
-    #[serde(default)]
-    #[specta(optional)]
-    pub folder: Option<FolderId>,
 }
 
 #[derive(Debug, Clone)]
@@ -596,85 +588,14 @@ impl ProfilesActor {
     /// transaction outcome. Only an explicit Rejected verdict may produce
     /// RuntimeRefused; every unavailable, skipped, untyped or unchecked
     /// result becomes RuntimeFailed. Neither can commit or replay a write.
-    fn runtime_gate_failure(error: anyhow::Error) -> ProfilesError {
-        use crate::client::{
-            application_workflow::{
-                mutation::{CheckRecord, RuntimeCheckFailure},
-                ports::{RuntimeCheckOutcome, RuntimeCheckUnavailable as GateUnavailable},
-            },
-            reconciler::check::RuntimeGateVerdict,
-        };
-
-        let detailed = error.downcast_ref::<RuntimeCheckFailure>();
-        let record = error
-            .downcast_ref::<RuntimeGateVerdict>()
-            .map(|failure| &failure.record);
-        let rejected = matches!(record, Some(CheckRecord::Rejected(_)))
-            || detailed.is_some_and(|failure| {
-                matches!(failure.outcome, RuntimeCheckOutcome::Rejected { .. })
-            });
-        let cause = if rejected {
-            let (core_kind, message) = match detailed.map(|failure| &failure.outcome) {
-                Some(RuntimeCheckOutcome::Rejected { kind, message }) => (*kind, message.clone()),
-                _ => (
-                    None,
-                    match record {
-                        Some(CheckRecord::Rejected(message)) => message.clone(),
-                        _ => error.to_string(),
-                    },
-                ),
-            };
-            RuntimeError::CoreRejectedConfig { core_kind, message }
-        } else {
-            let reason = match detailed.map(|failure| &failure.outcome) {
-                Some(RuntimeCheckOutcome::Unavailable(GateUnavailable::Backend {
-                    kind,
-                    message,
-                    retryable,
-                })) => RuntimeCheckUnavailable::Backend {
-                    kind: *kind,
-                    message: message.clone(),
-                    retryable: *retryable,
-                },
-                Some(RuntimeCheckOutcome::Unavailable(GateUnavailable::CandidateUnavailable {
-                    reason,
-                })) => RuntimeCheckUnavailable::CandidateUnavailable {
-                    reason: reason.clone(),
-                },
-                Some(RuntimeCheckOutcome::Unavailable(GateUnavailable::NoEndpoint { reason })) => {
-                    RuntimeCheckUnavailable::NoEndpoint {
-                        reason: reason.clone(),
-                    }
-                }
-                Some(RuntimeCheckOutcome::Unavailable(GateUnavailable::HostUnsupported {
-                    host,
-                    reason,
-                })) => RuntimeCheckUnavailable::HostUnsupported {
-                    host: format!("{host:?}"),
-                    reason: reason.clone(),
-                },
-                _ => match record {
-                    Some(CheckRecord::Skipped(reason) | CheckRecord::Unserviceable(reason)) => {
-                        RuntimeCheckUnavailable::NotChecked {
-                            reason: reason.clone(),
-                        }
-                    }
-                    Some(CheckRecord::NotOwed) => RuntimeCheckUnavailable::NotChecked {
-                        reason: "candidate check not owed".into(),
-                    },
-                    _ => RuntimeCheckUnavailable::Other {
-                        reason: error.to_string(),
-                    },
-                },
-            };
-            RuntimeError::CheckUnavailable { reason }
-        };
-        let errors = vec![Arc::new(cause)];
-        let source: chimera_contracts::BoxedCause = Box::new(CandidateCheckSource(error));
-        let commit = if rejected {
-            CommitAborted::RuntimeRefused { errors, source }
-        } else {
+    fn runtime_gate_failure(error: Arc<RuntimeError>) -> ProfilesError {
+        let unavailable = matches!(error.as_ref(), RuntimeError::CheckUnavailable { .. });
+        let source: chimera_contracts::BoxedCause = Box::new(error.clone());
+        let errors = vec![error];
+        let commit = if unavailable {
             CommitAborted::RuntimeFailed { errors, source }
+        } else {
+            CommitAborted::RuntimeRefused { errors, source }
         };
         ProfilesError::Commit { source: commit }
     }
@@ -708,7 +629,9 @@ impl ProfilesActor {
                 .runtime_gate()
                 .map_err(Self::runtime_gate_failure)?
                 .check(crate::state::mutation::RuntimeCandidate {
-                    profiles: Arc::new(next.clone()),
+                    change: crate::state::mutation::DomainChange::Profiles {
+                        candidate: Arc::new(next.clone()),
+                    },
                     staged: hints.staged_content.clone(),
                 })
                 .await
@@ -1144,7 +1067,9 @@ impl ProfilesActor {
                 .runtime_gate()
                 .map_err(Self::runtime_gate_failure)?
                 .check(crate::state::mutation::RuntimeCandidate {
-                    profiles: Arc::new(candidate.clone()),
+                    change: crate::state::mutation::DomainChange::Profiles {
+                        candidate: Arc::new(candidate.clone()),
+                    },
                     staged: hints.staged_content.clone(),
                 })
                 .await
@@ -1922,6 +1847,7 @@ impl Actor for ProfilesActor {
                     Self::referrers_of(state, &before, &uid)
                 {
                     Err(ProfilesError::ProfileInUse {
+                        uid: uid.clone(),
                         referrers,
                         current,
                         global_transforms,
@@ -1934,6 +1860,10 @@ impl Actor for ProfilesActor {
                         .map(|source| source.materialized().file.clone());
                     let mut next = before.clone();
                     next.remove_item_unchecked(&uid);
+                    for folder in &mut next.folders {
+                        folder.members.retain(|member| member != &uid);
+                    }
+                    next.proxy_group_layouts.shift_remove(&uid);
                     Self::commit_with_resources(
                         &myself,
                         state,
@@ -1963,19 +1893,16 @@ impl Actor for ProfilesActor {
                         }
                         ReorderOp::ByList(list) => {
                             if list.len() != profiles.items.len() {
-                                return Err(ProfilesError::InvalidReorderList {
-                                    reason: format!(
-                                        "expected {} uids, got {}",
-                                        profiles.items.len(),
-                                        list.len()
-                                    ),
+                                return Err(ProfilesError::ReorderListSizeMismatch {
+                                    expected: profiles.items.len(),
+                                    got: list.len(),
                                 });
                             }
                             let mut seen = indexmap::IndexSet::with_capacity(list.len());
                             for uid in &list {
                                 if !seen.insert(uid.clone()) {
-                                    return Err(ProfilesError::InvalidReorderList {
-                                        reason: format!("duplicate uid {uid}"),
+                                    return Err(ProfilesError::ReorderListDuplicate {
+                                        uid: uid.clone(),
                                     });
                                 }
                                 if profiles.items.get(uid).is_none() {
@@ -2915,13 +2842,16 @@ mod tests {
         use chimera_contracts::runtime_error::RuntimeCheckUnavailable;
         use chimera_core_manager::{CoreError, CoreErrorKind};
 
-        let refusal = ProfilesActor::runtime_gate_failure(anyhow::Error::new(
-            RuntimeCheckFailure::from_core_error(CoreError::new(
-                CoreErrorKind::ConfigCheckFailed,
-                "invalid proposed YAML",
-                false,
-            )),
-        ));
+        let refusal = ProfilesActor::runtime_gate_failure(
+            crate::client::reconciler::check::typed_gate_error(
+                "profiles",
+                anyhow::Error::new(RuntimeCheckFailure::from_core_error(CoreError::new(
+                    CoreErrorKind::ConfigCheckFailed,
+                    "invalid proposed YAML",
+                    false,
+                ))),
+            ),
+        );
         let ProfilesError::Commit {
             source: CommitAborted::RuntimeRefused { errors, source },
         } = &refusal
@@ -2935,19 +2865,22 @@ mod tests {
                 ..
             }
         ));
-        assert!(source.downcast_ref::<CandidateCheckSource>().is_some());
+        assert!(source.downcast_ref::<Arc<RuntimeError>>().is_some());
         assert_eq!(
             serde_json::to_value(&refusal.typed_failure().unwrap()).unwrap()["reason"],
             "runtime_refused"
         );
 
-        let unavailable = ProfilesActor::runtime_gate_failure(anyhow::Error::new(
-            RuntimeCheckFailure::from_core_error(CoreError::new(
-                CoreErrorKind::BackendUnavailable,
-                "service is reconnecting",
-                true,
-            )),
-        ));
+        let unavailable = ProfilesActor::runtime_gate_failure(
+            crate::client::reconciler::check::typed_gate_error(
+                "profiles",
+                anyhow::Error::new(RuntimeCheckFailure::from_core_error(CoreError::new(
+                    CoreErrorKind::BackendUnavailable,
+                    "service is reconnecting",
+                    true,
+                ))),
+            ),
+        );
         let ProfilesError::Commit {
             source: CommitAborted::RuntimeFailed { errors, .. },
         } = &unavailable
@@ -2968,9 +2901,12 @@ mod tests {
 
     #[test]
     fn unknown_validator_error_does_not_forge_an_explicit_core_rejection() {
-        let error = ProfilesActor::runtime_gate_failure(anyhow::anyhow!(
-            "candidate input resolver could not be reached"
-        ));
+        let error = ProfilesActor::runtime_gate_failure(
+            crate::client::reconciler::check::typed_gate_error(
+                "profiles",
+                anyhow::anyhow!("candidate input resolver could not be reached"),
+            ),
+        );
         assert!(matches!(
             &error,
             ProfilesError::Commit {
@@ -2981,6 +2917,38 @@ mod tests {
             serde_json::to_value(error.typed_failure().unwrap()).unwrap()["reason"],
             "runtime_failed"
         );
+    }
+
+    #[test]
+    fn profile_reference_and_reorder_errors_preserve_typed_source_fields() {
+        let cases = [
+            (
+                ProfilesError::ProfileInUse {
+                    uid: ProfileId("target".into()),
+                    referrers: vec![ProfileId("referrer".into())],
+                    current: true,
+                    global_transforms: false,
+                },
+                "profile_in_use",
+            ),
+            (
+                ProfilesError::ReorderListSizeMismatch {
+                    expected: 3,
+                    got: 2,
+                },
+                "reorder_list_size_mismatch",
+            ),
+            (
+                ProfilesError::ReorderListDuplicate {
+                    uid: ProfileId("duplicate".into()),
+                },
+                "reorder_list_duplicate",
+            ),
+        ];
+        for (error, expected_kind) in cases {
+            let wire = serde_json::to_value(error.typed_failure().unwrap()).unwrap();
+            assert_eq!(wire["kind"], expected_kind);
+        }
     }
 
     #[test]
