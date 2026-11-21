@@ -17,6 +17,10 @@ import { useId } from 'react';
 import * as m from '@/paraglide/messages';
 import type { ProviderReference, SubscriptionTarget } from './widget-config';
 import { ConfigRow } from './widget-config-row';
+import {
+  canToggleProviderReference,
+  providerReferenceChoices,
+} from './widget-reference-model';
 
 /**
  * Ref widget configuration select. Dynamic profile/provider reference fields
@@ -100,7 +104,9 @@ function ProfileSelect({
   if (value && !items.some((item) => item.uid === value)) {
     options.push({
       value,
-      label: m.dashboard_widget_config_missing_reference({ name: value }),
+      label: query.isSuccess
+        ? m.dashboard_widget_config_missing_reference({ name: value })
+        : value,
     });
   }
   return (
@@ -109,7 +115,7 @@ function ProfileSelect({
         label={m.dashboard_widget_config_profile()}
         value={value ?? '*'}
         options={options}
-        disabled={disabled || query.isPending}
+        disabled={disabled || query.isPending || (query.isError && !query.data)}
         onChange={(next) => onChange(next === '*' ? null : next)}
       />
       {query.isError && (
@@ -180,25 +186,15 @@ export function ProviderReferencesField({
   const idPrefix = useId();
   const proxies = useClashProxiesProvider();
   const rules = useClashRulesProvider();
-  const available: ProviderReference[] = [
-    ...Object.keys(proxies.data ?? {}).map((name) => ({
-      kind: 'proxy' as const,
-      name,
-    })),
-    ...Object.keys(rules.data ?? {}).map((name) => ({
-      kind: 'rule' as const,
-      name,
-    })),
-  ];
-  const refs = [
-    ...resources,
-    ...available.filter(
-      (ref) =>
-        !resources.some(
-          (entry) => entry.kind === ref.kind && entry.name === ref.name,
-        ),
-    ),
-  ];
+  const choices = providerReferenceChoices(
+    resources,
+    !proxies.isPending && !proxies.isError && proxies.data
+      ? Object.keys(proxies.data)
+      : null,
+    !rules.isPending && !rules.isError && rules.data
+      ? Object.keys(rules.data)
+      : null,
+  );
   return (
     <>
       <div
@@ -214,7 +210,7 @@ export function ProviderReferencesField({
         </p>
       )}
 
-      {refs.map((ref) => {
+      {choices.map(({ ref, availability }) => {
         const checked = resources.some(
           (entry) => entry.kind === ref.kind && entry.name === ref.name,
         );
@@ -230,9 +226,7 @@ export function ProviderReferencesField({
                   ? m.dashboard_widget_config_proxy_providers()
                   : m.dashboard_widget_config_rule_providers()}
                 : {ref.name}
-                {!available.some(
-                  (entry) => entry.kind === ref.kind && entry.name === ref.name,
-                )
+                {availability === 'missing'
                   ? ` (${m.dashboard_widget_config_missing()})`
                   : ''}
               </span>
@@ -240,7 +234,10 @@ export function ProviderReferencesField({
           >
             <Switch
               id={id}
-              disabled={disabled}
+              disabled={
+                disabled ||
+                !canToggleProviderReference({ ref, availability }, checked)
+              }
               checked={checked}
               onCheckedChange={(next) =>
                 onChange(
