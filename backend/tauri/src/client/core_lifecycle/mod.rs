@@ -257,6 +257,17 @@ enum Message {
     },
     RuntimeDirty,
     DirtyTick,
+    /// A committed checked value can only be dispatched from the sole Owner
+    /// mailbox after observing the matching source version. Not connected to
+    /// the production Source Gate until the authoritative latest-target read
+    /// is also integrated.
+    ApplyCheckedCommitted {
+        domain: SourceDomain,
+        version: u64,
+        target: String,
+        core_spec: chimera_core_manager::CoreSpec,
+        reply: RpcReplyPort<anyhow::Result<()>>,
+    },
     #[cfg(test)]
     ReadSourceVersionsForTest {
         reply: RpcReplyPort<SourceVersions>,
@@ -424,7 +435,7 @@ fn runtime_trigger(command: &Command) -> &'static str {
         Command::StopCore => "Stop",
         Command::Shutdown => "Shutdown",
         Command::Reconcile => "Retry",
-        Command::ReconcileSource => "SourceCommitted",
+        Command::ReconcileSource | Command::ApplyChecked { .. } => "SourceCommitted",
         Command::MaintainServiceRelease => "ServiceRelease",
         Command::StartupReconcile { .. } => "Startup",
         Command::RetryStartup { .. } => "Retry",
@@ -983,6 +994,16 @@ impl ApplicationWorkflowState {
             _ => {}
         }
         if self.run_intent == RunIntent::Stopped
+            && matches!(&request.command, Command::ApplyChecked { .. })
+        {
+            self.reject(
+                request,
+                anyhow::anyhow!("checked runtime cannot apply while stopped"),
+            );
+            self.drive(myself);
+            return;
+        }
+        if self.run_intent == RunIntent::Stopped
             && matches!(
                 &request.command,
                 Command::Reconcile
@@ -1006,6 +1027,23 @@ impl ApplicationWorkflowState {
             return;
         }
 
+        // Recheck at execution, not only admission. A more recent source
+        // notification can arrive while an older Core operation is running.
+        if let Command::ApplyChecked {
+            domain,
+            version,
+            prepared,
+            ..
+        } = &request.command
+            && (self.seen_sources.version(*domain) != Some(*version) || prepared.target.is_none())
+        {
+            self.reject(
+                request,
+                anyhow::anyhow!("checked runtime source is no longer the latest committed version"),
+            );
+            self.drive(myself);
+            return;
+        }
         let Some(mut workflow) = self.workflow.take() else {
             tracing::error!("core lifecycle workflow missing without an active operation");
             self.reject(
@@ -1055,6 +1093,7 @@ impl ApplicationWorkflowState {
             &request.command,
             Command::Reconcile
                 | Command::ReconcileSource
+                | Command::ApplyChecked { .. }
                 | Command::StartCore
                 | Command::StartupReconcile { .. }
                 | Command::FollowService { .. }
@@ -1896,6 +1935,49 @@ impl Actor for ApplicationWorkflowActor {
                         state.source_dirty = true;
                         state.mark_runtime_dirty(&myself);
                     }
+                }
+            }
+            Message::ApplyCheckedCommitted {
+                domain,
+                version,
+                target,
+                core_spec,
+                reply,
+            } => {
+                // The upstream mailbox retains exactly one prechecked target.
+                // The commit notification and the checked target must agree;
+                // this is a *version* fence, not yet the authoritative
+                // latest-source content identity proof required for production.
+                let valid = !state.shutting_down
+                    && !state.uncertain
+                    && state.run_intent == RunIntent::Running
+                    && !state.startup_owner_unproven
+                    && !state.startup_owner_unproven_shared.load(Ordering::Acquire)
+                    && !state.owner_transition_pending()
+                    && state.seen_sources.version(domain) == Some(version)
+                    && state.checked.as_ref().is_some_and(|prepared| {
+                        prepared.target.as_deref() == Some(target.as_str())
+                    });
+                if !valid || state.pending.len() >= MAX_PENDING {
+                    let _ = reply.send(Err(anyhow::anyhow!(
+                        "checked candidate has no matching committed source or Core owner"
+                    )));
+                } else {
+                    let prepared = state.checked.take().expect("matching checked candidate");
+                    let id = state.allocate_operation_id();
+                    state.pending.push_back(Request {
+                        command: Command::ApplyChecked {
+                            prepared,
+                            core_spec,
+                            domain,
+                            version,
+                        },
+                        response: Response {
+                            id,
+                            reply: Some(reply),
+                        },
+                        deferred_retry: None,
+                    });
                 }
             }
             Message::RuntimeDirty => {
@@ -3139,6 +3221,41 @@ impl CoreLifecycleClient {
     /// This is not wired to the production gate until the CoreFacade executor
     /// can apply these same bytes; the reply establishes true cache ownership,
     /// not Core apply success.
+    /// Dispatch only an acknowledged, committed checked value through the
+    /// existing CoreLifecycle command queue. This is not exposed through the
+    /// production RuntimeGate until the latest source *content* has also
+    /// been authoritatively sampled by the new reconciler workflow.
+    pub(in crate::client) async fn apply_checked_committed(
+        &self,
+        domain: SourceDomain,
+        version: u64,
+        target: String,
+        core_spec: chimera_core_manager::CoreSpec,
+    ) -> anyhow::Result<()> {
+        let CoreLifecycleClientInner::Actor { actor_ref, .. } = self.0.as_ref() else {
+            anyhow::bail!("checked runtime apply requires the lifecycle actor");
+        };
+        match actor_ref
+            .call(
+                |reply| Message::ApplyCheckedCommitted {
+                    domain,
+                    version,
+                    target,
+                    core_spec,
+                    reply,
+                },
+                Some(CALL_WAIT),
+            )
+            .await?
+        {
+            CallResult::Success(result) => result,
+            CallResult::Timeout => anyhow::bail!("checked runtime apply outcome is unknown"),
+            CallResult::SenderError => {
+                anyhow::bail!("checked runtime apply reply was dropped; outcome unknown")
+            }
+        }
+    }
+
     pub(in crate::client) async fn checked_candidate(
         &self,
         prepared: ports::PreparedRuntime,
@@ -13671,6 +13788,176 @@ mod tests {
             chimera_contracts::runtime_error::RuntimeError::ShuttingDown
         ));
         assert!(client.checked_for_tests().await.is_none());
+    }
+
+    struct ExactCheckedCore {
+        submits: Arc<Mutex<Vec<(String, Vec<u8>, String)>>>,
+    }
+
+    #[async_trait]
+    impl CoreLifecyclePort for ExactCheckedCore {
+        async fn reconcile(&self, _: ClashConfig, _: ClashCore, _: RunType) -> anyhow::Result<()> {
+            anyhow::bail!("legacy runtime must never rebuild a checked candidate")
+        }
+
+        async fn reconcile_prepared(
+            &self,
+            prepared: ports::PreparedRuntime,
+            core_spec: chimera_core_manager::CoreSpec,
+        ) -> anyhow::Result<()> {
+            anyhow::ensure!(
+                core_spec.kind
+                    == chimera_core::client::core_spec::core_kind(prepared.snapshot.target_core),
+                "wrong core spec"
+            );
+            anyhow::ensure!(
+                prepared.intent.config_text.as_bytes() == prepared.snapshot.product_bytes(),
+                "prepared runtime bytes diverged"
+            );
+            self.submits.lock().unwrap().push((
+                prepared.target.unwrap(),
+                prepared.snapshot.product_bytes().to_vec(),
+                prepared.intent.digest.clone(),
+            ));
+            Ok(())
+        }
+
+        async fn stop(&self) -> anyhow::Result<()> {
+            Ok(())
+        }
+        async fn change_core(&self, _: ClashCore) -> anyhow::Result<()> {
+            Ok(())
+        }
+        async fn status(&self) -> anyhow::Result<CoreStatusSnapshot> {
+            Ok(CoreStatusSnapshot {
+                instance_id: None,
+                state: CoreState::Stopped(None),
+                state_changed_at: 0,
+                run_type: RunType::Normal,
+            })
+        }
+        fn recovery_notify(&self) -> Option<Arc<Notify>> {
+            None
+        }
+        async fn on_profile_change(&self, _: bool) {}
+    }
+
+    fn checked_mihomo_spec() -> chimera_core_manager::CoreSpec {
+        chimera_core::client::core_spec::resolve_with(&ClashCore::Mihomo, |_, _| {
+            Ok(std::path::PathBuf::from("/tmp/chimera-checked-mihomo"))
+        })
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn checked_source_dispatch_uses_single_lifecycle_core_queue_and_exact_bytes() {
+        let submits = Arc::new(Mutex::new(Vec::new()));
+        let client = CoreLifecycleClient::spawn(
+            Arc::new(ExactCheckedCore {
+                submits: submits.clone(),
+            }),
+            ApplicationClient::legacy().unwrap(),
+            ClashConfigClient::legacy().unwrap(),
+            RuntimePaths::from_config_root(std::path::PathBuf::from("test-runtime-root")),
+        )
+        .await
+        .unwrap();
+        let prepared = checked_runtime_fixture("checked-source-a");
+        let digest = prepared.intent.digest.clone();
+        let bytes = prepared.snapshot.product_bytes().to_vec();
+        client.checked_candidate(prepared).await.unwrap();
+        assert!(
+            client
+                .apply_checked_committed(
+                    SourceDomain::Profiles,
+                    8,
+                    "checked-source-a".into(),
+                    checked_mihomo_spec(),
+                )
+                .await
+                .is_err(),
+            "a candidate cannot apply before its durable source notice"
+        );
+        assert!(submits.lock().unwrap().is_empty());
+        client.source_committed(SourceDomain::Profiles, 8, false);
+        assert!(
+            client
+                .apply_checked_committed(
+                    SourceDomain::Profiles,
+                    8,
+                    "another-target".into(),
+                    checked_mihomo_spec(),
+                )
+                .await
+                .is_err(),
+            "target identity must match the checked product"
+        );
+        assert!(submits.lock().unwrap().is_empty());
+        client
+            .apply_checked_committed(
+                SourceDomain::Profiles,
+                8,
+                "checked-source-a".into(),
+                checked_mihomo_spec(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            submits.lock().unwrap().as_slice(),
+            &[("checked-source-a".to_owned(), bytes, digest)]
+        );
+        assert!(
+            client.checked_for_tests().await.is_none(),
+            "accepted candidate is consumed exactly once"
+        );
+        assert!(
+            client
+                .apply_checked_committed(
+                    SourceDomain::Profiles,
+                    8,
+                    "checked-source-a".into(),
+                    checked_mihomo_spec(),
+                )
+                .await
+                .is_err(),
+            "an already used checked value cannot be replayed"
+        );
+        assert_eq!(submits.lock().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn newer_source_notification_refuses_stale_checked_execution() {
+        let submits = Arc::new(Mutex::new(Vec::new()));
+        let client = CoreLifecycleClient::spawn(
+            Arc::new(ExactCheckedCore {
+                submits: submits.clone(),
+            }),
+            ApplicationClient::legacy().unwrap(),
+            ClashConfigClient::legacy().unwrap(),
+            RuntimePaths::from_config_root(std::path::PathBuf::from("test-runtime-root")),
+        )
+        .await
+        .unwrap();
+        client
+            .checked_candidate(checked_runtime_fixture("checked-v4"))
+            .await
+            .unwrap();
+        client.source_committed(SourceDomain::Profiles, 4, false);
+        client.source_committed(SourceDomain::Profiles, 5, false);
+        let result = client
+            .apply_checked_committed(
+                SourceDomain::Profiles,
+                4,
+                "checked-v4".into(),
+                checked_mihomo_spec(),
+            )
+            .await;
+        assert!(
+            result.is_err(),
+            "a newer source version supersedes the old checked candidate"
+        );
+        assert!(submits.lock().unwrap().is_empty());
+        assert!(client.checked_for_tests().await.is_some());
     }
 
     #[tokio::test]

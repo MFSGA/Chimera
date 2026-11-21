@@ -106,6 +106,14 @@ pub(in crate::client) enum Command {
         reason: String,
     },
     Reconcile,
+    /// The exact upstream checked bytes, handed from the only lifecycle
+    /// mailbox into the existing CoreFacade mutation executor. No rebuild.
+    ApplyChecked {
+        prepared: super::ports::PreparedRuntime,
+        core_spec: chimera_core_manager::CoreSpec,
+        domain: super::super::reconciler::committed::SourceDomain,
+        version: u64,
+    },
     /// One source notification requests a latest-committed-target round.
     ReconcileSource,
     /// Ref release-owed maintenance; no Core submit or startup handoff.
@@ -692,6 +700,11 @@ impl CoreLifecycleWorkflow {
             Command::RecoverCore => self.reconcile_with_trigger(Trigger::CoreChanged).await,
             Command::Reconcile => self.reconcile_with_trigger(Trigger::Retry).await,
             Command::ReconcileSource => self.reconcile_with_trigger(Trigger::SourceCommitted).await,
+            Command::ApplyChecked {
+                prepared,
+                core_spec,
+                ..
+            } => self.core.reconcile_prepared(prepared, core_spec).await,
             Command::StartCore => self.reconcile_with_trigger(Trigger::Start).await,
             #[cfg(test)]
             Command::StartupReconcile {

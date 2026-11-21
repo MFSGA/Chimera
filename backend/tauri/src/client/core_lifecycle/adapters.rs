@@ -291,6 +291,14 @@ impl CoreLifecyclePort for LegacyCoreBridge {
         self.facade().reconcile(clash, target_core, run_type).await
     }
 
+    async fn reconcile_prepared(
+        &self,
+        prepared: super::ports::PreparedRuntime,
+        core_spec: chimera_core_manager::CoreSpec,
+    ) -> anyhow::Result<()> {
+        self.facade().reconcile_prepared(prepared, core_spec).await
+    }
+
     async fn retire_service_core(
         &self,
         expected_owner: chimera_core_manager::CoreOwner,
