@@ -14,6 +14,7 @@ chimera-config = { path = '../chimera-config', default-features = false, feature
   'nesting'
 ] }
 chimera-paths = { path = '../chimera-paths' }
+chimera-core-metadata = { package = 'chimera-service-core-metadata', path = '../chimera-runtime/crates/chimera-core-metadata' }
 
 anyhow = '1'
 bytes = '1'

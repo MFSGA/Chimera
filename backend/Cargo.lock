@@ -1237,6 +1237,7 @@ dependencies = [
  "bytes",
  "chimera-config",
  "chimera-paths",
+ "chimera-service-core-metadata",
  "mockall",
  "semver 1.0.28",
  "serde",
