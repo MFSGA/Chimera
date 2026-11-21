@@ -16,6 +16,8 @@ pub(crate) mod event_sink;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub(crate) mod hotkey;
 pub(crate) mod jobs;
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+pub(crate) mod network_automation;
 pub(crate) mod ports;
 pub(crate) mod profiles;
 pub(crate) mod reconciler;
