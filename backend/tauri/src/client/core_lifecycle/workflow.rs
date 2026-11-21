@@ -1862,7 +1862,7 @@ impl CoreLifecycleWorkflow {
         let inputs = self
             .capture_profile_inputs_for(app, clash, profiles, staged_content)
             .await?;
-        let target = inputs.target_key()?;
+        let target = inputs.checked_target_key()?;
         let (app, clash, profiles, staged_content) = inputs.into_parts().map_err(|error| {
             anyhow::Error::new(
                 crate::client::application_workflow::mutation::RuntimeCheckFailure::
@@ -1924,7 +1924,7 @@ impl CoreLifecycleWorkflow {
         let inputs = self
             .capture_committed_profile_inputs_for(app, clash)
             .await?;
-        let target = inputs.target_key()?;
+        let target = inputs.checked_target_key()?;
         let (app, clash, profiles, content) = inputs.into_parts()?;
         Ok((target, app, clash, profiles, content))
     }
@@ -1937,7 +1937,7 @@ impl CoreLifecycleWorkflow {
                     self.clash.get()?,
                 )
                 .await?
-                .target_key();
+                .checked_target_key();
         }
         self.startup_source_identity(None)
     }
@@ -2270,7 +2270,7 @@ impl CoreLifecycleWorkflow {
         let inputs = self
             .capture_committed_profile_inputs_for(self.application.get_typed(), self.clash.get()?)
             .await?;
-        if inputs.target_key()? != expected_digest {
+        if inputs.checked_target_key()? != expected_digest {
             return Ok(());
         }
         let (app, clash, profiles, profile_content) =
@@ -2523,7 +2523,7 @@ impl ProfileRuntime for CoreLifecycleWorkflow {
         crate::client::application_workflow::mutation::AppliedCandidate,
         crate::client::application_workflow::mutation::CheckRecord,
     )> {
-        let target = inputs.target_key().map_err(|error| {
+        let target = inputs.checked_target_key().map_err(|error| {
             anyhow::Error::new(
                 crate::client::application_workflow::mutation::RuntimeCheckFailure::
                     candidate_unavailable(error.to_string()),

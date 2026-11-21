@@ -1,22 +1,30 @@
-//! Ref ProfileContentReader: read a committed Profiles document and its managed
-//! files under the same fence used for materialization promotion/recovery.
-//! Until Profiles moves to the standalone state engine, its existing versioned
-//! snapshot is intentionally used here; no new document writer is created.
+//! Keeps build inputs consistent across managed profile file and document writes.
+
+use std::sync::Arc;
 
 use chimera_config::profile::Profiles;
 use chimera_core::state::{StateSnapshot, VersionedState};
-use std::{future::Future, sync::Arc};
-use tokio::sync::{OwnedRwLockWriteGuard, RwLock};
 
+/// Held by the Profiles owner through document publication or compensation: a
+/// profile write promotes its file before the document is published, so the
+/// files do not match the committed document in between. Validation and runtime
+/// application never hold it. Readers go through [`ProfileContentReader`].
 #[derive(Clone, Default)]
-pub(crate) struct ProfileContentLock(Arc<RwLock<()>>);
+pub(crate) struct ProfileContentLock(Arc<tokio::sync::RwLock<()>>);
 
 impl ProfileContentLock {
-    pub(crate) async fn write(&self) -> OwnedRwLockWriteGuard<()> {
+    // Chimera's detached Profiles persistence owner holds this guard across
+    // cancellation and local-write compensation. Unlike ref's borrowed guard,
+    // it must be transferable to the owner without borrowing its local lock.
+    pub(crate) async fn write(&self) -> tokio::sync::OwnedRwLockWriteGuard<()> {
         self.0.clone().write_owned().await
     }
 }
 
+/// The only way to read managed profile files together with the document they
+/// belong to. A reader that loads the document and the files separately can
+/// pair a promoted file with the document that preceded it, or read content a
+/// failed write is about to compensate.
 #[derive(Clone)]
 pub(crate) struct ProfileContentReader {
     committed: StateSnapshot<Profiles>,
@@ -28,8 +36,9 @@ impl ProfileContentReader {
         Self { committed, lock }
     }
 
-    /// Read the document and all of its file inputs while no file promotion,
-    /// restoration, or durable materialization recovery may run.
+    /// Runs `read` on the committed document. No profile write replaces a file
+    /// or publishes a document until the returned future completes, so `read`
+    /// must stay local: it holds every profile write back.
     pub(crate) async fn committed<T, Fut>(
         &self,
         read: impl FnOnce(Arc<VersionedState<Profiles>>) -> Fut,
@@ -41,8 +50,8 @@ impl ProfileContentReader {
         read(self.committed.load()).await
     }
 
-    /// A candidate supplies its own document, so it only needs to fence the
-    /// filesystem reads. Do not hold this fence during a Core check or apply.
+    /// Reads the files a candidate document refers to, under the same guarantee.
+    /// The caller brings the candidate; the committed document is not involved.
     pub(crate) async fn candidate<T>(&self, read: impl Future<Output = T>) -> T {
         let _guard = self.lock.0.read().await;
         read.await

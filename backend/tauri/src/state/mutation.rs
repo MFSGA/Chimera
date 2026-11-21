@@ -6,6 +6,7 @@ pub(crate) mod impact;
 mod ports;
 pub(crate) use ports::{RuntimeCandidate, RuntimeGate};
 mod profile_content;
+pub(crate) mod runtime_apply;
 pub(crate) use profile_content::{ProfileContentLock, ProfileContentReader};
 
 use std::{collections::HashMap, sync::Arc};
