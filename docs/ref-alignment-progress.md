@@ -1,5 +1,13 @@
 # ref 对齐进度
 
+## DIFF-142（Runtime Reconciler）：将上游 Checked 候选交接迁入单一 CoreLifecycle Actor 邮箱（2026-11-21）
+
+- **固定 ref 与源码顺序**：沿用只读 `ref@c4b35e04870a9caa53f21d10af6fcfde4a6f4c01`，在 `master` 没有新远端分叉的前提下对照 `ref/backend/nyanpasu-core/src/client/reconciler/mod.rs` 的 `Message::Checked(PreparedRuntime)`、`Message::SourceCommitted {domain,version}` 及 `workflow.checked` 缓存。上游先保存 checked 候选、再由已提交 Source 的 Actor 回合消费目标。Chimera 目前仍只有一个运行时写所有者 `CoreLifecycleClient`，不额外创建第二个 mutating Actor。
+- **真实 CoreLifecycle 邮箱而非旁路缓存**：在现有 `ApplicationWorkflowActor::Message` 新增 `Checked { prepared, reply }`，在同一个 Actor `ApplicationWorkflowState` 内缓存最新的完整 `PreparedRuntime`（包含原 Snapshot Arc、精确 RuntimeIntent bytes/digest、端口候选及 target），同一邮箱继续处理既有 `SourceCommitted`。它不发布新产品、不确认端口、不执行 Core Apply；仅检查收件人的 `shutting_down` / `uncertain` 状态，并在退出与 Shutdown 时清除缓存。重复候选只保留最新一份，和上游单个 `checked: Option<PreparedRuntime>` 相同。测试专用 mailbox 读取证明数据确实被唯一 Actor 保管，消息接收本身不生成 Core `rebuild`。
+- **比 ref 更严格的提交前确认**：新 `CheckedCandidatePort::checked` 改为 async，Source Gate 必须 `.await` 单一 Actor 真正保存候选的 ACK 之后才放行 Source 的持久化提交；原本单纯 cast 成功并不证明 Actor 已接收。已确认 send 失败返回 `RuntimeError::ShuttingDown`，请求可能已送达但未得到答复返回 `RuntimeError::OwnerUnresponsive` 并保留操作 ID，不把未知情况伪装为肯定关闭。现有模拟 Inbox 测试改为异步确认，验证拒绝、后端不可用、二进制缺失及关闭拒收时不会放行。
+- **仍未切换生产 Source Gate / Apply**：生产 `client/mod.rs` 目前依然装配 `legacy_check::CandidateCheck`，因此新 Checked 消息只由明确调用新客户端方法的测试使用；绝不将其缓存误称为已应用。当前旧执行者的 `CoreLifecycleWorkflow` 仍会独立构建 Runtime，尚不能消费新 `PreparedRuntime.intent`。在一个明确的 CoreFacade 提交链能够使用同一份 checked bytes、确认端口/发布产品和保存 Source 版本之前，不得切换生产 `MutationCoordinator` 到新 CandidateCheck，也不能将新消息映射为旧 `ReconcileSource`（那会造成 check/apply 配置漂移）。下一步需要迁移 `ref/reconciler/{workflow.rs,mod.rs}` 的统一提交、恢复及 CoreLifecycle 端口、完成 Owner cutover，再移除 legacy 路径。
+- **验证边界**：`cargo check --manifest-path backend/Cargo.toml -p chimera --lib` 通过；预提交新 Source Gate 4 项测试通过；新增 2 项真实 CoreLifecycle Actor 邮箱测试验证 Checked 接受 ACK 后先于 SourceCommitted、原数据完整保留、不调用 Core Apply、后续候选替换以及 Shutdown 拒收。`cargo test --manifest-path backend/Cargo.toml -p chimera --lib client::core_lifecycle::tests::` **127/127**、`-p chimera --lib client::reconciler::` **60/60**、`-p chimera-core --lib` **426/426**；未验证 GUI E2E、真机 Service、Runtime 实际交付及跨平台打包。
+
 ## DIFF-141（Runtime Reconciler）：迁移上游 Startup Round 与 Prepared Apply 结果/复用边界（2026-11-21）
 
 - **基准与协同**：先将远端包含 Network Automation DIFF-140 的两笔并行提交快进合并到 `master`；固定 `ref@c4b35e04870a9caa53f21d10af6fcfde4a6f4c01` 无任何变更。此条为 Runtime Reconciler DIFF-141，不覆盖另一开发者的 DIFF-140 记录。重点仍是优先直接复制上游源码，然后根据 `chimera_core`/`chimera_contracts` 的真实接口窄适配。
