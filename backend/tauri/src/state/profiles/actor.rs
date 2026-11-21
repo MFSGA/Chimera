@@ -11,6 +11,7 @@ use chimera_config::profile::{
     RemoteProfileOptions, RemoteProfileOptionsPatch, RemoteSyncInterval, ScriptRuntime,
     SubscriptionInfo, TransformDefinition,
 };
+use chimera_contracts::profiles::{command_failure::ProfileFailure, error::ProfileFileError};
 use chimera_core::state::{PersistentStateManager, ReplaceIfVersionResult, Version};
 use chimera_core_manager::OperationId;
 use ractor::{Actor, ActorProcessingErr, ActorRef, RpcReplyPort};
@@ -95,12 +96,69 @@ pub enum ProfilesError {
     Revision(#[from] ProfileRevisionError),
     #[error("profile materialization failed: {0}")]
     Materialization(String),
+    /// Retain the exact filesystem/journal port failure and its causal chain
+    /// instead of discarding it when crossing spawn_blocking/anyhow.
+    #[error("profile materialization failed: {context}: {source}")]
+    MaterializationFile {
+        context: &'static str,
+        #[source]
+        source: ProfileFileError,
+    },
     #[error("profiles actor rpc failed: {0}")]
     Rpc(String),
     #[error("profile sync job failed: {0}")]
     ProfileSyncJobs(#[from] chimera_jobs::Error),
     #[error("application is shutting down")]
     ShuttingDown,
+}
+
+impl ProfilesError {
+    /// Project only real, shape-preserving profile command failures into the
+    /// shared Runtime Values boundary. The remaining variants keep their
+    /// original Tauri owner and source chain; never fabricate a file, commit
+    /// or materialization reason from a diagnostic string.
+    pub(crate) fn typed_failure(&self) -> Option<ProfileFailure> {
+        match self {
+            Self::ProfileNotFound(uid) => {
+                Some(ProfileFailure::ProfileNotFound { uid: uid.clone() })
+            }
+            Self::ValidationFailed(errors) => Some(ProfileFailure::ValidationFailed {
+                errors: errors.clone(),
+            }),
+            Self::VersionConflict { expected, actual } => Some(ProfileFailure::VersionConflict {
+                expected: *expected,
+                actual: *actual,
+                cleanup: None,
+            }),
+            Self::ConflictCleanup {
+                expected,
+                actual,
+                cleanup,
+            } => Some(ProfileFailure::VersionConflict {
+                expected: *expected,
+                actual: *actual,
+                cleanup: Some(cleanup.clone()),
+            }),
+            Self::Revision(ProfileRevisionError::Overflow) => {
+                Some(ProfileFailure::RevisionOverflow)
+            }
+            Self::ProfileHasNoFile => Some(ProfileFailure::ProfileHasNoFile),
+            Self::NotARemoteProfile => Some(ProfileFailure::NotARemoteProfile),
+            Self::ProfileInUse { .. }
+            | Self::InvalidReorderList { .. }
+            | Self::FileNotWritable { .. }
+            | Self::RefreshFailed { .. }
+            | Self::ImportFailed { .. }
+            | Self::Persist(_)
+            | Self::RuntimeCheck(_)
+            | Self::SourceTransaction { .. }
+            | Self::Materialization(_)
+            | Self::MaterializationFile { .. }
+            | Self::Rpc(_)
+            | Self::ProfileSyncJobs(_)
+            | Self::ShuttingDown => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -614,8 +672,14 @@ impl ProfilesActor {
             .map_err(|error| anyhow::anyhow!("materialization task failed: {error}"))?
     }
 
-    fn materialization_error(context: &str, error: impl std::fmt::Display) -> ProfilesError {
-        ProfilesError::Materialization(format!("{context}: {error}"))
+    fn materialization_error(
+        context: &'static str,
+        error: impl Into<anyhow::Error>,
+    ) -> ProfilesError {
+        match error.into().downcast::<ProfileFileError>() {
+            Ok(source) => ProfilesError::MaterializationFile { context, source },
+            Err(error) => ProfilesError::Materialization(format!("{context}: {error}")),
+        }
     }
 
     async fn resource_for_definition(
@@ -2543,6 +2607,54 @@ mod tests {
 
     /// Config subscriptions must carry proxies (legacy remote.rs semantics);
     /// overlays only require a mapping.
+    #[test]
+    fn profile_validation_and_version_conflicts_keep_original_typed_sources() {
+        let id = ProfileId("missing".into());
+        let error = ProfilesError::ValidationFailed(vec![ProfileValidationError::CurrentNotFound(
+            id.clone(),
+        )]);
+        let typed = error.typed_failure().expect("typed validation reason");
+        let wire = serde_json::to_value(typed).unwrap();
+        assert_eq!(wire["kind"], "validation_failed");
+        assert_eq!(wire["errors"][0]["CurrentNotFound"], "missing");
+
+        let conflict = ProfilesError::ConflictCleanup {
+            expected: 10,
+            actual: 11,
+            cleanup: "staging recovery needs reconciliation".into(),
+        };
+        let wire = serde_json::to_value(conflict.typed_failure().unwrap()).unwrap();
+        assert_eq!(wire["kind"], "version_conflict");
+        assert_eq!(wire["expected"], 10);
+        assert_eq!(wire["actual"], 11);
+        assert_eq!(wire["cleanup"], "staging recovery needs reconciliation");
+        assert!(
+            ProfilesError::Persist("unspecified".into())
+                .typed_failure()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn file_materialization_error_retains_its_actual_port_source() {
+        let source = ProfileFileError::ReadFile {
+            path: std::path::PathBuf::from("profiles/materialized.yaml").into(),
+            source: std::io::Error::other("filesystem permission denied"),
+        };
+        let error = ProfilesActor::materialization_error("prepare materialization", source);
+        let ProfilesError::MaterializationFile { context, source } = &error else {
+            panic!("typed ProfileFileError must survive the materialization boundary");
+        };
+        assert_eq!(*context, "prepare materialization");
+        assert!(source.to_string().contains("profiles/materialized.yaml"));
+        assert!(
+            std::error::Error::source(&error)
+                .expect("the actor preserves the original file failure")
+                .to_string()
+                .contains("profiles/materialized.yaml")
+        );
+    }
+
     #[test]
     fn config_content_requires_proxies_key() {
         let definition = config_definition();

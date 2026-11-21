@@ -723,6 +723,30 @@ impl ChimeraClient {
         }
     }
 
+    /// Match ref's post-commit profile activation reason only when the
+    /// actual ProfilesActor failure supplies a lossless shared cause. Other
+    /// errors (including a missing ProfilesClient) retain the legacy flat
+    /// diagnostic instead of impersonating an upstream ProfilesError.
+    fn typed_auto_activation_failure(
+        profile: &ProfileId,
+        error: &ProfilesError,
+    ) -> Option<chimera_contracts::runtime::Degradation> {
+        use chimera_contracts::runtime::{
+            Degradation as SharedDegradation, DegradationPhase as SharedPhase,
+            DegradationReason as SharedReason,
+        };
+
+        Some(SharedDegradation {
+            phase: SharedPhase::SystemEffect,
+            reason: SharedReason::ProfileAutoActivationFailed {
+                profile: profile.clone(),
+                cause: Box::new(error.typed_failure()?),
+            },
+            message: error.to_string(),
+            retryable: true,
+        })
+    }
+
     async fn try_auto_activate_if_none(&self, uid: ProfileId) -> MutationOutcome<()> {
         let profiles = match self.profiles_client() {
             Ok(profiles) => profiles.clone(),
@@ -733,16 +757,23 @@ impl ChimeraClient {
                 );
             }
         };
-        match profiles.set_current_if_none(uid).await {
+        match profiles.set_current_if_none(uid.clone()).await {
             Ok(None) => MutationOutcome::from_parts((), Vec::new()),
             Ok(Some(report)) => {
                 self.refresh_profiles();
                 self.after_commit(&report).await
             }
-            Err(error) => MutationOutcome::from_parts(
-                (),
-                vec![Self::auto_activation_failure_degradation(&error)],
-            ),
+            Err(error) => {
+                let degradation = if let Some(typed) =
+                    Self::typed_auto_activation_failure(&uid, &error)
+                {
+                    tracing::warn!(%error, profile = %uid, "typed profile auto-activation failed after commit");
+                    Degradation::from_shared(typed)
+                } else {
+                    Self::auto_activation_failure_degradation(&error)
+                };
+                MutationOutcome::from_parts((), vec![degradation])
+            }
         }
     }
 
@@ -1870,6 +1901,56 @@ mod tests {
         assert_eq!(
             events.lock().unwrap().as_slice(),
             ["rebuild", "refresh-diagnostics"]
+        );
+    }
+
+    #[test]
+    fn auto_activation_uses_actual_typed_profile_conflict_without_changing_ipc() {
+        use chimera_contracts::{
+            profiles::command_failure::ProfileFailure, runtime::DegradationReason,
+        };
+
+        let profile = ProfileId("created-profile".into());
+        let error = ProfilesError::VersionConflict {
+            expected: 2,
+            actual: 3,
+        };
+        let detail = ChimeraClient::typed_auto_activation_failure(&profile, &error)
+            .expect("a real MVCC conflict has a lossless structured cause");
+        match &detail.reason {
+            DegradationReason::ProfileAutoActivationFailed {
+                profile: uid,
+                cause,
+            } => {
+                assert_eq!(uid, &profile);
+                assert!(matches!(
+                    cause.as_ref(),
+                    ProfileFailure::VersionConflict {
+                        expected: 2,
+                        actual: 3,
+                        cleanup: None
+                    }
+                ));
+            }
+            other => panic!("unexpected autoactivation cause: {other:?}"),
+        }
+        let nested = serde_json::to_value(&detail).unwrap();
+        assert_eq!(nested["reason"]["code"], "profile_auto_activation_failed");
+        assert_eq!(nested["reason"]["profile"], "created-profile");
+        assert_eq!(nested["reason"]["cause"]["kind"], "version_conflict");
+
+        let legacy = Degradation::from_shared(detail);
+        let wire = serde_json::to_value(legacy).unwrap();
+        assert_eq!(wire["code"], "profile_auto_activation_failed");
+        assert_eq!(wire["phase"], "system_effect");
+        assert_eq!(wire["retryable"], true);
+        assert!(wire.get("reason").is_none());
+        assert!(
+            ChimeraClient::typed_auto_activation_failure(
+                &profile,
+                &ProfilesError::Persist("untyped source commit error".into())
+            )
+            .is_none()
         );
     }
 
