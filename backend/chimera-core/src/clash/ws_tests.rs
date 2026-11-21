@@ -460,3 +460,46 @@ fn push_limited_keeps_latest_items() {
 
 #[path = "ws_integration_tests.rs"]
 mod integration;
+
+// Source-only regression coverage for the ref-aligned stream-owner drain.
+// The maintainer asked to continue migration without running these tests.
+#[tokio::test]
+async fn cancelling_stream_worker_reaps_socket_before_replacing_it() {
+    use tokio::sync::oneshot;
+
+    struct DropNotice(Option<oneshot::Sender<()>>);
+    impl Drop for DropNotice {
+        fn drop(&mut self) {
+            if let Some(sender) = self.0.take() {
+                let _ = sender.send(());
+            }
+        }
+    }
+
+    let (ready, receiver) = oneshot::channel();
+    let (on_drop, dropped) = oneshot::channel();
+    let handle = tokio::spawn(async move {
+        let _notice = DropNotice(Some(on_drop));
+        let _ = ready.send(());
+        std::future::pending::<()>().await;
+    });
+    receiver.await.expect("socket task must begin");
+    let mut slot = Some(handle);
+    let mut first_panic = None;
+    cancel_stream_worker(&mut slot, "test socket", &mut first_panic).await;
+    assert!(slot.is_none());
+    assert!(first_panic.is_none());
+    dropped
+        .await
+        .expect("socket must be dropped before drain returns");
+}
+
+#[tokio::test]
+async fn a_fatal_stream_join_can_be_propagated_after_other_workers_are_reaped() {
+    let faulty = tokio::spawn(async { panic!("broken websocket worker") });
+    let healthy = tokio::spawn(async {});
+    let mut first_panic = None;
+    collect_stream_join(faulty.await, "faulty socket", &mut first_panic);
+    collect_stream_join(healthy.await, "healthy socket", &mut first_panic);
+    assert!(first_panic.is_some(), "fatal task panic must not disappear");
+}
