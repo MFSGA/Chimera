@@ -95,7 +95,7 @@ describe('main settings reference layout', () => {
     );
     assert.ok(state.navigation && state.systemLink, JSON.stringify(state));
     assert.equal(state.navigationGroups, 4, JSON.stringify(state));
-    assert.equal(state.navigationItems, 10, JSON.stringify(state));
+    assert.equal(state.navigationItems, 14, JSON.stringify(state));
     assert.equal(state.systemActive, 'true', JSON.stringify(state));
     assert.equal(state.systemCurrent, 'page', JSON.stringify(state));
     assert.equal(state.outletDisplay, 'flex', JSON.stringify(state));
@@ -175,6 +175,70 @@ describe('main settings reference layout', () => {
     assert.equal(
       new URL(await browser.getUrl()).pathname,
       '/main/settings/clash/network',
+    );
+  });
+
+  it('opens the tray and window settings from the new reference navigation', async () => {
+    const tray = await $('a[href="/main/settings/chimera/tray"]');
+    await tray.waitForClickable({ timeout: 15_000 });
+    await tray.click();
+
+    const traySettings = await $('[data-slot="tray-settings-container"]');
+    const windowSettings = await $('[data-slot="window-settings-container"]');
+    await traySettings.waitForDisplayed({ timeout: 15_000 });
+    await windowSettings.waitForDisplayed({ timeout: 15_000 });
+
+    await browser.waitUntil(
+      async () =>
+        browser.execute(() => {
+          const selected = document.querySelector<HTMLElement>(
+            'a[href="/main/settings/chimera/tray"]',
+          );
+          return (
+            location.pathname === '/main/settings/chimera/tray' &&
+            selected?.getAttribute('data-active') === 'true' &&
+            selected?.getAttribute('aria-current') === 'page'
+          );
+        }),
+      {
+        timeout: 15_000,
+        timeoutMsg: 'Tray settings route did not become active.',
+      },
+    );
+    assert.equal(
+      new URL(await browser.getUrl()).pathname,
+      '/main/settings/chimera/tray',
+    );
+  });
+
+  it('opens public IP settings while retaining the original controls', async () => {
+    const publicIp = await $('a[href="/main/settings/chimera/public-ip"]');
+    await publicIp.waitForClickable({ timeout: 15_000 });
+    await publicIp.click();
+
+    const settings = await $('[data-slot="public-ip-settings"]');
+    await settings.waitForDisplayed({ timeout: 15_000 });
+
+    await browser.waitUntil(
+      async () =>
+        browser.execute(() => {
+          const selected = document.querySelector<HTMLElement>(
+            'a[href="/main/settings/chimera/public-ip"]',
+          );
+          return (
+            location.pathname === '/main/settings/chimera/public-ip' &&
+            selected?.getAttribute('data-active') === 'true' &&
+            selected?.getAttribute('aria-current') === 'page'
+          );
+        }),
+      {
+        timeout: 15_000,
+        timeoutMsg: 'Public IP settings route did not become active.',
+      },
+    );
+    assert.equal(
+      new URL(await browser.getUrl()).pathname,
+      '/main/settings/chimera/public-ip',
     );
   });
 });

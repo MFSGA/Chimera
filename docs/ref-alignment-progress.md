@@ -1,5 +1,12 @@
 # ref 对齐进度
 
+## 2026-11-21：Settings 应用配置分层与 ref 页面职责对齐（前端 partial）
+
+- **基线 / 映射 / 风险**：固定 `ref@c4b35e04870a9caa53f21d10af6fcfde4a6f4c01`，对照 `ref/frontend/nyanpasu/src/pages/(main)/main/settings/nyanpasu/{interface,tray,shortcuts,logs,public-ip}/index.tsx` 与 `settings/_modules/settings-navigate.tsx`，映射到 Chimera `frontend/chimera/src/pages/(main)/main/settings/chimera/` 同名子页面与导航。L1：只改 React 页面、路由、i18n 和桌面 UI 测试，不碰 Rust、IPC 合同、配置存储、用户数据、Core/Service、agent/legacy 共享业务实现或子模块。
+- **实施**：新增 ref 风格的 Interface、Tray、Shortcuts、Logs、Public IP 五个可访问页面；导航相应拆分为独立菜单项、保留 Chimera 综合设置入口和 Debug；直接复用现有语言/主题/CSS、窗口关闭、托盘代理、快捷键、应用日志、核心日志、流量保留及公网 IP/STUN/查询控件，全部经原有共享 `useSetting`/IPC，不引入第二个配置来源。相关上游导航描述和两个日志分组标题使用 ref 五语言消息，重新生成 Paraglide 和 TanStack route tree。
+- **向后兼容与剩余差异**：原 `/main/settings/chimera` 综合页面和 `/main/settings/user-interface` 独立旧页面继续可用；Chimera 父路由只在子页面匹配时使用 `Outlet`。当前托盘控件没有上游完整 WebView tray menu 选择器/图标编辑；Custom CSS 仍使用 Chimera 既有卡片而非 ref 的预设/多 CSS 列表；应用更新和远程访问的上游页面依赖尚未全量迁入的应用 API 和权限体系，不伪造管理功能或授权 UI。旧综合路径继续支持现有 Main/Legacy/E2E 深链接；后续可逐页移动组件到 ref 相同目录，待业务 API 一致后再删除兼容重复内容，而不移除受支持的 Legacy UI。
+- **实际验证与未覆盖**：`pnpm --filter=chimera-ui generate:i18n`、`pnpm --filter=chimera-ui build`、`pnpm typecheck`、`pnpm lint:frontend-boundaries`、`pnpm --filter=chimera-ui test:localization`（6/6）已通过；修改的 Settings E2E 契约覆盖托盘和公网 IP 的可见导航，E2E 类型检查通过。改动范围的 Prettier/Oxlint、E2E harness 单测及实际远程 CI 以本轮最终记录为准。**没有运行真实桌面 WebDriver E2E**，不可视为桌面交互已验收。预存且与本批无关的 `frontend/interface/src/ipc/bindings.ts` 修改保持不动。回滚为本批签名 revert，无用户数据转换。
+
 ## DIFF-135：直接复制 ref 的 RuntimeBuildPort、RuntimeValidatorPort 与 CoreCheckValidator（2026-11-21）
 
 - **上游基线与复制清单**：固定 `ref@c4b35e04870a9caa53f21d10af6fcfde4a6f4c01`，直接以 `ref/backend/nyanpasu-core/src/client/reconciler/ports.rs`、`client/reconciler/adapters.rs` 和 `ref/backend/nyanpasu-runtime-values/src/publish.rs` 为底稿，迁入 `backend/tauri/src/client/reconciler/{ports.rs,adapters.rs}` 与 `backend/chimera-contracts/src/publish.rs`。保留上游类型名、方法职责、失败码区分及序列化结构；未触碰 `ref` 和 gitlink。
