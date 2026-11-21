@@ -21,6 +21,7 @@ import SyncRounded from '~icons/material-symbols/sync-rounded';
 import dayjs from 'dayjs';
 import { motion, useReducedMotion } from 'motion/react';
 import { useState } from 'react';
+import { isWidgetQueryReconciled } from '@/features/dashboard/widget-query-reconciliation';
 import * as m from '@/paraglide/messages';
 import type { WidgetComponentProps } from './consts';
 import {
@@ -224,10 +225,8 @@ function SubscriptionScheduleTarget({
             runs.refetch(),
           ]);
           setCheckFailed(
-            statusResult.isError ||
-              statusResult.data == null ||
-              runsResult.isError ||
-              runsResult.data == null,
+            !isWidgetQueryReconciled(statusResult) ||
+              !isWidgetQueryReconciled(runsResult),
           );
         } catch {
           setCheckFailed(true);
@@ -248,10 +247,8 @@ function SubscriptionScheduleTarget({
         runs.refetch(),
       ]);
       if (
-        statusResult.isError ||
-        statusResult.data == null ||
-        runsResult.isError ||
-        runsResult.data == null
+        !isWidgetQueryReconciled(statusResult) ||
+        !isWidgetQueryReconciled(runsResult)
       ) {
         setCheckFailed(true);
         setCheckedAfterUnconfirmed(false);
