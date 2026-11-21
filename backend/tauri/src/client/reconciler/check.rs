@@ -6,7 +6,8 @@ use chimera_contracts::{
     mutation::ConfigDomain,
     runtime_error::{RuntimeCheckUnavailable, RuntimeError},
 };
-use chimera_core::state::{StateSnapshot, Version};
+use chimera_core::state::Version;
+use chimera_state_engine::StateSnapshot;
 
 use super::{
     ports::{RuntimeBuildPort, RuntimeCheckOutcome, RuntimeCheckRequest, RuntimeValidatorPort},
@@ -28,7 +29,11 @@ use crate::{
 pub(in crate::client) trait CheckedCandidatePort: Send + Sync + 'static {
     /// Admission is acknowledged by the sole runtime owner before source commit.
     /// An enqueued-but-unhandled message is not proof of ownership.
-    async fn checked(&self, candidate: PreparedRuntime) -> Result<(), Arc<RuntimeError>>;
+    async fn checked(
+        &self,
+        candidate: PreparedRuntime,
+        core_spec: chimera_core_manager::CoreSpec,
+    ) -> Result<(), Arc<RuntimeError>>;
     fn source_committed(&self, domain: ConfigDomain, version: Version);
 }
 
@@ -119,12 +124,12 @@ impl RuntimeGate for CandidateCheck {
         match self
             .validator
             .check(RuntimeCheckRequest {
-                core_spec,
+                core_spec: core_spec.clone(),
                 intent: &prepared.intent,
             })
             .await
         {
-            RuntimeCheckOutcome::Passed => self.workflow.checked(prepared).await?,
+            RuntimeCheckOutcome::Passed => self.workflow.checked(prepared, core_spec).await?,
             RuntimeCheckOutcome::Rejected { kind, message } => {
                 return Err(Arc::new(RuntimeError::CoreRejectedConfig {
                     core_kind: kind,
@@ -158,11 +163,10 @@ mod tests {
         application::ClashCore, profile::Profiles, runtime::executor::ResolvedPortBindings,
     };
     use chimera_contracts::runtime_error::RuntimeCheckUnavailable;
-    use chimera_core::{
-        client::{core_spec::CoreSpecError, runtime_build::RuntimeBuildError},
-        state::PersistentStateManagerSetup,
-    };
+    use chimera_core::client::{core_spec::CoreSpecError, runtime_build::RuntimeBuildError};
+    use chimera_core::state::PersistentStateManagerSetup as ProfilesManagerSetup;
     use chimera_core_manager::{CoreErrorKind, CoreKind, CoreSpec};
+    use chimera_state_engine::PersistentStateManagerSetup;
 
     use crate::{
         client::{
@@ -251,7 +255,13 @@ mod tests {
 
     #[async_trait::async_trait]
     impl CheckedCandidatePort for RecordingInbox {
-        async fn checked(&self, candidate: PreparedRuntime) -> Result<(), Arc<RuntimeError>> {
+        async fn checked(
+            &self,
+            candidate: PreparedRuntime,
+            core_spec: chimera_core_manager::CoreSpec,
+        ) -> Result<(), Arc<RuntimeError>> {
+            assert_eq!(core_spec.kind, chimera_core_manager::CoreKind::Mihomo);
+
             if self.reject {
                 return Err(Arc::new(RuntimeError::ShuttingDown));
             }
@@ -278,16 +288,12 @@ mod tests {
         let app = PersistentStateManagerSetup::<ChimeraAppConfig>::builder()
             .config_path(path("app.yaml"))
             .assemble()
-            .from_state(ChimeraAppConfig::default())
-            .await
-            .unwrap();
+            .from_state(ChimeraAppConfig::default());
         let clash = PersistentStateManagerSetup::<ClashConfig>::builder()
             .config_path(path("clash.yaml"))
             .assemble()
-            .from_state(ClashConfig::default())
-            .await
-            .unwrap();
-        let profiles = PersistentStateManagerSetup::<Profiles>::builder()
+            .from_state(ClashConfig::default());
+        let profiles = ProfilesManagerSetup::<Profiles>::builder()
             .config_path(path("profiles.yaml"))
             .assemble()
             .from_state(Profiles::default())
