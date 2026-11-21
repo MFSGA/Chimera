@@ -1,5 +1,13 @@
 # ref 对齐进度
 
+## DIFF-119：ProxiesActor 快照指纹、Provider 写入与跨 Host 操作结果结算（2026-11-20）
+
+- **上游固定基线和迁移目标**：对照 `ref@c4b35e048` 的 `backend/nyanpasu-core/src/proxies.rs::{State::refresh,reread_after_rejection,change_route,Message::Provider}`，继续复用上游单 CoreActor API 绑定、写入后不自动重试、写入失败后重读实际控制器状态的规则。风险 L2：Host 切换、Provider 更新、连接中断和缓存发布可能跨异步边界完成。用户此前持续要求只迁移、不独立运行测试或打包；本轮不额外执行单元测试、全量构建、GUI E2E 或 CI，仓库提交钩子仍遵循原有流程。`ref`、Runtime gitlink、现有配置及迁移/备份数据不改变。
+- **快照指纹流式计算**：上游使用 `SeaHasher` 直接接收 `serde_json::to_writer`，避免为整个代理与 Provider 快照构建一次性 JSON buffer。Chimera 原本是 `DefaultHasher` 加 `serde_json::to_vec`；本轮增加 `FingerprintSink`（`io::Write` 适配原有 `DefaultHasher`），改为把相同 JSON 序列化流直接送入哈希器，不再额外分配整份 JSON 字节数组，同时**保留现有 DefaultHasher 指纹算法**，不为复制 SeaHasher 单独引入新依赖或改变既有指纹值。这是按上游数据流结构迁移，并非宣称哈希算法逐字相同。
+- **当前 Core 来源判定**：新增 `State::require_source_instance`，在 Snapshot 发布前、代理路由写入完成后、连接中断完成后和 Provider 操作完成后验证原始 `ApiClient` 仍匹配 `CoreClient::api_client()` 最新能力；检查使用现有 `same_instance`（已撤销令牌、完整授权绑定或测试中共享身份），同时受 Shutdown/Lease 取消与 30 秒校验期限约束。若 API 令牌仍未收到异步撤销通知，但上游 CoreActor 已切换实例，立即清空旧缓存、阻止任何从旧 Host 发布的快照、连接副作用或普通成功结果，改为明确“需重新确认实际 Core 状态”的错误。不重放可能已经提交到旧控制器的写请求。
+- **保持上游失败与降级边界**：普通路由/Provider 写入失败但来源仍有效时，依然按上游 `reread_after_rejection` 重读实际状态并返回原业务错误；普通路由成功但缓存刷新失败时仍返回现有 `proxy_cache_refresh_failed` UI 降级，连接中断失败则返回 `proxy_interruption_failed` 非重试降级，Provider 成功但重读失败仍返回上下文错误。**只有原始 Core 来源已经改变或不可验证时**，才把其写入/连接中断结果视作不确定而非正常成功或仅 UI 降级。对于最终缓存刷新失败，额外复查原始 Lease 的当前所有权以区别普通 HTTP 读失败与跨 Host 失效。新实现不改变实际写命令、Profile 改动、Provider API 或代理链中断策略。
+- **测试源码和余留差异**：新增未执行的路由写入、Provider 更新和快照读取三类 pending-revocation 回归定义：旧 HTTP controller 尚能响应但 CoreClient 已改用新实例时，不允许旧结果触发连接中断、额外重读或快照发布；原 `replacement_during_chain_read` 改为要求收到“Core Lease 已退休”的错误，不再把旧 Host 的操作伪装为两项普通降级。另增加流式指纹与原 serialized-bytes hash 结果一致的源码测试。未运行这些测试或多平台/实时 Core 切换测试。新加的来源校验会在可信控制器权限不可达时保守地返回未知状态并清空旧缓存，可能增加少量 CoreActor IPC 往返；后续需与实际 Host Handoff 端到端运行结果结合验证。若回滚，应一并恢复来源校验和旧测试预期，不删除用户配置、迁移状态、备份及 `.corrupt-*` 证据。
+
 ## DIFF-118：ProxiesActor 旧 Host 失效事件隔离与 API Monitor 所有权迁移（2026-11-20）
 
 - **固定上游与目标**：对照 `ref@c4b35e048` 中 `backend/nyanpasu-core/src/proxies.rs` 与 `backend/nyanpasu-core/src/actor_v2/api.rs` 的单 Core Lease、代理缓存 generation fence、失效订阅监控。Chimera 原有 ProxiesActor 已保留 ref 的单线程 Actor、`same_instance`、缓存快照与失效消息；这轮补齐的是本地 Host 切换通知和 Monitor 退出所有权，不另造 API 控制器。风险 L2（WebSocket 与代理缓存的旧 Host 数据、订阅通知及 Actor 退出）；不修改配置、Runtime、`ref` gitlink 和真实代理写命令协议。按用户持续要求，不单独执行功能测试、打包或 GUI E2E，仓库提交钩子只作为正常 Git 提交条件。
