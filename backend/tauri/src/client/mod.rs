@@ -344,6 +344,12 @@ impl ChimeraClient {
             &core_v2,
             &core_lifecycle,
         )?);
+        // Both Application and Clash legacy postcommit paths validate via
+        // the exact Profiles production checker. Install it in the sole
+        // CoreLifecycle workflow before opening Profile mutation admission.
+        tauri::async_runtime::block_on(
+            core_lifecycle.install_candidate_gate(profile_gate.clone()),
+        )?;
         tauri::async_runtime::block_on(
             mutations.connect_with_runtime_gate(core_lifecycle.clone(), profile_gate.clone()),
         )?;

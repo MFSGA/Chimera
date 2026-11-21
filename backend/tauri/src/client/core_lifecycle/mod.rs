@@ -341,6 +341,12 @@ enum Message {
         checked: CheckedRuntimeCandidate,
         reply: RpcReplyPort<Result<(), Arc<chimera_contracts::runtime_error::RuntimeError>>>,
     },
+    /// Install the single production ref CandidateCheck on the existing
+    /// lifecycle workflow before any Application source mutation can run.
+    InstallCandidateGate {
+        gate: Arc<super::reconciler::check::CandidateCheck>,
+        reply: RpcReplyPort<anyhow::Result<()>>,
+    },
     ConnectApplicationWorkflow {
         workflow: ApplicationWorkflow,
         reply: RpcReplyPort<anyhow::Result<()>>,
@@ -1479,6 +1485,18 @@ impl Actor for ApplicationWorkflowActor {
         state: &mut Self::State,
     ) -> Result<(), ActorProcessingErr> {
         match message {
+            Message::InstallCandidateGate { gate, reply } => {
+                let result = if state.shutting_down {
+                    Err(anyhow::anyhow!("core lifecycle is shutting down"))
+                } else {
+                    state
+                        .workflow
+                        .as_ref()
+                        .ok_or_else(|| anyhow::anyhow!("core lifecycle workflow is busy"))
+                        .and_then(|workflow| workflow.lifecycle().install_checked_gate(gate))
+                };
+                let _ = reply.send(result);
+            }
             Message::Checked { checked, reply } => {
                 // Unlike a bare cast, this acknowledgement proves that the
                 // owner actually retained the exact document and digest.
@@ -2941,6 +2959,33 @@ impl CoreLifecycleClient {
             core,
             startup_state: tokio::sync::Mutex::new(startup_state),
         }))
+    }
+
+    pub(in crate::client) async fn install_candidate_gate(
+        &self,
+        gate: Arc<super::reconciler::check::CandidateCheck>,
+    ) -> anyhow::Result<()> {
+        match self.0.as_ref() {
+            CoreLifecycleClientInner::Actor { actor_ref, .. } => {
+                match actor_ref
+                    .call(
+                        |reply| Message::InstallCandidateGate { gate, reply },
+                        Some(CALL_WAIT),
+                    )
+                    .await?
+                {
+                    CallResult::Success(result) => result,
+                    CallResult::Timeout => anyhow::bail!("candidate gate installation timed out"),
+                    CallResult::SenderError => {
+                        anyhow::bail!("candidate gate installation reply dropped")
+                    }
+                }
+            }
+            #[cfg(test)]
+            CoreLifecycleClientInner::Direct { .. } => {
+                anyhow::bail!("production CandidateCheck requires the lifecycle actor")
+            }
+        }
     }
 
     pub(crate) async fn connect_application_workflow(

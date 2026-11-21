@@ -447,6 +447,34 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn application_validation_only_checks_core_without_queuing_a_runtime_apply() {
+        let (accepted_gate, builder, validator, inbox) =
+            gate(RuntimeCheckOutcome::Passed, false).await;
+        accepted_gate.validate_only(candidate()).await.unwrap();
+        assert_eq!(builder.prepared.lock().unwrap().len(), 1);
+        assert_eq!(validator.checked.lock().unwrap().len(), 1);
+        assert!(inbox.checked.lock().unwrap().is_empty());
+        assert!(inbox.committed.lock().unwrap().is_empty());
+
+        // A real Core rejection still prevents publication even though
+        // legacy Application postcommit execution remains separate.
+        let (rejected_gate, _builder, validator, inbox) = gate(
+            RuntimeCheckOutcome::Rejected {
+                kind: Some(CoreErrorKind::ConfigCheckFailed),
+                message: "invalid application candidate".into(),
+            },
+            false,
+        )
+        .await;
+        assert!(matches!(
+            rejected_gate.validate_only(candidate()).await,
+            Err(error) if matches!(error.as_ref(), RuntimeError::CoreRejectedConfig { .. })
+        ));
+        assert_eq!(validator.checked.lock().unwrap().len(), 1);
+        assert!(inbox.checked.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
     async fn checked_gate_preserves_the_actual_source_domain_for_each_candidate() {
         let (gate, _builder, _validator, inbox) = gate(RuntimeCheckOutcome::Passed, false).await;
         gate.check(RuntimeCandidate {

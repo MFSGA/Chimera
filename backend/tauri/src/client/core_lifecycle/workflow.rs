@@ -160,6 +160,10 @@ pub(in crate::client) struct CoreLifecycleWorkflow {
     clash: ClashConfigClient,
     profiles: Option<chimera_core::state::StateSnapshot<chimera_config::profile::Profiles>>,
     content_reader: Option<crate::state::mutation::ProfileContentReader>,
+    /// Installed once by the production Client after the canonical Core
+    /// session and Profiles gate have been assembled. Shared by clones of
+    /// the sole lifecycle workflow, not an independent runtime owner.
+    checked_gate: Arc<std::sync::OnceLock<Arc<crate::client::reconciler::check::CandidateCheck>>>,
     core: Arc<dyn CoreLifecyclePort>,
     installer: Arc<dyn BinaryInstaller>,
     service: Arc<dyn ServiceLifecyclePort>,
@@ -248,6 +252,7 @@ impl CoreLifecycleWorkflow {
             clash,
             profiles,
             content_reader: None,
+            checked_gate: Arc::new(std::sync::OnceLock::new()),
             core,
             installer,
             service,
@@ -261,6 +266,15 @@ impl CoreLifecycleWorkflow {
             service_recovery_reconnected: Arc::new(AtomicBool::new(false)),
             shutdown: CancellationToken::new(),
         }
+    }
+
+    pub(in crate::client) fn install_checked_gate(
+        &self,
+        gate: Arc<crate::client::reconciler::check::CandidateCheck>,
+    ) -> anyhow::Result<()> {
+        self.checked_gate
+            .set(gate)
+            .map_err(|_| anyhow::anyhow!("production candidate gate already installed"))
     }
 
     pub(super) fn with_shutdown(mut self, shutdown: CancellationToken) -> Self {
@@ -2179,25 +2193,45 @@ impl CoreLifecycleWorkflow {
     ) -> anyhow::Result<()> {
         use crate::state::mutation::{DomainChange, RuntimeCandidate};
 
-        let Some(profiles) = &self.profiles else {
-            // Compatibility-only tests instantiate no typed Profiles source.
+        if self.profiles.is_none() {
+            // Only isolated test adapters may omit the authoritative Profiles
+            // domain. Production must never silently waive a Core check.
+            #[cfg(test)]
             return Ok(());
+            #[cfg(not(test))]
+            anyhow::bail!("Application preflight requires the typed Profiles source");
+        }
+        let candidate = RuntimeCandidate {
+            change: DomainChange::Application {
+                candidate: Arc::new(app.clone()),
+            },
+            staged: Default::default(),
         };
-        // Share the exact REF-style DomainChange admission path with the
-        // production Profiles/Clash gate. The CoreLifecycle mailbox still
-        // serializes source persistence and the subsequent runtime apply.
+        if let Some(gate) = self.checked_gate.get() {
+            // Application still owns its legacy postcommit host transition.
+            // Use the same ref builder and Core check as Profiles/Clash but
+            // do not enqueue Checked bytes until that apply path is retired.
+            return gate
+                .validate_only(candidate)
+                .await
+                .map_err(anyhow::Error::new);
+        }
+        #[cfg(not(test))]
+        {
+            let _ = service_connected;
+            anyhow::bail!("Application preflight requires the installed production CandidateCheck");
+        }
+        // Isolated legacy workflow tests have no canonical runtime session.
+        #[cfg(test)]
         crate::client::reconciler::legacy_check::check_domain_candidate(
             self.core.as_ref(),
             self.application.get_typed(),
             self.clash.get()?,
-            profiles,
+            self.profiles
+                .as_ref()
+                .expect("checked Profiles availability"),
             self.content_reader.as_ref(),
-            RuntimeCandidate {
-                change: DomainChange::Application {
-                    candidate: Arc::new(app),
-                },
-                staged: Default::default(),
-            },
+            candidate,
             service_connected,
         )
         .await
