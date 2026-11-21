@@ -1,5 +1,13 @@
 # ref 对齐进度
 
+## DIFF-117：Core API Monitor、WebSocket Worker 与旧实例缓存的退出回收（2026-11-20）
+
+- **固定来源/风险**：参考 `ref@c4b35e048` 中 `backend/nyanpasu-core/src/{actor_v2/api.rs,clash/ws.rs}` 的单实例 API Lease、WebSocket Worker 与 Actor 停止所有权语义。在 DIFF-116 已完成 CoreActor API Monitor 显式退休与状态 Pump 回收后，继续处理 Chimera `clash/ws.rs` 尚未 join 的日志、重连、详情订阅以及多 socket worker。风险 L2（日志流重订阅、旧 Host 事件与 Panic 传播）；仍依维护者要求不额外运行单测、全量构建、桌面 E2E 或打包，仓库强制提交钩子仅是提交流程。
+- **WebSocket Actor 的真实生产任务排空**：新增 `collect_stream_join`、`cancel_stream_worker` 和 `resume_stream_panic`。普通关闭和 Host API 失效允许中断只读 socket，但现在会完整 await 其 `JoinHandle`，区分预期取消与致命 Panic。`State::reset` 在丢弃旧 API Lease、清空连接详情和滚动订阅 epoch 前先回收原 logs socket；`restart_logs` 改为 async，在启动新 log-level socket 前取消并 join 旧任务，保持原 epoch fence 防止旧帧混入。`State::stop` 依次回收 reconnect owner、logs socket 和 details-subscriber watcher，清空实例绑定与发布状态后再传播异常；换订阅者时也先回收原 `details_closed` watcher。
+- **WebSocket JoinSet 意外 Panic 不丢失**：主重连任务管理 Connections、Traffic 和 Memory 三个 WebSocket Worker。原逻辑可能在收到第一项 fatal `JoinError` 时直接 `resume_unwind`，使其它 worker 在尚未回收时被 JoinSet Drop 取消；其它时候又丢弃后续 `join_next` 的错误。现先保留首个原始 Panic，`abort_all()` 并完全 drain JoinSet，记录其它真实错误后再传播给上层 Actor；非致命取消仍不提升为崩溃。保留原 Core API 令牌取消、重连退避和 Actor 投递 RPC，不引入新的独立 Service/Core Owner。
+- **兼容 CoreFacade API 缓存退休**：生产 `ChimeraClient` 已通过上游 `CoreActor`/`CoreFacade` 获取实例绑定 API，不再依赖 Tauri 私有缓存，故不复制或改写生产路径。只对原有无 Core Router 的兼容 Facade 增加显式退休：`chimera_core::actor_v2::api::ApiLease::stop` 对其宿主适配公开；Tauri wrapper `ApiLease::stop` 复用共享 Monitor join。兼容 `CoreFacade::clash_api_client` 在取不到可信 Running/instance receipt 时释放已缓存 Lease，在 binding 不匹配的实例替换时先 join 旧 Monitor 再创建新客户端；`finish_shutdown` 在停止 Core 前释放缓存。生产 ref ServiceActor 和 CoreActor 仍分别只有一个真正 Owner。
+- **回归源码与待验差异**：在 `clash/ws_tests.rs` 新增取消后 `JoinHandle` 已回收、socket 确实被 drop，以及 fatal JoinError 在其它 worker 回收后仍可向监督层传播的测试定义；本轮未执行。上游 WebSocket Actor 的详细日志历史和投递结构与 Chimera 存在本地扩展，本轮保留这些上层协议字段，迁移的是独立任务生命周期，不称为逐行完全一致。若回滚，需成组撤回 WebSocket join、Tauri 兼容缓存退休及其共享 Lease 可见性调整；不删除用户配置、Profiles、迁移状态、备份或 `.corrupt-*` 证据。
+
 ## DIFF-116：Core API Lease、状态 Pump 与 Handoff 资源所有权迁移（2026-11-20）
 
 - **固定来源/范围**：参照 `ref@c4b35e048` 的 `backend/nyanpasu-core/src/actor_v2/{mod.rs,api.rs}`。原上游 CoreActor 独占 API Lease、状态订阅 Pump 和 Handoff；本轮沿用其实例绑定、永久撤销、两阶段 Stop 及 generation fence 语义，补齐 Chimera 显式任务回收。风险 L2（Host 变更、API 鉴权、订阅取消及 Actor 停止），不更改用户配置、Runtime 或 `ref` gitlink。维护者要求继续迁移、不额外运行测试或打包；提交钩子不等于运行验收。
