@@ -6,7 +6,8 @@
 //! additional runtime states and phases are retained for desktop wire parity.
 use serde::{Deserialize, Serialize};
 
-use crate::profiles::ports::ProfileDegradationCode;
+use crate::profiles::{command_failure::ProfileFailure, ports::ProfileDegradationCode};
+use chimera_config::profile::ProfileId;
 
 /// A source commit and its critical runtime outcome. Side effects settle
 /// separately and cannot undo a committed source mutation.
@@ -145,14 +146,27 @@ pub struct Degradation {
 #[derive(Debug, Clone, Serialize, specta::Type)]
 #[serde(tag = "code", rename_all = "snake_case")]
 pub enum DegradationReason {
-    ModeInterruptionFailed { cause: InterruptFailure },
-    ProfileInterruptionFailed { cause: InterruptFailure },
-    ProxyInterruptionFailed { cause: InterruptFailure },
+    ModeInterruptionFailed {
+        cause: InterruptFailure,
+    },
+    ProfileInterruptionFailed {
+        cause: InterruptFailure,
+    },
+    ProxyInterruptionFailed {
+        cause: InterruptFailure,
+    },
     ProxyCacheRefreshFailed,
     JournalInvalid,
     JobsJournalUnavailable,
     MaterializationDeferred,
     CleanupDeferred,
+    /// Ref's post-commit profile activation result with a real, typed cause.
+    /// Only source errors that can be projected without losing their identity
+    /// are admitted; the older desktop wire retains its flat fallback.
+    ProfileAutoActivationFailed {
+        profile: ProfileId,
+        cause: Box<ProfileFailure>,
+    },
     HttpServerUnavailable,
     LocalSocketUnavailable,
 }
@@ -170,6 +184,7 @@ impl DegradationReason {
             Self::JobsJournalUnavailable => "jobs_journal_unavailable",
             Self::MaterializationDeferred => "materialization_deferred",
             Self::CleanupDeferred => "cleanup_deferred",
+            Self::ProfileAutoActivationFailed { .. } => "profile_auto_activation_failed",
             Self::HttpServerUnavailable => "http_server_unavailable",
             Self::LocalSocketUnavailable => "local_socket_unavailable",
         }
