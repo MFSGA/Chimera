@@ -2,20 +2,39 @@
 //! Matches ref's `nyanpasu-core/src/connections.rs` ownership: the
 //! application supplies a scope, never a Tauri window or runtime handle.
 
-use anyhow::Result;
-
-use crate::{actor_v2::api::ApiClient, clash::api::ConnectionItem};
+use crate::{
+    actor_v2::api::{ApiClient, ApiError},
+    clash::api::ConnectionItem,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConnectionScope {
     All,
     ProxyGroup { name: String },
 }
+// Source copied from pinned ref/connections.rs. Caller policy only selects
+// the scope; it does not silently convert a retired API into a valid close.
+impl ConnectionScope {
+    pub fn for_proxy_change(
+        strategy: chimera_config::clash::config::clash_strategy::ProxyChangeBreakMode,
+        group: String,
+    ) -> Option<Self> {
+        use chimera_config::clash::config::clash_strategy::ProxyChangeBreakMode;
+        match strategy {
+            ProxyChangeBreakMode::Off => None,
+            ProxyChangeBreakMode::All => Some(Self::All),
+            ProxyChangeBreakMode::ProxyGroup => Some(Self::ProxyGroup { name: group }),
+        }
+    }
+}
 
 /// Close the selected scope using the already instance-bound Clash API
 /// capability. Do not retry deletes: a lost reply does not prove the
 /// connection is still open.
-pub async fn interrupt_connections(api: &ApiClient, scope: &ConnectionScope) -> Result<()> {
+pub async fn interrupt_connections(
+    api: &ApiClient,
+    scope: &ConnectionScope,
+) -> Result<(), ApiError> {
     match scope {
         ConnectionScope::All => Ok(api.delete_connections(None).await?),
         ConnectionScope::ProxyGroup { name } => interrupt_by_chains(api, &[name.as_str()]).await,
@@ -24,7 +43,7 @@ pub async fn interrupt_connections(api: &ApiClient, scope: &ConnectionScope) -> 
 
 /// Chimera's existing multi-group compatibility entrypoint. The model still
 /// lives in the independent core; the Tauri adapter supplies only policy.
-pub async fn interrupt_by_chains(api: &ApiClient, chains: &[&str]) -> Result<()> {
+pub async fn interrupt_by_chains(api: &ApiClient, chains: &[&str]) -> Result<(), ApiError> {
     if chains.is_empty() {
         return Ok(());
     }
@@ -199,6 +218,25 @@ mod tests {
             .unwrap()
             .unwrap();
         assert!(request.starts_with("DELETE /connections "), "{request}");
+    }
+
+    #[test]
+    fn pinned_ref_strategy_maps_to_optional_connection_scope() {
+        use chimera_config::clash::config::clash_strategy::ProxyChangeBreakMode;
+        assert_eq!(
+            ConnectionScope::for_proxy_change(ProxyChangeBreakMode::Off, "group".into()),
+            None
+        );
+        assert_eq!(
+            ConnectionScope::for_proxy_change(ProxyChangeBreakMode::All, "group".into()),
+            Some(ConnectionScope::All)
+        );
+        assert_eq!(
+            ConnectionScope::for_proxy_change(ProxyChangeBreakMode::ProxyGroup, "group".into()),
+            Some(ConnectionScope::ProxyGroup {
+                name: "group".into()
+            })
+        );
     }
 
     #[test]
