@@ -5,9 +5,9 @@ import {
   SystemProxyButton,
   TunModeButton,
 } from '@/components/settings/system-proxy';
+import { OS } from '@/consts';
 import * as m from '@/paraglide/messages';
 import CurrentSystemProxy from '../_modules/current-system-proxy';
-import ProxyBypassConfig from '../_modules/proxy-bypass-config';
 import ProxyGuardConfig from '../_modules/proxy-guard-config';
 import ProxyGuardSwitch from '../_modules/proxy-guard-switch';
 import ProxyModeSelector from '../_modules/proxy-mode-selector';
@@ -19,6 +19,8 @@ import {
   SettingsLabel,
 } from '../../_modules/settings-card';
 import { SettingsTitle } from '../../_modules/settings-title';
+import ProxyBypassConfig from './_modules/proxy-bypass-config';
+import TransparentProxyButton from './_modules/transparent-proxy-button';
 
 export const Route = createFileRoute('/(main)/main/settings/system/proxy/')({
   component: RouteComponent,
@@ -36,6 +38,7 @@ const ProxyMode = () => {
           <SystemProxyButton />
 
           <TunModeButton />
+          {OS === 'linux' && <TransparentProxyButton />}
         </div>
       </SettingsGroup>
 
