@@ -48,6 +48,22 @@ pub enum MaterializationOperation {
     Reconcile,
 }
 
+/// Why the source transaction failed before a confirmed document commit.
+/// `WriteConfig` and `RecoverAfterWriteFailure` are the pinned ref's
+/// CommitAborted classes. The others distinguish Chimera's actual local
+/// write, preflight ACK, and post-write recovery ownership boundaries.
+/// The original ReplaceIfVersionError remains the #[source] in ProfilesActor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, serde::Deserialize, specta::Type)]
+#[serde(rename_all = "snake_case")]
+pub enum CommitFailureReason {
+    WriteConfig,
+    RecoverAfterWriteFailure,
+    LocalWrite,
+    PrepareAck,
+    StateValidation,
+    StateRecovery,
+}
+
 #[derive(Debug, Clone, Serialize, specta::Type)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ProfileFailure {
@@ -65,6 +81,11 @@ pub enum ProfileFailure {
         cleanup: Option<String>,
     },
     RevisionOverflow,
+    /// Only returned when an actual conditional-write error supplied a
+    /// concrete source category; no source or cleanup object is fabricated.
+    Commit {
+        reason: CommitFailureReason,
+    },
     ProfileHasNoFile,
     NotARemoteProfile,
 }
@@ -88,6 +109,24 @@ mod tests {
         assert_eq!(
             serde_json::to_value(MaterializationOperation::PrepareFileFirst).unwrap(),
             "prepare_file_first"
+        );
+    }
+
+    #[test]
+    fn commit_failure_reason_serializes_as_a_concrete_source_class() {
+        let error = ProfileFailure::Commit {
+            reason: CommitFailureReason::RecoverAfterWriteFailure,
+        };
+        assert_eq!(
+            serde_json::to_value(error).unwrap(),
+            serde_json::json!({
+                "kind": "commit",
+                "reason": "recover_after_write_failure"
+            })
+        );
+        assert_eq!(
+            serde_json::to_value(CommitFailureReason::LocalWrite).unwrap(),
+            "local_write"
         );
     }
 
