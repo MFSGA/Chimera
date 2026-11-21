@@ -911,3 +911,45 @@ async fn listed_groups_reach_the_published_snapshot() {
     client.stop_for_test().await.unwrap();
     server.abort();
 }
+
+#[tokio::test]
+async fn old_host_invalidation_cannot_clear_rebound_proxy_cache() {
+    let (client, _core, source, fixture, server) = setup().await;
+    client.get(false).await.unwrap();
+    source.rotate().await;
+    // A new Host capability must replace the retired cache regardless of
+    // whether the old monitor has already queued its invalidation message.
+    client.get(true).await.unwrap();
+    let reads_after_rebind = fixture.reads.load(Ordering::SeqCst);
+    client
+        .0
+        .actor
+        .cast(Message::Invalidated(1))
+        .expect("the proxy actor accepts a queued old-Host notification");
+    client.get(false).await.unwrap();
+    assert_eq!(
+        fixture.reads.load(Ordering::SeqCst),
+        reads_after_rebind,
+        "old generation events must not invalidate the current cached API"
+    );
+    assert!(!client.snapshot().nodes.is_empty());
+    server.abort();
+}
+
+#[tokio::test]
+async fn a_different_core_instance_notifies_subscribers_with_identical_proxy_groups() {
+    let (client, _core, source, _, server) = setup().await;
+    client.get(false).await.unwrap();
+    let mut changed = client.subscribe();
+    changed.borrow_and_update();
+    // Keep the old token valid on purpose: only the identity changes. The
+    // same proxy response cannot distinguish the controllers by fingerprint.
+    *source.api.write().await = ApiClient::new_unbound(source.server.to_string(), None).unwrap();
+    client.healthcheck_provider(PROVIDER.into()).await.unwrap();
+    assert!(
+        changed.has_changed().unwrap(),
+        "new Core instance must emit a binding event even with identical groups"
+    );
+    assert!(!client.snapshot().nodes.is_empty());
+    server.abort();
+}
