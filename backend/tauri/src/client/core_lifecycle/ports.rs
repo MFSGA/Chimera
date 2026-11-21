@@ -176,6 +176,16 @@ pub(crate) trait CoreLifecyclePort: Send + Sync {
         target_core: ClashCore,
         run_type: RunType,
     ) -> anyhow::Result<()>;
+    /// The upstream checked-product apply port. No adapter may re-build the
+    /// candidate at this boundary; unsupported ports must explicitly refuse.
+    async fn reconcile_prepared(
+        &self,
+        _prepared: PreparedRuntime,
+        _core_spec: chimera_core_manager::CoreSpec,
+    ) -> anyhow::Result<()> {
+        anyhow::bail!("this CoreLifecycle port cannot submit checked runtime bytes")
+    }
+
     /// Stop a Service-hosted Core after startup evidence proved that this
     /// instance owns it. The caller must re-probe before starting Local.
     async fn retire_service_core(
@@ -421,7 +431,7 @@ pub(in crate::client) trait RuntimePreparationPort: Send + Sync {
     ) -> Result<chimera_core_manager::CoreSpec, CoreSpecError>;
 }
 
-pub(in crate::client) struct PreparedRuntime {
+pub(crate) struct PreparedRuntime {
     pub snapshot: Arc<runtime::RuntimeSnapshot>,
     /// The to-be-committed bytes, serialized exactly once so the advisory
     /// check and the reconcile cannot drift apart.
