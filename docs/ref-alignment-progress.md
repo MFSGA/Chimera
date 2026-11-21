@@ -1,5 +1,14 @@
 # ref 对齐进度
 
+## DIFF-145（Runtime Reconciler）：统一候选构建与 Core Host 的 Revision/Ports Session（2026-11-21）
+
+- **对齐上游的共享所有权**：固定只读 `ref@c4b35e04870a9caa53f21d10af6fcfde4a6f4c01`，沿用上游 `client/reconciler/mod.rs::RuntimeReconcilerArgs` 的共享 `RuntimeRevisionAllocator` 和 `Arc<SessionPortResolver>` 思路，不建立额外 Core mutating Actor；既有 `CoreLifecycleClient → CoreFacade → LocalRuntimeHost` 仍是唯一 Core Apply 所有者。
+- **同一 RuntimeLifecycle 真实句柄**：`RuntimeLifecycle::revision_allocator()` 克隆的是其内部 `Arc<AtomicU64>` 计数器，不创建新的序列；生产 `LocalRuntimeHost` 将原来的 `SessionPortResolver` 持有方式改为 `Arc<SessionPortResolver>`，并通过 `preparation_session()` 返回同一个 resolver Arc 和同一 revision allocator。`CoreFacade::preparation_session()`、`LegacyCoreBridge::runtime_preparation_session()`、`CoreLifecycleClient::runtime_preparation_session()` 将这两个句柄只读传递给候选构建层；不支持真实 LocalRuntimeHost 的兼容端口返回 `None`，不允许伪装为新会话。
+- **新准备器拒绝隐式分叉**：`RuntimePreparation::new(reader,builder,session)` 现在**必须**接收同一个 `RuntimePreparationSession`，不再从 `RuntimeRevisionAllocator::new()` 创建独立修订序列，也不允许构造后用 `with_session` 覆写。新的 `CandidateCheck::Args` 只接收一份 session，而不是可随意拼配的 `revisions` 与 `ports` 两项；真实 RuntimeBuildService 测试、校验器测试以及 Apply 测试均改为从相同 `RuntimeLifecycle` 构造 session。
+- **真正经过 Core 确认的端口与修订回归**：LocalRuntimeHost 集成测试从同一 resolver 解析候选，确认候选本身不改变运行中端口基线；调用真实 `reconcile_prepared`（模拟 Core 端点）并通过 Core 报告状态确认后，检查 receipt 内精确保存预先选定的 listener 绑定及 Snapshot Arc。随后再次从 Host 借用 session：`Arc::ptr_eq` 证明是同一个 resolver，未变化的策略复用确认端口；候选分配和 Core owner 侧 revision 分配连续递增。模拟 S2 从 Local 切换到 Service 后，所有先前借出的同一 resolver 立即看到已确认绑定失效，但 revision 序列不会重置。
+- **专项验证**：`CARGO_INCREMENTAL=0 cargo check --manifest-path backend/Cargo.toml -p chimera --lib --quiet` 通过；`cargo test -p chimera --lib client::reconciler::` **61/61**、`client::runtime_build::tests::` **2/2**、`client::core_lifecycle::tests::` **132/132**、`core::actor_v2::local_runtime::tests::` **11/11**、`cargo test -p chimera-core --lib` **426/426**；测试执行的是模拟 Core 端点及单一生命周期 Actor，不代表完整服务端实机或 GUI E2E 已通过。
+- **仍未切换生产 Gate**：本轮完成了实际 Core Host 状态共享入口、强制构造接口及真实确认后的端口/修订回归，**但现有 `MutationCoordinator` 仍使用 `legacy_check`**。`CoreLifecycleClient::runtime_preparation_session()` 已可为未来生产 `CandidateCheck` 提供唯一 session，尚未把 RuntimeBuildService/Validator/Source Gate 的整条生产装配切换完成；提交与应用之间的 Source 并发、S2 服务端细节、Effects 与清理旧实现仍待后续整体迁移。不得把本次 session 接口误报为生产 Reconciler 已接管。
+
 ## DIFF-144（Runtime Reconciler）：生产执行前读取权威 Source 版本与内容身份（2026-11-21）
 
 - **固定 ref/唯一执行所有权**：保持 `ref@c4b35e04870a9caa53f21d10af6fcfde4a6f4c01` 不变，对齐上游 `reconciler/{workflow.rs,apply.rs}` 的最新提交目标防护；没有创建第二个 Runtime Actor、分支或工作树。新的 `ApplyChecked` 仍由已有 `CoreLifecycleClient` 的唯一 mutating 命令槽调用 CoreFacade；继续维持上轮的原字节提交、Core 修订 CAS、Host generation CAS 及确认后出版。
