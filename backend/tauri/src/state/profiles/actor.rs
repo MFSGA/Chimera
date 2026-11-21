@@ -17,6 +17,10 @@ use chimera_contracts::profiles::{
     },
     error::{ProfileFileError, SubscriptionFetchError},
 };
+use chimera_contracts::{
+    mutation::CommitAborted,
+    runtime_error::{RuntimeCheckUnavailable, RuntimeError},
+};
 use chimera_core::state::{PersistentStateManager, ReplaceIfVersionResult, Version};
 use chimera_core_manager::OperationId;
 use ractor::{Actor, ActorProcessingErr, ActorRef, RpcReplyPort};
@@ -81,6 +85,14 @@ pub enum ProfilesError {
     Persist(String),
     #[error("Profiles runtime candidate check failed: {0}")]
     RuntimeCheck(String),
+    /// A source candidate failed before the file/Journal/MVCC transaction
+    /// began. The REF CommitAborted variant distinguishes real rejection
+    /// from an unavailable verdict and keeps the actual check cause.
+    #[error("the profiles change was not committed: {source}")]
+    Commit {
+        #[source]
+        source: CommitAborted,
+    },
     #[error("profiles source transaction failed: {source}; staging cleanup: {cleanup:?}")]
     SourceTransaction {
         #[source]
@@ -171,6 +183,16 @@ impl ProfilesError {
                 reason: Some(reason),
                 ..
             } => Some(ProfileFailure::Commit { reason: *reason }),
+            Self::Commit {
+                source: CommitAborted::RuntimeRefused { .. },
+            } => Some(ProfileFailure::Commit {
+                reason: CommitFailureReason::RuntimeRefused,
+            }),
+            Self::Commit {
+                source: CommitAborted::RuntimeFailed { .. },
+            } => Some(ProfileFailure::Commit {
+                reason: CommitFailureReason::RuntimeFailed,
+            }),
             Self::ProfileHasNoFile => Some(ProfileFailure::ProfileHasNoFile),
             Self::NotARemoteProfile => Some(ProfileFailure::NotARemoteProfile),
             Self::ProfileInUse { .. }
@@ -180,6 +202,7 @@ impl ProfilesError {
             | Self::ImportFailed { .. }
             | Self::Persist(_)
             | Self::RuntimeCheck(_)
+            | Self::Commit { .. }
             | Self::SourceTransaction { reason: None, .. }
             | Self::Materialization(_)
             | Self::MaterializationFile { .. }
@@ -200,6 +223,24 @@ impl ProfilesError {
 pub struct MaterializationRecoveryFailure {
     pub resource: Option<anyhow::Error>,
     pub cleanup: Option<anyhow::Error>,
+}
+
+/// Retain a non-cloneable check error as the original source of the REF
+/// CommitAborted. `anyhow` owns the underlying structured Core/Gate errors;
+/// keep that chain accessible instead of reporting only its Display text.
+#[derive(Debug)]
+struct CandidateCheckSource(anyhow::Error);
+
+impl std::fmt::Display for CandidateCheckSource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl std::error::Error for CandidateCheckSource {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        self.0.chain().next()
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -551,6 +592,93 @@ impl ProfilesActor {
         }
     }
 
+    /// Map exactly one independent candidate check to the ref pre-commit
+    /// transaction outcome. Only an explicit Rejected verdict may produce
+    /// RuntimeRefused; every unavailable, skipped, untyped or unchecked
+    /// result becomes RuntimeFailed. Neither can commit or replay a write.
+    fn runtime_gate_failure(error: anyhow::Error) -> ProfilesError {
+        use crate::client::{
+            application_workflow::{
+                mutation::{CheckRecord, RuntimeCheckFailure},
+                ports::{RuntimeCheckOutcome, RuntimeCheckUnavailable as GateUnavailable},
+            },
+            reconciler::check::RuntimeGateVerdict,
+        };
+
+        let detailed = error.downcast_ref::<RuntimeCheckFailure>();
+        let record = error
+            .downcast_ref::<RuntimeGateVerdict>()
+            .map(|failure| &failure.record);
+        let rejected = matches!(record, Some(CheckRecord::Rejected(_)))
+            || detailed.is_some_and(|failure| {
+                matches!(failure.outcome, RuntimeCheckOutcome::Rejected { .. })
+            });
+        let cause = if rejected {
+            let (core_kind, message) = match detailed.map(|failure| &failure.outcome) {
+                Some(RuntimeCheckOutcome::Rejected { kind, message }) => (*kind, message.clone()),
+                _ => (
+                    None,
+                    match record {
+                        Some(CheckRecord::Rejected(message)) => message.clone(),
+                        _ => error.to_string(),
+                    },
+                ),
+            };
+            RuntimeError::CoreRejectedConfig { core_kind, message }
+        } else {
+            let reason = match detailed.map(|failure| &failure.outcome) {
+                Some(RuntimeCheckOutcome::Unavailable(GateUnavailable::Backend {
+                    kind,
+                    message,
+                    retryable,
+                })) => RuntimeCheckUnavailable::Backend {
+                    kind: *kind,
+                    message: message.clone(),
+                    retryable: *retryable,
+                },
+                Some(RuntimeCheckOutcome::Unavailable(GateUnavailable::CandidateUnavailable {
+                    reason,
+                })) => RuntimeCheckUnavailable::CandidateUnavailable {
+                    reason: reason.clone(),
+                },
+                Some(RuntimeCheckOutcome::Unavailable(GateUnavailable::NoEndpoint { reason })) => {
+                    RuntimeCheckUnavailable::NoEndpoint {
+                        reason: reason.clone(),
+                    }
+                }
+                Some(RuntimeCheckOutcome::Unavailable(GateUnavailable::HostUnsupported {
+                    host,
+                    reason,
+                })) => RuntimeCheckUnavailable::HostUnsupported {
+                    host: format!("{host:?}"),
+                    reason: reason.clone(),
+                },
+                _ => match record {
+                    Some(CheckRecord::Skipped(reason) | CheckRecord::Unserviceable(reason)) => {
+                        RuntimeCheckUnavailable::NotChecked {
+                            reason: reason.clone(),
+                        }
+                    }
+                    Some(CheckRecord::NotOwed) => RuntimeCheckUnavailable::NotChecked {
+                        reason: "candidate check not owed".into(),
+                    },
+                    _ => RuntimeCheckUnavailable::Other {
+                        reason: error.to_string(),
+                    },
+                },
+            };
+            RuntimeError::CheckUnavailable { reason }
+        };
+        let errors = vec![Arc::new(cause)];
+        let source: chimera_contracts::BoxedCause = Box::new(CandidateCheckSource(error));
+        let commit = if rejected {
+            CommitAborted::RuntimeRefused { errors, source }
+        } else {
+            CommitAborted::RuntimeFailed { errors, source }
+        };
+        ProfilesError::Commit { source: commit }
+    }
+
     /// Persist an already validated, revision-bumped candidate exactly as prepared.
     async fn persist_candidate(
         state: &mut ProfilesActorState,
@@ -578,13 +706,13 @@ impl ProfilesActor {
             state
                 .mutations
                 .runtime_gate()
-                .map_err(|error| ProfilesError::RuntimeCheck(error.to_string()))?
+                .map_err(Self::runtime_gate_failure)?
                 .check(crate::state::mutation::RuntimeCandidate {
                     profiles: Arc::new(next.clone()),
                     staged: hints.staged_content.clone(),
                 })
                 .await
-                .map_err(|error| ProfilesError::RuntimeCheck(error.to_string()))?;
+                .map_err(Self::runtime_gate_failure)?;
         }
         // Use the same publication fence as ref's Profile source actor.
         // A concurrent committed-content reader cannot observe a mixed
@@ -1014,13 +1142,13 @@ impl ProfilesActor {
             state
                 .mutations
                 .runtime_gate()
-                .map_err(|error| ProfilesError::RuntimeCheck(error.to_string()))?
+                .map_err(Self::runtime_gate_failure)?
                 .check(crate::state::mutation::RuntimeCandidate {
                     profiles: Arc::new(candidate.clone()),
                     staged: hints.staged_content.clone(),
                 })
                 .await
-                .map_err(|error| ProfilesError::RuntimeCheck(error.to_string()))?;
+                .map_err(Self::runtime_gate_failure)?;
         }
         let prepared = if let Some((path, resource)) = resource {
             Some(
@@ -2781,6 +2909,80 @@ mod tests {
 
     /// Config subscriptions must carry proxies (legacy remote.rs semantics);
     /// overlays only require a mapping.
+    #[test]
+    fn runtime_check_failure_retains_real_core_kind_and_retryability() {
+        use crate::client::application_workflow::mutation::RuntimeCheckFailure;
+        use chimera_contracts::runtime_error::RuntimeCheckUnavailable;
+        use chimera_core_manager::{CoreError, CoreErrorKind};
+
+        let refusal = ProfilesActor::runtime_gate_failure(anyhow::Error::new(
+            RuntimeCheckFailure::from_core_error(CoreError::new(
+                CoreErrorKind::ConfigCheckFailed,
+                "invalid proposed YAML",
+                false,
+            )),
+        ));
+        let ProfilesError::Commit {
+            source: CommitAborted::RuntimeRefused { errors, source },
+        } = &refusal
+        else {
+            panic!("a Core check rejection must not be recorded as unavailable");
+        };
+        assert!(matches!(
+            errors[0].as_ref(),
+            RuntimeError::CoreRejectedConfig {
+                core_kind: Some(CoreErrorKind::ConfigCheckFailed),
+                ..
+            }
+        ));
+        assert!(source.downcast_ref::<CandidateCheckSource>().is_some());
+        assert_eq!(
+            serde_json::to_value(&refusal.typed_failure().unwrap()).unwrap()["reason"],
+            "runtime_refused"
+        );
+
+        let unavailable = ProfilesActor::runtime_gate_failure(anyhow::Error::new(
+            RuntimeCheckFailure::from_core_error(CoreError::new(
+                CoreErrorKind::BackendUnavailable,
+                "service is reconnecting",
+                true,
+            )),
+        ));
+        let ProfilesError::Commit {
+            source: CommitAborted::RuntimeFailed { errors, .. },
+        } = &unavailable
+        else {
+            panic!("failed validation must preserve the missing verdict");
+        };
+        assert!(matches!(
+            errors[0].as_ref(),
+            RuntimeError::CheckUnavailable {
+                reason: RuntimeCheckUnavailable::Backend {
+                    kind: Some(CoreErrorKind::BackendUnavailable),
+                    retryable: true,
+                    ..
+                }
+            }
+        ));
+    }
+
+    #[test]
+    fn unknown_validator_error_does_not_forge_an_explicit_core_rejection() {
+        let error = ProfilesActor::runtime_gate_failure(anyhow::anyhow!(
+            "candidate input resolver could not be reached"
+        ));
+        assert!(matches!(
+            &error,
+            ProfilesError::Commit {
+                source: CommitAborted::RuntimeFailed { .. }
+            }
+        ));
+        assert_eq!(
+            serde_json::to_value(error.typed_failure().unwrap()).unwrap()["reason"],
+            "runtime_failed"
+        );
+    }
+
     #[test]
     fn source_write_failures_keep_actual_manager_error_and_typed_commit_class() {
         use chimera_core::state::ReplaceIfVersionError;

@@ -3524,7 +3524,15 @@ mod tests {
                 Some("proxies: []\n"),
                 "ref CandidateCheck must receive the frozen proposed bytes"
             );
-            anyhow::bail!("Core rejected candidate");
+            Err(anyhow::Error::new(
+                crate::client::reconciler::check::RuntimeGateVerdict {
+                    domain: "profiles".into(),
+                    record: crate::client::application_workflow::mutation::CheckRecord::Rejected(
+                        "Core rejected candidate".into(),
+                    ),
+                    source: None,
+                },
+            ))
         }
     }
 
@@ -3558,8 +3566,85 @@ mod tests {
             .save_file(ProfileId("cfg1".into()), "proxies: []\n".into())
             .await
             .unwrap_err();
-        assert!(matches!(error, ProfilesError::RuntimeCheck(_)));
+        assert!(matches!(
+            &error,
+            ProfilesError::Commit {
+                source: chimera_contracts::mutation::CommitAborted::RuntimeRefused { .. }
+            }
+        ));
         assert!(error.to_string().contains("Core rejected candidate"));
+        let structured = error
+            .typed_failure()
+            .expect("a real rejected verdict is typed");
+        assert_eq!(
+            serde_json::to_value(structured).unwrap()["reason"],
+            "runtime_refused"
+        );
+        assert_eq!(client.snapshot().revision(), before.revision());
+        assert_eq!(std::fs::read(temp_profiles_path(&dir)).unwrap(), document);
+    }
+
+    struct UnavailableRuntimeGate;
+
+    #[async_trait::async_trait]
+    impl crate::state::mutation::RuntimeGate for UnavailableRuntimeGate {
+        async fn check(
+            &self,
+            _candidate: crate::state::mutation::RuntimeCandidate,
+        ) -> anyhow::Result<()> {
+            Err(anyhow::Error::new(
+                crate::client::application_workflow::mutation::RuntimeCheckFailure::from_core_error(
+                    chimera_core_manager::CoreError::new(
+                        chimera_core_manager::CoreErrorKind::BackendUnavailable,
+                        "core validation service is not reachable",
+                        true,
+                    ),
+                ),
+            ))
+        }
+    }
+
+    #[tokio::test]
+    async fn unavailable_candidate_check_fails_before_profile_file_or_source_commit() {
+        let dir = tempdir().unwrap();
+        let mutations = MutationCoordinator::isolated();
+        let mut materialization = MockProfileMaterializationPort::new();
+        materialization
+            .expect_reconcile()
+            .returning(|_| Ok(MaterializationReconcileReport::default()));
+        materialization.expect_prepare_file_first().never();
+        let client = ProfilesClient::new(
+            mutations.clone(),
+            temp_profiles_path(&dir),
+            Arc::new(MockProfileFsPort::new()),
+            Arc::new(MockSubscriptionFetcher::new()),
+            Arc::new(materialization),
+        )
+        .await
+        .unwrap();
+        client.replace(seeded_profiles()).await.unwrap();
+        client
+            .set_current(Some(ProfileId("cfg1".into())))
+            .await
+            .unwrap();
+        let before = client.snapshot();
+        let document = std::fs::read(temp_profiles_path(&dir)).unwrap();
+        mutations.install_test_runtime_gate(Arc::new(UnavailableRuntimeGate));
+        let error = client
+            .save_file(ProfileId("cfg1".into()), "proxies: []\n".into())
+            .await
+            .unwrap_err();
+        let ProfilesError::Commit {
+            source: chimera_contracts::mutation::CommitAborted::RuntimeFailed { errors, .. },
+        } = &error
+        else {
+            panic!("unavailable validator must not reject the candidate: {error:#}");
+        };
+        assert_eq!(errors.len(), 1);
+        assert!(matches!(
+            errors[0].as_ref(),
+            chimera_contracts::runtime_error::RuntimeError::CheckUnavailable { .. }
+        ));
         assert_eq!(client.snapshot().revision(), before.revision());
         assert_eq!(std::fs::read(temp_profiles_path(&dir)).unwrap(), document);
     }

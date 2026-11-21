@@ -62,6 +62,10 @@ pub enum CommitFailureReason {
     PrepareAck,
     StateValidation,
     StateRecovery,
+    /// The Core actually validated and rejected the candidate before commit.
+    RuntimeRefused,
+    /// Candidate validation did not return an authoritative verdict.
+    RuntimeFailed,
 }
 
 #[derive(Debug, Clone, Serialize, specta::Type)]

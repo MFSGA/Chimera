@@ -5,7 +5,7 @@
 //! CoreLifecycle's mutating command lease. Source owners must still commit
 //! their prepared documents before asking the lifecycle to reconcile.
 
-use anyhow::{Result, bail};
+use anyhow::Result;
 
 use crate::client::{
     application_workflow::mutation::{CheckRecord, RuntimeCheckFailure},
@@ -38,12 +38,45 @@ pub(crate) async fn check_candidate(
         .await
 }
 
+/// Source-facing candidate verdict with its original error chain. An
+/// explicitly rejected Core candidate and an unavailable/unknown result
+/// cannot be collapsed into the same textual `anyhow` error.
+#[derive(Debug, thiserror::Error)]
+#[error("independent {domain} runtime candidate check did not pass: {record:?}")]
+pub(crate) struct RuntimeGateVerdict {
+    pub(crate) domain: String,
+    pub(crate) record: CheckRecord,
+    #[source]
+    pub(crate) source: Option<anyhow::Error>,
+}
+
+impl RuntimeGateVerdict {
+    /// Preserve a typed CoreCheck failure if the backend supplied one;
+    /// otherwise lack of a check verdict remains unserviceable, never a
+    /// deterministic rejection inferred from arbitrary error text.
+    fn from_error(domain: &str, error: anyhow::Error) -> Self {
+        let record = error
+            .downcast_ref::<RuntimeCheckFailure>()
+            .map(RuntimeCheckFailure::record)
+            .unwrap_or_else(|| CheckRecord::Unserviceable(error.to_string()));
+        Self {
+            domain: domain.into(),
+            record,
+            source: Some(error),
+        }
+    }
+}
+
 /// A source may commit a runtime-affecting candidate only after a real pass.
 /// In particular, NotOwed/Skipped are not interchangeable with Passed here.
 pub(crate) fn require_passed(record: CheckRecord, domain: &str) -> Result<()> {
     match record {
         CheckRecord::Passed => Ok(()),
-        other => bail!("independent {domain} runtime candidate check did not pass: {other:?}"),
+        other => Err(anyhow::Error::new(RuntimeGateVerdict {
+            domain: domain.into(),
+            record: other,
+            source: None,
+        })),
     }
 }
 
@@ -74,22 +107,29 @@ impl CandidateCheck {
 #[async_trait::async_trait]
 impl crate::state::mutation::RuntimeGate for CandidateCheck {
     async fn check(&self, candidate: crate::state::mutation::RuntimeCandidate) -> Result<()> {
-        let profiles_dir = crate::utils::dirs::app_profiles_dir()?;
+        let profiles_dir = crate::utils::dirs::app_profiles_dir()
+            .map_err(|error| RuntimeGateVerdict::from_error("profiles", error))?;
         let source = crate::enhance::FsProfileContentSource::new(profiles_dir);
+        let clash = self
+            .clash
+            .get()
+            .map_err(|error| RuntimeGateVerdict::from_error("profiles", error))?;
         let inputs = RuntimePreparation::new(Some(&self.profile_content), None, &source)
             .capture_inputs(
                 self.application.get_typed(),
-                self.clash.get()?,
+                clash,
                 candidate.profiles,
                 candidate.staged,
             )
-            .await?;
+            .await
+            .map_err(|error| RuntimeGateVerdict::from_error("profiles", error))?;
         let checked = check_candidate(
             self.core.as_ref(),
             inputs,
             crate::core::service::ipc::get_ipc_state().is_connected(),
         )
-        .await?;
+        .await
+        .map_err(|error| RuntimeGateVerdict::from_error("profiles", error))?;
         require_passed(checked, "profiles")
     }
 }
@@ -222,6 +262,43 @@ mod tests {
             1,
             "the lower checker must never receive incomplete content"
         );
+    }
+
+    #[test]
+    fn typed_core_rejection_keeps_a_rejection_and_unavailable_checks_do_not() {
+        use chimera_core_manager::{CoreError, CoreErrorKind};
+
+        let rejected = RuntimeGateVerdict::from_error(
+            "profiles",
+            anyhow::Error::new(RuntimeCheckFailure::from_core_error(CoreError::new(
+                CoreErrorKind::ConfigCheckFailed,
+                "invalid profile target",
+                false,
+            ))),
+        );
+        assert_eq!(
+            rejected.record,
+            CheckRecord::Rejected("invalid profile target".into())
+        );
+        let unavailable = RuntimeGateVerdict::from_error(
+            "profiles",
+            anyhow::Error::new(RuntimeCheckFailure::from_core_error(CoreError::new(
+                CoreErrorKind::BackendUnavailable,
+                "validator unreachable",
+                true,
+            ))),
+        );
+        assert_eq!(
+            unavailable.record,
+            CheckRecord::Unserviceable("validator unreachable".into())
+        );
+        assert!(unavailable.source.is_some());
+        let opaque = RuntimeGateVerdict::from_error(
+            "profiles",
+            anyhow::anyhow!("unknown validation RPC failure"),
+        );
+        assert!(matches!(opaque.record, CheckRecord::Unserviceable(_)));
+        assert!(opaque.source.is_some());
     }
 
     #[test]
