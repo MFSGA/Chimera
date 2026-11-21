@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { openMainRoute } from './main-window.js';
 
-const targetPath = '/main/settings/system';
+const targetPath = '/main/settings/system/proxy';
 
 describe('main settings reference layout', () => {
   before(async () => {
@@ -48,8 +48,8 @@ describe('main settings reference layout', () => {
       const nav = sidebar?.querySelector<HTMLElement>(
         '[data-slot="navigation-list"]',
       );
-      const systemLink = sidebar?.querySelector<HTMLElement>(
-        'a[href="/main/settings/system"]',
+      const proxyLink = sidebar?.querySelector<HTMLElement>(
+        'a[href="/main/settings/system/proxy"]',
       );
       const rect = (element: HTMLElement | null) => {
         if (!element) return null;
@@ -81,9 +81,9 @@ describe('main settings reference layout', () => {
         navigationItems:
           nav?.querySelectorAll('[data-slot="navigation-list-item"]').length ??
           0,
-        systemLink: rect(systemLink ?? null),
-        systemActive: systemLink?.getAttribute('data-active'),
-        systemCurrent: systemLink?.getAttribute('aria-current'),
+        proxyLink: rect(proxyLink ?? null),
+        proxyActive: proxyLink?.getAttribute('data-active'),
+        proxyCurrent: proxyLink?.getAttribute('aria-current'),
       };
     });
 
@@ -93,11 +93,11 @@ describe('main settings reference layout', () => {
       state.container && state.sidebar && state.content,
       JSON.stringify(state),
     );
-    assert.ok(state.navigation && state.systemLink, JSON.stringify(state));
+    assert.ok(state.navigation && state.proxyLink, JSON.stringify(state));
     assert.equal(state.navigationGroups, 4, JSON.stringify(state));
-    assert.equal(state.navigationItems, 14, JSON.stringify(state));
-    assert.equal(state.systemActive, 'true', JSON.stringify(state));
-    assert.equal(state.systemCurrent, 'page', JSON.stringify(state));
+    assert.equal(state.navigationItems, 15, JSON.stringify(state));
+    assert.equal(state.proxyActive, 'true', JSON.stringify(state));
+    assert.equal(state.proxyCurrent, 'page', JSON.stringify(state));
     assert.equal(state.outletDisplay, 'flex', JSON.stringify(state));
     assert.equal(state.outletDirection, 'column', JSON.stringify(state));
     assert.equal(state.outletGrow, '1', JSON.stringify(state));
@@ -112,6 +112,56 @@ describe('main settings reference layout', () => {
       fs.mkdirSync(path.dirname(evidencePath), { recursive: true });
       await browser.saveScreenshot(evidencePath);
     }
+  });
+
+  it('navigates from proxy settings to service settings and back through visible links', async () => {
+    const service = await $('a[href="/main/settings/system/service"]');
+    await service.waitForClickable({ timeout: 15_000 });
+    await service.click();
+
+    const startup = await $('[data-slot="system-launch-container"]');
+    await startup.waitForDisplayed({ timeout: 15_000 });
+    await browser.waitUntil(
+      async () =>
+        browser.execute(() => {
+          const selected = document.querySelector<HTMLElement>(
+            'a[href="/main/settings/system/service"]',
+          );
+          return (
+            location.pathname === '/main/settings/system/service' &&
+            selected?.getAttribute('data-active') === 'true' &&
+            selected?.getAttribute('aria-current') === 'page'
+          );
+        }),
+      {
+        timeout: 15_000,
+        timeoutMsg: 'Service settings navigation did not become active.',
+      },
+    );
+
+    const proxy = await $('a[href="/main/settings/system/proxy"]');
+    await proxy.waitForClickable({ timeout: 15_000 });
+    await proxy.click();
+
+    const mode = await $('[data-slot="proxy-mode-container"]');
+    await mode.waitForDisplayed({ timeout: 15_000 });
+    await browser.waitUntil(
+      async () =>
+        browser.execute(() => {
+          const selected = document.querySelector<HTMLElement>(
+            'a[href="/main/settings/system/proxy"]',
+          );
+          return (
+            location.pathname === '/main/settings/system/proxy' &&
+            selected?.getAttribute('data-active') === 'true' &&
+            selected?.getAttribute('aria-current') === 'page'
+          );
+        }),
+      {
+        timeout: 15_000,
+        timeoutMsg: 'Proxy settings navigation did not become active.',
+      },
+    );
   });
 
   it('opens the reference control-channel settings through the sidebar', async () => {
