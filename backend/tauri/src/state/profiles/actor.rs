@@ -12,7 +12,9 @@ use chimera_config::profile::{
     SubscriptionInfo, TransformDefinition,
 };
 use chimera_contracts::profiles::{
-    command_failure::{MaterializationOperation, ProfileContentError, ProfileFailure},
+    command_failure::{
+        CommitFailureReason, MaterializationOperation, ProfileContentError, ProfileFailure,
+    },
     error::{ProfileFileError, SubscriptionFetchError},
 };
 use chimera_core::state::{PersistentStateManager, ReplaceIfVersionResult, Version};
@@ -83,7 +85,12 @@ pub enum ProfilesError {
     SourceTransaction {
         #[source]
         source: chimera_core::state::ReplaceIfVersionError,
+        /// Derived from the actual conditional-write result, never a string
+        /// guessed from a user-visible error message.
+        reason: Option<CommitFailureReason>,
         cleanup: Option<String>,
+        /// Unmodified error objects from refused pre-commit compensations.
+        cleanup_failures: Vec<anyhow::Error>,
     },
     #[error("profiles state version conflict: expected {expected}, actual {actual}")]
     VersionConflict { expected: u64, actual: u64 },
@@ -94,6 +101,8 @@ pub enum ProfilesError {
         expected: u64,
         actual: u64,
         cleanup: String,
+        /// The exact independent compensation/cancel errors, if any.
+        cleanup_failures: Vec<anyhow::Error>,
     },
     #[error("failed to advance profile revision: {0}")]
     Revision(#[from] ProfileRevisionError),
@@ -149,6 +158,7 @@ impl ProfilesError {
                 expected,
                 actual,
                 cleanup,
+                ..
             } => Some(ProfileFailure::VersionConflict {
                 expected: *expected,
                 actual: *actual,
@@ -157,6 +167,10 @@ impl ProfilesError {
             Self::Revision(ProfileRevisionError::Overflow) => {
                 Some(ProfileFailure::RevisionOverflow)
             }
+            Self::SourceTransaction {
+                reason: Some(reason),
+                ..
+            } => Some(ProfileFailure::Commit { reason: *reason }),
             Self::ProfileHasNoFile => Some(ProfileFailure::ProfileHasNoFile),
             Self::NotARemoteProfile => Some(ProfileFailure::NotARemoteProfile),
             Self::ProfileInUse { .. }
@@ -166,7 +180,7 @@ impl ProfilesError {
             | Self::ImportFailed { .. }
             | Self::Persist(_)
             | Self::RuntimeCheck(_)
-            | Self::SourceTransaction { .. }
+            | Self::SourceTransaction { reason: None, .. }
             | Self::Materialization(_)
             | Self::MaterializationFile { .. }
             | Self::FetchSubscription { .. }
@@ -176,6 +190,16 @@ impl ProfilesError {
             | Self::ShuttingDown => None,
         }
     }
+}
+
+/// Both compensation branches can fail after a source write refusal.
+/// Keep each original anyhow/port error available through downcast, rather
+/// than replacing two filesystem/journal failures with a debug-formatted line.
+#[derive(Debug, thiserror::Error)]
+#[error("resource recovery: {resource:?}; cleanup recovery: {cleanup:?}")]
+pub struct MaterializationRecoveryFailure {
+    pub resource: Option<anyhow::Error>,
+    pub cleanup: Option<anyhow::Error>,
 }
 
 #[derive(Debug, Clone)]
@@ -504,6 +528,29 @@ impl ProfilesActor {
             && impact::classify_profiles(before, next, hints) == RuntimeImpact::None
     }
 
+    /// Classify only concrete failures returned by the conditional source
+    /// owner. CAS conflicts are handled by the separate version-conflict path.
+    fn commit_failure_reason(
+        source: &chimera_core::state::ReplaceIfVersionError,
+    ) -> Option<CommitFailureReason> {
+        use chimera_core::state::{ReplaceIfVersionError, error::StateChangedError};
+        match source {
+            ReplaceIfVersionError::WriteConfig(_) => Some(CommitFailureReason::WriteConfig),
+            ReplaceIfVersionError::LocalWrite(_) => Some(CommitFailureReason::LocalWrite),
+            ReplaceIfVersionError::ResourceRecovery { .. } => {
+                Some(CommitFailureReason::RecoverAfterWriteFailure)
+            }
+            ReplaceIfVersionError::Recovery { .. } => Some(CommitFailureReason::StateRecovery),
+            ReplaceIfVersionError::State(StateChangedError::PrepareAck(_)) => {
+                Some(CommitFailureReason::PrepareAck)
+            }
+            ReplaceIfVersionError::State(StateChangedError::Validation(_)) => {
+                Some(CommitFailureReason::StateValidation)
+            }
+            ReplaceIfVersionError::State(StateChangedError::StateCasMismatch { .. }) => None,
+        }
+    }
+
     /// Persist an already validated, revision-bumped candidate exactly as prepared.
     async fn persist_candidate(
         state: &mut ProfilesActorState,
@@ -575,8 +622,10 @@ impl ProfilesActor {
                 actual: *actual.as_ref(),
             }),
             Err(source) => Err(ProfilesError::SourceTransaction {
+                reason: Self::commit_failure_reason(&source),
                 source,
                 cleanup: None,
+                cleanup_failures: Vec::new(),
             }),
         }
     }
@@ -698,7 +747,7 @@ impl ProfilesActor {
         let materialization = Arc::clone(&state.materialization);
         tokio::task::spawn_blocking(move || operation(materialization.as_ref()))
             .await
-            .map_err(|error| anyhow::anyhow!("materialization task failed: {error}"))?
+            .map_err(|error| anyhow::Error::new(error).context("materialization task failed"))?
     }
 
     fn materialization_error(
@@ -1050,9 +1099,12 @@ impl ProfilesActor {
                     .transpose();
                 match (resource, cleanup) {
                     (Ok(_), Ok(_)) => Ok(()),
-                    (resource, cleanup) => anyhow::bail!(
-                        "resource recovery: {resource:?}; cleanup recovery: {cleanup:?}"
-                    ),
+                    (resource, cleanup) => {
+                        Err(anyhow::Error::new(MaterializationRecoveryFailure {
+                            resource: resource.err(),
+                            cleanup: cleanup.err(),
+                        }))
+                    }
                 }
             })
             .await?
@@ -1103,7 +1155,7 @@ impl ProfilesActor {
                         })
                         .await
                         {
-                            failures.push(error.to_string());
+                            failures.push(error);
                         }
                     }
                     if let Some(cleanup) = cleanup {
@@ -1112,10 +1164,19 @@ impl ProfilesActor {
                         })
                         .await
                         {
-                            failures.push(error.to_string());
+                            failures.push(error);
                         }
                     }
                 }
+                // Keep old human-readable cleanup output for the legacy UI,
+                // alongside the exact independent port/journal error objects.
+                let cleanup_message = (!failures.is_empty()).then(|| {
+                    failures
+                        .iter()
+                        .map(ToString::to_string)
+                        .collect::<Vec<_>>()
+                        .join("; ")
+                });
                 return Err(match result {
                     Err(chimera_core::state::ReplaceIfVersionError::State(
                         chimera_core::state::error::StateChangedError::StateCasMismatch {
@@ -1132,13 +1193,16 @@ impl ProfilesActor {
                             ProfilesError::ConflictCleanup {
                                 expected: *expected.as_ref(),
                                 actual: *actual.as_ref(),
-                                cleanup: failures.join("; "),
+                                cleanup: cleanup_message.clone().unwrap_or_default(),
+                                cleanup_failures: failures,
                             }
                         }
                     }
                     Err(source) => ProfilesError::SourceTransaction {
+                        reason: Self::commit_failure_reason(&source),
                         source,
-                        cleanup: (!failures.is_empty()).then(|| failures.join("; ")),
+                        cleanup: cleanup_message,
+                        cleanup_failures: failures,
                     },
                     Ok(ReplaceIfVersionResult::Conflict { actual_version }) => {
                         if failures.is_empty() {
@@ -1150,7 +1214,8 @@ impl ProfilesActor {
                             ProfilesError::ConflictCleanup {
                                 expected: *expected_version.as_ref(),
                                 actual: *actual_version.as_ref(),
-                                cleanup: failures.join("; "),
+                                cleanup: cleanup_message.clone().unwrap_or_default(),
+                                cleanup_failures: failures,
                             }
                         }
                     }
@@ -2717,6 +2782,117 @@ mod tests {
     /// Config subscriptions must carry proxies (legacy remote.rs semantics);
     /// overlays only require a mapping.
     #[test]
+    fn source_write_failures_keep_actual_manager_error_and_typed_commit_class() {
+        use chimera_core::state::ReplaceIfVersionError;
+
+        for (source, expected) in [
+            (
+                ReplaceIfVersionError::WriteConfig(anyhow::anyhow!("config was not persisted")),
+                CommitFailureReason::WriteConfig,
+            ),
+            (
+                ReplaceIfVersionError::LocalWrite(anyhow::Error::new(
+                    ProfileFileError::JournalNotFound {
+                        operation_id: "staged-1".into(),
+                    },
+                )),
+                CommitFailureReason::LocalWrite,
+            ),
+        ] {
+            let reason = ProfilesActor::commit_failure_reason(&source);
+            assert_eq!(reason, Some(expected));
+            let failure = ProfilesError::SourceTransaction {
+                reason,
+                source,
+                cleanup: None,
+                cleanup_failures: Vec::new(),
+            };
+            let typed = failure.typed_failure().expect("actual commit category");
+            let wire = serde_json::to_value(typed).unwrap();
+            assert_eq!(wire["kind"], "commit");
+            assert_eq!(wire["reason"], serde_json::to_value(expected).unwrap(),);
+            assert!(std::error::Error::source(&failure).is_some());
+        }
+    }
+
+    #[test]
+    fn failed_materialization_recovery_retains_both_independent_port_causes() {
+        use chimera_core::state::ReplaceIfVersionError;
+
+        let resource = ProfileFileError::JournalNotFound {
+            operation_id: "resource-staged".into(),
+        };
+        let cleanup = ProfileFileError::CleanupAlreadyActivated;
+        let recovery = anyhow::Error::new(MaterializationRecoveryFailure {
+            resource: Some(anyhow::Error::new(resource)),
+            cleanup: Some(anyhow::Error::new(cleanup)),
+        });
+        let source = ReplaceIfVersionError::ResourceRecovery {
+            cause: anyhow::anyhow!("file source write refused"),
+            recovery_error: recovery,
+        };
+        let reason = ProfilesActor::commit_failure_reason(&source);
+        assert_eq!(reason, Some(CommitFailureReason::RecoverAfterWriteFailure));
+        let ReplaceIfVersionError::ResourceRecovery { recovery_error, .. } = &source else {
+            unreachable!()
+        };
+        let retained = recovery_error
+            .downcast_ref::<MaterializationRecoveryFailure>()
+            .expect("original port failures must survive persistence recovery");
+        assert!(retained.resource.as_ref().unwrap().is::<ProfileFileError>());
+        assert!(retained.cleanup.as_ref().unwrap().is::<ProfileFileError>());
+        let refused = ProfilesError::SourceTransaction {
+            source,
+            reason,
+            cleanup: None,
+            cleanup_failures: Vec::new(),
+        };
+        assert!(matches!(
+            refused.typed_failure(),
+            Some(ProfileFailure::Commit {
+                reason: CommitFailureReason::RecoverAfterWriteFailure
+            })
+        ));
+    }
+
+    #[test]
+    fn refused_precommit_cleanup_keeps_both_sources_and_the_legacy_message() {
+        let cleanup_errors = vec![
+            anyhow::Error::new(ProfileFileError::JournalNotFound {
+                operation_id: "staged".into(),
+            }),
+            anyhow::Error::new(ProfileFileError::CleanupAlreadyActivated),
+        ];
+        let combined = cleanup_errors
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("; ");
+        let conflict = ProfilesError::ConflictCleanup {
+            expected: 3,
+            actual: 4,
+            cleanup: combined.clone(),
+            cleanup_failures: cleanup_errors,
+        };
+        let ProfilesError::ConflictCleanup {
+            cleanup_failures, ..
+        } = &conflict
+        else {
+            unreachable!()
+        };
+        assert_eq!(cleanup_failures.len(), 2);
+        assert!(
+            cleanup_failures
+                .iter()
+                .all(|error| error.is::<ProfileFileError>())
+        );
+        assert_eq!(
+            serde_json::to_value(conflict.typed_failure().unwrap()).unwrap()["cleanup"],
+            combined
+        );
+    }
+
+    #[test]
     fn profile_validation_and_version_conflicts_keep_original_typed_sources() {
         let id = ProfileId("missing".into());
         let error = ProfilesError::ValidationFailed(vec![ProfileValidationError::CurrentNotFound(
@@ -2731,6 +2907,7 @@ mod tests {
             expected: 10,
             actual: 11,
             cleanup: "staging recovery needs reconciliation".into(),
+            cleanup_failures: vec![anyhow::anyhow!("staging recovery needs reconciliation")],
         };
         let wire = serde_json::to_value(conflict.typed_failure().unwrap()).unwrap();
         assert_eq!(wire["kind"], "version_conflict");
