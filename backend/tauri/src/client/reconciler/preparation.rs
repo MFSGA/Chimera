@@ -1,246 +1,309 @@
-//! Capture immutable runtime inputs under the committed Profiles/content fence.
-//!
-//! Ref: client/reconciler/preparation.rs. The upstream owner also resolves
-//! candidate ports and builds a PreparedRuntime. Chimera currently retains
-//! those steps in its existing runtime builder/typed CoreLifecycle adapter;
-//! moving this content stage first removes the old ApplicationWorkflow's
-//! production input capture without introducing a second Core executor.
-use std::{collections::BTreeMap, sync::Arc};
+use std::sync::Arc;
 
+use anyhow::{Context, Result};
 use chimera_config::{
     application::ChimeraAppConfig, clash::config::ClashConfig, profile::Profiles,
 };
-use chimera_core::state::StateSnapshot;
+use chimera_core_manager::{CoreSpec, LocalIpcPolicy, LocalIpcSettings};
 
-use super::{inputs::RuntimeInputs, ports::RuntimeContentPort};
-use crate::state::mutation::ProfileContentReader;
+use super::{
+    super::{SessionPortResolver, runtime},
+    ports::RuntimeBuildPort,
+};
+use crate::client::core_lifecycle::ports::{PreparedRuntime, RuntimePreparationPort};
+use chimera_contracts::publish::PublishRuntimeError;
+use chimera_core::actor_v2::intent::RuntimeIntentBuilder;
+use chimera_core::client::core_spec::CoreSpecError;
 
-/// The read-only runtime candidate preparation boundary. All managed file
-/// reads are fenced against source publication and file promotion.
-pub(in crate::client) struct RuntimePreparation<'a> {
-    profile_content: Option<&'a ProfileContentReader>,
-    committed_profiles: Option<&'a StateSnapshot<Profiles>>,
-    builder: &'a dyn RuntimeContentPort,
+/// Builds runtime candidates from committed source config. It holds read-only
+/// state handles, never a domain client: build capture must not write the source
+/// domains it reads.
+pub(in crate::client) struct RuntimePreparation {
+    profile_content: crate::state::mutation::ProfileContentReader,
+    builder: Arc<dyn RuntimeBuildPort>,
+    ports: Arc<SessionPortResolver>,
+    revisions: runtime::RuntimeRevisionAllocator,
 }
 
-impl<'a> RuntimePreparation<'a> {
+impl RuntimePreparation {
     pub fn new(
-        profile_content: Option<&'a ProfileContentReader>,
-        committed_profiles: Option<&'a StateSnapshot<Profiles>>,
-        builder: &'a dyn RuntimeContentPort,
+        profile_content: crate::state::mutation::ProfileContentReader,
+        builder: Arc<dyn RuntimeBuildPort>,
+        ports: Arc<SessionPortResolver>,
     ) -> Self {
         Self {
             profile_content,
-            committed_profiles,
             builder,
+            ports,
+            revisions: runtime::RuntimeRevisionAllocator::new(),
         }
     }
 
-    /// Build a candidate from the exact Profiles document supplied by the
-    /// source owner. Hold its managed-file fence only during content capture,
-    /// never through candidate validation, Core submission or source commit.
+    pub(super) fn with_revisions(mut self, revisions: runtime::RuntimeRevisionAllocator) -> Self {
+        self.revisions = revisions;
+        self
+    }
+
+    #[cfg(test)]
+    pub async fn prepare(
+        &self,
+        profiles: Arc<Profiles>,
+        clash: ClashConfig,
+        app: ChimeraAppConfig,
+    ) -> Result<PreparedRuntime> {
+        let inputs = self.capture_inputs(app, clash, profiles).await;
+        self.prepare_inputs(inputs).await
+    }
+
     pub async fn capture_inputs(
         &self,
         app: ChimeraAppConfig,
         clash: ClashConfig,
         profiles: Arc<Profiles>,
-        staged_content: BTreeMap<String, String>,
-    ) -> anyhow::Result<RuntimeInputs> {
-        let content = match self.profile_content {
-            Some(reader) => {
-                reader
-                    .candidate(self.builder.capture_content(&profiles, staged_content))
-                    .await
-            }
-            None => {
-                self.builder
-                    .capture_content(&profiles, staged_content)
-                    .await
-            }
-        };
-        Ok(RuntimeInputs {
+    ) -> super::inputs::RuntimeInputs {
+        let content = self
+            .profile_content
+            .candidate(self.builder.capture_content(&profiles))
+            .await;
+        super::inputs::RuntimeInputs {
             app,
             clash,
             profiles,
             content,
-        })
+        }
     }
 
-    /// Capture a committed Profiles document *and* its managed file bytes
-    /// within one fence. When the snapshot reader has not yet been installed
-    /// (legacy tests), use the explicitly supplied fallback snapshot.
     pub async fn capture_committed_inputs(
         &self,
         app: ChimeraAppConfig,
         clash: ClashConfig,
-    ) -> anyhow::Result<RuntimeInputs> {
-        if let Some(reader) = self.profile_content {
-            return reader
-                .committed(|versioned| async move {
-                    let profiles = Arc::new(versioned.state.clone());
-                    let content = self
-                        .builder
-                        .capture_content(&profiles, BTreeMap::new())
-                        .await;
-                    Ok(RuntimeInputs {
+    ) -> (chimera_core::state::Version, super::inputs::RuntimeInputs) {
+        self.profile_content
+            .committed(|profiles| async move {
+                let content = self.builder.capture_content(&profiles.state).await;
+                (
+                    profiles.version,
+                    super::inputs::RuntimeInputs {
                         app,
                         clash,
-                        profiles,
+                        profiles: Arc::new(profiles.state.clone()),
                         content,
-                    })
-                })
-                .await;
-        }
-        let profiles = self.committed_profiles.ok_or_else(|| {
-            anyhow::anyhow!("Profile state is unavailable for committed runtime capture")
-        })?;
-        self.capture_inputs(
-            app,
-            clash,
-            Arc::new(profiles.load().state.clone()),
-            BTreeMap::new(),
-        )
-        .await
+                    },
+                )
+            })
+            .await
+    }
+
+    pub async fn prepare_inputs(
+        &self,
+        inputs: super::inputs::RuntimeInputs,
+    ) -> Result<PreparedRuntime> {
+        self.prepare_inputs_with_policy(inputs, false).await
+    }
+
+    pub async fn prepare_candidate_inputs(
+        &self,
+        inputs: super::inputs::RuntimeInputs,
+    ) -> Result<PreparedRuntime> {
+        self.prepare_inputs_with_policy(inputs, true).await
+    }
+
+    async fn prepare_inputs_with_policy(
+        &self,
+        inputs: super::inputs::RuntimeInputs,
+        strict_transforms: bool,
+    ) -> Result<PreparedRuntime> {
+        let revision = self
+            .revisions
+            .allocate()
+            .context("allocate runtime revision")?;
+        let local_ipc = LocalIpcSettings {
+            policy: match inputs.clash.clash_control_channel {
+                chimera_config::clash::config::ClashControlChannel::PreferIpc => {
+                    LocalIpcPolicy::Prefer
+                }
+                chimera_config::clash::config::ClashControlChannel::HttpOnly => {
+                    LocalIpcPolicy::Disable
+                }
+            },
+            keep_http_controller: !inputs.clash.clash_ipc_disable_http_controller,
+        };
+        // A candidate resolution, not an active one: nothing here touches the
+        // confirmed binding, so a build that is never applied leaves the
+        // running instance's ports alone (v2 §6.2).
+        let ports = self
+            .ports
+            .resolve_candidate(&inputs.clash)
+            .context("resolve candidate listener ports")?;
+        let core_type: chimera_utils::core::CoreType = (&inputs.app.core).into();
+        let target = inputs.target_key();
+        let snapshot = self
+            .builder
+            .build(
+                revision,
+                inputs,
+                ports.bindings().clone(),
+                strict_transforms,
+            )
+            .await
+            .context("build runtime candidate")?;
+        // Serialized once, here: the check and the reconcile both consume this
+        // value, so "same bytes" holds by construction rather than by
+        // convention.
+        // Chimera's RuntimeSnapshot currently stores the exact product bytes,
+        // rather than ref's separate `config_text` member. Reuse those bytes
+        // without serializing again, so checks and later submission agree.
+        let text = std::str::from_utf8(snapshot.product_bytes())
+            .context("the built runtime document is not UTF-8")?;
+        let intent = RuntimeIntentBuilder::build(core_type, Arc::<str>::from(text), local_ipc);
+        Ok(PreparedRuntime {
+            snapshot,
+            intent: Arc::new(intent),
+            ports,
+            target,
+        })
+    }
+}
+
+#[async_trait::async_trait]
+impl RuntimePreparationPort for RuntimePreparation {
+    async fn publish(
+        &self,
+        snapshot: &runtime::RuntimeSnapshot,
+    ) -> Result<(), PublishRuntimeError> {
+        self.builder.publish(snapshot).await
+    }
+
+    fn core_spec(
+        &self,
+        core: &chimera_config::application::ClashCore,
+    ) -> Result<CoreSpec, CoreSpecError> {
+        self.builder.core_spec(core)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
 
-    use chimera_config::{
-        profile::{
-            ConfigDefinition, FileConfig, LocalBinding, ManagedProfilePath, MaterializedFile,
-            ProfileDefinition, ProfileId, ProfileItem, ProfileMetadata, ProfileSource,
+    use crate::{
+        client::{
+            reconciler::inputs::{FrozenProfileContent, RuntimeInputs},
+            runtime::{RuntimeLifecycle, RuntimeSnapshot},
         },
-        runtime::executor::{PortError, ProfileContentSource},
+        state::mutation::ProfileContentLock,
     };
+    use chimera_config::{application::ClashCore, clash::config::ClashControlChannel};
     use chimera_core::state::PersistentStateManagerSetup;
 
-    use crate::state::mutation::ProfileContentLock;
+    #[derive(Default)]
+    struct RecordingBuildPort {
+        strict: Mutex<Vec<bool>>,
+    }
 
-    struct MemoryContent(BTreeMap<String, String>);
+    #[async_trait::async_trait]
+    impl RuntimeBuildPort for RecordingBuildPort {
+        async fn capture_content(&self, _: &Profiles) -> FrozenProfileContent {
+            FrozenProfileContent::default()
+        }
 
-    impl ProfileContentSource for MemoryContent {
-        fn read(&self, path: &ManagedProfilePath) -> Result<String, PortError> {
-            self.0
-                .get(&path.to_string())
-                .cloned()
-                .ok_or_else(|| format!("unavailable managed file: {path}").into())
+        fn core_spec(&self, core: &ClashCore) -> std::result::Result<CoreSpec, CoreSpecError> {
+            chimera_core::client::core_spec::resolve_with(core, |_, _| {
+                Ok(std::path::PathBuf::from("/tmp/chimera-fixture-core"))
+            })
+        }
+
+        async fn build(
+            &self,
+            revision: runtime::RuntimeRevision,
+            inputs: RuntimeInputs,
+            _: chimera_config::runtime::executor::ResolvedPortBindings,
+            strict_transforms: bool,
+        ) -> std::result::Result<
+            Arc<RuntimeSnapshot>,
+            chimera_core::client::runtime_build::RuntimeBuildError,
+        > {
+            self.strict.lock().unwrap().push(strict_transforms);
+            Ok(Arc::new(RuntimeSnapshot::new(
+                revision,
+                inputs.app.core,
+                b"mode: rule\n".to_vec(),
+                serde_yaml::Mapping::new(),
+            )))
+        }
+
+        async fn publish(
+            &self,
+            _: &RuntimeSnapshot,
+        ) -> std::result::Result<(), PublishRuntimeError> {
+            Ok(())
         }
     }
 
-    fn profiles() -> Profiles {
-        let mut profiles = Profiles::default();
-        let uid = ProfileId("selected".to_owned());
-        profiles.current = Some(uid.clone());
-        profiles.items.insert(
-            uid.clone(),
-            ProfileItem {
-                uid,
-                metadata: ProfileMetadata {
-                    name: "selected".into(),
-                    desc: None,
-                    custom_name: true,
-                },
-                definition: ProfileDefinition::Config {
-                    config: ConfigDefinition::File(FileConfig {
-                        source: ProfileSource::Local {
-                            binding: LocalBinding::Managed {
-                                materialized: MaterializedFile {
-                                    file: ManagedProfilePath::new("selected.yaml").unwrap(),
-                                    updated_at: None,
-                                },
-                            },
-                        },
-                        transforms: vec![],
-                    }),
-                },
-            },
-        );
-        profiles
-    }
-
-    #[tokio::test]
-    async fn candidate_staged_bytes_replace_captured_content_without_touching_commit() {
-        let committed = Arc::new(profiles());
-        let content = MemoryContent(BTreeMap::from([(
-            "selected.yaml".into(),
-            "committed".into(),
-        )]));
-        let prep = RuntimePreparation::new(None, None, &content);
-        let inputs = prep
-            .capture_inputs(
-                ChimeraAppConfig::default(),
-                ClashConfig::default(),
-                committed.clone(),
-                BTreeMap::from([("selected.yaml".into(), "staged".into())]),
-            )
-            .await
-            .unwrap();
-        assert_eq!(inputs.profiles.current, committed.current);
-        assert_eq!(
-            inputs
-                .content
-                .0
-                .get("selected.yaml")
-                .unwrap()
-                .as_ref()
-                .unwrap(),
-            "staged"
-        );
-        assert_eq!(content.0.get("selected.yaml").unwrap(), "committed");
-    }
-
-    #[tokio::test]
-    async fn committed_capture_is_serialized_with_file_promotion() {
-        let temp = tempfile::tempdir().unwrap();
-        let path = camino::Utf8PathBuf::from_path_buf(temp.path().join("profiles.yaml")).unwrap();
+    async fn preparation() -> (RuntimePreparation, Arc<RecordingBuildPort>) {
+        let path = camino::Utf8PathBuf::from_path_buf(
+            tempfile::tempdir().unwrap().path().join("profiles.yaml"),
+        )
+        .unwrap();
         let manager = PersistentStateManagerSetup::<Profiles>::builder()
             .config_path(path)
             .assemble()
-            .from_state(profiles())
+            .from_state(Profiles::default())
             .await
             .unwrap();
-        let lock = ProfileContentLock::default();
-        let reader = ProfileContentReader::new(manager.snapshot_handle(), lock.clone());
-        let content = MemoryContent(BTreeMap::from([(
-            "selected.yaml".into(),
-            "committed".into(),
-        )]));
-        let prep = RuntimePreparation::new(Some(&reader), None, &content);
-        let promotion_guard = lock.write().await;
-        let mut capture = Box::pin(
-            prep.capture_committed_inputs(ChimeraAppConfig::default(), ClashConfig::default()),
+        let reader = crate::state::mutation::ProfileContentReader::new(
+            manager.snapshot_handle(),
+            ProfileContentLock::default(),
         );
-        assert!(
-            tokio::time::timeout(std::time::Duration::from_millis(25), &mut capture)
-                .await
-                .is_err(),
-            "committed capture must wait for managed-file promotion"
-        );
-        drop(promotion_guard);
-        let inputs = capture.await.unwrap();
-        assert_eq!(
-            inputs
-                .content
-                .0
-                .get("selected.yaml")
-                .unwrap()
-                .as_ref()
-                .unwrap(),
-            "committed"
-        );
+        let builder = Arc::new(RecordingBuildPort::default());
+        let ports = Arc::new(SessionPortResolver::new(Arc::new(
+            RuntimeLifecycle::default(),
+        )));
+        (
+            RuntimePreparation::new(reader, builder.clone(), ports),
+            builder,
+        )
     }
 
     #[tokio::test]
-    async fn missing_committed_snapshot_remains_an_error() {
-        let content = MemoryContent(BTreeMap::new());
-        let prep = RuntimePreparation::new(None, None, &content);
-        let err = prep
-            .capture_committed_inputs(ChimeraAppConfig::default(), ClashConfig::default())
-            .await
-            .unwrap_err();
-        assert!(err.to_string().contains("Profile state is unavailable"));
+    async fn reference_preparation_freezes_committed_inputs_and_reuses_exact_bytes() {
+        let (preparation, builder) = preparation().await;
+        let app = ChimeraAppConfig {
+            core: ClashCore::Mihomo,
+            ..Default::default()
+        };
+        let clash = ClashConfig::default();
+        let (version, inputs) = preparation.capture_committed_inputs(app, clash).await;
+        assert_eq!(version, chimera_core::state::Version::new(0));
+        let expected_target = inputs.target_key();
+        let prepared = preparation.prepare_inputs(inputs).await.unwrap();
+        assert_eq!(prepared.target, expected_target);
+        assert_eq!(prepared.snapshot.product_bytes(), b"mode: rule\n");
+        assert_eq!(prepared.intent.config_text.as_ref(), "mode: rule\n");
+        assert_eq!(
+            prepared.intent.digest,
+            chimera_core_manager::payload_digest(prepared.snapshot.product_bytes())
+        );
+        assert_eq!(builder.strict.lock().unwrap().as_slice(), &[false]);
+    }
+
+    #[tokio::test]
+    async fn candidate_preparation_is_strict_and_does_not_confirm_ports() {
+        let (preparation, builder) = preparation().await;
+        let app = ChimeraAppConfig {
+            core: ClashCore::ChimeraClient,
+            ..Default::default()
+        };
+        let mut clash = ClashConfig::default();
+        clash.clash_control_channel = ClashControlChannel::HttpOnly;
+        let inputs = preparation
+            .capture_inputs(app, clash, Arc::new(Profiles::default()))
+            .await;
+        let prepared = preparation.prepare_candidate_inputs(inputs).await.unwrap();
+        assert_eq!(prepared.snapshot.target_core, ClashCore::ChimeraClient);
+        assert_eq!(prepared.intent.local_ipc.policy, LocalIpcPolicy::Disable);
+        assert_eq!(builder.strict.lock().unwrap().as_slice(), &[true]);
+        assert!(prepared.target.is_some());
     }
 }

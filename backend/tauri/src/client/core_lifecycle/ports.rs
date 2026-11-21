@@ -402,3 +402,34 @@ pub(crate) trait CoreLifecyclePort: Send + Sync {
 
     async fn on_profile_change(&self, break_when: bool);
 }
+
+// Pinned ref/backend/nyanpasu-core/src/client/core_lifecycle/ports.rs:
+// Typed, read-only candidate build and publication boundary. Its prepared
+// value does not apply anything to a running Core.
+use super::super::runtime;
+use chimera_contracts::publish::PublishRuntimeError;
+use chimera_core::client::core_spec::CoreSpecError;
+
+/// Application-owned runtime preparation; implementations never call the workflow actor.
+#[async_trait]
+pub(in crate::client) trait RuntimePreparationPort: Send + Sync {
+    async fn publish(&self, snapshot: &runtime::RuntimeSnapshot)
+    -> Result<(), PublishRuntimeError>;
+    fn core_spec(
+        &self,
+        core: &chimera_config::application::ClashCore,
+    ) -> Result<chimera_core_manager::CoreSpec, CoreSpecError>;
+}
+
+pub(in crate::client) struct PreparedRuntime {
+    pub snapshot: Arc<runtime::RuntimeSnapshot>,
+    /// The to-be-committed bytes, serialized exactly once so the advisory
+    /// check and the reconcile cannot drift apart.
+    pub intent: Arc<chimera_core::actor_v2::intent::RuntimeIntent>,
+    /// The ports this candidate would bind. Inert: only the receipt of an
+    /// apply that succeeded may confirm them.
+    pub ports: crate::client::ports::CandidatePortBindings,
+    /// The committed target the build came from (`RuntimeInputs::target_key`),
+    /// when it has one.
+    pub target: Option<String>,
+}

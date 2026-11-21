@@ -20,6 +20,7 @@ pub(crate) mod ports;
 pub(crate) mod profiles;
 pub(crate) mod reconciler;
 pub mod runtime;
+pub(crate) mod runtime_build;
 pub(crate) mod runtime_inspection;
 mod service_status;
 mod session_state;

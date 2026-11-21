@@ -22,7 +22,7 @@ use crate::{
             ports::{RuntimeCheckOutcome, RuntimeCheckUnavailable as GateUnavailable},
         },
         core_lifecycle::{CoreLifecycleClient, ports::CoreLifecyclePort},
-        reconciler::{inputs::RuntimeInputs, preparation::RuntimePreparation},
+        reconciler::{inputs::RuntimeInputs, legacy_preparation::RuntimePreparation},
     },
     state::mutation::{DomainChange, ProfileContentReader, RuntimeCandidate},
 };

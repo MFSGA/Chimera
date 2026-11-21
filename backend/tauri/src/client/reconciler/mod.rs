@@ -9,6 +9,7 @@ pub(crate) mod check;
 pub(crate) mod committed;
 pub(crate) mod decision;
 pub(in crate::client) mod inputs;
+pub(in crate::client) mod legacy_preparation;
 pub(crate) mod mutation;
 pub(in crate::client) mod ports;
 pub(in crate::client) mod preparation;
