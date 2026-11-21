@@ -149,15 +149,21 @@ impl RuntimeSourceAuthority for LiveSourceAuthority {
         checked_target: &str,
     ) -> anyhow::Result<()> {
         let current = self.read_committed_target().await?;
-        anyhow::ensure!(
-            current.version(domain) == version,
-            "committed {domain:?} version changed: expected {version}, observed {}",
-            current.version(domain)
-        );
-        anyhow::ensure!(
-            current.target == checked_target,
-            "checked runtime target differs from the authoritative committed sources"
-        );
+        // A moved Source or target is not a Core rejection. Preserve a
+        // typed identity-advanced cause so the sole lifecycle owner schedules
+        // a fresh latest-target reconcile rather than recording a refusal.
+        use super::attempt::CommittedTargetAdvanced;
+        if current.version(domain) != version {
+            return Err(anyhow::Error::new(CommittedTargetAdvanced).context(format!(
+                "committed {domain:?} version changed: expected {version}, observed {}",
+                current.version(domain)
+            )));
+        }
+        if current.target != checked_target {
+            return Err(anyhow::Error::new(CommittedTargetAdvanced).context(
+                "checked runtime target differs from the authoritative committed sources",
+            ));
+        }
         Ok(())
     }
 }
@@ -249,17 +255,25 @@ mod tests {
             .verify(SourceDomain::Profiles, 0, &initial.target)
             .await
             .unwrap();
+        let changed_version = authority
+            .verify(SourceDomain::Profiles, 1, &initial.target)
+            .await
+            .unwrap_err();
         assert!(
-            authority
-                .verify(SourceDomain::Profiles, 1, &initial.target)
-                .await
-                .is_err()
+            changed_version
+                .downcast_ref::<crate::client::reconciler::attempt::CommittedTargetAdvanced>()
+                .is_some(),
+            "a version advancement must request the latest target rather than refuse Core"
         );
+        let changed_target = authority
+            .verify(SourceDomain::Profiles, 0, "different-target")
+            .await
+            .unwrap_err();
         assert!(
-            authority
-                .verify(SourceDomain::Profiles, 0, "different-target")
-                .await
-                .is_err()
+            changed_target
+                .downcast_ref::<crate::client::reconciler::attempt::CommittedTargetAdvanced>()
+                .is_some(),
+            "a stale target must use the single owner's latest-source recovery"
         );
 
         content
