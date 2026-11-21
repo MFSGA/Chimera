@@ -58,6 +58,19 @@ pub(in crate::client) struct CompletedLifecycleOperation {
 
 /// A late authoritative source change is a replan request, not evidence
 /// that the preceding Core operation converged the latest durable target.
+/// Source notices can arrive in the CoreLifecycle mailbox while a source
+/// round owns the single Core executor. The worker's own post-Core source
+/// read is not sufficient if a new *message* is received immediately after
+/// that read, but before Completed is handled. A verified old Core receipt
+/// cannot settle the newer version or release an S2 continuation.
+fn source_committed_during_round(
+    trigger: &str,
+    started: &SourceVersions,
+    latest: &SourceVersions,
+) -> bool {
+    trigger == "SourceCommitted" && started != latest
+}
+
 fn committed_target_advanced(result: &anyhow::Result<()>) -> bool {
     result.as_ref().err().is_some_and(|error| {
         error
@@ -1606,6 +1619,25 @@ impl Actor for ApplicationWorkflowActor {
                 reconciled,
             } => {
                 if state.active.as_ref().map(|operation| operation.response.id) == Some(id) {
+                    // Source messages can be handled between the worker's
+                    // final authoritative read and this completion. Detect
+                    // that queued notification race *before* settling Effects
+                    // or claiming latest-source convergence.
+                    let superseded_in_mailbox = state.active.as_ref().is_some_and(|active| {
+                        source_committed_during_round(
+                            active.trigger,
+                            &active.observed_sources,
+                            &state.seen_sources,
+                        )
+                    });
+                    let result = if superseded_in_mailbox && result.is_ok() {
+                        Err(anyhow::Error::new(
+                            crate::client::reconciler::attempt::CommittedTargetAdvanced,
+                        )
+                        .context("new committed source notice arrived during the Core operation"))
+                    } else {
+                        result
+                    };
                     let source_advanced = committed_target_advanced(&result);
                     let refresh_runtime_binding = refresh_effect_ports(
                         reconciled,
@@ -14040,6 +14072,42 @@ mod tests {
     }
 
     #[test]
+    fn a_new_source_notice_between_core_checks_and_completion_invalidates_old_s2_round() {
+        let mut started = SourceVersions::default();
+        started.observe(SourceDomain::Profiles, 4);
+        started.observe(SourceDomain::Application, 2);
+        let mut latest = started.clone();
+        assert!(!source_committed_during_round(
+            "SourceCommitted",
+            &started,
+            &latest
+        ));
+        latest.observe(SourceDomain::Application, 3);
+        assert!(
+            source_committed_during_round("SourceCommitted", &started, &latest),
+            "cross-domain commit received during source round cannot settle its old target"
+        );
+        assert!(
+            !source_committed_during_round("ServiceReadiness", &started, &latest),
+            "Service ownership events have their own independent settlement"
+        );
+        assert!(
+            !source_committed_during_round("Stop", &started, &latest),
+            "explicit stop must settle independently of source updates"
+        );
+        assert!(
+            !source_committed_during_round("ServiceRelease", &started, &latest),
+            "Service cleanup is maintenance independent of Source versions"
+        );
+        latest.observe(SourceDomain::Profiles, 5);
+        assert!(source_committed_during_round(
+            "SourceCommitted",
+            &started,
+            &latest
+        ));
+    }
+
+    #[test]
     fn superseded_source_does_not_publish_stale_effect_ports_or_assert_convergence() {
         let obsolete = Err(anyhow::Error::new(
             crate::client::reconciler::attempt::CommittedTargetAdvanced,
@@ -14549,6 +14617,115 @@ mod tests {
             .unwrap();
         assert_eq!(observed.reads.load(AtomicOrdering::Relaxed), 2);
         assert_eq!(core.submits.lock().unwrap().len(), 1);
+    }
+
+    /// The worker may finish both authority reads successfully while another
+    /// source publication was already accepted by the mailbox. Completion
+    /// itself must fence that notification and replan latest through the sole
+    /// CoreLifecycle owner. No unverified older source may settle Converged.
+    #[tokio::test]
+    async fn checked_core_completion_with_new_mailbox_source_requires_latest_reconcile() {
+        let accepted = Arc::new(Notify::new());
+        let release = Arc::new(Notify::new());
+        let core = Arc::new(DelayedCheckedCore {
+            accepted: accepted.clone(),
+            release: release.clone(),
+            submits: Mutex::new(Vec::new()),
+        });
+        let client = CoreLifecycleClient::spawn(
+            core.clone(),
+            ApplicationClient::legacy().unwrap(),
+            ClashConfigClient::legacy().unwrap(),
+            RuntimePaths::from_config_root(std::path::PathBuf::from("test-runtime-root")),
+        )
+        .await
+        .unwrap();
+        let authority =
+            TestSourceAuthority::for_source(SourceDomain::Profiles, 7, "old-checked-target");
+        let original = checked_runtime_fixture("old-checked-target");
+        let bytes = original.snapshot.product_bytes().to_vec();
+        client
+            .checked_candidate(original, checked_mihomo_spec())
+            .await
+            .unwrap();
+        client.source_committed(SourceDomain::Profiles, 7, false);
+        let waiter = client.clone();
+        let running = tokio::spawn(async move {
+            waiter
+                .submit_checked_with_authority(
+                    SourceDomain::Profiles,
+                    7,
+                    "old-checked-target".to_owned(),
+                    authority.clone(),
+                )
+                .await
+        });
+        tokio::time::timeout(Duration::from_secs(3), accepted.notified())
+            .await
+            .expect("checked bytes were submitted to Core");
+        // A different domain is committed and *observed by the same Actor*
+        // while Core is in flight. The test authority still reports the old
+        // checked target; the completion mailbox fence, not the worker's
+        // pre/post authority callback, must detect the new source notice.
+        client.source_committed(SourceDomain::Application, 1, false);
+        let CoreLifecycleClientInner::Actor { actor_ref, .. } = client.0.as_ref() else {
+            panic!("a real CoreLifecycle actor is required");
+        };
+        let observed = match actor_ref
+            .call(
+                |reply| Message::ReadSourceVersionsForTest { reply },
+                Some(Duration::from_secs(2)),
+            )
+            .await
+            .unwrap()
+        {
+            ractor::rpc::CallResult::Success(seen) => seen,
+            other => panic!("failed to observe durable Source notice: {other:?}"),
+        };
+        assert_eq!(
+            observed.version(SourceDomain::Application),
+            Some(1),
+            "latest Source notice must reach the Actor before the Checked Core completes"
+        );
+        release.notify_one();
+        let error = tokio::time::timeout(Duration::from_secs(3), running)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap_err();
+        assert!(
+            error
+                .downcast_ref::<crate::client::reconciler::attempt::CommittedTargetAdvanced>()
+                .is_some(),
+            "mailbox completion cannot settle the older successful Core operation"
+        );
+        assert_eq!(core.submits.lock().unwrap().len(), 1);
+        assert_eq!(core.submits.lock().unwrap()[0].0, bytes);
+        // Unlike a plain Retry, the invalidated command must arm one fresh
+        // committed-source round in the same Actor, even without another
+        // source commit or external Service event.
+        tokio::time::timeout(Duration::from_secs(4), async {
+            loop {
+                let rounds = client.reconciler_status().recent;
+                if rounds
+                    .iter()
+                    .filter(|r| r.trigger == "SourceCommitted")
+                    .count()
+                    >= 2
+                {
+                    assert!(
+                        rounds.iter().any(|r| r.conclusion == "Waiting"),
+                        "obsolete physical Core success cannot conclude convergence"
+                    );
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("latest source should be replanned by the sole owner");
+        assert_eq!(core.submits.lock().unwrap().len(), 1);
+        client.shutdown().await.unwrap();
     }
 
     fn checked_mihomo_spec() -> chimera_core_manager::CoreSpec {
