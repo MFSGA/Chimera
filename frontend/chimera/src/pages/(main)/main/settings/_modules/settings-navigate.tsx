@@ -1,4 +1,3 @@
-import { useSetting } from '@chimera/interface';
 import {
   NavigationList,
   NavigationListGroup,
@@ -7,31 +6,23 @@ import {
   NavigationListItemText,
   type NavigationListItemColor,
 } from '@chimera/ui/navigation-list';
-import { cn } from '@chimera/utils';
 import { Link, useLinkProps } from '@tanstack/react-router';
-import DisplayExternalInput from '~icons/material-symbols/display-external-input-rounded';
+import DataObjectRounded from '~icons/material-symbols/data-object-rounded';
+import DeployedCodeRounded from '~icons/material-symbols/deployed-code-rounded';
 import FrameBugOutlineRounded from '~icons/material-symbols/frame-bug-outline-rounded';
-import SettingsBoltRounded from '~icons/material-symbols/settings-b-roll-rounded';
+import LanRounded from '~icons/material-symbols/lan-rounded';
 import SettingsEthernet from '~icons/material-symbols/settings-ethernet-rounded';
 import SettingsRounded from '~icons/material-symbols/settings-rounded';
+import SwapHorizRounded from '~icons/material-symbols/swap-horiz-rounded';
+import TuneRounded from '~icons/material-symbols/tune-rounded';
 import ViewQuilt from '~icons/material-symbols/view-quilt-rounded';
 import type { ComponentProps, ForwardedRef, ReactNode } from 'react';
 import ChimeraIcon from '@root/backend/tauri/icons/icon.png';
-import useCoreIcon from '@/hooks/use-core-icon';
 import * as m from '@/paraglide/messages';
 
 const ChimeraLogo = () => (
   <img src={ChimeraIcon} className="size-8 rounded-full object-cover" alt="" />
 );
-
-const CurrentCoreIcon = ({
-  className,
-  ...props
-}: Omit<ComponentProps<'img'>, 'src'>) => {
-  const { value } = useSetting('core');
-  const icon = useCoreIcon(value ?? 'mihomo');
-  return <img src={icon} className={cn('size-full', className)} {...props} />;
-};
 
 function SettingsNavigationItem({
   icon,
@@ -87,23 +78,39 @@ export default function SettingsNavigate() {
       </NavigationListGroup>
       <NavigationListGroup label={m.settings_label_clash_settings()}>
         <SettingsNavigationItem
-          to="/main/settings/clash"
+          to="/main/settings/clash/core-manager"
           color="purple"
-          icon={<SettingsBoltRounded />}
-          label={m.settings_label_clash_settings()}
-          description={m.settings_label_clash_settings_description()}
+          icon={<DeployedCodeRounded />}
+          label={m.settings_label_core_manager()}
+          description={m.settings_label_core_manager_description()}
         />
         <SettingsNavigationItem
-          to="/main/settings/web-ui"
+          to="/main/settings/clash/core"
+          color="orange"
+          icon={<TuneRounded />}
+          label={m.settings_label_core_settings()}
+          description={m.settings_label_core_settings_description()}
+        />
+        <SettingsNavigationItem
+          to="/main/settings/clash/network"
           color="cyan"
-          icon={
-            <span className="relative">
-              <CurrentCoreIcon className="size-5" />
-              <DisplayExternalInput className="absolute -right-1 -bottom-1 size-3" />
-            </span>
-          }
-          label={m.settings_label_external_controll()}
-          description={m.settings_label_external_controll_description()}
+          icon={<LanRounded />}
+          label={m.settings_label_network()}
+          description={m.settings_label_network_description()}
+        />
+        <SettingsNavigationItem
+          to="/main/settings/clash/control"
+          color="blue"
+          icon={<SwapHorizRounded />}
+          label={m.settings_label_control()}
+          description={m.settings_label_control_description()}
+        />
+        <SettingsNavigationItem
+          to="/main/settings/clash/runtime"
+          color="yellow"
+          icon={<DataObjectRounded />}
+          label={m.settings_label_runtime()}
+          description={m.settings_label_runtime_description()}
         />
       </NavigationListGroup>
       <NavigationListGroup label={m.settings_label_chimera()}>

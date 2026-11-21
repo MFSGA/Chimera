@@ -1,4 +1,4 @@
-import { createFileRoute } from '@tanstack/react-router';
+import { createFileRoute, Outlet, useMatchRoute } from '@tanstack/react-router';
 import * as m from '@/paraglide/messages';
 import {
   SettingsCard,
@@ -125,6 +125,14 @@ const RuntimeProcessingSettings = () => (
 );
 
 function RouteComponent() {
+  const matchRoute = useMatchRoute();
+
+  // Keep the original all-in-one page for existing desktop/legacy navigation.
+  // New ref-style settings subroutes render through the same parent route.
+  if (!matchRoute({ to: '/main/settings/clash', fuzzy: false })) {
+    return <Outlet />;
+  }
+
   return (
     <>
       <SettingsTitle>{m.settings_clash_settings_title()}</SettingsTitle>
