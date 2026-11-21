@@ -7,6 +7,7 @@
 
 mod actor;
 pub(crate) mod ports;
+mod switches;
 
 #[cfg(test)]
 mod tests;
@@ -18,7 +19,7 @@ use tokio_util::task::TaskTracker;
 
 use self::actor::{Message, NetworkAutomationActor};
 
-pub(crate) use self::actor::Args as NetworkAutomationArgs;
+pub(crate) use self::{actor::Args as NetworkAutomationArgs, switches::ConfigCaptureSwitches};
 
 #[derive(Debug, snafu::Snafu)]
 pub enum Error {

@@ -1298,7 +1298,7 @@ mod tests {
         }
     }
 
-    async fn recording_client(
+    pub(super) async fn recording_client(
         fail_rebuild: bool,
     ) -> (ChimeraClient, Arc<Mutex<Vec<&'static str>>>) {
         let events = Arc::new(Mutex::new(Vec::new()));
