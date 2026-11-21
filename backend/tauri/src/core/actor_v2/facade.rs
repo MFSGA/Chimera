@@ -282,6 +282,16 @@ where
 }
 
 impl CoreFacade {
+    /// Read-only ref preparation session from the *same* LocalRuntimeHost
+    /// used for the authoritative Core submission and runtime product.
+    pub(crate) fn preparation_session(
+        &self,
+    ) -> Option<crate::client::ports::RuntimePreparationSession> {
+        self.local_runtime
+            .as_ref()
+            .map(|host| host.preparation_session())
+    }
+
     #[cfg(test)]
     pub(crate) fn new_local() -> Self {
         Self {

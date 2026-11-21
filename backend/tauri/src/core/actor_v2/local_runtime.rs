@@ -148,7 +148,7 @@ fn transform_uid_of(tag: &OperatorTag) -> Option<&str> {
 pub(crate) struct LocalRuntimeHost {
     control: CoreControl,
     runtime_paths: RuntimePaths,
-    ports: crate::client::SessionPortResolver,
+    ports: Arc<crate::client::SessionPortResolver>,
     lifecycle: Arc<crate::client::runtime::RuntimeLifecycle>,
     pending_profile_candidates:
         tokio::sync::Mutex<HashMap<OperationId, crate::client::runtime::CandidateFile>>,
@@ -213,7 +213,7 @@ impl LocalRuntimeHost {
         Self {
             control,
             runtime_paths,
-            ports: crate::client::SessionPortResolver::new(lifecycle.clone()),
+            ports: Arc::new(crate::client::SessionPortResolver::new(lifecycle.clone())),
             lifecycle,
             pending_profile_candidates: tokio::sync::Mutex::new(HashMap::new()),
             run_type: RwLock::new(RunType::Normal),
@@ -264,6 +264,16 @@ impl LocalRuntimeHost {
 
     pub(crate) fn accepted_runtime_receipt(&self) -> Option<Arc<RuntimeApplyReceipt>> {
         self.lifecycle.accepted_confirmed_receipt()
+    }
+
+    /// Returns the real Core owner session, not a parallel preparation cache.
+    /// Port candidate reads and confirmed Core publications use this exact
+    /// resolver/RuntimeLifecycle instance on both sides of the Actor.
+    pub(crate) fn preparation_session(&self) -> crate::client::ports::RuntimePreparationSession {
+        crate::client::ports::RuntimePreparationSession {
+            revisions: self.lifecycle.revision_allocator(),
+            ports: self.ports.clone(),
+        }
     }
 
     pub(crate) fn invalidate_ports(&self) {
@@ -1788,6 +1798,69 @@ mod tests {
             target: Some("committed-source-42".into()),
         };
         (prepared, receipt.core_spec.clone())
+    }
+
+    #[tokio::test]
+    async fn checked_preparation_and_core_owner_share_revision_and_confirmed_port_session() {
+        use chimera_config::clash::config::ClashConfig;
+        let (_root, host, _paths) = runtime_host_fixture().await;
+        let checked_session = host.preparation_session();
+        let clash = ClashConfig::default();
+        let before = checked_session.ports.resolve_candidate(&clash).unwrap();
+        assert!(
+            host.accepted_runtime_receipt().is_none(),
+            "a candidate must remain inert"
+        );
+        let revision = checked_session.revisions.allocate().unwrap();
+        let (mut prepared, spec) = prepared_runtime_fixture(Arc::from("mode: rule\n"));
+        prepared.snapshot = Arc::new(prepared.snapshot.with_revision(revision));
+        prepared.ports = before.clone();
+        let endpoint = recording_endpoint(true);
+        host.reconcile_prepared(&prepared, spec, &endpoint, (ExecutionHost::Local, 3))
+            .await
+            .unwrap();
+
+        // The Core receipt must contain the exact prepared picks and revision,
+        // rather than a second generator's independently allocated values.
+        let receipt = host.accepted_runtime_receipt().unwrap();
+        assert_eq!(receipt.revision, revision);
+        assert_eq!(receipt.ports, before);
+        assert!(Arc::ptr_eq(
+            receipt.artifact.as_ref().unwrap(),
+            &prepared.snapshot
+        ));
+        let future_session = host.preparation_session();
+        assert!(
+            Arc::ptr_eq(&checked_session.ports, &future_session.ports),
+            "the checked builder must share the actual Core host resolver Arc"
+        );
+        let next = future_session.ports.resolve_candidate(&clash).unwrap();
+        assert_eq!(
+            next, before,
+            "unchanged strategy must reuse the confirmed running listeners"
+        );
+        let revision_two = future_session.revisions.allocate().unwrap();
+        assert_eq!(revision_two.get(), revision.get() + 1);
+        let revision_three = host.lifecycle.allocate_revision().unwrap();
+        assert_eq!(
+            revision_three.get(),
+            revision_two.get() + 1,
+            "Core-host allocations and checked builder allocations share one counter"
+        );
+        // A confirmed listener baseline belongs to the previous Core host.
+        // After S2 owner switching it must be invalidated for *all* session
+        // borrowers, without creating a new resolver or resetting revisions.
+        host.select_execution_host(ExecutionHost::Service).unwrap();
+        assert!(host.accepted_runtime_receipt().is_none());
+        assert!(Arc::ptr_eq(
+            &host.preparation_session().ports,
+            &checked_session.ports
+        ));
+        assert_eq!(
+            checked_session.revisions.allocate().unwrap().get(),
+            revision_three.get() + 1
+        );
+        host.shutdown().await.unwrap();
     }
 
     #[tokio::test]

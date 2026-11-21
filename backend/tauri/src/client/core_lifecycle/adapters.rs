@@ -265,6 +265,12 @@ impl LegacyCoreBridge {
 
 #[async_trait]
 impl CoreLifecyclePort for LegacyCoreBridge {
+    fn runtime_preparation_session(
+        &self,
+    ) -> Option<crate::client::ports::RuntimePreparationSession> {
+        self.facade().preparation_session()
+    }
+
     async fn reconcile_transparent_proxy(
         &self,
         request: &chimera_ipc::api::network::transparent_proxy::NetworkTransparentProxyRequest,

@@ -135,6 +135,15 @@ pub struct RuntimeTransformDiagnostics {
 
 #[async_trait]
 pub(crate) trait CoreLifecyclePort: Send + Sync {
+    /// The canonical prepared-runtime session, only present when this port
+    /// delegates to the active LocalRuntimeHost. A compatibility port without
+    /// that owner cannot safely start a new independent revision/port pool.
+    fn runtime_preparation_session(
+        &self,
+    ) -> Option<crate::client::ports::RuntimePreparationSession> {
+        None
+    }
+
     async fn reconcile_transparent_proxy(
         &self,
         request: &chimera_ipc::api::network::transparent_proxy::NetworkTransparentProxyRequest,

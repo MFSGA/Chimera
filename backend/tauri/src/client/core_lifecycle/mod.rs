@@ -3223,6 +3223,19 @@ impl CoreLifecycleClient {
         }
     }
 
+    /// The ref RuntimePreparation must share both its revision sequence and
+    /// its confirmed port baseline with this same mutating Core owner.
+    /// No new allocator or resolver is synthesized for compatibility ports.
+    pub(in crate::client) fn runtime_preparation_session(
+        &self,
+    ) -> Option<super::ports::RuntimePreparationSession> {
+        match self.0.as_ref() {
+            CoreLifecycleClientInner::Actor { core, .. } => core.runtime_preparation_session(),
+            #[cfg(test)]
+            CoreLifecycleClientInner::Direct { core, .. } => core.runtime_preparation_session(),
+        }
+    }
+
     pub(crate) fn status(&self) -> CoreLifecycleStatus {
         match self.0.as_ref() {
             CoreLifecycleClientInner::Actor { status, .. } => status.lock().clone(),
