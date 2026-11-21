@@ -8,6 +8,45 @@
 
 use chimera_config::profile::{ProfileId, ProfileValidationError};
 use serde::Serialize;
+use snafu::Snafu;
+
+/// Source-bearing content validation errors from upstream `profiles.rs`.
+/// Preserve the exact YAML parser error in the actor; omit it from IPC, as
+/// the upstream domain does. Chimera still parses content with serde_yaml 0.9.
+#[derive(Debug, Snafu, Serialize, specta::Type)]
+#[snafu(visibility(pub))]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ProfileContentError {
+    #[snafu(display("the document is not a YAML mapping"))]
+    NotYamlMapping {
+        #[serde(skip)]
+        source: serde_yaml::Error,
+    },
+    #[snafu(display("could not reserialize the YAML mapping"))]
+    ReserializeYaml {
+        #[serde(skip)]
+        source: serde_yaml::Error,
+    },
+    #[snafu(display("the subscription contains neither `proxies` nor `proxy-providers`"))]
+    MissingProxies,
+    #[snafu(display("the script is empty"))]
+    EmptyScript,
+}
+
+/// Source materialization phase. The durable transaction still owns the
+/// actual journal, commit, and compensation sequence.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, serde::Deserialize, specta::Type)]
+#[serde(rename_all = "snake_case")]
+pub enum MaterializationOperation {
+    PrepareFileFirst,
+    Compensate,
+    Complete,
+    PrepareCleanup,
+    ActivateCleanup,
+    CancelCleanup,
+    RetryCleanup,
+    Reconcile,
+}
 
 #[derive(Debug, Clone, Serialize, specta::Type)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -33,6 +72,24 @@ pub enum ProfileFailure {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn content_errors_serialize_without_leaking_yaml_parser_source() {
+        let source = serde_yaml::from_str::<serde_yaml::Mapping>("[").unwrap_err();
+        let failure = ProfileContentError::NotYamlMapping { source };
+        assert_eq!(
+            serde_json::to_value(&failure).unwrap(),
+            serde_json::json!({"kind": "not_yaml_mapping"}),
+        );
+        assert_eq!(
+            serde_json::to_value(ProfileContentError::MissingProxies).unwrap(),
+            serde_json::json!({"kind": "missing_proxies"}),
+        );
+        assert_eq!(
+            serde_json::to_value(MaterializationOperation::PrepareFileFirst).unwrap(),
+            "prepare_file_first"
+        );
+    }
 
     #[test]
     fn version_conflict_retains_both_versions_and_cleanup_evidence() {
