@@ -95,7 +95,7 @@ describe('main settings reference layout', () => {
     );
     assert.ok(state.navigation && state.systemLink, JSON.stringify(state));
     assert.equal(state.navigationGroups, 4, JSON.stringify(state));
-    assert.equal(state.navigationItems, 7, JSON.stringify(state));
+    assert.equal(state.navigationItems, 10, JSON.stringify(state));
     assert.equal(state.systemActive, 'true', JSON.stringify(state));
     assert.equal(state.systemCurrent, 'page', JSON.stringify(state));
     assert.equal(state.outletDisplay, 'flex', JSON.stringify(state));
@@ -114,30 +114,67 @@ describe('main settings reference layout', () => {
     }
   });
 
-  it('selects another settings category through a visible link', async () => {
-    const external = await $('a[href="/main/settings/web-ui"]');
-    await external.waitForClickable({ timeout: 15_000 });
-    await external.click();
+  it('opens the reference control-channel settings through the sidebar', async () => {
+    const control = await $('a[href="/main/settings/clash/control"]');
+    await control.waitForClickable({ timeout: 15_000 });
+    await control.click();
+
     await browser.waitUntil(
       async () =>
         browser.execute(() => {
           const selected = document.querySelector<HTMLElement>(
-            'a[href="/main/settings/web-ui"]',
+            'a[href="/main/settings/clash/control"]',
           );
           return (
-            location.pathname === '/main/settings/web-ui' &&
+            location.pathname === '/main/settings/clash/control' &&
+            selected?.getAttribute('data-active') === 'true' &&
+            selected?.getAttribute('aria-current') === 'page' &&
+            document.querySelector(
+              '[data-slot="web-ui-settings-container"]',
+            ) !== null
+          );
+        }),
+      {
+        timeout: 15_000,
+        timeoutMsg: 'Control-channel settings did not become active.',
+      },
+    );
+
+    assert.equal(
+      new URL(await browser.getUrl()).pathname,
+      '/main/settings/clash/control',
+    );
+  });
+
+  it('opens network settings and displays the existing port controls', async () => {
+    const network = await $('a[href="/main/settings/clash/network"]');
+    await network.waitForClickable({ timeout: 15_000 });
+    await network.click();
+
+    const portSettings = await $('[data-slot="port-settings-container"]');
+    await portSettings.waitForDisplayed({ timeout: 15_000 });
+
+    await browser.waitUntil(
+      async () =>
+        browser.execute(() => {
+          const selected = document.querySelector<HTMLElement>(
+            'a[href="/main/settings/clash/network"]',
+          );
+          return (
+            location.pathname === '/main/settings/clash/network' &&
             selected?.getAttribute('data-active') === 'true' &&
             selected?.getAttribute('aria-current') === 'page'
           );
         }),
       {
         timeout: 15_000,
-        timeoutMsg: 'Web UI settings navigation did not become active.',
+        timeoutMsg: 'Network settings did not become active.',
       },
     );
+
     assert.equal(
       new URL(await browser.getUrl()).pathname,
-      '/main/settings/web-ui',
+      '/main/settings/clash/network',
     );
   });
 });
