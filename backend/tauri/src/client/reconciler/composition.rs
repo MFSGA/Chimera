@@ -42,16 +42,31 @@ impl CoreLifecycleCheckedInbox {
     ) -> Self {
         Self { owner }
     }
+
+    fn source_domain(
+        domain: chimera_contracts::mutation::ConfigDomain,
+    ) -> crate::client::reconciler::committed::SourceDomain {
+        use crate::client::reconciler::committed::SourceDomain;
+        match domain {
+            chimera_contracts::mutation::ConfigDomain::Application => SourceDomain::Application,
+            chimera_contracts::mutation::ConfigDomain::Clash => SourceDomain::Clash,
+            chimera_contracts::mutation::ConfigDomain::Profiles => SourceDomain::Profiles,
+        }
+    }
 }
 
 #[async_trait::async_trait]
 impl CheckedCandidatePort for CoreLifecycleCheckedInbox {
     async fn checked(
         &self,
+        domain: chimera_contracts::mutation::ConfigDomain,
         prepared: crate::client::core_lifecycle::ports::PreparedRuntime,
         core_spec: chimera_core_manager::CoreSpec,
     ) -> Result<(), Arc<chimera_contracts::runtime_error::RuntimeError>> {
-        self.owner.checked_candidate(prepared, core_spec).await
+        let domain = Self::source_domain(domain);
+        self.owner
+            .checked_candidate_for_domain(domain, prepared, core_spec)
+            .await
     }
 
     fn source_committed(
@@ -59,13 +74,8 @@ impl CheckedCandidatePort for CoreLifecycleCheckedInbox {
         domain: chimera_contracts::mutation::ConfigDomain,
         version: chimera_core::state::Version,
     ) {
-        use crate::client::reconciler::committed::SourceDomain;
-        let domain = match domain {
-            chimera_contracts::mutation::ConfigDomain::Application => SourceDomain::Application,
-            chimera_contracts::mutation::ConfigDomain::Clash => SourceDomain::Clash,
-            chimera_contracts::mutation::ConfigDomain::Profiles => SourceDomain::Profiles,
-        };
-        self.owner.checked_source_committed(domain, *version);
+        self.owner
+            .checked_source_committed(Self::source_domain(domain), *version);
     }
 }
 
@@ -219,9 +229,11 @@ mod tests {
     impl CheckedCandidatePort for RecordingInbox {
         async fn checked(
             &self,
+            domain: ConfigDomain,
             candidate: crate::client::core_lifecycle::ports::PreparedRuntime,
             core_spec: chimera_core_manager::CoreSpec,
         ) -> Result<(), Arc<RuntimeError>> {
+            assert_eq!(domain, ConfigDomain::Application);
             assert_eq!(core_spec.kind, chimera_core_manager::CoreKind::Mihomo);
 
             self.checked.lock().unwrap().push((

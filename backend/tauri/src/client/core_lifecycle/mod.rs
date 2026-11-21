@@ -45,6 +45,8 @@ const DIRTY_WINDOW: Duration = Duration::from_millis(500);
 const RECOVERY_INTERVAL: Duration = Duration::from_secs(5);
 const STARTUP_RECOVERY_LEASE_ATTEMPTS: usize = 3;
 const MAX_PENDING: usize = 32;
+/// Bounded precommit checks belong to source domains, not to the Core queue.
+const MAX_CHECKED_PENDING: usize = 32;
 const COMPLETED_LIMIT: usize = 32;
 
 type OperationId = u64;
@@ -204,8 +206,93 @@ pub(crate) use ports::{
 /// One admitted checked product *and the exact executable specification* used
 /// for validation. Do not re-resolve the binary at SourceCommitted or Apply.
 struct CheckedRuntimeCandidate {
+    domain: SourceDomain,
     prepared: ports::PreparedRuntime,
     core_spec: chimera_core_manager::CoreSpec,
+}
+
+#[derive(Default)]
+struct CheckedRuntimeInbox {
+    pending: VecDeque<CheckedRuntimeCandidate>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CheckedSelection {
+    Missing,
+    Ambiguous,
+    Matched,
+}
+
+impl CheckedRuntimeInbox {
+    fn accept(
+        &mut self,
+        checked: CheckedRuntimeCandidate,
+    ) -> Result<(), Arc<chimera_contracts::runtime_error::RuntimeError>> {
+        use chimera_contracts::runtime_error::{RuntimeCheckUnavailable, RuntimeError};
+        if checked.prepared.target.is_none() {
+            return Err(Arc::new(RuntimeError::CheckUnavailable {
+                reason: RuntimeCheckUnavailable::CandidateUnavailable {
+                    reason: "checked candidate has no source target identity".into(),
+                },
+            }));
+        }
+        if self.pending.len() >= MAX_CHECKED_PENDING {
+            return Err(Arc::new(RuntimeError::CheckUnavailable {
+                reason: RuntimeCheckUnavailable::CandidateUnavailable {
+                    reason: "checked candidate inbox is full; source commit must not be authorized"
+                        .into(),
+                },
+            }));
+        }
+        self.pending.push_back(checked);
+        Ok(())
+    }
+
+    fn matching_count(&self, domain: SourceDomain, target: Option<&str>) -> usize {
+        self.pending
+            .iter()
+            .filter(|entry| {
+                entry.domain == domain
+                    && target
+                        .is_none_or(|expected| entry.prepared.target.as_deref() == Some(expected))
+            })
+            .count()
+    }
+
+    /// A source notification has no target identity; consume its checked
+    /// product only if exactly one candidate belongs to that source domain.
+    /// Multiple candidates in one domain may have been committed in another
+    /// order, so discard that domain's ambiguous proposals and rebuild the
+    /// authoritative *latest committed* target in the existing Core owner.
+    fn take_unique(
+        &mut self,
+        domain: SourceDomain,
+        target: Option<&str>,
+    ) -> (CheckedSelection, Option<CheckedRuntimeCandidate>) {
+        let matched = self.matching_count(domain, target);
+        if matched == 0 {
+            return (CheckedSelection::Missing, None);
+        }
+        if matched > 1 {
+            self.pending.retain(|entry| entry.domain != domain);
+            return (CheckedSelection::Ambiguous, None);
+        }
+        let index = self
+            .pending
+            .iter()
+            .position(|entry| {
+                entry.domain == domain
+                    && target
+                        .is_none_or(|expected| entry.prepared.target.as_deref() == Some(expected))
+            })
+            .expect("the matched checked candidate is still in this mailbox");
+        (CheckedSelection::Matched, self.pending.remove(index))
+    }
+
+    #[cfg(test)]
+    fn first(&self) -> Option<&CheckedRuntimeCandidate> {
+        self.pending.front()
+    }
 }
 
 enum Message {
@@ -377,7 +464,7 @@ struct ApplicationWorkflowState {
     run_intent: RunIntent,
     /// A checked-but-not-yet-committed product. This is only an inbox cache;
     /// the old Core executor does not currently submit it.
-    checked: Option<CheckedRuntimeCandidate>,
+    checked: CheckedRuntimeInbox,
     source_authority: Option<Arc<dyn super::reconciler::authority::RuntimeSourceAuthority>>,
     seen_sources: SourceVersions,
     service_recovery_inflight: bool,
@@ -922,7 +1009,7 @@ impl ApplicationWorkflowState {
         self.shutting_down = true;
         // A checked document that was never committed is not a running Core
         // receipt; discard it instead of carrying it past shutdown.
-        self.checked = None;
+        self.checked.pending.clear();
         self.dirty = false;
         self.source_dirty = false;
         self.source_after_handoff = false;
@@ -1333,7 +1420,7 @@ impl Actor for ApplicationWorkflowActor {
             source_dirty: false,
             source_after_handoff: false,
             run_intent: RunIntent::Running,
-            checked: None,
+            checked: CheckedRuntimeInbox::default(),
             source_authority: args.source_authority,
             seen_sources: SourceVersions::default(),
             service_recovery_inflight: false,
@@ -1362,8 +1449,7 @@ impl Actor for ApplicationWorkflowActor {
                         chimera_contracts::runtime_error::RuntimeError::ShuttingDown,
                     ))
                 } else {
-                    state.checked = Some(checked);
-                    Ok(())
+                    state.checked.accept(checked)
                 };
                 let _ = reply.send(result);
             }
@@ -2008,33 +2094,48 @@ impl Actor for ApplicationWorkflowActor {
                     // frees up. Never submit a candidate outside this Actor.
                     state.source_dirty = true;
                     state.mark_runtime_dirty(&myself);
-                } else if state.checked.is_some() && state.source_authority.is_some() {
-                    let authority = state.source_authority.as_ref().unwrap().clone();
-                    // Only consume after both the candidate and authoritative
-                    // reader are available; missing state must not discard
-                    // an acknowledged checked product.
-                    let checked = state.checked.take().unwrap();
-                    let CheckedRuntimeCandidate {
-                        prepared,
-                        core_spec,
-                    } = checked;
-                    let id = state.allocate_operation_id();
-                    state.pending.push_back(Request {
-                        command: Command::ApplyChecked {
-                            prepared,
-                            core_spec,
-                            domain,
-                            version,
-                            authority,
-                        },
-                        response: Response { id, reply: None },
-                        deferred_retry: None,
-                    });
+                } else if let Some(authority) = state.source_authority.as_ref().cloned() {
+                    let (selection, checked) = state.checked.take_unique(domain, None);
+                    match (selection, checked) {
+                        (
+                            CheckedSelection::Matched,
+                            Some(CheckedRuntimeCandidate {
+                                prepared,
+                                core_spec,
+                                ..
+                            }),
+                        ) => {
+                            let id = state.allocate_operation_id();
+                            state.pending.push_back(Request {
+                                command: Command::ApplyChecked {
+                                    prepared,
+                                    core_spec,
+                                    domain,
+                                    version,
+                                    authority,
+                                },
+                                response: Response { id, reply: None },
+                                deferred_retry: None,
+                            });
+                        }
+                        (selection, _) => {
+                            // No proof which of several same-domain checks
+                            // became durable: do not guess from FIFO order.
+                            // Keep unrelated-domain candidates, and let the
+                            // *same* Core owner rebuild the latest source.
+                            tracing::debug!(
+                                ?domain,
+                                ?selection,
+                                "checked source requires latest-target recovery"
+                            );
+                            state.source_dirty = true;
+                            state.mark_runtime_dirty(&myself);
+                        }
+                    }
                 } else {
-                    // A missing checked product or authority is NOT a reason
-                    // to invent a successful Core apply. Replan the latest
-                    // committed target through the existing sole owner while
-                    // the new check/apply handoff is being rolled out.
+                    // No authoritative reader: an ACKed checked candidate
+                    // must not become a Core submission. Retain it and
+                    // request a latest-source recovery in the same owner.
                     state.source_dirty = true;
                     state.mark_runtime_dirty(&myself);
                 }
@@ -2046,10 +2147,9 @@ impl Actor for ApplicationWorkflowActor {
                 authority,
                 reply,
             } => {
-                // The upstream mailbox retains exactly one prechecked target.
-                // The commit notification and the checked target must agree;
-                // this is a *version* fence, not yet the authoritative
-                // latest-source content identity proof required for production.
+                // Explicit target dispatch is valid only for the uniquely
+                // matching candidate in the specified source domain. Other
+                // checked candidates remain cached, never overwritten.
                 let valid = !state.shutting_down
                     && !state.uncertain
                     && state.run_intent == RunIntent::Running
@@ -2057,18 +2157,19 @@ impl Actor for ApplicationWorkflowActor {
                     && !state.startup_owner_unproven_shared.load(Ordering::Acquire)
                     && !state.owner_transition_pending()
                     && state.seen_sources.version(domain) == Some(version)
-                    && state.checked.as_ref().is_some_and(|checked| {
-                        checked.prepared.target.as_deref() == Some(target.as_str())
-                    });
+                    && state.checked.matching_count(domain, Some(target.as_str())) == 1;
                 if !valid || state.pending.len() >= MAX_PENDING {
                     let _ = reply.send(Err(anyhow::anyhow!(
                         "checked candidate has no matching committed source or Core owner"
                     )));
                 } else {
+                    let (selection, checked) = state.checked.take_unique(domain, Some(&target));
+                    debug_assert_eq!(selection, CheckedSelection::Matched);
                     let CheckedRuntimeCandidate {
                         prepared,
                         core_spec,
-                    } = state.checked.take().expect("matching checked candidate");
+                        ..
+                    } = checked.expect("uniquely matching checked candidate");
                     let id = state.allocate_operation_id();
                     state.pending.push_back(Request {
                         command: Command::ApplyChecked {
@@ -2105,7 +2206,7 @@ impl Actor for ApplicationWorkflowActor {
             }
             #[cfg(test)]
             Message::ReadCheckedForTest { reply } => {
-                let _ = reply.send(state.checked.as_ref().map(|checked| {
+                let _ = reply.send(state.checked.first().map(|checked| {
                     (
                         checked.prepared.target.clone(),
                         checked.prepared.intent.digest.clone(),
@@ -2412,7 +2513,7 @@ impl Actor for ApplicationWorkflowActor {
                 }
             }
         }
-        state.checked = None;
+        state.checked.pending.clear();
         state.reconciler.send_modify(ReconcilerStatus::close);
         Ok(())
     }
@@ -3416,8 +3517,11 @@ impl CoreLifecycleClient {
         }
     }
 
-    pub(in crate::client) async fn checked_candidate(
+    /// The ref Source Gate always tags an ACKed candidate with its own
+    /// durable commit domain; multiple domains can check concurrently.
+    pub(in crate::client) async fn checked_candidate_for_domain(
         &self,
+        domain: SourceDomain,
         prepared: ports::PreparedRuntime,
         core_spec: chimera_core_manager::CoreSpec,
     ) -> Result<(), Arc<chimera_contracts::runtime_error::RuntimeError>> {
@@ -3429,6 +3533,7 @@ impl CoreLifecycleClient {
                     .call(
                         |reply| Message::Checked {
                             checked: CheckedRuntimeCandidate {
+                                domain,
                                 prepared,
                                 core_spec,
                             },
@@ -3455,6 +3560,16 @@ impl CoreLifecycleClient {
             #[cfg(test)]
             CoreLifecycleClientInner::Direct { .. } => Err(Arc::new(RuntimeError::ShuttingDown)),
         }
+    }
+
+    #[cfg(test)]
+    async fn checked_candidate(
+        &self,
+        prepared: ports::PreparedRuntime,
+        core_spec: chimera_core_manager::CoreSpec,
+    ) -> Result<(), Arc<chimera_contracts::runtime_error::RuntimeError>> {
+        self.checked_candidate_for_domain(SourceDomain::Profiles, prepared, core_spec)
+            .await
     }
 
     #[cfg(test)]
@@ -13894,6 +14009,109 @@ mod tests {
         }
     }
 
+    fn checked_entry(domain: SourceDomain, target: &str) -> CheckedRuntimeCandidate {
+        CheckedRuntimeCandidate {
+            domain,
+            prepared: checked_runtime_fixture(target),
+            core_spec: checked_mihomo_spec(),
+        }
+    }
+
+    #[test]
+    fn checked_inbox_keeps_cross_domain_candidates_and_never_selects_the_wrong_source() {
+        let mut inbox = CheckedRuntimeInbox::default();
+        inbox
+            .accept(checked_entry(SourceDomain::Profiles, "profiles-A"))
+            .unwrap();
+        inbox
+            .accept(checked_entry(SourceDomain::Application, "application-B"))
+            .unwrap();
+        inbox
+            .accept(checked_entry(SourceDomain::Clash, "clash-C"))
+            .unwrap();
+        assert_eq!(inbox.pending.len(), 3);
+        let (selection, checked) = inbox.take_unique(SourceDomain::Application, None);
+        assert_eq!(selection, CheckedSelection::Matched);
+        assert_eq!(
+            checked.unwrap().prepared.target.as_deref(),
+            Some("application-B")
+        );
+        assert_eq!(inbox.pending.len(), 2);
+        assert_eq!(
+            inbox.matching_count(SourceDomain::Profiles, Some("clash-C")),
+            0,
+            "the target and source domain must both match"
+        );
+        let (selection, checked) = inbox.take_unique(SourceDomain::Profiles, Some("profiles-A"));
+        assert_eq!(selection, CheckedSelection::Matched);
+        assert_eq!(
+            checked.unwrap().prepared.target.as_deref(),
+            Some("profiles-A")
+        );
+        let (selection, checked) = inbox.take_unique(SourceDomain::Clash, None);
+        assert_eq!(selection, CheckedSelection::Matched);
+        assert_eq!(checked.unwrap().prepared.target.as_deref(), Some("clash-C"));
+        assert!(inbox.pending.is_empty());
+    }
+
+    #[test]
+    fn checked_inbox_ambiguous_same_source_falls_back_without_consuming_other_domains() {
+        let mut inbox = CheckedRuntimeInbox::default();
+        inbox
+            .accept(checked_entry(SourceDomain::Profiles, "profiles-old"))
+            .unwrap();
+        inbox
+            .accept(checked_entry(SourceDomain::Clash, "clash-other"))
+            .unwrap();
+        inbox
+            .accept(checked_entry(SourceDomain::Profiles, "profiles-new"))
+            .unwrap();
+        let (selection, checked) = inbox.take_unique(SourceDomain::Profiles, None);
+        assert_eq!(selection, CheckedSelection::Ambiguous);
+        assert!(
+            checked.is_none(),
+            "commit notification contains no candidate identity"
+        );
+        assert_eq!(inbox.matching_count(SourceDomain::Profiles, None), 0);
+        assert_eq!(inbox.matching_count(SourceDomain::Clash, None), 1);
+        let (selection, checked) = inbox.take_unique(SourceDomain::Clash, None);
+        assert_eq!(selection, CheckedSelection::Matched);
+        assert_eq!(
+            checked.unwrap().prepared.target.as_deref(),
+            Some("clash-other")
+        );
+    }
+
+    #[test]
+    fn checked_inbox_ack_is_bounded_and_missing_target_is_not_authorized() {
+        let mut inbox = CheckedRuntimeInbox::default();
+        let mut without_target = checked_entry(SourceDomain::Application, "some-target");
+        without_target.prepared.target = None;
+        assert!(matches!(inbox.accept(without_target), Err(error)
+            if matches!(error.as_ref(), chimera_contracts::runtime_error::RuntimeError::CheckUnavailable { .. })));
+        assert!(inbox.pending.is_empty());
+        for index in 0..MAX_CHECKED_PENDING {
+            inbox
+                .accept(checked_entry(
+                    SourceDomain::Application,
+                    &format!("pending-{index}"),
+                ))
+                .unwrap();
+        }
+        let error = inbox
+            .accept(checked_entry(SourceDomain::Profiles, "overflow"))
+            .unwrap_err();
+        assert!(matches!(
+            error.as_ref(),
+            chimera_contracts::runtime_error::RuntimeError::CheckUnavailable { .. }
+        ));
+        assert_eq!(
+            inbox.pending.len(),
+            MAX_CHECKED_PENDING,
+            "failed ACK must never replace or evict a previously authorized candidate"
+        );
+    }
+
     #[tokio::test]
     async fn ref_checked_message_is_acknowledged_by_the_single_owner_before_source_notice() {
         use crate::client::reconciler::committed::SourceDomain;
@@ -13953,9 +14171,13 @@ mod tests {
             )
             .await
             .unwrap();
-        let newer = client.checked_for_tests().await.unwrap();
-        assert_eq!(newer.0.as_deref(), Some("precommit-source-b"));
-        assert_eq!(newer.2, b"mode: rule\n");
+        let retained = client.checked_for_tests().await.unwrap();
+        assert_eq!(
+            retained.0.as_deref(),
+            Some("precommit-source-a"),
+            "a second precommit check must not overwrite an acknowledged earlier product"
+        );
+        assert_eq!(retained.2, b"mode: rule\n");
     }
 
     #[tokio::test]
@@ -14449,7 +14671,11 @@ mod tests {
         let mut spec = checked_mihomo_spec();
         spec.binary_path = Utf8PathBuf::from("/tmp/only-checked-spec-may-run");
         inbox
-            .checked(checked_runtime_fixture(&target), spec.clone())
+            .checked(
+                ConfigDomain::Profiles,
+                checked_runtime_fixture(&target),
+                spec.clone(),
+            )
             .await
             .unwrap();
         inbox.source_committed(ConfigDomain::Profiles, chimera_core::state::Version::new(0));
@@ -14484,6 +14710,133 @@ mod tests {
             completed,
             "a repeated checked notification must not queue a legacy rebuild"
         );
+    }
+
+    #[tokio::test]
+    async fn interleaved_checked_domains_keep_original_core_specs_and_apply_independently() {
+        use chimera_config::profile::Profiles;
+        let temp = tempfile::tempdir().unwrap();
+        let mut manager = PersistentStateManagerSetup::<Profiles>::builder()
+            .config_path(Utf8PathBuf::from_path_buf(temp.path().join("profiles.yaml")).unwrap())
+            .assemble()
+            .from_state(Profiles::default())
+            .await
+            .unwrap();
+        let snapshot = manager.snapshot_handle();
+        let reader = crate::state::mutation::ProfileContentReader::new(
+            snapshot.clone(),
+            crate::state::mutation::ProfileContentLock::default(),
+        );
+        let app = ApplicationClient::legacy().unwrap();
+        let clash = ClashConfigClient::legacy().unwrap();
+        let target = crate::client::reconciler::inputs::RuntimeInputs {
+            app: app.get_typed(),
+            clash: clash.get().unwrap(),
+            profiles: Arc::new(Profiles::default()),
+            content: Default::default(),
+        }
+        .checked_target_key()
+        .unwrap();
+        let submits = Arc::new(Mutex::new(Vec::new()));
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let tasks = TaskTracker::new();
+        let client = CoreLifecycleClient::spawn_with_profiles_and_content(
+            Arc::new(ExactCheckedCore {
+                submits: submits.clone(),
+            }),
+            app,
+            clash,
+            Some(snapshot),
+            Some(reader),
+            Some(Arc::new(EmptyManagedFiles)),
+            RuntimePaths::from_config_root(temp.path().join("runtime")),
+            Arc::new(RecordingInstaller {
+                events: events.clone(),
+            }),
+            Arc::new(RecordingService { events }),
+            CancellationToken::new(),
+            &tasks,
+        )
+        .await
+        .unwrap();
+
+        use crate::client::reconciler::{
+            check::CheckedCandidatePort, composition::CoreLifecycleCheckedInbox,
+        };
+        use chimera_contracts::mutation::ConfigDomain;
+        let inbox = CoreLifecycleCheckedInbox::new(client.clone());
+        let mut profiles_spec = checked_mihomo_spec();
+        profiles_spec.binary_path = Utf8PathBuf::from("/tmp/checked-only-profiles-core");
+        let mut application_spec = checked_mihomo_spec();
+        application_spec.binary_path = Utf8PathBuf::from("/tmp/checked-only-application-core");
+        // The earlier Profiles check cannot be replaced by a later
+        // Application check. An Application commit can arrive first.
+        inbox
+            .checked(
+                ConfigDomain::Profiles,
+                checked_runtime_fixture(&target),
+                profiles_spec.clone(),
+            )
+            .await
+            .unwrap();
+        inbox
+            .checked(
+                ConfigDomain::Application,
+                checked_runtime_fixture(&target),
+                application_spec.clone(),
+            )
+            .await
+            .unwrap();
+        inbox.source_committed(
+            ConfigDomain::Application,
+            chimera_core::state::Version::new(0),
+        );
+        tokio::time::timeout(Duration::from_secs(4), async {
+            while submits.lock().unwrap().len() < 1 || client.status().active.is_some() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("Application checked source should submit the originally validated CoreSpec");
+        let first = submits.lock().unwrap().clone();
+        assert_eq!(first.len(), 1);
+        assert_eq!(first[0].0, target);
+        assert_eq!(first[0].3, application_spec.binary_path.to_string());
+        assert_eq!(
+            client.checked_for_tests().await.unwrap().0.as_deref(),
+            Some(target.as_str()),
+            "the uncommitted Profiles candidate remains owned by the same Actor"
+        );
+        inbox.source_committed(ConfigDomain::Profiles, chimera_core::state::Version::new(0));
+        tokio::time::timeout(Duration::from_secs(4), async {
+            while submits.lock().unwrap().len() < 2 || client.status().active.is_some() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("Profiles checked source should submit the other validated CoreSpec");
+        let both = submits.lock().unwrap().clone();
+        assert_eq!(both.len(), 2);
+        assert_eq!(both[1].0, target);
+        assert_eq!(both[1].3, profiles_spec.binary_path.to_string());
+        assert!(client.checked_for_tests().await.is_none());
+        assert!(
+            client
+                .status()
+                .completed
+                .iter()
+                .all(|entry| entry.error.is_none()),
+            "no legacy rebuild or unrelated Core executor may run"
+        );
+        // Duplicates cannot replay either consumed source, regardless of
+        // incoming order or domains.
+        inbox.source_committed(
+            ConfigDomain::Application,
+            chimera_core::state::Version::new(0),
+        );
+        inbox.source_committed(ConfigDomain::Profiles, chimera_core::state::Version::new(0));
+        client.checked_for_tests().await;
+        assert_eq!(submits.lock().unwrap().len(), 2);
     }
 
     #[tokio::test]

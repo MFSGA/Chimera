@@ -31,6 +31,7 @@ pub(in crate::client) trait CheckedCandidatePort: Send + Sync + 'static {
     /// An enqueued-but-unhandled message is not proof of ownership.
     async fn checked(
         &self,
+        domain: ConfigDomain,
         candidate: PreparedRuntime,
         core_spec: chimera_core_manager::CoreSpec,
     ) -> Result<(), Arc<RuntimeError>>;
@@ -82,6 +83,11 @@ impl CandidateCheck {
 #[async_trait::async_trait]
 impl RuntimeGate for CandidateCheck {
     async fn check(&self, candidate: RuntimeCandidate) -> Result<(), Arc<RuntimeError>> {
+        let domain = match &candidate.change {
+            DomainChange::Application { .. } => ConfigDomain::Application,
+            DomainChange::Clash { .. } => ConfigDomain::Clash,
+            DomainChange::Profiles { .. } => ConfigDomain::Profiles,
+        };
         let app = match &candidate.change {
             DomainChange::Application { candidate } => candidate.as_ref().clone(),
             _ => self.application.load().state.clone(),
@@ -129,7 +135,9 @@ impl RuntimeGate for CandidateCheck {
             })
             .await
         {
-            RuntimeCheckOutcome::Passed => self.workflow.checked(prepared, core_spec).await?,
+            RuntimeCheckOutcome::Passed => {
+                self.workflow.checked(domain, prepared, core_spec).await?
+            }
             RuntimeCheckOutcome::Rejected { kind, message } => {
                 return Err(Arc::new(RuntimeError::CoreRejectedConfig {
                     core_kind: kind,
@@ -249,6 +257,7 @@ mod tests {
     #[derive(Default)]
     struct RecordingInbox {
         checked: Mutex<Vec<PreparedRuntime>>,
+        domains: Mutex<Vec<ConfigDomain>>,
         committed: Mutex<Vec<(ConfigDomain, Version)>>,
         reject: bool,
     }
@@ -257,15 +266,16 @@ mod tests {
     impl CheckedCandidatePort for RecordingInbox {
         async fn checked(
             &self,
+            domain: ConfigDomain,
             candidate: PreparedRuntime,
             core_spec: chimera_core_manager::CoreSpec,
         ) -> Result<(), Arc<RuntimeError>> {
             assert_eq!(core_spec.kind, chimera_core_manager::CoreKind::Mihomo);
-
             if self.reject {
                 return Err(Arc::new(RuntimeError::ShuttingDown));
             }
             self.checked.lock().unwrap().push(candidate);
+            self.domains.lock().unwrap().push(domain);
             Ok(())
         }
 
@@ -345,6 +355,10 @@ mod tests {
         let prepared = inbox.checked.lock().unwrap();
         assert_eq!(prepared.len(), 1);
         let build = &prepared[0];
+        assert_eq!(
+            inbox.domains.lock().unwrap().as_slice(),
+            &[ConfigDomain::Application]
+        );
         let validation = validator.checked.lock().unwrap();
         assert_eq!(
             validation.as_slice(),
@@ -370,6 +384,32 @@ mod tests {
             inbox.committed.lock().unwrap().as_slice(),
             &[(ConfigDomain::Application, Version::new(7))]
         );
+    }
+
+    #[tokio::test]
+    async fn checked_gate_preserves_the_actual_source_domain_for_each_candidate() {
+        let (gate, _builder, _validator, inbox) = gate(RuntimeCheckOutcome::Passed, false).await;
+        gate.check(RuntimeCandidate {
+            change: DomainChange::Profiles {
+                candidate: Arc::new(Profiles::default()),
+            },
+            staged: BTreeMap::new(),
+        })
+        .await
+        .unwrap();
+        gate.check(RuntimeCandidate {
+            change: DomainChange::Clash {
+                candidate: Arc::new(ClashConfig::default()),
+            },
+            staged: BTreeMap::new(),
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            inbox.domains.lock().unwrap().as_slice(),
+            &[ConfigDomain::Profiles, ConfigDomain::Clash]
+        );
+        assert_eq!(inbox.checked.lock().unwrap().len(), 2);
     }
 
     #[tokio::test]
