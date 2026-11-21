@@ -26,12 +26,14 @@ pub struct ApplicationActorArgs {
     pub manager: PersistentStateManager<ChimeraAppConfig>,
     pub bridge: Arc<dyn VergeLegacyBridge>,
     pub build_channel: ReleaseChannel,
+    pub settings_changes: tokio::sync::watch::Sender<ChimeraAppConfig>,
 }
 
 pub struct ApplicationActorState {
     manager: PersistentStateManager<ChimeraAppConfig>,
     bridge: Arc<dyn VergeLegacyBridge>,
     build_channel: ReleaseChannel,
+    settings_changes: tokio::sync::watch::Sender<ChimeraAppConfig>,
 }
 
 #[derive(Debug)]
@@ -59,6 +61,23 @@ pub enum ApplicationActorMessage {
 
 pub struct ApplicationActor;
 
+/// Validate the entire policy at the source owner for Patch, Replace and CAS.
+/// Persisting disabled rules is safe. Until the observer and authorized RPC
+/// are wired, accepting an enabled policy would falsely promise automation.
+pub(crate) fn validate_network_automation_policy(
+    candidate: &ChimeraAppConfig,
+) -> anyhow::Result<()> {
+    candidate
+        .network_automation
+        .validate()
+        .map_err(|error| anyhow::anyhow!("invalid network automation policy: {error}"))?;
+    anyhow::ensure!(
+        !candidate.network_automation.enabled,
+        "network automation cannot be enabled without a production observer and authorized control RPC"
+    );
+    Ok(())
+}
+
 impl ApplicationActor {
     fn snapshot(state: &ApplicationActorState) -> ApplicationSnapshot {
         let snapshot = state.manager.snapshot_handle().load();
@@ -75,6 +94,7 @@ impl ApplicationActor {
         mut next: ChimeraAppConfig,
     ) -> anyhow::Result<PreparedTypedReplace<ChimeraAppConfig>> {
         Self::validate_release_channel(state, &mut next)?;
+        validate_network_automation_policy(&next)?;
         chimera_config::application::validate_update_sources(&next.update_sources)
             .map_err(anyhow::Error::msg)
             .context("invalid application update sources")?;
@@ -125,6 +145,7 @@ impl ApplicationActor {
                 let mut snapshot = Self::snapshot(state);
                 snapshot.reaches_runtime = reaches_runtime;
                 snapshot.operation_id = reaches_runtime.then(OperationId::generate);
+                state.settings_changes.send_replace(snapshot.state.clone());
                 Ok(snapshot)
             }
             ReplaceIfVersionResult::Conflict { actual_version } => anyhow::bail!(
@@ -141,6 +162,7 @@ impl ApplicationActor {
         prepared: PreparedTypedReplace<ChimeraAppConfig>,
     ) -> anyhow::Result<ConditionalReplaceResult<ApplicationSnapshot>> {
         let (next, mirror) = prepared.into_parts();
+        validate_network_automation_policy(&next)?;
         let current = state.manager.snapshot_handle().load();
         let reaches_runtime = impact::reaches_runtime(&current.state, &next, &[]);
         drop(current);
@@ -155,6 +177,7 @@ impl ApplicationActor {
                 let mut snapshot = Self::snapshot(state);
                 snapshot.reaches_runtime = reaches_runtime;
                 snapshot.operation_id = reaches_runtime.then(OperationId::generate);
+                state.settings_changes.send_replace(snapshot.state.clone());
                 Ok(ConditionalReplaceResult::Replaced(snapshot))
             }
             ReplaceIfVersionResult::Conflict { actual_version } => {
@@ -180,6 +203,7 @@ impl Actor for ApplicationActor {
             manager: args.manager,
             bridge: args.bridge,
             build_channel: args.build_channel,
+            settings_changes: args.settings_changes,
         })
     }
 
@@ -264,6 +288,19 @@ mod tests {
         bridge: Arc<dyn VergeLegacyBridge>,
         build_channel: ReleaseChannel,
     ) -> (ActorRef<ApplicationActorMessage>, tempfile::TempDir) {
+        let (actor, dir, _settings_changes) =
+            spawn_actor_with_receiver(bridge, build_channel).await;
+        (actor, dir)
+    }
+
+    async fn spawn_actor_with_receiver(
+        bridge: Arc<dyn VergeLegacyBridge>,
+        build_channel: ReleaseChannel,
+    ) -> (
+        ActorRef<ApplicationActorMessage>,
+        tempfile::TempDir,
+        tokio::sync::watch::Receiver<ChimeraAppConfig>,
+    ) {
         let dir = tempdir().expect("tempdir should be created");
         let config_dir = dir.path().join("config");
         std::fs::create_dir(&config_dir).expect("config directory should be created");
@@ -274,7 +311,8 @@ mod tests {
         let manager = PersistentStateManagerSetup::<ChimeraAppConfig>::builder()
             .config_path(path)
             .assemble()
-            .from_state(config);
+            .from_state(config.clone());
+        let (settings_changes, rx) = tokio::sync::watch::channel(config);
         let (actor_ref, _handle) = Actor::spawn(
             None,
             ApplicationActor,
@@ -282,11 +320,12 @@ mod tests {
                 manager,
                 bridge,
                 build_channel,
+                settings_changes,
             },
         )
         .await
         .expect("application actor should spawn");
-        (actor_ref, dir)
+        (actor_ref, dir, rx)
     }
 
     async fn get_snapshot(
@@ -297,6 +336,188 @@ mod tests {
             CallResult::SenderError => anyhow::bail!("application actor reply dropped"),
             CallResult::Timeout => anyhow::bail!("application actor call timed out"),
         }
+    }
+
+    fn disabled_home_policy() -> chimera_config::application::NetworkAutomation {
+        serde_json::from_value(serde_json::json!({
+            "enabled": false,
+            "default_actions": { "system_proxy": "enable" },
+            "rules": [{
+                "id": "home",
+                "name": "Home",
+                "conditions": { "wifi_ssid": "Home" },
+                "actions": { "system_proxy": "disable" }
+            }]
+        }))
+        .unwrap()
+    }
+
+    async fn patch_network_policy(
+        actor: &ActorRef<ApplicationActorMessage>,
+        policy: chimera_config::application::NetworkAutomation,
+    ) -> anyhow::Result<ApplicationSnapshot> {
+        let mut patch = ChimeraAppConfig::new_empty_patch();
+        patch.network_automation = Some(policy);
+        match actor
+            .call(
+                |reply| ApplicationActorMessage::Patch { patch, reply },
+                None,
+            )
+            .await?
+        {
+            CallResult::Success(result) => result,
+            other => anyhow::bail!("network policy actor reply failed: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn disabled_network_policy_persists_and_notifies_only_after_commit() {
+        let (actor, dir, mut changes) =
+            spawn_actor_with_receiver(Arc::new(NoopVergeMirror), ReleaseChannel::Stable).await;
+        let before = get_snapshot(&actor).await.unwrap();
+        assert!(!changes.has_changed().unwrap());
+
+        let policy = disabled_home_policy();
+        let committed = patch_network_policy(&actor, policy.clone()).await.unwrap();
+        assert!(committed.version > before.version);
+        assert!(!committed.reaches_runtime);
+        assert!(!committed.state.network_automation.enabled);
+        changes.changed().await.unwrap();
+        assert_eq!(changes.borrow_and_update().network_automation, policy);
+        assert!(!changes.has_changed().unwrap());
+
+        let persisted: ChimeraAppConfig = serde_yaml_ng::from_slice(
+            &std::fs::read(dir.path().join("config/application.yaml")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(persisted.network_automation, policy);
+
+        // Replacing rules clears previous conditions instead of merging them.
+        let empty = chimera_config::application::NetworkAutomation::default();
+        patch_network_policy(&actor, empty.clone()).await.unwrap();
+        changes.changed().await.unwrap();
+        assert_eq!(changes.borrow_and_update().network_automation, empty);
+    }
+
+    #[tokio::test]
+    async fn invalid_or_enabled_network_policy_rejects_without_persisting_or_notifying() {
+        let (actor, dir, mut changes) =
+            spawn_actor_with_receiver(Arc::new(NoopVergeMirror), ReleaseChannel::Stable).await;
+        let valid = disabled_home_policy();
+        let before = patch_network_policy(&actor, valid.clone()).await.unwrap();
+        changes.changed().await.unwrap();
+        changes.borrow_and_update();
+        let previous_bytes = std::fs::read(dir.path().join("config/application.yaml")).unwrap();
+
+        let mut enabled = valid.clone();
+        enabled.enabled = true;
+        let err = patch_network_policy(&actor, enabled)
+            .await
+            .expect_err("no production owner can activate network automation");
+        assert!(err.to_string().contains("cannot be enabled"));
+
+        let mut unnamed = valid.clone();
+        unnamed.rules[0].name.clear();
+        let err = patch_network_policy(&actor, unnamed)
+            .await
+            .expect_err("invalid rule must fail even while disabled");
+        assert!(err.to_string().contains("rule 0 has no name"));
+
+        let mut conflicting = valid.clone();
+        conflicting.default_actions.tun = chimera_config::application::MechanismAction::Enable;
+        conflicting.default_actions.transparent_proxy =
+            chimera_config::application::MechanismAction::Enable;
+        let err = patch_network_policy(&actor, conflicting)
+            .await
+            .expect_err("conflicting capture cannot commit");
+        assert!(err.to_string().contains("exclude each other"));
+
+        assert_eq!(get_snapshot(&actor).await.unwrap().version, before.version);
+        assert_eq!(
+            get_snapshot(&actor).await.unwrap().state.network_automation,
+            valid
+        );
+        assert!(!changes.has_changed().unwrap());
+        assert_eq!(
+            std::fs::read(dir.path().join("config/application.yaml")).unwrap(),
+            previous_bytes
+        );
+    }
+
+    #[tokio::test]
+    async fn rejected_cas_policy_replace_does_not_notify_but_success_does() {
+        let (actor, _dir, mut changes) =
+            spawn_actor_with_receiver(Arc::new(NoopVergeMirror), ReleaseChannel::Stable).await;
+        let original = get_snapshot(&actor).await.unwrap();
+        let mut next = original.state.clone();
+        next.network_automation = disabled_home_policy();
+
+        let prepared = match actor
+            .call(
+                |reply| ApplicationActorMessage::PrepareReplace {
+                    state: next.clone(),
+                    reply,
+                },
+                None,
+            )
+            .await
+            .unwrap()
+        {
+            CallResult::Success(Ok(prepared)) => prepared,
+            other => panic!("valid disabled policy must prepare: {other:?}"),
+        };
+        let conflict = actor
+            .call(
+                |reply| ApplicationActorMessage::ReplacePreparedIfVersion {
+                    expected_version: original.version + 1,
+                    prepared,
+                    reply,
+                },
+                None,
+            )
+            .await
+            .unwrap();
+        assert!(matches!(
+            conflict,
+            CallResult::Success(Ok(ConditionalReplaceResult::Conflict { .. }))
+        ));
+        assert!(!changes.has_changed().unwrap());
+        assert_eq!(
+            get_snapshot(&actor).await.unwrap().version,
+            original.version
+        );
+
+        let prepared = match actor
+            .call(
+                |reply| ApplicationActorMessage::PrepareReplace { state: next, reply },
+                None,
+            )
+            .await
+            .unwrap()
+        {
+            CallResult::Success(Ok(prepared)) => prepared,
+            other => panic!("valid policy must prepare: {other:?}"),
+        };
+        let committed = actor
+            .call(
+                |reply| ApplicationActorMessage::ReplacePreparedIfVersion {
+                    expected_version: original.version,
+                    prepared,
+                    reply,
+                },
+                None,
+            )
+            .await
+            .unwrap();
+        assert!(matches!(
+            committed,
+            CallResult::Success(Ok(ConditionalReplaceResult::Replaced(_)))
+        ));
+        changes.changed().await.unwrap();
+        assert_eq!(
+            changes.borrow_and_update().network_automation,
+            disabled_home_policy()
+        );
     }
 
     #[tokio::test]
