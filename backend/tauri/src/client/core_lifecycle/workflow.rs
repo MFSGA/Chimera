@@ -1010,6 +1010,47 @@ impl CoreLifecycleWorkflow {
         Ok(true)
     }
 
+    /// Preserve the Core's exact terminal verdict through the sole lower-host
+    /// operation registry. RolledBack is a completed refusal with the old
+    /// revision still running; Unknown has a Core operation ID and must not
+    /// be submitted again. Legacy ports keep their explicit Unobserved result.
+    async fn submit_prepared_verdict(
+        &self,
+        prepared: super::ports::PreparedRuntime,
+        spec: chimera_core_manager::CoreSpec,
+    ) -> anyhow::Result<super::ports::PreparedCoreSettlement> {
+        let verdict = self
+            .core
+            .reconcile_prepared_submission(prepared, spec)
+            .await?;
+        let mapped = crate::client::reconciler::apply::prepared_submission_outcome(&verdict);
+        match verdict {
+            super::ports::PreparedSubmission::Applied(applied) => {
+                if let Some(crate::client::reconciler::mutation::ApplyOutcome::Applied(candidate)) =
+                    mapped
+                {
+                    anyhow::ensure!(
+                        applied.replaced == Some(candidate.replaced)
+                            && applied
+                                .product
+                                .as_ref()
+                                .is_some_and(|product| Arc::ptr_eq(product, &candidate.product)),
+                        "upstream AppliedCandidate is not the exact confirmed Core settlement"
+                    );
+                }
+                Ok(applied)
+            }
+            super::ports::PreparedSubmission::RolledBack(report) => {
+                let reason = report
+                    .failed_apply
+                    .clone()
+                    .unwrap_or_else(|| "the host returned no rollback detail".into());
+                Err(super::ports::PreparedRolledBack { report, reason }.into())
+            }
+            super::ports::PreparedSubmission::Unknown(error) => Err(error.into()),
+        }
+    }
+
     /// The sole Core owner's checked runtime execution. Carry the pre-apply
     /// source-instance API and Core replacement verdict through this one
     /// operation; never issue a second Core submit or interrupt a newly
@@ -1049,10 +1090,7 @@ impl CoreLifecycleWorkflow {
             } else {
                 None
             };
-            let applied = self
-                .core
-                .reconcile_prepared_settlement(prepared, core_spec)
-                .await?;
+            let applied = self.submit_prepared_verdict(prepared, core_spec).await?;
             applied.validate_identity(&checked_target)?;
             // No stale source may be promoted into applied_selection, and
             // an obsolete Core result cannot settle current runtime effects.
@@ -2007,9 +2045,7 @@ impl CoreLifecycleWorkflow {
             } else {
                 None
             };
-            let applied = self
-                .core
-                .reconcile_prepared_settlement(prepared, core_spec)
+            let applied = self.submit_prepared_verdict(prepared, core_spec)
                 .await?;
             applied.validate_identity(target)?;
             let latest = authority

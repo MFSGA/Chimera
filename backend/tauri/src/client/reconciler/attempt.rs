@@ -155,6 +155,14 @@ pub(crate) fn legacy_error_verdict(
         LegacyApplyVerdict::Unknown(Arc::new(runtime_apply_error(error, true)))
     } else if source_advanced || waiting_dependency(error) {
         LegacyApplyVerdict::Waiting(Arc::new(runtime_apply_error(error, false)))
+    } else if let Some(rolled_back) =
+        error.downcast_ref::<crate::client::core_lifecycle::ports::PreparedRolledBack>()
+    {
+        // The host completed an actual rollback. The requested candidate did
+        // not take effect, while the previous Core revision kept running.
+        LegacyApplyVerdict::Refused(Arc::new(RuntimeError::CoreRolledBack {
+            reason: rolled_back.report.failed_apply.clone(),
+        }))
     } else {
         LegacyApplyVerdict::Refused(Arc::new(runtime_apply_error(error, false)))
     }
@@ -197,6 +205,29 @@ pub(crate) fn waiting_dependency(error: &anyhow::Error) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rolled_back_core_is_typed_refusal_not_apply_success_or_unknown() {
+        use chimera_ipc::api::core::v2::{ReconcileOutcomeInfo, ReconcileOutcomeKind};
+        let result = Err(crate::client::core_lifecycle::ports::PreparedRolledBack {
+            report: ReconcileOutcomeInfo {
+                outcome: ReconcileOutcomeKind::RolledBack,
+                revision: chimera_ipc::api::status::ConfigRevisionInfo {
+                    epoch: 7,
+                    generation: 3,
+                    source_hash: "restored-original".into(),
+                    effective_hash: "unchanged-original".into(),
+                },
+                warning: None,
+                failed_apply: Some("bad candidate".into()),
+            },
+            reason: "bad candidate".into(),
+        }
+        .into());
+        assert!(matches!(legacy_apply_verdict(&result, false, false),
+            LegacyApplyVerdict::Refused(cause)
+            if matches!(cause.as_ref(), RuntimeError::CoreRolledBack {reason: Some(reason)} if reason == "bad candidate")));
+    }
 
     #[test]
     fn legacy_result_verdict_matches_ref_waiting_refused_and_unknown_semantics() {

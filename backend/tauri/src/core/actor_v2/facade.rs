@@ -477,6 +477,28 @@ impl CoreFacade {
         prepared: crate::client::core_lifecycle::ports::PreparedRuntime,
         core_spec: chimera_core_manager::CoreSpec,
     ) -> anyhow::Result<crate::client::core_lifecycle::ports::PreparedCoreSettlement> {
+        use crate::client::core_lifecycle::ports::{PreparedRolledBack, PreparedSubmission};
+        match self
+            .reconcile_prepared_submission(prepared, core_spec)
+            .await?
+        {
+            PreparedSubmission::Applied(applied) => Ok(applied),
+            PreparedSubmission::RolledBack(report) => {
+                let reason = report
+                    .failed_apply
+                    .clone()
+                    .unwrap_or_else(|| "the host returned no rollback detail".into());
+                Err(PreparedRolledBack { report, reason }.into())
+            }
+            PreparedSubmission::Unknown(error) => Err(error.into()),
+        }
+    }
+
+    pub(crate) async fn reconcile_prepared_submission(
+        &self,
+        prepared: crate::client::core_lifecycle::ports::PreparedRuntime,
+        core_spec: chimera_core_manager::CoreSpec,
+    ) -> anyhow::Result<crate::client::core_lifecycle::ports::PreparedSubmission> {
         let local_runtime = self
             .local_runtime
             .as_ref()
@@ -502,24 +524,55 @@ impl CoreFacade {
         // Deliver the confirmed replacement kind through that same operation
         // rather than invoking Core outside the serialized registry.
         let (outcome_tx, outcome_rx) = tokio::sync::oneshot::channel();
+        let report_endpoint = endpoint.clone();
+        let owner = (observed.host, observed.generation);
         let result = self
             .run_local_mutation("checked runtime reconcile", async move {
-                let settled = local_runtime
-                    .reconcile_prepared_settlement(
-                        &prepared,
-                        core_spec,
-                        endpoint.as_ref(),
-                        (observed.host, observed.generation),
-                    )
+                let verdict = local_runtime
+                    .reconcile_prepared_submission(&prepared, core_spec, endpoint.as_ref(), owner)
                     .await?;
-                let _ = outcome_tx.send(settled);
+                let _ = outcome_tx.send(verdict);
                 Ok(())
             })
             .await;
         self.refresh_ws_binding().await;
         result?;
         match outcome_rx.await {
-            Ok(settlement) => Ok(settlement),
+            Ok(crate::client::core_lifecycle::ports::PreparedSubmission::Applied(
+                mut settlement,
+            )) => {
+                if let (Some(receipt), Some(outcome)) = (&settlement.confirmed, &settlement.outcome)
+                    && let Ok(status) = router.refresh_status().await
+                    && status.host == owner.0
+                    && status.generation == owner.1
+                    && status
+                        .snapshot
+                        .as_ref()
+                        .is_some_and(|observed| receipt.confirms(status.host, observed))
+                {
+                    let effective_config = report_endpoint
+                        .effective_config()
+                        .await
+                        .ok()
+                        .flatten()
+                        .filter(|snapshot| snapshot.revision == outcome.revision);
+                    settlement.report =
+                        Some(Box::new(chimera_core::actor_v2::facade::ReconcileReport {
+                            applied: chimera_core::actor_v2::facade::AppliedConfigBinding {
+                                revision: receipt.applied_revision.clone(),
+                                host: receipt.host,
+                                generation: status.generation,
+                            },
+                            effective_config,
+                            output: chimera_ipc::api::core::v2::OperationOutputInfo::Reconciled(
+                                outcome.clone(),
+                            ),
+                            status,
+                        }));
+                }
+                Ok(crate::client::core_lifecycle::ports::PreparedSubmission::Applied(settlement))
+            }
+            Ok(other) => Ok(other),
             Err(_) => {
                 // The registry reported success but lost the only real
                 // AppliedCandidate evidence. Isolate until a live receipt

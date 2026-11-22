@@ -326,6 +326,30 @@ impl LocalRuntimeHost {
         endpoint: &dyn ControlEndpoint,
         expected_owner: (ExecutionHost, u64),
     ) -> anyhow::Result<crate::client::core_lifecycle::ports::PreparedCoreSettlement> {
+        use crate::client::core_lifecycle::ports::{PreparedRolledBack, PreparedSubmission};
+        match self
+            .reconcile_prepared_submission(prepared, core_spec, endpoint, expected_owner)
+            .await?
+        {
+            PreparedSubmission::Applied(applied) => Ok(applied),
+            PreparedSubmission::RolledBack(report) => {
+                let reason = report
+                    .failed_apply
+                    .clone()
+                    .unwrap_or_else(|| "the host returned no rollback detail".into());
+                Err(PreparedRolledBack { report, reason }.into())
+            }
+            PreparedSubmission::Unknown(error) => Err(error.into()),
+        }
+    }
+
+    pub(crate) async fn reconcile_prepared_submission(
+        &self,
+        prepared: &crate::client::core_lifecycle::ports::PreparedRuntime,
+        core_spec: chimera_core_manager::CoreSpec,
+        endpoint: &dyn ControlEndpoint,
+        expected_owner: (ExecutionHost, u64),
+    ) -> anyhow::Result<crate::client::core_lifecycle::ports::PreparedSubmission> {
         anyhow::ensure!(
             !self.closed.load(Ordering::Acquire),
             "the local core control plane is shutting down"
@@ -400,12 +424,33 @@ impl LocalRuntimeHost {
             core_type: Some(prepared.intent.core_type.clone()),
         };
         let outcome = match self
-            .submit_and_wait(endpoint, submission, operation_id)
+            .submit_and_wait_terminal(endpoint, submission, operation_id.clone())
             .await
         {
-            Ok(outcome) => outcome,
+            Ok(ObservedReconcile::Applied(outcome)) => outcome,
+            Ok(ObservedReconcile::RolledBack(report)) => {
+                cleanup_candidate(candidate, "prepared Core restored its previous runtime").await;
+                return Ok(
+                    crate::client::core_lifecycle::ports::PreparedSubmission::RolledBack(report),
+                );
+            }
             Err(error) => {
                 cleanup_candidate(candidate, "checked runtime operation failed").await;
+                if self.outcome_uncertain() {
+                    let cause = error
+                        .downcast_ref::<chimera_core_manager::CoreError>()
+                        .cloned()
+                        .unwrap_or(chimera_core_manager::CoreError {
+                            kind: None,
+                            message: format!("{error:#}"),
+                            retryable: false,
+                            operation_id: None,
+                        })
+                        .with_operation(operation_id);
+                    return Ok(
+                        crate::client::core_lifecycle::ports::PreparedSubmission::Unknown(cause),
+                    );
+                }
                 return Err(error);
             }
         };
@@ -470,12 +515,16 @@ impl LocalRuntimeHost {
             }
         };
         Ok(
-            crate::client::core_lifecycle::ports::PreparedCoreSettlement {
-                replaced: Some(reconcile_replaced(&outcome)),
-                confirmed: Some(receipt),
-                product: Some(prepared.snapshot.clone()),
-                publication,
-            },
+            crate::client::core_lifecycle::ports::PreparedSubmission::Applied(
+                crate::client::core_lifecycle::ports::PreparedCoreSettlement {
+                    report: None,
+                    outcome: Some(outcome.clone()),
+                    replaced: Some(reconcile_replaced(&outcome)),
+                    confirmed: Some(receipt),
+                    product: Some(prepared.snapshot.clone()),
+                    publication,
+                },
+            ),
         )
     }
 
@@ -1208,6 +1257,26 @@ impl LocalRuntimeHost {
         submission: CoreSubmission,
         operation_id: OperationId,
     ) -> anyhow::Result<ReconcileOutcomeInfo> {
+        match self
+            .submit_and_wait_terminal(endpoint, submission, operation_id)
+            .await?
+        {
+            ObservedReconcile::Applied(outcome) => Ok(outcome),
+            ObservedReconcile::RolledBack(report) => {
+                accept_reconcile_outcome(&report).map(|_| report)
+            }
+        }
+    }
+
+    /// Keep the original terminal ReconcileOutcomeInfo intact for ref-style
+    /// Applied/RolledBack classification. The compatibility method above
+    /// continues to report rollback as an error to old Profile transactions.
+    async fn submit_and_wait_terminal(
+        &self,
+        endpoint: &dyn ControlEndpoint,
+        submission: CoreSubmission,
+        operation_id: OperationId,
+    ) -> anyhow::Result<ObservedReconcile> {
         let mut operation = match endpoint.submit(submission).await {
             Ok(operation) => operation,
             Err(error) => {
@@ -1260,8 +1329,12 @@ impl LocalRuntimeHost {
 
         match (operation.phase, operation.output) {
             (OperationPhase::Succeeded, Some(OperationOutputInfo::Reconciled(outcome))) => {
-                accept_reconcile_outcome(&outcome)?;
-                Ok(outcome)
+                if outcome.outcome == ReconcileOutcomeKind::RolledBack {
+                    Ok(ObservedReconcile::RolledBack(outcome))
+                } else {
+                    accept_reconcile_outcome(&outcome)?;
+                    Ok(ObservedReconcile::Applied(outcome))
+                }
             }
             (OperationPhase::Failed, _) => bail!(
                 "core reconcile failed: {}",
@@ -1475,6 +1548,12 @@ impl LocalRuntimeHost {
     }
 }
 
+#[derive(Debug, Clone)]
+enum ObservedReconcile {
+    Applied(ReconcileOutcomeInfo),
+    RolledBack(ReconcileOutcomeInfo),
+}
+
 async fn cleanup_candidate(candidate: crate::client::runtime::CandidateFile, reason: &str) {
     if let Err(error) = candidate.cleanup().await {
         tracing::warn!(%error, reason, "failed to clean a rejected runtime candidate");
@@ -1681,6 +1760,11 @@ mod tests {
         apply_submission: bool,
         /// Check replacement semantics independently from runtime receipt.
         patched: bool,
+        /// A terminal Core rollback is a success for the host operation, but
+        /// a refusal for the candidate source that was not applied.
+        rolled_back: bool,
+        /// A registered command that remains Running after bounded wait.
+        lose_result: bool,
     }
 
     #[async_trait::async_trait]
@@ -1715,7 +1799,7 @@ mod tests {
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .push((bytes, request.options.local_ipc, submission.expected_owner));
 
-            let generation = if self.apply_submission {
+            let generation = if self.apply_submission && !self.rolled_back {
                 let mut status = self
                     .status
                     .lock()
@@ -1749,19 +1833,41 @@ mod tests {
                 source_hash: digest,
                 effective_hash: format!("effective-{generation}"),
             };
+            let rollback_revision = if self.rolled_back {
+                let status = self.status.lock().unwrap();
+                let id = status.revision.as_ref().expect("old Core revision");
+                ConfigRevisionInfo {
+                    epoch: id.epoch,
+                    generation: id.generation,
+                    source_hash: status.source_hash.clone().unwrap_or_default(),
+                    effective_hash: id.effective_hash.clone(),
+                }
+            } else {
+                revision
+            };
             Ok(OperationInfo {
                 id: operation_id.to_string(),
-                phase: OperationPhase::Succeeded,
-                output: Some(OperationOutputInfo::Reconciled(ReconcileOutcomeInfo {
-                    outcome: if self.patched {
-                        ReconcileOutcomeKind::Patched
-                    } else {
-                        ReconcileOutcomeKind::Started
+                phase: if self.lose_result {
+                    OperationPhase::Running
+                } else {
+                    OperationPhase::Succeeded
+                },
+                output: (!self.lose_result).then_some(OperationOutputInfo::Reconciled(
+                    ReconcileOutcomeInfo {
+                        outcome: if self.rolled_back {
+                            ReconcileOutcomeKind::RolledBack
+                        } else if self.patched {
+                            ReconcileOutcomeKind::Patched
+                        } else {
+                            ReconcileOutcomeKind::Started
+                        },
+                        revision: rollback_revision,
+                        warning: None,
+                        failed_apply: self
+                            .rolled_back
+                            .then(|| "candidate rejected; previous runtime restored".into()),
                     },
-                    revision,
-                    warning: None,
-                    failed_apply: None,
-                })),
+                )),
                 error: None,
             })
         }
@@ -1824,6 +1930,8 @@ mod tests {
             submitted: StdMutex::new(Vec::new()),
             apply_submission,
             patched: false,
+            rolled_back: false,
+            lose_result: false,
         }
     }
 
@@ -1987,6 +2095,76 @@ mod tests {
             tokio::fs::read(paths.product()).await.unwrap(),
             bytes.as_bytes()
         );
+        host.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn prepared_core_rollback_stays_typed_and_never_publishes_candidate() {
+        use crate::client::core_lifecycle::ports::{PreparedRolledBack, PreparedSubmission};
+
+        let (_root, host, _paths) = runtime_host_fixture().await;
+        let (prepared, spec) = prepared_runtime_fixture(Arc::from("mode: rule\n"));
+        let mut endpoint = recording_endpoint(true);
+        endpoint.rolled_back = true;
+
+        let terminal = host
+            .reconcile_prepared_submission(
+                &prepared,
+                spec.clone(),
+                &endpoint,
+                (ExecutionHost::Local, 3),
+            )
+            .await
+            .expect("rollback is an observed Core terminal, not an uncertain error");
+        let PreparedSubmission::RolledBack(report) = terminal else {
+            panic!("the Core restored its old revision, never accepted the candidate");
+        };
+        assert_eq!(report.outcome, ReconcileOutcomeKind::RolledBack);
+        assert_eq!(
+            report.failed_apply.as_deref(),
+            Some("candidate rejected; previous runtime restored")
+        );
+        assert_eq!(
+            report.revision.generation, 2,
+            "the restored revision remains running"
+        );
+        assert!(host.lifecycle.confirmed_receipt().is_none());
+        assert!(host.lifecycle.snapshot().applied.is_none());
+        assert!(host.pending_runtime_product_target().is_none());
+        assert!(!host.outcome_uncertain());
+        assert_eq!(endpoint.submitted.lock().unwrap().len(), 1);
+
+        let rejected = host
+            .reconcile_prepared_settlement(&prepared, spec, &endpoint, (ExecutionHost::Local, 3))
+            .await
+            .expect_err("the legacy single-result caller must refuse an observed rollback");
+        let typed = rejected.downcast_ref::<PreparedRolledBack>().unwrap();
+        assert_eq!(typed.report.outcome, ReconcileOutcomeKind::RolledBack);
+        assert!(typed.reason.contains("previous runtime restored"));
+        host.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn prepared_core_unknown_retains_operation_identity_and_isolates_owner() {
+        use crate::client::core_lifecycle::ports::PreparedSubmission;
+
+        let (_root, host, _paths) = runtime_host_fixture().await;
+        let (prepared, spec) = prepared_runtime_fixture(Arc::from("mode: rule\n"));
+        let mut endpoint = recording_endpoint(false);
+        endpoint.lose_result = true;
+        let terminal = host
+            .reconcile_prepared_submission(&prepared, spec, &endpoint, (ExecutionHost::Local, 3))
+            .await
+            .expect("the unobserved terminal is represented explicitly");
+        let PreparedSubmission::Unknown(cause) = terminal else {
+            panic!("a Running operation that never returns cannot be a refusal");
+        };
+        assert!(cause.operation_id.is_some());
+        assert!(cause.message.contains("outcome could not be observed"));
+        assert_eq!(endpoint.submitted.lock().unwrap().len(), 1);
+        assert!(host.outcome_uncertain());
+        assert!(host.lifecycle.confirmed_receipt().is_none());
+        assert!(host.pending_runtime_product_target().is_none());
         host.shutdown().await.unwrap();
     }
 

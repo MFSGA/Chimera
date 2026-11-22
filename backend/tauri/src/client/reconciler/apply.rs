@@ -129,6 +129,42 @@ fn replaced_runtime(report: &ReconcileReport) -> bool {
 /// Ref's `submit_prepared` outcome projection against Chimera's existing Core
 /// facade. This is a classification of evidence, *not* a submission, an ACK,
 /// or a producer of the published runtime document.
+/// The already-admitted CoreLifecycle route now returns the same typed
+/// Applied/RolledBack/Unknown evidence as the upstream facade. Only a fully
+/// confirmed host/status report may become an AppliedCandidate; legacy ports
+/// with no router report intentionally yield None for their Applied arm.
+pub(in crate::client) fn prepared_submission_outcome(
+    verdict: &crate::client::core_lifecycle::ports::PreparedSubmission,
+) -> Option<ApplyOutcome> {
+    use crate::client::core_lifecycle::ports::PreparedSubmission;
+    match verdict {
+        PreparedSubmission::Applied(settlement) => {
+            let receipt = settlement.confirmed.as_ref()?;
+            settlement
+                .validate_identity(receipt.target.as_deref()?)
+                .ok()?;
+            let report = settlement.report.as_ref()?.as_ref().clone();
+            let product = settlement.product.as_ref()?.clone();
+            let replaced = settlement.replaced?;
+            Some(ApplyOutcome::Applied(AppliedCandidate {
+                replaced,
+                product,
+                report: Box::new(report),
+            }))
+        }
+        PreparedSubmission::RolledBack(outcome) => Some(ApplyOutcome::Refused {
+            cause: Arc::new(RuntimeError::CoreRolledBack {
+                reason: outcome.failed_apply.clone(),
+            }),
+        }),
+        PreparedSubmission::Unknown(error) => Some(ApplyOutcome::Unknown(Arc::new(
+            RuntimeError::SubmissionUnobserved {
+                failure: core_failure(error.clone()),
+            },
+        ))),
+    }
+}
+
 pub(super) fn submission_outcome(
     result: ReconcileResult,
     product: Arc<RuntimeSnapshot>,
@@ -256,6 +292,127 @@ mod tests {
         assert!(
             missing_target.is_some(),
             "absent identities cannot validate each other"
+        );
+    }
+
+    #[test]
+    fn prepared_applied_candidate_requires_exact_core_report_and_product_binding() {
+        use crate::client::core_lifecycle::ports::{
+            PreparedCoreSettlement, PreparedProductPublication, PreparedSubmission,
+        };
+        use chimera_core::actor_v2::endpoint::CoreStatusSnapshot;
+        use chimera_core_manager::CoreKind;
+        use chimera_ipc::api::status::CoreStateDetail;
+
+        let product = product();
+        let mut receipt = crate::client::ports::test_runtime_receipt(Default::default());
+        receipt.target = Some("committed-source-9".into());
+        receipt.revision = product.revision;
+        receipt.config_digest = chimera_core_manager::payload_digest(product.product_bytes());
+        receipt.applied_revision = revision();
+        receipt.artifact = Some(product.clone());
+        let receipt = Arc::new(receipt);
+        let mut router_status = status();
+        router_status.snapshot = Some(CoreStatusSnapshot {
+            instance_id: Some("core-instance".into()),
+            controller: None,
+            state: Some(CoreStateDetail::Running { epoch: 1, pid: 27 }),
+            state_changed_at: 14,
+            revision: Some(revision().id()),
+            source_hash: Some(revision().source_hash.clone()),
+            healthy: Some(true),
+            applied_kind: Some(CoreKind::Mihomo),
+        });
+        let outcome = ReconcileOutcomeInfo {
+            outcome: ReconcileOutcomeKind::Started,
+            revision: revision(),
+            warning: Some("the Core applied with a durability warning".into()),
+            failed_apply: None,
+        };
+        let report = ReconcileReport {
+            applied: AppliedConfigBinding {
+                revision: revision(),
+                host: ExecutionHost::Local,
+                generation: 3,
+            },
+            effective_config: None,
+            output: OperationOutputInfo::Reconciled(outcome.clone()),
+            status: router_status,
+        };
+        let candidate = PreparedCoreSettlement {
+            report: Some(Box::new(report.clone())),
+            outcome: Some(outcome),
+            replaced: Some(true),
+            confirmed: Some(receipt),
+            product: Some(product.clone()),
+            publication: PreparedProductPublication::Published,
+        };
+        candidate.validate_identity("committed-source-9").unwrap();
+        match prepared_submission_outcome(&PreparedSubmission::Applied(candidate.clone())) {
+            Some(ApplyOutcome::Applied(applied)) => {
+                assert!(applied.replaced);
+                assert!(Arc::ptr_eq(&applied.product, &product));
+                assert_eq!(applied.report.output, report.output);
+            }
+            other => panic!(
+                "real terminal Core proof must become the upstream AppliedCandidate: {other:?}"
+            ),
+        }
+        let mut stale = candidate;
+        stale.outcome.as_mut().unwrap().revision.generation += 1;
+        assert!(
+            prepared_submission_outcome(&PreparedSubmission::Applied(stale)).is_none(),
+            "a mismatched Core terminal must not become an AppliedCandidate"
+        );
+    }
+
+    #[test]
+    fn prepared_terminal_outcomes_preserve_ref_rollback_unknown_and_unobserved() {
+        use crate::client::core_lifecycle::ports::{
+            PreparedCoreSettlement, PreparedProductPublication, PreparedSubmission,
+        };
+        let rollback = PreparedSubmission::RolledBack(ReconcileOutcomeInfo {
+            outcome: ReconcileOutcomeKind::RolledBack,
+            revision: revision(),
+            warning: None,
+            failed_apply: Some("old Core config was restored".into()),
+        });
+        assert!(matches!(
+            prepared_submission_outcome(&rollback),
+            Some(ApplyOutcome::Refused {cause})
+            if matches!(cause.as_ref(), RuntimeError::CoreRolledBack {reason: Some(reason)}
+                if reason == "old Core config was restored")
+        ));
+
+        let operation_id = OperationId::generate();
+        let unknown = PreparedSubmission::Unknown(
+            CoreError::new(
+                CoreErrorKind::BackendUnavailable,
+                "lost operation terminal",
+                true,
+            )
+            .with_operation(operation_id.clone()),
+        );
+        assert!(matches!(
+            prepared_submission_outcome(&unknown),
+            Some(ApplyOutcome::Unknown(cause))
+            if matches!(cause.as_ref(), RuntimeError::SubmissionUnobserved {failure}
+                if failure.kind == Some(CoreErrorKind::BackendUnavailable)
+                    && failure.retryable
+                    && failure.operation_id.as_deref() == Some(operation_id.to_string().as_str()))
+        ));
+
+        let compat = PreparedSubmission::Applied(PreparedCoreSettlement {
+            report: None,
+            outcome: None,
+            replaced: None,
+            confirmed: None,
+            product: None,
+            publication: PreparedProductPublication::Unobserved,
+        });
+        assert!(
+            prepared_submission_outcome(&compat).is_none(),
+            "the legacy Core bridge must not invent a ReconcileReport or AppliedCandidate"
         );
     }
 

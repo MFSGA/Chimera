@@ -148,6 +148,13 @@ pub(crate) struct CheckedApplyOutcome {
 /// a Core/RuntimeProduct identity.
 #[derive(Debug, Clone)]
 pub(crate) struct PreparedCoreSettlement {
+    /// A complete verified report from the Core router, when this port can
+    /// prove its host/generation and accepted revision. No synthetic report
+    /// is constructed for legacy ports without the owner evidence.
+    pub report: Option<Box<chimera_core::actor_v2::facade::ReconcileReport>>,
+    /// Terminal outcome observed directly from this operation's Core registry.
+    /// This is not a substitute for the separate router status proof.
+    pub outcome: Option<chimera_ipc::api::core::v2::ReconcileOutcomeInfo>,
     pub replaced: Option<bool>,
     pub confirmed: Option<Arc<RuntimeApplyReceipt>>,
     pub product: Option<Arc<crate::client::runtime::RuntimeSnapshot>>,
@@ -161,13 +168,35 @@ pub(crate) enum PreparedProductPublication {
     Unobserved,
 }
 
+/// A terminal Core command may have restored its old revision, or its reply
+/// may have become unobservable. Neither case is an AppliedCandidate.
+#[derive(Debug, Clone)]
+pub(crate) enum PreparedSubmission {
+    Applied(PreparedCoreSettlement),
+    RolledBack(chimera_ipc::api::core::v2::ReconcileOutcomeInfo),
+    Unknown(chimera_core_manager::CoreError),
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("core runtime apply was rolled back: {reason}")]
+pub(crate) struct PreparedRolledBack {
+    pub report: chimera_ipc::api::core::v2::ReconcileOutcomeInfo,
+    pub reason: String,
+}
+
 impl PreparedCoreSettlement {
     /// The real accepted candidate carries one exact source, Core revision,
     /// product and digest. Old test/compatibility adapters are explicitly
     /// Unobserved; a half-filled receipt may never pretend to be Applied.
     pub(crate) fn validate_identity(&self, target: &str) -> anyhow::Result<()> {
         match (&self.confirmed, &self.product) {
-            (None, None) if self.publication == PreparedProductPublication::Unobserved => Ok(()),
+            (None, None)
+                if self.publication == PreparedProductPublication::Unobserved
+                    && self.outcome.is_none()
+                    && self.report.is_none() =>
+            {
+                Ok(())
+            }
             (Some(receipt), Some(product)) => {
                 anyhow::ensure!(
                     receipt.target.as_deref() == Some(target),
@@ -187,6 +216,40 @@ impl PreparedCoreSettlement {
                         .is_some_and(|saved| Arc::ptr_eq(saved, product)),
                     "confirmed Core receipt did not retain the exact submitted product"
                 );
+                if let Some(outcome) = &self.outcome {
+                    use chimera_ipc::api::core::v2::ReconcileOutcomeKind;
+                    anyhow::ensure!(
+                        outcome.revision == receipt.applied_revision
+                            && outcome.outcome != ReconcileOutcomeKind::RolledBack,
+                        "applied candidate carried a rolled-back or mismatched Core revision"
+                    );
+                    anyhow::ensure!(
+                        self.replaced
+                            == Some(matches!(
+                                outcome.outcome,
+                                ReconcileOutcomeKind::Started
+                                    | ReconcileOutcomeKind::Restarted
+                                    | ReconcileOutcomeKind::Switched
+                            )),
+                        "Core replacement verdict does not match the reported transaction"
+                    );
+                }
+                if let Some(report) = &self.report {
+                    anyhow::ensure!(
+                        report.applied.host == receipt.host
+                            && report.applied.revision == receipt.applied_revision
+                            && report.status.host == receipt.host
+                            && report.status.generation == report.applied.generation
+                            && report.status.snapshot.as_ref().is_some_and(
+                                |snapshot| receipt.confirms(report.status.host, snapshot)
+                            )
+                            && self.outcome.as_ref().is_some_and(|outcome| report.output
+                                == chimera_ipc::api::core::v2::OperationOutputInfo::Reconciled(
+                                    outcome.clone()
+                                )),
+                        "Core ReconcileReport is not bound to the accepted host, revision and terminal operation"
+                    );
+                }
                 Ok(())
             }
             _ => anyhow::bail!("prepared Core result has no coherent accepted product receipt"),
@@ -288,11 +351,28 @@ pub(crate) trait CoreLifecyclePort: Send + Sync {
     ) -> anyhow::Result<PreparedCoreSettlement> {
         let applied = self.reconcile_prepared_outcome(prepared, core_spec).await?;
         Ok(PreparedCoreSettlement {
+            report: None,
+            outcome: None,
             replaced: applied.replaced,
             confirmed: None,
             product: None,
             publication: PreparedProductPublication::Unobserved,
         })
+    }
+
+    /// An observed, typed result of the actual Core operation. Production
+    /// overrides this instead of flattening RolledBack and Unknown into
+    /// general anyhow errors. Existing compatibility ports provide only
+    /// the safe legacy Applied/Err boundary.
+    async fn reconcile_prepared_submission(
+        &self,
+        prepared: PreparedRuntime,
+        core_spec: chimera_core_manager::CoreSpec,
+    ) -> anyhow::Result<PreparedSubmission> {
+        Ok(PreparedSubmission::Applied(
+            self.reconcile_prepared_settlement(prepared, core_spec)
+                .await?,
+        ))
     }
 
     /// Capture the *previous* running Core's instance-bound API before

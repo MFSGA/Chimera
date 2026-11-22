@@ -329,6 +329,16 @@ impl CoreLifecyclePort for LegacyCoreBridge {
             .await
     }
 
+    async fn reconcile_prepared_submission(
+        &self,
+        prepared: super::ports::PreparedRuntime,
+        core_spec: chimera_core_manager::CoreSpec,
+    ) -> anyhow::Result<super::ports::PreparedSubmission> {
+        self.facade()
+            .reconcile_prepared_submission(prepared, core_spec)
+            .await
+    }
+
     async fn capture_interruption_source(
         &self,
     ) -> anyhow::Result<Option<crate::core::actor_v2::api::ApiClient>> {
