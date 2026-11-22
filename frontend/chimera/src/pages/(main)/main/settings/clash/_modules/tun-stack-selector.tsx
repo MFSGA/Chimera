@@ -45,6 +45,9 @@ export default function TunStackSelector() {
     if (coreType.value === 'clash') {
       delete options.mixed;
     }
+    if (coreType.value === 'mihomo' || coreType.value === 'mihomo-alpha') {
+      options.mips = 'MIPS';
+    }
 
     return options;
   }, [coreType.value]);

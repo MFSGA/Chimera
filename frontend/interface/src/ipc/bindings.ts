@@ -1419,6 +1419,11 @@ export type ClashConfig = {
   break_connection: BreakConnectionStrategy;
   /**  Tun 堆栈选择 */
   tun_stack: TunStack;
+  /**
+   *  Preserved even while another stack is selected, exactly as in ref.
+   *  Default is required to read existing Chimera config documents.
+   */
+  tun_mips?: MipsConfig;
 };
 
 export type ClashConfigPatch =
@@ -1442,6 +1447,7 @@ export type ClashConfigPatch_Deserialize = {
   transparent_proxy?: TransparentProxyConfigPatch;
   break_connection?: BreakConnectionStrategyPatch_Deserialize;
   tun_stack?: TunStack | null;
+  tun_mips?: MipsConfigPatch_Deserialize;
 };
 
 export type ClashConfigPatch_Serialize = {
@@ -1462,6 +1468,7 @@ export type ClashConfigPatch_Serialize = {
   transparent_proxy?: TransparentProxyConfigPatch;
   break_connection?: BreakConnectionStrategyPatch_Serialize;
   tun_stack?: TunStack | null;
+  tun_mips?: MipsConfigPatch_Serialize;
 };
 
 /**  One core connection plus its derived rates, as in ref's detail contract. */
@@ -2657,6 +2664,27 @@ export type MechanismActions = {
 /**  What a topology orders and merges its nodes by. */
 export type Metric = 'bytes' | 'connections';
 
+/**
+ *  The options of the mips stack. Kept while another stack is selected, so
+ *  switching back restores them; read them through
+ *  `ClashConfig::selected_tun_stack`.
+ */
+export type MipsConfig = {
+  /**  `None` writes no key, so the core uses its own default. */
+  congestion_controller?: TunCongestionController | null;
+};
+
+export type MipsConfigPatch =
+  MipsConfigPatch_Serialize | MipsConfigPatch_Deserialize;
+
+export type MipsConfigPatch_Deserialize = {
+  congestion_controller?: TunCongestionController | null;
+};
+
+export type MipsConfigPatch_Serialize = {
+  congestion_controller?: TunCongestionController | null;
+};
+
 export type Mode = 'rule' | 'global' | 'direct' | 'script';
 
 /**
@@ -3748,7 +3776,11 @@ export type StepLogEntry = {
   message: string;
 };
 
-/**  1:1 with the legacy `LogSpan` wire shape (enhance/utils.rs:18-25). */
+/**
+ *  1:1 with the legacy `LogSpan` wire shape (enhance/utils.rs:18-25).
+ *
+ *  Declaration order is severity (`Log` lowest, `Error` highest); `Ord` relies on it.
+ */
 export type StepLogLevel = 'log' | 'info' | 'warn' | 'error';
 
 export type StorageEntry = {
@@ -4011,6 +4043,9 @@ export type TrayMenuCloseBehavior = 'hide' | 'close';
 /**  Whether the tray menu uses the system-native menu or the WebView menu. */
 export type TrayMenuMode = 'native' | 'webview';
 
+/**  mihomo `tun.congestion-controller`, read only by the mips stack. */
+export type TunCongestionController = 'cubic' | 'reno' | 'bbr' | 'bbr3';
+
 /**
  *  The `tun` keys Chimera may manage while TUN mode is on. The TUN switch and
  *  the stack stay separate settings.
@@ -4034,7 +4069,15 @@ export type TunOverridesPatch_Serialize = {
   'auto-route'?: ManageableField<boolean> | null;
 };
 
-export type TunStack = 'system' | 'gvisor' | 'mixed';
+export type TunStack =
+  | 'system'
+  | 'gvisor'
+  | 'mixed'
+  /**
+   *  mihomo's own user-space network stack (Mihomo IP Stack), not the MIPS
+   *  processor architecture.
+   */
+  | 'mips';
 
 export type UpdateSource = 'chimera' | 'github' | 'ghfast' | 'sourceforge';
 

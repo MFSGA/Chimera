@@ -14,19 +14,28 @@ const TUN_STACK_OPTIONS = {
   system: 'System',
   gvisor: 'gVisor',
   mixed: 'Mixed',
+  mips: 'MIPS',
 } satisfies Record<TunStack, string>;
 
 export const getTunStackOptions = (
   coreType: string | null | undefined,
 ): Partial<Record<TunStack, string>> => {
+  if (coreType === 'mihomo' || coreType === 'mihomo-alpha') {
+    return TUN_STACK_OPTIONS;
+  }
   if (coreType === 'clash') {
     return {
       system: TUN_STACK_OPTIONS.system,
       gvisor: TUN_STACK_OPTIONS.gvisor,
     };
   }
-
-  return TUN_STACK_OPTIONS;
+  // MIPS is supported by Mihomo only. Preserve the existing selections for
+  // other cores instead of exposing a stack their feature matrix ignores.
+  return {
+    system: TUN_STACK_OPTIONS.system,
+    gvisor: TUN_STACK_OPTIONS.gvisor,
+    mixed: TUN_STACK_OPTIONS.mixed,
+  };
 };
 
 /** Keep TUN stack changes serialized and refresh every runtime view they affect. */
