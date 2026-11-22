@@ -1446,3 +1446,9 @@ backend/Cargo.toml -p chimera --lib core::clash::proxies::tests:: -- --nocapture
 - 失败用例：Windows E2E commit baa10cab / run 45072061799 真正点击 UI OK 后，创建对话框在 30 秒内不关闭。其测试故意先等待 UI 结束再读 UID 和保存文件；因此原先“保存抢跑就是根因”的推断不充分。先前源文档已经可读只证明 Actor 发布了某个版本，并不能证明创建后 auto-activation、Core 验证、Checked admission 等后续步骤已结算。
 - 行为约束：保留 ref 的 create_profile 后条件自动激活协议和 source commit。不得把 auto-activation 改为纯 fire-and-forget、在 UI 中跳过错误、将长时间等待认定为提交成功或简单放宽 WebDriver 超时。
 - 诊断策略：只在 feature=e2e 的 Profile Add、Source Publish、Reconcile、SetCurrentIfNone、CandidateCheck 和 CoreCheck 阶段打无参数的 WARN stage 标记。以最新原生失败 artifact 的最后已到达阶段缩小因果链，再建复现与真正的事务/队列/锁序修复。本机相关 Rust 回归编译通过不代表 Windows UI 问题已解决。
+
+### LESSON-20261122-004：已校验候选 ACK 被 CoreLifecycle 消息处理循环延迟
+
+- Windows E2E run 45074585452（commit e7ef4ea7）原生 wdio 证据：Add 及本地物化在不到 50ms 内完成，候选 Build 和 Core -t 在约 0.4s 内完成；随后 CandidateCheck::check 等待 CoreLifecycleCheckedInbox::checked 的 ACK 约 68.5 秒才返回成功。此前基于 UI 等待与文件状态的猜测均不构成该处的根因证明。
+- 检查顺序：先用 cfg(feature = e2e) 的 CoreLifecycle Actor handler 消息计时确定是 Completed 内的观察 await、ServiceReadiness/ObserveService 的异步 I/O，还是其他 mailbox 排队；再构建慢端口与并发 Checked 的真实 Actor 测试，并在单一 Core owner 内修复。不得把候选写入另一份独立 Checked inbox，或在原 Actor 未保留确切文档时虚报 ACK。
+- E2E 控件等待/脚本超时不应扩大到 68 秒，因为那会隐藏用户可见创建延迟。Profiler 和日志应只记录固定阶段与时长，不泄露配置源、UID 或服务凭证；正式构建不包含 E2E 探针。
