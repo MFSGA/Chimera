@@ -198,6 +198,92 @@ impl CandidateCheck {
         Ok((prepared, spec))
     }
 
+    /// Stopped Profile TCC uses exactly the same strict candidate build and
+    /// ref validator as a running Try, but only observes the check result.
+    /// No Core Reconcile, source commit, candidate-file promotion or Checked
+    /// inbox admission can occur before the owning TCC decision is settled.
+    pub(in crate::client) async fn validate_stopped_profile_tcc(
+        &self,
+        inputs: super::inputs::RuntimeInputs,
+    ) -> anyhow::Result<crate::client::application_workflow::mutation::CheckRecord> {
+        use crate::client::application_workflow::{
+            mutation::RuntimeCheckFailure,
+            ports::{
+                RuntimeCheckOutcome as ProfileCheckOutcome,
+                RuntimeCheckUnavailable as ProfileCheckUnavailable,
+            },
+        };
+        let (prepared, core_spec) =
+            self.prepare_profile_tcc_candidate(inputs)
+                .await
+                .map_err(|error| {
+                    anyhow::Error::new(RuntimeCheckFailure::candidate_unavailable(
+                        error.to_string(),
+                    ))
+                })?;
+        let verdict = self
+            .validator
+            .check(RuntimeCheckRequest {
+                core_spec,
+                intent: &prepared.intent,
+            })
+            .await;
+        match verdict {
+            RuntimeCheckOutcome::Passed => {
+                Ok(crate::client::application_workflow::mutation::CheckRecord::Passed)
+            }
+            RuntimeCheckOutcome::Rejected { kind, message } => Err(RuntimeCheckFailure {
+                message: message.clone(),
+                outcome: ProfileCheckOutcome::Rejected { kind, message },
+            }
+            .into()),
+            RuntimeCheckOutcome::Unavailable(reason) => {
+                let outcome = match reason {
+                    RuntimeCheckUnavailable::Backend {
+                        kind,
+                        message,
+                        retryable,
+                    } => ProfileCheckUnavailable::Backend {
+                        kind,
+                        message,
+                        retryable,
+                    },
+                    RuntimeCheckUnavailable::CandidateUnavailable { reason } => {
+                        ProfileCheckUnavailable::CandidateUnavailable { reason }
+                    }
+                    RuntimeCheckUnavailable::NoEndpoint { reason } => {
+                        ProfileCheckUnavailable::NoEndpoint { reason }
+                    }
+                    RuntimeCheckUnavailable::HostUnsupported { host, reason } => {
+                        // The ref check returned no positive validation;
+                        // a stopped source must not claim Passed when the
+                        // selected host cannot check these exact bytes.
+                        ProfileCheckUnavailable::Backend {
+                            kind: None,
+                            message: format!("{host}: {reason}"),
+                            retryable: false,
+                        }
+                    }
+                    RuntimeCheckUnavailable::NotChecked { reason }
+                    | RuntimeCheckUnavailable::Other { reason } => {
+                        ProfileCheckUnavailable::CandidateUnavailable { reason }
+                    }
+                };
+                let message = match &outcome {
+                    ProfileCheckUnavailable::Backend { message, .. } => message.clone(),
+                    ProfileCheckUnavailable::CandidateUnavailable { reason }
+                    | ProfileCheckUnavailable::NoEndpoint { reason }
+                    | ProfileCheckUnavailable::HostUnsupported { reason, .. } => reason.clone(),
+                };
+                Err(RuntimeCheckFailure {
+                    message,
+                    outcome: ProfileCheckOutcome::Unavailable(outcome),
+                }
+                .into())
+            }
+        }
+    }
+
     /// Build the latest committed RuntimeInputs through the same canonical
     /// session that checked sources use, but without writing a new source,
     /// creating an inbox entry, or submitting a Core command. Only the sole
@@ -511,6 +597,191 @@ mod tests {
             },
             staged: BTreeMap::new(),
         }
+    }
+
+    #[tokio::test]
+    async fn stopped_profile_tcc_checks_exact_strict_product_without_core_or_source_mutation() {
+        use crate::client::{
+            application_workflow::mutation::CheckRecord,
+            reconciler::inputs::{FrozenProfileContent, RuntimeInputs},
+        };
+        let (gate, builder, validator, inbox) = gate(RuntimeCheckOutcome::Passed, false).await;
+        let inputs = RuntimeInputs {
+            app: ChimeraAppConfig::default(),
+            clash: ClashConfig::default(),
+            profiles: Arc::new(Profiles::default()),
+            content: FrozenProfileContent::default(),
+        };
+        let target = inputs.checked_target_key().unwrap();
+        let check = gate.validate_stopped_profile_tcc(inputs).await.unwrap();
+        assert_eq!(check, CheckRecord::Passed);
+        assert_eq!(
+            builder.prepared.lock().unwrap().as_slice(),
+            &[(true, target)]
+        );
+        let checked = validator.checked.lock().unwrap();
+        assert_eq!(checked.len(), 1);
+        assert_eq!(checked[0].1, "mode: rule\n");
+        assert_eq!(
+            checked[0].0,
+            chimera_core_manager::payload_digest(checked[0].1.as_bytes())
+        );
+        assert!(inbox.checked.lock().unwrap().is_empty());
+        assert!(inbox.committed.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn stopped_profile_tcc_preserves_rejected_and_unavailable_check_evidence() {
+        use crate::client::{
+            application_workflow::{
+                mutation::{CheckRecord, RuntimeCheckFailure},
+                ports::{
+                    RuntimeCheckOutcome as ProfileCheckOutcome,
+                    RuntimeCheckUnavailable as ProfileUnavailable,
+                },
+            },
+            reconciler::inputs::{FrozenProfileContent, RuntimeInputs},
+        };
+        let inputs = || RuntimeInputs {
+            app: ChimeraAppConfig::default(),
+            clash: ClashConfig::default(),
+            profiles: Arc::new(Profiles::default()),
+            content: FrozenProfileContent::default(),
+        };
+        let core_kind = chimera_core_manager::CoreErrorKind::InvalidConfig;
+        let (rejected, _, validator, inbox) = gate(
+            RuntimeCheckOutcome::Rejected {
+                kind: Some(core_kind),
+                message: "invalid precommit Profile".into(),
+            },
+            false,
+        )
+        .await;
+        let error = rejected
+            .validate_stopped_profile_tcc(inputs())
+            .await
+            .unwrap_err();
+        let failure = error.downcast_ref::<RuntimeCheckFailure>().unwrap();
+        assert_eq!(
+            failure.record(),
+            CheckRecord::Rejected("invalid precommit Profile".into())
+        );
+        assert!(matches!(failure.outcome, ProfileCheckOutcome::Rejected {
+            kind: Some(kind), ref message
+        } if kind == core_kind && message == "invalid precommit Profile"));
+        assert_eq!(
+            failure.cause(),
+            crate::client::application_workflow::policy::TryCauseKind::Deterministic
+        );
+        assert_eq!(validator.checked.lock().unwrap().len(), 1);
+        assert!(inbox.checked.lock().unwrap().is_empty());
+
+        let (unavailable, _, validator, inbox) = gate(
+            RuntimeCheckOutcome::Unavailable(RuntimeCheckUnavailable::Backend {
+                kind: Some(chimera_core_manager::CoreErrorKind::BackendUnavailable),
+                message: "Core check endpoint offline".into(),
+                retryable: true,
+            }),
+            false,
+        )
+        .await;
+        let error = unavailable
+            .validate_stopped_profile_tcc(inputs())
+            .await
+            .unwrap_err();
+        let failure = error.downcast_ref::<RuntimeCheckFailure>().unwrap();
+        assert_eq!(
+            failure.record(),
+            CheckRecord::Unserviceable("Core check endpoint offline".into())
+        );
+        assert!(matches!(
+            failure.outcome,
+            ProfileCheckOutcome::Unavailable(ProfileUnavailable::Backend {
+                retryable: true,
+                ..
+            })
+        ));
+        assert_eq!(
+            failure.cause(),
+            crate::client::application_workflow::policy::TryCauseKind::Transient
+        );
+        assert_eq!(validator.checked.lock().unwrap().len(), 1);
+        assert!(inbox.checked.lock().unwrap().is_empty());
+        assert!(inbox.committed.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn stopped_profile_tcc_unresolved_core_spec_cannot_call_validator_or_commit() {
+        use crate::client::{
+            application_workflow::{
+                mutation::RuntimeCheckFailure,
+                ports::{
+                    RuntimeCheckOutcome as ProfileCheckOutcome,
+                    RuntimeCheckUnavailable as ProfileUnavailable,
+                },
+            },
+            reconciler::inputs::{FrozenProfileContent, RuntimeInputs},
+        };
+        let (gate, builder, validator, inbox) = gate(RuntimeCheckOutcome::Passed, false).await;
+        builder.reject_core_spec.store(true, Ordering::Relaxed);
+        let inputs = RuntimeInputs {
+            app: ChimeraAppConfig::default(),
+            clash: ClashConfig::default(),
+            profiles: Arc::new(Profiles::default()),
+            content: FrozenProfileContent::default(),
+        };
+        let error = gate.validate_stopped_profile_tcc(inputs).await.unwrap_err();
+        let failure = error.downcast_ref::<RuntimeCheckFailure>().unwrap();
+        assert!(matches!(
+            failure.outcome,
+            ProfileCheckOutcome::Unavailable(ProfileUnavailable::CandidateUnavailable { .. })
+        ));
+        assert_eq!(builder.prepared.lock().unwrap().len(), 1);
+        assert!(
+            validator.checked.lock().unwrap().is_empty(),
+            "a candidate without a resolved Core binary must never be checked as passing"
+        );
+        assert!(inbox.checked.lock().unwrap().is_empty());
+        assert!(inbox.committed.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn stopped_profile_tcc_cannot_treat_unsupported_check_as_passed() {
+        use crate::client::{
+            application_workflow::{
+                mutation::RuntimeCheckFailure,
+                ports::{
+                    RuntimeCheckOutcome as ProfileCheckOutcome,
+                    RuntimeCheckUnavailable as ProfileUnavailable,
+                },
+            },
+            reconciler::inputs::{FrozenProfileContent, RuntimeInputs},
+        };
+        let (gate, _, validator, inbox) = gate(
+            RuntimeCheckOutcome::Unavailable(RuntimeCheckUnavailable::HostUnsupported {
+                host: "Service".into(),
+                reason: "check not implemented".into(),
+            }),
+            false,
+        )
+        .await;
+        let inputs = RuntimeInputs {
+            app: ChimeraAppConfig::default(),
+            clash: ClashConfig::default(),
+            profiles: Arc::new(Profiles::default()),
+            content: FrozenProfileContent::default(),
+        };
+        let error = gate.validate_stopped_profile_tcc(inputs).await.unwrap_err();
+        let failure = error.downcast_ref::<RuntimeCheckFailure>().unwrap();
+        assert!(matches!(
+            failure.outcome,
+            ProfileCheckOutcome::Unavailable(ProfileUnavailable::Backend {
+                retryable: false,
+                ..
+            })
+        ));
+        assert_eq!(validator.checked.lock().unwrap().len(), 1);
+        assert!(inbox.checked.lock().unwrap().is_empty());
     }
 
     #[tokio::test]

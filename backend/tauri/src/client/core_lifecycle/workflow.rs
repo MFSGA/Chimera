@@ -3395,6 +3395,14 @@ impl ProfileRuntime for CoreLifecycleWorkflow {
         &self,
         inputs: crate::client::application_workflow::inputs::RuntimeInputs,
     ) -> anyhow::Result<crate::client::application_workflow::mutation::CheckRecord> {
+        // A Stopped Profile TCC must validate the same exact strict product
+        // that a later running Try would submit. It is read-only: no Core
+        // operation, no Checked inbox entry and no source mutation.
+        if let Some(gate) = self.checked_gate.get()
+            && self.core.runtime_preparation_session().is_some()
+        {
+            return gate.validate_stopped_profile_tcc(inputs).await;
+        }
         crate::client::reconciler::legacy_check::check_candidate(
             self.core.as_ref(),
             inputs,
