@@ -238,13 +238,14 @@ cargo clippy --manifest-path backend/Cargo.toml --all-targets --all-features
 - 实际验证：`pnpm typecheck:chimera`、E2E TypeScript typecheck、`pnpm lint:frontend-boundaries`、前端 build 和 E2E harness unit（25/25）通过；`test:main` 14/14 specs 通过，其中该回归用例先挂载旧 Profile 查询再切换到 fixture Profile；`test:smoke` 4/4 specs（9 条用例）通过。该用例使用 IPC fixture 准备并由桌面 UI 观察，不代表真实网络流量验证。`test:settings` 整套 12/16，失败项和已知限制见 `DIFF-MAIN-SCROLL-VIEWPORT` 验证记录。
 - 收敛、移除或重新评估条件：迁移到 ref 的 query/event 架构后，重新核对 Profile 事件的代理快照失效语义；只有新架构在“缓存旧 Profile 后切换”的回归场景仍能更新时，才移除此兼容修正。
 
-### DIFF-RUNTIME-STORED-GRAPH：Runtime Pipeline 压缩快照与 Inspection 展开适配
+### DIFF-RUNTIME-STORED-GRAPH：Runtime Pipeline 压缩快照与按需 Inspection
 
 - ref commit：c4b35e04870a9caa53f21d10af6fcfde4a6f4c01（固定本地 ref，未修改）。
 - ref 路径与符号：backend/nyanpasu-config/src/runtime/snapshot.rs 中的 StoredConfigSnapshotsGraph、StoredConfigSnapshotState.changed_fields、KeyframePolicy、apply_patch、ConfigSnapshotsBuilder.push_delta、restore / restore_with_parent；runtime/executor/{builtin,artifact,mod}.rs 中的 filter_fields、RuntimeArtifact.graph / final_node 和快照记录。
-- Chimera 路径与符号：backend/chimera-config/src/runtime/{snapshot,executor}/；backend/chimera-core/src/client/{artifact_snapshot,runtime_build}.rs；Tauri 现有 runtime build 调用方。
+- Chimera 路径与符号：backend/chimera-config/src/runtime/{snapshot,executor}/；backend/chimera-core/src/client/{artifact_snapshot,runtime_build,runtime_inspection}.rs；backend/tauri/src/client/runtime_inspection.rs 和既有 runtime build 调用方。
 - 类别：临时迁移 / legacy UI 兼容。Shared executor 现已向上游返回压缩存储图及确定性的 final_node，字段过滤和 Guard/TUN 已知变更直接写入 Delta；序列化版本升级为 v3，旧 v2 快照缓存按版本拒绝后需要从源配置重建。此缓存不属于用户 Profile 文档。
-- 保留差异：Chimera 当前 RuntimeInspectionData 仍使用完整 ConfigSnapshotsGraph，以维护主界面、legacy UI 和 agent 的现有 inspection DTO。压缩图只在 artifact_snapshot 的适配边界展开。Chimera 的 Finalizing、TUN 分阶段处理、Chimera Client MMDB、可选监听器及 DNS/TUN 策略仍与 ref 的执行顺序或字段所有权存在差异；不将这一阶段误认为 Runtime Pipeline 全量完成对齐。
+- 保留差异：Chimera 的 RuntimeInspectionData 已沿用 ref 的 StoredConfigSnapshotsGraph，RuntimeArtifact → Inspection 不再整图展开，而是使用 restore / restore_with_parent 按需恢复；主界面、legacy UI 和 agent 继续共用原有 inspection DTO/IPC，未修改外部协议或用户 Profile 持久化。Chimera 的 Finalizing、TUN 分阶段处理、Chimera Client MMDB、可选监听器及 DNS/TUN 策略仍与 ref 的执行顺序或字段所有权存在差异；不将这一阶段误认为 Runtime Pipeline 全量完成对齐。
 - 验证边界：配置层单元测试（含 snapshot-persistence feature）271/271 通过；Core runtime build 7/7、artifact snapshot 3/3、Tauri Runtime Builder 11/11 通过。已覆盖顺序保持、负零符号、显式补丁重放、压缩图恢复、最终节点与配置一致、v2 缓存版本拒绝。编译警告仍存在；未执行真实桌面、内核、Service 或主机网络 E2E。
-- 风险与回退：L2，涉及运行时生成、Inspection 及快照缓存；若发现兼容回归，应回退本轮快照与执行器切片并由持久化源重建缓存，不回退或重写用户配置。
-- 收敛条件：下一轮让 RuntimeInspectionData 自身持有 StoredConfigSnapshotsGraph，并按 ref 用 restore / restore_with_parent 按需恢复节点，再统一收敛 ref 的单次字段所有权计划与执行顺序。保留 legacy UI 的展示能力和 Chimera Client/Service 兼容层，不复制新的平行运行时状态实现。
+- 本轮补充验证：Core 的 Runtime Inspection 4/4、Artifact Snapshot 4/4、Runtime Build 7/7 通过；Tauri Runtime Inspection 7/7 通过。新增快照 Delta 恢复、敏感配置脱敏、补丁损坏错误返回、产物与最终节点不一致时拒绝发布等回归用例。
+- 风险与回退：L2，共享 Inspector 的图表示和按需读取路径发生变化，未修改前端 RPC wire、Profile/订阅数据、Core/Service 配置所有权或宿主网络。若发生 Inspection 回归，回退本轮 Inspection/Artifact 适配提交即可恢复前一轮的完整图映射；若涉及旧快照缓存，按版本拒绝并从持久化源重建，绝不重写用户配置。独立审查与真机桌面/网络 E2E 仍是后续验证项。
+- 收敛条件：下轮继续对齐 ref 的单次字段所有权计划与执行顺序，并评估可移除的旧完整图 materialize 兼容方法。保留 legacy UI 的展示能力和 Chimera Client/Service 兼容层，不复制新的平行运行时状态实现。
