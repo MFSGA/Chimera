@@ -810,12 +810,49 @@ impl CoreLifecycleWorkflow {
         Ok(())
     }
 
+    /// Startup S2/S3 established and, if necessary, retired the Local Core
+    /// before reaching here. Reuse the exact committed-source preparation
+    /// instead of the old inline YAML construction whenever the sole Core
+    /// owner and authoritative source reader are available.
+    async fn try_startup_prepared_local(
+        &self,
+        app: &ChimeraAppConfig,
+    ) -> Option<anyhow::Result<()>> {
+        if self.profiles.is_none()
+            || self.checked_gate.get().is_none()
+            || self.source_authority.is_none()
+        {
+            return None;
+        }
+        let clash = match self.clash.get() {
+            Ok(clash) => clash,
+            Err(error) => return Some(Err(error)),
+        };
+        let (target, app, clash, ..) = match self
+            .capture_reconcile_committed_target(app.clone(), clash)
+            .await
+        {
+            Ok(committed) => committed,
+            Err(error) => return Some(Err(error)),
+        };
+        self.try_reconcile_prepared_local(&target, &app, &clash, crate::core::RunType::Normal)
+            .await
+    }
+
     pub(in crate::client) async fn startup_reconcile_application(
         &self,
         app: ChimeraAppConfig,
         service_connected: bool,
     ) -> anyhow::Result<()> {
-        let result = self.reconcile_application(app, service_connected).await;
+        let result = if !service_connected {
+            if let Some(result) = self.try_startup_prepared_local(&app).await {
+                result
+            } else {
+                self.reconcile_application(app, service_connected).await
+            }
+        } else {
+            self.reconcile_application(app, service_connected).await
+        };
         self.refresh_service_recovery_host().await;
         result
     }
@@ -2835,14 +2872,53 @@ impl CoreLifecycleWorkflow {
         app: ChimeraAppConfig,
     ) -> anyhow::Result<()> {
         let clash = self.clash.get()?;
-        let Some(profiles) = &self.profiles else {
+        if self.profiles.is_none() {
             return self
                 .core
                 .reconcile_after_service_release(clash, app.core)
                 .await;
-        };
+        }
         let (target, app, clash, profiles, staged_content) =
             self.capture_reconcile_committed_target(app, clash).await?;
+
+        if self.checked_gate.get().is_some()
+            && let Some(authority) = self.source_authority.as_ref()
+            && self.core.runtime_preparation_session().is_some()
+        {
+            anyhow::ensure!(
+                !self.core.outcome_uncertain(),
+                "Service-to-Local handback cannot begin while the Core outcome is uncertain"
+            );
+            // A newer committed source may have reversed the preferred host
+            // while the Service release was being proved. Do not change the
+            // host at all for a target that has already been superseded.
+            anyhow::ensure!(
+                authority
+                    .verify_committed_prepared_target(&target, None)
+                    .await?
+                    .is_some(),
+                "authoritative source cannot prove the released Service fallback target"
+            );
+            // The caller holds the transition lease and has *already* proved
+            // that the rejected Service Core was released. Preserve this
+            // evidence when selecting Local; do not submit via the router's
+            // old combined host-handoff + inline-build path.
+            self.core
+                .select_local_after_confirmed_service_release()
+                .await?;
+            // Once S2 has moved the owner, missing Core/source proof must be
+            // Waiting, not a license for a second legacy submit or handoff.
+            return self
+                .try_reconcile_prepared_local(&target, &app, &clash, crate::core::RunType::Normal)
+                .await
+                .unwrap_or_else(|| {
+                    Err(crate::client::reconciler::attempt::OwnershipTransitionPending::waiting(
+                        "Local Core ownership was not proven after the Service release handback",
+                    )
+                    .into())
+                });
+        }
+
         self.core
             .reconcile_profiles_after_service_release(
                 clash,

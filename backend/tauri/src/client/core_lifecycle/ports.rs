@@ -352,6 +352,16 @@ pub(crate) trait CoreLifecyclePort: Send + Sync {
     /// Startup uses this between the host handoff (S2) and owner verification
     /// (S3), matching the reference lifecycle's separate `move_execution_host`
     /// and `apply_committed` operations.
+    /// Only the caller that already proved the previous Service Core was
+    /// released may select Local with `source_released=true`. This must not
+    /// submit any runtime bytes; the subsequent PreparedRuntime submission
+    /// remains a separate single-owner Core operation.
+    async fn select_local_after_confirmed_service_release(&self) -> anyhow::Result<()> {
+        anyhow::bail!(
+            "this lifecycle adapter cannot select Local after a confirmed Service release"
+        )
+    }
+
     async fn select_execution_host(
         &self,
         host: crate::core::actor_v2::control_endpoint::ExecutionHost,

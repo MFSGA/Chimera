@@ -37,6 +37,20 @@ use chimera_ipc::{
 
 use super::workflow::ApplicationWorkflow;
 
+/// Ref S4 only permits a Service-to-Local recovery for a positively
+/// refused submission. Missing dependencies, source movement and unknown
+/// Core outcomes must leave Service ownership untouched for the next round.
+fn startup_service_fallback_refused(result: &anyhow::Result<()>, uncertain: bool) -> bool {
+    let Err(error) = result else {
+        return false;
+    };
+    !startup_failure_waits_for_dependency(error)
+        && matches!(
+            crate::client::reconciler::attempt::legacy_error_verdict(error, uncertain, false),
+            crate::client::reconciler::attempt::LegacyApplyVerdict::Refused(_)
+        )
+}
+
 pub(crate) fn startup_failure_is_retryable(error: &anyhow::Error) -> bool {
     error.chain().any(|cause| {
         cause
@@ -745,9 +759,49 @@ mod tests {
 
     use super::{
         OwnerPlan, ServiceEvidence, effective_host, owner_followup_required, plan_owner, s2_step,
+        startup_service_fallback_refused,
     };
     use crate::core::actor_v2::control_endpoint::ExecutionHost::{Local, Service};
     use chimera_core::client::reconciler::plan::{Conclusion, Step};
+
+    #[test]
+    fn startup_service_fallback_requires_refused_not_waiting_or_unknown() {
+        use chimera_core_manager::{CoreError, CoreErrorKind};
+
+        assert!(!startup_service_fallback_refused(&Ok(()), false));
+        for kind in [
+            CoreErrorKind::RevisionConflict,
+            CoreErrorKind::OperationConflict,
+            CoreErrorKind::QueueFull,
+            CoreErrorKind::BackendUnavailable,
+        ] {
+            let awaiting = Err(CoreError::new(kind, "Service dependency pending", false).into());
+            assert!(
+                !startup_service_fallback_refused(&awaiting, false),
+                "{kind:?} may not stop the selected Service Core"
+            );
+            assert!(!startup_service_fallback_refused(&awaiting, true));
+        }
+        let source_advanced = Err(anyhow::Error::new(
+            crate::client::reconciler::attempt::CommittedTargetAdvanced,
+        ));
+        assert!(!startup_service_fallback_refused(&source_advanced, false));
+        let owner_pending = Err(anyhow::Error::new(
+            crate::client::reconciler::attempt::OwnershipTransitionPending::waiting(
+                "Service handoff not confirmed",
+            ),
+        ));
+        assert!(!startup_service_fallback_refused(&owner_pending, false));
+
+        let refusal = Err(CoreError::new(
+            CoreErrorKind::ConfigCheckFailed,
+            "Service rejected the runtime config",
+            false,
+        )
+        .into());
+        assert!(startup_service_fallback_refused(&refusal, false));
+        assert!(!startup_service_fallback_refused(&refusal, true));
+    }
 
     #[test]
     fn ref_full_round_is_authoritative_for_all_s2_handoff_actions() {
@@ -1739,7 +1793,9 @@ impl ApplicationWorkflow {
             )
             .await;
 
-        if desired == ExecutionHost::Service && result.is_err() && !lifecycle.outcome_uncertain() {
+        if desired == ExecutionHost::Service
+            && startup_service_fallback_refused(&result, lifecycle.outcome_uncertain())
+        {
             let failed_owner = lifecycle
                 .startup_core_status()
                 .await

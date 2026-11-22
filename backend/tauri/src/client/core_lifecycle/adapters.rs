@@ -495,6 +495,12 @@ impl CoreLifecyclePort for LegacyCoreBridge {
         )
     }
 
+    async fn select_local_after_confirmed_service_release(&self) -> anyhow::Result<()> {
+        self.facade()
+            .select_local_after_confirmed_service_release()
+            .await
+    }
+
     async fn select_execution_host(
         &self,
         host: crate::core::actor_v2::control_endpoint::ExecutionHost,

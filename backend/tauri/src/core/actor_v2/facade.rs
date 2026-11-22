@@ -959,6 +959,36 @@ impl CoreFacade {
     /// Select a host after startup has completed its S2 handoff. This only
     /// changes which already-proven endpoint the shared Core lifecycle uses;
     /// the caller still owns S3 retirement/receipt verification and S4 apply.
+    /// The caller has already proved via a fresh Service observation and
+    /// transition lease that this instance no longer owns a Service Core.
+    /// Preserve that proof for the router's degraded-source handback rather
+    /// than doing a second unproven Service stop. This only selects Local;
+    /// committed runtime bytes are applied by the *next* Core mutation.
+    pub(crate) async fn select_local_after_confirmed_service_release(&self) -> anyhow::Result<()> {
+        use super::control_endpoint::ExecutionHost;
+
+        let local_runtime = self
+            .local_runtime
+            .as_ref()
+            .cloned()
+            .context("prepared fallback requires the shared CoreControl host")?;
+        let router = self.core_router.clone();
+        self.run_local_mutation("confirmed Service release to Local selection", async move {
+            if let Some(router) = router {
+                let target: Arc<dyn ControlEndpoint> = Arc::new(local_runtime.local_endpoint());
+                router.change_host_from(target, true).await?;
+            } else {
+                // Same compatibility behavior as reconcile_with_profile_source
+                // when a released Service Core no longer owns these ports.
+                local_runtime.invalidate_ports();
+            }
+            local_runtime.select_execution_host(ExecutionHost::Local)
+        })
+        .await?;
+        self.refresh_ws_binding().await;
+        Ok(())
+    }
+
     pub(crate) async fn select_execution_host(
         &self,
         host: super::control_endpoint::ExecutionHost,
