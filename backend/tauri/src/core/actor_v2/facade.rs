@@ -677,6 +677,80 @@ impl CoreFacade {
             .await
     }
 
+    /// Core-owned Profile Try using the canonical PreparedRuntime product.
+    /// Unlike a committed-source Apply, this must preserve a held candidate
+    /// across the source TCC decision, so Confirm/Cancel remain the only
+    /// owners of its promotion or baseline restoration.
+    pub(crate) async fn prepare_profile_runtime_prepared(
+        &self,
+        prepared: crate::client::core_lifecycle::ports::PreparedRuntime,
+        core_spec: chimera_core_manager::CoreSpec,
+        run_type: RunType,
+        operation_id: OperationId,
+    ) -> anyhow::Result<(
+        crate::client::application_workflow::mutation::AppliedCandidate,
+        crate::client::application_workflow::mutation::CheckRecord,
+    )> {
+        let local_runtime = self
+            .local_runtime
+            .as_ref()
+            .cloned()
+            .context("prepared Profile Try requires the shared Core-owned runtime session")?;
+        let previous_run_type = local_runtime.run_type();
+        let endpoint = self.endpoint_for_run_type(run_type)?;
+        let router = self.core_router.clone();
+        let service_endpoint = self.service_endpoint.clone();
+        let stop_uncertain = self.outcome_uncertain.clone();
+        let candidate_slot = Arc::new(tokio::sync::Mutex::new(None));
+        let future_slot = candidate_slot.clone();
+        self.run_local_mutation("prepared Profile TCC Try", async move {
+            let expected_owner = if let Some(router) = router {
+                let target: Arc<dyn ControlEndpoint> = match run_type {
+                    RunType::Normal => Arc::new(local_runtime.local_endpoint()),
+                    RunType::Service => Arc::new(service_endpoint.clone()),
+                    RunType::Elevated => {
+                        anyhow::bail!("elevated core execution is not implemented")
+                    }
+                };
+                router.change_host_from(target, false).await?;
+                local_runtime.select_execution_host(endpoint.host())?;
+                let observed = router.refresh_status().await?;
+                anyhow::ensure!(
+                    observed.host == endpoint.host(),
+                    "prepared Profile Try selected a different Core host"
+                );
+                Some((observed.host, observed.generation))
+            } else {
+                match (previous_run_type, run_type) {
+                    (RunType::Service, RunType::Normal) => {
+                        stop_service_core(service_endpoint, stop_uncertain, None).await?;
+                    }
+                    (RunType::Normal, RunType::Service) => local_runtime.stop_core().await?,
+                    _ => {}
+                }
+                None
+            };
+            let candidate = local_runtime
+                .prepare_profile_runtime_prepared(
+                    prepared,
+                    core_spec,
+                    endpoint.as_ref(),
+                    operation_id,
+                    expected_owner,
+                )
+                .await?;
+            *future_slot.lock().await = Some(candidate);
+            Ok(())
+        })
+        .await?;
+        self.refresh_ws_binding().await;
+        candidate_slot
+            .lock()
+            .await
+            .take()
+            .context("prepared Profile Try completed without a held candidate")
+    }
+
     pub(crate) async fn prepare_profile_runtime(
         &self,
         clash: ClashConfig,

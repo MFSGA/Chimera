@@ -534,9 +534,18 @@ impl LocalRuntimeHost {
         target_core: ClashCore,
         endpoint: &dyn ControlEndpoint,
     ) -> anyhow::Result<()> {
-        self.reconcile_with_profile_source(clash, target_core, endpoint, None, None, None)
-            .await
-            .map(|_| ())
+        self.reconcile_with_profile_source(
+            Some(clash),
+            target_core,
+            endpoint,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .await
+        .map(|_| ())
     }
 
     pub(crate) async fn reconcile_with_profiles(
@@ -550,15 +559,43 @@ impl LocalRuntimeHost {
         target: Option<String>,
     ) -> anyhow::Result<()> {
         self.reconcile_with_profile_source(
-            clash,
+            Some(clash),
             target_core,
             endpoint,
             Some((profiles, app, staged_content)),
             target,
             None,
+            None,
+            None,
         )
         .await
         .map(|_| ())
+    }
+
+    pub(crate) async fn prepare_profile_runtime_prepared(
+        &self,
+        prepared: crate::client::core_lifecycle::ports::PreparedRuntime,
+        core_spec: chimera_core_manager::CoreSpec,
+        endpoint: &dyn ControlEndpoint,
+        operation_id: OperationId,
+        expected_owner: Option<(ExecutionHost, u64)>,
+    ) -> anyhow::Result<(
+        crate::client::application_workflow::mutation::AppliedCandidate,
+        crate::client::application_workflow::mutation::CheckRecord,
+    )> {
+        let core = prepared.snapshot.target_core;
+        self.reconcile_with_profile_source(
+            None,
+            core,
+            endpoint,
+            None,
+            prepared.target.clone(),
+            Some(operation_id),
+            Some((prepared, core_spec)),
+            expected_owner,
+        )
+        .await?
+        .context("prepared Profile TCC Try returned no held candidate")
     }
 
     pub(crate) async fn prepare_profile_runtime(
@@ -576,12 +613,14 @@ impl LocalRuntimeHost {
         crate::client::application_workflow::mutation::CheckRecord,
     )> {
         self.reconcile_with_profile_source(
-            clash,
+            Some(clash),
             target_core,
             endpoint,
             Some((profiles, app, staged_content)),
             target,
             Some(operation_id),
+            None,
+            None,
         )
         .await?
         .context("Profile runtime preparation returned no candidate")
@@ -677,7 +716,7 @@ impl LocalRuntimeHost {
 
     async fn reconcile_with_profile_source(
         &self,
-        clash: ClashConfig,
+        clash: Option<ClashConfig>,
         target_core: ClashCore,
         endpoint: &dyn ControlEndpoint,
         profile_source: Option<(
@@ -687,6 +726,11 @@ impl LocalRuntimeHost {
         )>,
         target: Option<String>,
         profile_operation_id: Option<OperationId>,
+        prepared: Option<(
+            crate::client::core_lifecycle::ports::PreparedRuntime,
+            chimera_core_manager::CoreSpec,
+        )>,
+        expected_owner: Option<(ExecutionHost, u64)>,
     ) -> anyhow::Result<
         Option<(
             crate::client::application_workflow::mutation::AppliedCandidate,
@@ -712,86 +756,144 @@ impl LocalRuntimeHost {
             );
         }
 
-        let candidate_ports = self.ports.resolve_candidate(&clash)?;
-        let revision = self.lifecycle.allocate_revision()?;
-        let mut diagnostic_profiles = None;
-        let generated = match profile_source {
-            Some((profiles, app, staged_content)) => {
-                diagnostic_profiles = Some(profiles.clone());
-                Config::generate_runtime_output_from_profiles(
-                    &clash,
-                    target_core,
-                    app,
-                    profiles,
-                    candidate_ports.bindings().clone(),
-                    staged_content,
-                    true,
-                )
-                .await
-            }
-            None => {
-                Config::generate_runtime_output_with_ports(
-                    &clash,
-                    target_core,
-                    candidate_ports.bindings().clone(),
-                )
-                .await
-            }
-        };
-        let (config, exists_keys, transform_output, inspection) = match generated {
-            Ok(output) => (
-                output.config,
-                output.exists_keys,
-                output.postprocessing_output,
-                output.inspection,
-            ),
-            Err(error) => {
-                if let Some(profiles) = diagnostic_profiles.as_ref() {
-                    publish_transform_failure(&self.lifecycle, &error, profiles, revision);
-                } else if let Some(transform) =
-                    error.downcast_ref::<crate::enhance::TransformFailureError>()
-                {
-                    self.lifecycle
-                        .publish_transform_failure(RuntimeTransformFailure {
-                            attempt_revision: revision,
-                            transform_uid: transform.transform_uid.clone(),
-                            scope_uid: transform.scope_uid.clone(),
-                            script_type: transform.script_type,
-                            message: transform.message(),
-                        });
-                }
-                return Err(error);
-            }
-        };
-        self.lifecycle.clear_transform_failure();
-
-        let config_bytes = Config::render_runtime_bytes(&config)?;
-        let core_spec = local_host::core_spec(&target_core)?;
-        let local_ipc = LocalIpcSettings {
-            policy: chimera_core_manager::LocalIpcPolicy::Disable,
-            keep_http_controller: true,
-        };
-        let config_text: Arc<str> = String::from_utf8(config_bytes.clone())?.into();
-        // Use the ref's pure core-owned intent builder for the actual
-        // reconcile. Its digest and bytes are one immutable candidate.
-        let intent = chimera_core::actor_v2::intent::RuntimeIntentBuilder::build(
-            (&target_core).into(),
-            config_text,
-            local_ipc,
-        );
-        let digest = intent.digest.clone();
-        let config_text = intent.config_text.clone();
-        let snapshot = Arc::new(RuntimeSnapshot::from_data(
+        // Use ref's canonical strict candidate directly for Profile TCC.
+        // No second runtime build, port reservation or revision allocation
+        // can change its exact advisory-checked and Core-submitted bytes.
+        let (
+            candidate_ports,
             revision,
-            target_core,
-            config_bytes.clone().into(),
-            RuntimeSnapshotData {
-                config,
-                exists_keys,
-                postprocessing_output: transform_output,
-                inspection: Arc::new(inspection),
-            },
-        ));
+            config_bytes,
+            core_spec,
+            local_ipc,
+            digest,
+            config_text,
+            snapshot,
+        ) = if let Some((prepared, core_spec)) = prepared {
+            anyhow::ensure!(
+                profile_operation_id.is_some(),
+                "a precommit Profile product requires a TCC operation owner"
+            );
+            anyhow::ensure!(
+                target.is_some() && target == prepared.target,
+                "the precommit Profile target does not match the prepared source"
+            );
+            anyhow::ensure!(
+                target_core == prepared.snapshot.target_core
+                    && prepared.intent.core_type == (&target_core).into(),
+                "prepared Profile candidate uses a different Core type"
+            );
+            anyhow::ensure!(
+                prepared.intent.config_text.as_bytes() == prepared.snapshot.product_bytes()
+                    && chimera_core_manager::payload_digest(prepared.snapshot.product_bytes())
+                        == prepared.intent.digest,
+                "Profile check bytes, snapshot and Core intent disagree"
+            );
+            self.lifecycle.clear_transform_failure();
+            (
+                prepared.ports,
+                prepared.snapshot.revision,
+                prepared.snapshot.product_bytes().to_vec(),
+                core_spec,
+                prepared.intent.local_ipc,
+                prepared.intent.digest.clone(),
+                prepared.intent.config_text.clone(),
+                prepared.snapshot,
+            )
+        } else {
+            // A canonical PreparedRuntime does not supply or require default
+            // Clash values; the legacy generator uses its actual source.
+            let clash = clash.context("legacy Profile build requires its original Clash source")?;
+            let candidate_ports = self.ports.resolve_candidate(&clash)?;
+            let revision = self.lifecycle.allocate_revision()?;
+            let mut diagnostic_profiles = None;
+            let generated = match profile_source {
+                Some((profiles, app, staged_content)) => {
+                    diagnostic_profiles = Some(profiles.clone());
+                    Config::generate_runtime_output_from_profiles(
+                        &clash,
+                        target_core,
+                        app,
+                        profiles,
+                        candidate_ports.bindings().clone(),
+                        staged_content,
+                        true,
+                    )
+                    .await
+                }
+                None => {
+                    Config::generate_runtime_output_with_ports(
+                        &clash,
+                        target_core,
+                        candidate_ports.bindings().clone(),
+                    )
+                    .await
+                }
+            };
+            let (config, exists_keys, transform_output, inspection) = match generated {
+                Ok(output) => (
+                    output.config,
+                    output.exists_keys,
+                    output.postprocessing_output,
+                    output.inspection,
+                ),
+                Err(error) => {
+                    if let Some(profiles) = diagnostic_profiles.as_ref() {
+                        publish_transform_failure(&self.lifecycle, &error, profiles, revision);
+                    } else if let Some(transform) =
+                        error.downcast_ref::<crate::enhance::TransformFailureError>()
+                    {
+                        self.lifecycle
+                            .publish_transform_failure(RuntimeTransformFailure {
+                                attempt_revision: revision,
+                                transform_uid: transform.transform_uid.clone(),
+                                scope_uid: transform.scope_uid.clone(),
+                                script_type: transform.script_type,
+                                message: transform.message(),
+                            });
+                    }
+                    return Err(error);
+                }
+            };
+            self.lifecycle.clear_transform_failure();
+
+            let config_bytes = Config::render_runtime_bytes(&config)?;
+            let core_spec = local_host::core_spec(&target_core)?;
+            let local_ipc = LocalIpcSettings {
+                policy: chimera_core_manager::LocalIpcPolicy::Disable,
+                keep_http_controller: true,
+            };
+            let config_text: Arc<str> = String::from_utf8(config_bytes.clone())?.into();
+            // Use the ref's pure core-owned intent builder for the actual
+            // reconcile. Its digest and bytes are one immutable candidate.
+            let intent = chimera_core::actor_v2::intent::RuntimeIntentBuilder::build(
+                (&target_core).into(),
+                config_text,
+                local_ipc,
+            );
+            let digest = intent.digest.clone();
+            let config_text = intent.config_text.clone();
+            let snapshot = Arc::new(RuntimeSnapshot::from_data(
+                revision,
+                target_core,
+                config_bytes.clone().into(),
+                RuntimeSnapshotData {
+                    config,
+                    exists_keys,
+                    postprocessing_output: transform_output,
+                    inspection: Arc::new(inspection),
+                },
+            ));
+            (
+                candidate_ports,
+                revision,
+                config_bytes,
+                core_spec,
+                local_ipc,
+                digest,
+                config_text,
+                snapshot,
+            )
+        };
         let candidate = self
             .runtime_paths
             .create_candidate(&config_bytes)
@@ -864,7 +966,7 @@ impl LocalRuntimeHost {
 
         let operation_id = OperationId::generate();
         let submission = CoreSubmission {
-            expected_owner: None,
+            expected_owner,
             envelope: CoreCommandEnvelope {
                 operation_id,
                 command: CoreCommand::Reconcile(Box::new(ReconcileRequest {
@@ -1996,6 +2098,171 @@ mod tests {
             target: Some("committed-source-42".into()),
         };
         (prepared, receipt.core_spec.clone())
+    }
+
+    #[tokio::test]
+    async fn prepared_profile_tcc_try_holds_exact_checked_bytes_until_confirm() {
+        use chimera_core::actor_v2::intent::RuntimeIntentBuilder;
+
+        let (_root, host, paths) = runtime_host_fixture().await;
+        let session = host.preparation_session();
+        let (mut prepared, spec) =
+            prepared_runtime_fixture(Arc::from("mode: rule\n# exact checked source\n"));
+        let revision = session.revisions.allocate().unwrap();
+        prepared.snapshot = Arc::new(prepared.snapshot.with_revision(revision));
+        prepared.ports = session
+            .ports
+            .resolve_candidate(&ClashConfig::default())
+            .unwrap();
+        // Ref uses the selected source's control-channel policy, not the
+        // legacy Profile path's unconditional local IPC Disable setting.
+        let settings = LocalIpcSettings {
+            policy: LocalIpcPolicy::Prefer,
+            keep_http_controller: false,
+        };
+        prepared.intent = Arc::new(RuntimeIntentBuilder::build(
+            (&prepared.snapshot.target_core).into(),
+            prepared.intent.config_text.clone(),
+            settings,
+        ));
+        let original_snapshot = prepared.snapshot.clone();
+        let exact_bytes = prepared.snapshot.product_bytes().to_vec();
+        let target = prepared.target.clone();
+        let endpoint = recording_endpoint(true);
+        let operation_id = OperationId::generate();
+
+        let (candidate, check) = host
+            .prepare_profile_runtime_prepared(
+                prepared,
+                spec,
+                &endpoint,
+                operation_id.clone(),
+                Some((ExecutionHost::Local, 3)),
+            )
+            .await
+            .expect("TCC Try submits only the canonical strictly prepared candidate");
+        assert_eq!(
+            check,
+            crate::client::application_workflow::mutation::CheckRecord::Passed
+        );
+        assert!(Arc::ptr_eq(&candidate.product, &original_snapshot));
+        assert_eq!(candidate.receipt.revision, revision);
+        assert_eq!(candidate.receipt.target, target);
+        assert_eq!(candidate.receipt.local_ipc, settings);
+        assert!(Arc::ptr_eq(
+            candidate.receipt.artifact.as_ref().unwrap(),
+            &original_snapshot
+        ));
+        assert_eq!(endpoint.submitted.lock().unwrap().len(), 1);
+        {
+            let submitted = endpoint.submitted.lock().unwrap();
+            assert_eq!(
+                submitted[0].0, exact_bytes,
+                "check and Core Try use the same input bytes"
+            );
+            assert_eq!(submitted[0].1, Some(settings));
+            assert_eq!(
+                submitted[0].2,
+                Some((ExecutionHost::Local, 3)),
+                "the Profile Try must fence the current router owner generation"
+            );
+        }
+        assert!(
+            host.pending_profile_candidates
+                .lock()
+                .await
+                .contains_key(&operation_id)
+        );
+        assert!(host.lifecycle.snapshot().promoted.is_none());
+        assert!(host.lifecycle.snapshot().applied.is_none());
+        assert!(
+            !paths.product().exists(),
+            "the Profile source has not committed; no runtime product is public"
+        );
+
+        host.confirm_profile_runtime(&operation_id, candidate.clone())
+            .await
+            .expect("only the source TCC Confirm may promote the exact product");
+        assert_eq!(tokio::fs::read(paths.product()).await.unwrap(), exact_bytes);
+        assert!(Arc::ptr_eq(
+            &host.lifecycle.snapshot().applied.unwrap(),
+            &original_snapshot
+        ));
+        assert!(host.pending_profile_candidates.lock().await.is_empty());
+        assert_eq!(
+            endpoint.submitted.lock().unwrap().len(),
+            1,
+            "Confirm must not reapply Core"
+        );
+
+        // A duplicate Confirm after the candidate file is consumed must
+        // promote identical receipt bytes, still without resubmitting Core.
+        host.confirm_profile_runtime(&operation_id, candidate)
+            .await
+            .unwrap();
+        assert_eq!(endpoint.submitted.lock().unwrap().len(), 1);
+        host.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn prepared_profile_tcc_cancel_discards_held_file_without_publication() {
+        let (_root, host, paths) = runtime_host_fixture().await;
+        let (prepared, spec) = prepared_runtime_fixture(Arc::from("mode: rule\n"));
+        let endpoint = recording_endpoint(true);
+        let operation_id = OperationId::generate();
+        let (candidate, _) = host
+            .prepare_profile_runtime_prepared(prepared, spec, &endpoint, operation_id.clone(), None)
+            .await
+            .unwrap();
+        assert!(
+            host.pending_profile_candidates
+                .lock()
+                .await
+                .contains_key(&operation_id)
+        );
+        assert!(!paths.product().exists());
+        assert!(host.lifecycle.snapshot().applied.is_none());
+
+        // The higher Profile TCC coordinator restores the prior Core baseline
+        // before calling Discard on an Aborted source. Discard itself must be
+        // strictly a staged-file cleanup and never a publication/reapply.
+        host.discard_profile_runtime(&operation_id).await;
+        assert!(host.pending_profile_candidates.lock().await.is_empty());
+        assert!(!paths.product().exists());
+        assert!(host.lifecycle.snapshot().applied.is_none());
+        assert_eq!(endpoint.submitted.lock().unwrap().len(), 1);
+        assert!(
+            host.accepted_runtime_receipt().is_some(),
+            "Discard does not falsely claim a restored Core; TCC must restore baseline"
+        );
+        drop(candidate);
+        host.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn prepared_profile_tcc_try_rejects_mismatched_source_before_core_submit() {
+        let (_root, host, paths) = runtime_host_fixture().await;
+        let (mut prepared, spec) = prepared_runtime_fixture(Arc::from("mode: rule\n"));
+        let endpoint = recording_endpoint(true);
+        let operation_id = OperationId::generate();
+        prepared.target = Some("source-changed-after-prepare".into());
+        let result = host
+            .reconcile_with_profile_source(
+                None,
+                prepared.snapshot.target_core,
+                &endpoint,
+                None,
+                Some("older-source".into()),
+                Some(operation_id),
+                Some((prepared, spec)),
+                None,
+            )
+            .await;
+        assert!(result.unwrap_err().to_string().contains("target"));
+        assert!(endpoint.submitted.lock().unwrap().is_empty());
+        assert!(host.pending_profile_candidates.lock().await.is_empty());
+        assert!(!paths.product().exists());
+        host.shutdown().await.unwrap();
     }
 
     #[tokio::test]

@@ -3411,6 +3411,28 @@ impl ProfileRuntime for CoreLifecycleWorkflow {
         crate::client::application_workflow::mutation::AppliedCandidate,
         crate::client::application_workflow::mutation::CheckRecord,
     )> {
+        // Real Profile TCC Try owns a private candidate across its source
+        // decision. Build that candidate through the *same* ref session as
+        // Checked/committed sources, but do not enroll a Checked inbox entry
+        // or publish the product before TCC's own Confirm decision.
+        if let Some(gate) = self.checked_gate.get()
+            && self.core.runtime_preparation_session().is_some()
+        {
+            let run_type = crate::core::RunType::classify(
+                inputs.app.enable_service_mode,
+                crate::core::service::ipc::get_ipc_state(),
+            );
+            let (prepared, core_spec) = gate.prepare_profile_tcc_candidate(inputs).await?;
+            return self
+                .core
+                .prepare_profile_runtime_prepared(
+                    prepared,
+                    core_spec,
+                    run_type,
+                    operation_id.clone(),
+                )
+                .await;
+        }
         let target = inputs.checked_target_key().map_err(|error| {
             anyhow::Error::new(
                 crate::client::application_workflow::mutation::RuntimeCheckFailure::

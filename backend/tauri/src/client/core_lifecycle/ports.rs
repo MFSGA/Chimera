@@ -454,6 +454,20 @@ pub(crate) trait CoreLifecyclePort: Send + Sync {
     ) -> anyhow::Result<CheckRecord> {
         anyhow::bail!("this core lifecycle adapter cannot validate a typed Profile runtime")
     }
+    /// Profile TCC's precommit Try: consume the same Core-owned prepared
+    /// candidate as source Checked, but retain its staged file until the
+    /// source transaction explicitly Confirms or Cancels. Only the production
+    /// Core host supports this path; no second revision allocator is allowed.
+    async fn prepare_profile_runtime_prepared(
+        &self,
+        _prepared: PreparedRuntime,
+        _core_spec: chimera_core_manager::CoreSpec,
+        _run_type: RunType,
+        _operation_id: OperationId,
+    ) -> anyhow::Result<(AppliedCandidate, CheckRecord)> {
+        anyhow::bail!("this Core adapter cannot hold a prepared Profile TCC candidate")
+    }
+
     async fn prepare_profile_runtime(
         &self,
         _clash: ClashConfig,

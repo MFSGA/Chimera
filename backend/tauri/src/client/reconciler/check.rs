@@ -179,6 +179,25 @@ impl CandidateCheck {
         }
     }
 
+    /// A Profile TCC Try must use the same Core-owned revision allocator,
+    /// candidate port reservation and strict-transform builder as the ref
+    /// Checked source gate. It deliberately does not enroll a Checked inbox
+    /// or publish any source: the TCC owner holds the Core-applied candidate
+    /// until its existing transaction decision reaches Confirm or Cancel.
+    pub(in crate::client) async fn prepare_profile_tcc_candidate(
+        &self,
+        inputs: super::inputs::RuntimeInputs,
+    ) -> anyhow::Result<(PreparedRuntime, chimera_core_manager::CoreSpec)> {
+        let target = inputs.checked_target_key()?;
+        let prepared = self.preparation.prepare_candidate_inputs(inputs).await?;
+        anyhow::ensure!(
+            prepared.target.as_deref() == Some(target.as_str()),
+            "Profile Try candidate target changed during preparation"
+        );
+        let spec = self.preparation.core_spec(&prepared.snapshot.target_core)?;
+        Ok((prepared, spec))
+    }
+
     /// Build the latest committed RuntimeInputs through the same canonical
     /// session that checked sources use, but without writing a new source,
     /// creating an inbox entry, or submitting a Core command. Only the sole
@@ -492,6 +511,48 @@ mod tests {
             },
             staged: BTreeMap::new(),
         }
+    }
+
+    #[tokio::test]
+    async fn profile_tcc_try_prepares_one_strict_candidate_without_source_or_checked_inbox() {
+        use crate::client::reconciler::inputs::{FrozenProfileContent, RuntimeInputs};
+
+        let (gate, builder, validator, inbox) = gate(RuntimeCheckOutcome::Passed, false).await;
+        let inputs = RuntimeInputs {
+            app: ChimeraAppConfig::default(),
+            clash: ClashConfig::default(),
+            profiles: Arc::new(Profiles::default()),
+            content: FrozenProfileContent::default(),
+        };
+        let target = inputs.checked_target_key().unwrap();
+        let (prepared, spec) = gate.prepare_profile_tcc_candidate(inputs).await.unwrap();
+        assert_eq!(prepared.target.as_deref(), Some(target.as_str()));
+        assert_eq!(
+            prepared.snapshot.product_bytes(),
+            prepared.intent.config_text.as_bytes()
+        );
+        assert_eq!(
+            prepared.intent.digest,
+            chimera_core_manager::payload_digest(prepared.snapshot.product_bytes())
+        );
+        assert_eq!(spec.kind, chimera_core_manager::CoreKind::Mihomo);
+        assert_eq!(
+            builder.prepared.lock().unwrap().as_slice(),
+            &[(true, target)],
+            "Profile TCC must use strict-transform preparation, not a postcommit build"
+        );
+        assert!(
+            validator.checked.lock().unwrap().is_empty(),
+            "TCC's own Core owner performs the advisory check before a held Try"
+        );
+        assert!(
+            inbox.checked.lock().unwrap().is_empty(),
+            "TCC may not enqueue an unrelated Checked transaction"
+        );
+        assert!(
+            inbox.committed.lock().unwrap().is_empty(),
+            "TCC cannot publish a source before its decision"
+        );
     }
 
     #[tokio::test]
