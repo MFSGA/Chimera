@@ -293,3 +293,10 @@ cargo clippy --manifest-path backend/Cargo.toml --all-targets --all-features
 - ref 对应：ref/backend/nyanpasu-core/src/client/mod.rs 的 create_profile、try_auto_activate_if_none 与 Chimera backend/tauri/src/client/mod.rs 对应入口保持创建 Config 后空选择自动激活协议，不能绕过该业务行为。
 - 本轮范围：只在 tauri-e2e/specs/proxy-localization.e2e.ts 调整测试边界；真正点击 OK 后等待创建对话框名称输入框消失，再调用 get_profiles、save_profile_file、activate_profile，最后通过可见 Profile 卡片切换。保留严格 UI/后端断言、脱敏日志和清理；未动生产 Runtime/持久化/CoreLifecycle。
 - 验证：本地 E2E TS 和格式检查通过。此前 607b6fdf（run 45070826318）新增阶段日志证实点击 OK、配置行显示、get_profiles 返回全部完成，但随后第317行 save_profile_file 超时；该 SHA 尚未包含本轮等待对话框关闭的修复。Windows 原生 smoke 修复版新 SHA 尚未执行，不能视作问题已经修复。若等待对话框关闭超时，需结合该时刻截图与本机后端日志追踪创建自动激活；若保存仍超时，检查 actor commit_with_resources 与 runtime preflight 的交接。
+
+### CI-20261122-PROFILE-CREATE-GATE：Windows 创建未返回的真实阻塞边界
+
+- 证据：Windows E2E https://github.com/MFSGA/Chimera/actions/runs/45072061799（commit baa10cab）按“真正点击 OK、等待对话框内 name input 消失”执行；只出现点击前、点击后两个阶段日志。第 308 行的 waitForDisplayed(reverse) 在 30 秒内未完成，截图仍显示创建配置与 OK loading。原先 607b6fdf 的独立读能发现新 Profile，但保存命令超时，不能据此认为 create_profile mutation 已结束。上一轮所谓“仅测试串行化即可修复”已被反证：**问题不止测试抢跑，创建命令的某个异步阶段本身阻塞**。
+- 当前已核对的真实链路：ProfileDialog.onSubmit → useProfile.create.mutateAsync → IPC create_profile → ChimeraClient.create_profile → ProfilesActor.Add（源文档持久化、物化与 jobs/reconcile）→ try_auto_activate_if_none → ProfilesActor.SetCurrentIfNone → run_state_write → CandidateCheck::validate（捕获、构建、Core -t）→ CoreLifecycleCheckedInbox → 版本条件提交。ref 具有同样创建后自动激活原则，不得绕开/跳过以获得绿色测试。
+- 本轮仅 E2E 构建诊断：backend/tauri/src/state/profiles/actor.rs、client/reconciler/{check,adapters}.rs 加入 cfg(feature = "e2e") 的固定 stage 日志，涵盖 Add、源持久化、source reconcile、自动激活、候选捕获、CoreCheck 和 Checked inbox；不记录 Profile 名称、UID、路径、YAML、代理或凭证。默认生产构建完全不编入这些日志，避免改变核心工作流和耗时。
+- 验证与限制：Tauri cargo check --features e2e、候选检验测试 13/13、Profiles 测试 94/94 通过（原有 warning 存在）。未修改生产业务语义，真实 Windows 新 SHA 尚未重跑；不能宣布 Profile 创建故障修复。下一次 E2E artifact 可用 stage 的最后一条确定阻塞边界；仅在有可复现的源/RuntimeGate 契约测试后再实施小范围正式修复。不得增加测试超时或绕开内核检查。

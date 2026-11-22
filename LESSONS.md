@@ -1440,3 +1440,9 @@ backend/Cargo.toml -p chimera --lib core::clash::proxies::tests:: -- --nocapture
 - 证据：Windows Tauri E2E run 45067708381 的 proxy-localization.e2e.ts 第309行是 save_profile_file，而不是点击 OK。创建后的 get_profiles 可读取新增 UID，但失败截图仍显示对话框和 OK loading；原生日志报告 execute/sync 超时。此前两轮 45062874258、45064250656 均同样失败。这说明测试可能在创建 UI 未结算前执行文件写入，不能仅凭截图确认具体 Rust await 的根因。
 - 测试修复：真实点击创建后先等待对话框名称输入框消失（ProfileDialog 只有 create.mutateAsync 完成后才 onClose），再读取 UID、保存文件、清空选择并通过用户点击激活。保留 UI/后端断言和测试资源恢复，并分别记录脱敏阶段日志。未增加脚本超时、跳过创建或修改生产代码。
 - 验证边界：E2E TypeScript 检查已通过；在本轮修复之前的最新 Windows smoke run 45070826318（SHA 607b6fdf）复现了同样的超时：阶段日志确认已点击创建、列表可见、权威 get_profiles 返回，堆栈指向第317行 save_profile_file。该 SHA 尚未包含“等待对话框关闭”修复，因此不能作为本轮修复的 E2E 结果。若停留在对话框，下一轮从阶段日志定位 create_profile/自动激活，而不是让保存操作与它竞争。
+
+### LESSON-20261122-003：已发布 Profile 只是中间态，不等于 create_profile mutation 完成
+
+- 失败用例：Windows E2E commit baa10cab / run 45072061799 真正点击 UI OK 后，创建对话框在 30 秒内不关闭。其测试故意先等待 UI 结束再读 UID 和保存文件；因此原先“保存抢跑就是根因”的推断不充分。先前源文档已经可读只证明 Actor 发布了某个版本，并不能证明创建后 auto-activation、Core 验证、Checked admission 等后续步骤已结算。
+- 行为约束：保留 ref 的 create_profile 后条件自动激活协议和 source commit。不得把 auto-activation 改为纯 fire-and-forget、在 UI 中跳过错误、将长时间等待认定为提交成功或简单放宽 WebDriver 超时。
+- 诊断策略：只在 feature=e2e 的 Profile Add、Source Publish、Reconcile、SetCurrentIfNone、CandidateCheck 和 CoreCheck 阶段打无参数的 WARN stage 标记。以最新原生失败 artifact 的最后已到达阶段缩小因果链，再建复现与真正的事务/队列/锁序修复。本机相关 Rust 回归编译通过不代表 Windows UI 问题已解决。
