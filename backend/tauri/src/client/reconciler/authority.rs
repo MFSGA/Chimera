@@ -68,6 +68,18 @@ pub(in crate::client) trait RuntimeSourceAuthority:
     ) -> anyhow::Result<Option<Selection>> {
         Ok(None)
     }
+
+    /// The legacy SourceCommitted/Retry path has no domain CAS version. A
+    /// prepared submission can only be admitted when one bounded read proves
+    /// its exact complete target and its connection-interruption policy.
+    /// Test/legacy authorities have no such evidence and fail closed.
+    async fn verify_committed_prepared_target(
+        &self,
+        _target: &str,
+        _previous: Option<&Selection>,
+    ) -> anyhow::Result<Option<(Selection, Option<SelectionChange>)>> {
+        Ok(None)
+    }
 }
 
 pub(in crate::client) struct LiveSourceAuthority {
@@ -260,6 +272,24 @@ impl RuntimeSourceAuthority for LiveSourceAuthority {
         let current = self.read_committed_target().await?;
         Ok((current.target == applied_target).then_some(current.selection))
     }
+
+    async fn verify_committed_prepared_target(
+        &self,
+        target: &str,
+        previous: Option<&Selection>,
+    ) -> anyhow::Result<Option<(Selection, Option<SelectionChange>)>> {
+        let current = self.read_committed_target().await?;
+        if current.target != target {
+            return Err(anyhow::Error::new(super::attempt::CommittedTargetAdvanced)
+                .context("source changed before the prepared committed runtime could be applied"));
+        }
+        let interruption = current.selection.interruption_with_policy(
+            previous,
+            current.interrupt_on_mode,
+            current.interrupt_on_profile,
+        );
+        Ok(Some((current.selection, interruption)))
+    }
 }
 
 #[cfg(test)]
@@ -398,6 +428,14 @@ mod tests {
         );
         assert_eq!(
             authority
+                .verify_committed_prepared_target(&initial.target, Some(&previous))
+                .await
+                .unwrap(),
+            Some((initial.selection.clone(), Some(SelectionChange::Mode))),
+            "legacy prepared Core admission must use the same source policy as Checked Apply"
+        );
+        assert_eq!(
+            authority
                 .verify_interruption(SourceDomain::Profiles, 0, &initial.target, None)
                 .await
                 .unwrap(),
@@ -425,11 +463,28 @@ mod tests {
             "a stale target must use the single owner's latest-source recovery"
         );
 
+        let mismatch = authority
+            .verify_committed_prepared_target("stale-legacy-runtime", Some(&previous))
+            .await
+            .unwrap_err();
+        assert!(
+            mismatch
+                .downcast_ref::<crate::client::reconciler::attempt::CommittedTargetAdvanced>()
+                .is_some()
+        );
+
         content
             .0
             .lock()
             .unwrap()
             .insert("selected.yaml".into(), "mode: direct\n".into());
+        assert!(
+            authority
+                .verify_committed_prepared_target(&initial.target, Some(&previous))
+                .await
+                .is_err(),
+            "managed Profile content changes must invalidate a prepared Local Core admission"
+        );
         assert!(
             authority
                 .selection_for_applied_target(&initial.target)

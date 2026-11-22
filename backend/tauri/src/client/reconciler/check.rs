@@ -179,6 +179,34 @@ impl CandidateCheck {
         }
     }
 
+    /// Build the latest committed RuntimeInputs through the same canonical
+    /// session that checked sources use, but without writing a new source,
+    /// creating an inbox entry, or submitting a Core command. Only the sole
+    /// lifecycle worker may consume this product after a full target fence.
+    pub(in crate::client) async fn prepare_committed_target(
+        &self,
+        app: ChimeraAppConfig,
+        clash: ClashConfig,
+        expected_target: &str,
+    ) -> anyhow::Result<(PreparedRuntime, chimera_core_manager::CoreSpec)> {
+        let inputs = self
+            .preparation
+            .capture_committed_inputs(app, clash)
+            .await
+            .1;
+        anyhow::ensure!(
+            inputs.target_key().as_deref() == Some(expected_target),
+            "committed runtime inputs changed during prepared build capture"
+        );
+        let prepared = self.preparation.prepare_inputs(inputs).await?;
+        anyhow::ensure!(
+            prepared.target.as_deref() == Some(expected_target),
+            "prepared runtime was built for a different source target"
+        );
+        let spec = self.preparation.core_spec(&prepared.snapshot.target_core)?;
+        Ok((prepared, spec))
+    }
+
     /// Migration bridge for legacy postcommit Application/Clash workflows:
     /// use the upstream candidate builder and validator, but do not enqueue
     /// checked bytes that the old apply path cannot consume safely yet.
@@ -464,6 +492,63 @@ mod tests {
             },
             staged: BTreeMap::new(),
         }
+    }
+
+    #[tokio::test]
+    async fn committed_target_uses_one_core_owned_preparation_without_check_or_inbox() {
+        use crate::client::reconciler::inputs::{FrozenProfileContent, RuntimeInputs};
+
+        let (gate, builder, validator, inbox) = gate(RuntimeCheckOutcome::Passed, false).await;
+        let app = ChimeraAppConfig::default();
+        let clash = ClashConfig::default();
+        let target = RuntimeInputs {
+            app: app.clone(),
+            clash: clash.clone(),
+            profiles: Arc::new(Profiles::default()),
+            content: FrozenProfileContent::default(),
+        }
+        .checked_target_key()
+        .unwrap();
+        let (prepared, spec) = gate
+            .prepare_committed_target(app.clone(), clash.clone(), &target)
+            .await
+            .unwrap();
+        assert_eq!(prepared.target.as_deref(), Some(target.as_str()));
+        assert_eq!(
+            prepared.intent.config_text.as_bytes(),
+            prepared.snapshot.product_bytes()
+        );
+        assert_eq!(
+            prepared.intent.digest,
+            chimera_core_manager::payload_digest(prepared.snapshot.product_bytes())
+        );
+        assert_eq!(spec.kind, chimera_core_manager::CoreKind::Mihomo);
+        assert_eq!(
+            builder.prepared.lock().unwrap().as_slice(),
+            &[(false, target.clone())]
+        );
+        assert!(
+            validator.checked.lock().unwrap().is_empty(),
+            "the legacy committed build is not an uncommitted candidate check"
+        );
+        assert!(inbox.checked.lock().unwrap().is_empty());
+        assert!(inbox.committed.lock().unwrap().is_empty());
+
+        let bad = gate
+            .prepare_committed_target(app, clash, "obsolete-committed-target")
+            .await;
+        assert!(
+            bad.err()
+                .expect("obsolete committed target must be rejected")
+                .to_string()
+                .contains("changed during prepared build capture")
+        );
+        assert_eq!(
+            builder.prepared.lock().unwrap().len(),
+            1,
+            "stale source must be rejected before allocating/building another product"
+        );
+        assert!(inbox.checked.lock().unwrap().is_empty());
     }
 
     #[tokio::test]

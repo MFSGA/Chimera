@@ -5489,6 +5489,30 @@ mod tests {
             anyhow::bail!("this fixture requires typed committed Profiles")
         }
 
+        async fn reconcile_prepared_outcome(
+            &self,
+            prepared: ports::PreparedRuntime,
+            spec: chimera_core_manager::CoreSpec,
+        ) -> anyhow::Result<ports::CheckedApplyOutcome> {
+            anyhow::ensure!(
+                prepared.intent.config_text.as_bytes() == prepared.snapshot.product_bytes(),
+                "prepared source bytes were not submitted verbatim"
+            );
+            anyhow::ensure!(
+                spec.kind == chimera_core_manager::CoreKind::Mihomo,
+                "unexpected CoreSpec"
+            );
+            self.submissions.fetch_add(1, AtomicOrdering::AcqRel);
+            let mut receipt = crate::client::ports::test_runtime_receipt(Default::default());
+            receipt.target = prepared.target;
+            receipt.revision = prepared.snapshot.revision;
+            receipt.config_digest = prepared.intent.digest.clone();
+            *self.active.lock().unwrap() = Some(Arc::new(receipt));
+            Ok(ports::CheckedApplyOutcome {
+                replaced: Some(true),
+            })
+        }
+
         async fn reconcile_profiles(
             &self,
             _: ClashConfig,
@@ -15146,6 +15170,271 @@ mod tests {
                 .then(|| self.selection.clone())
                 .flatten())
         }
+
+        async fn verify_committed_prepared_target(
+            &self,
+            target: &str,
+            _previous: Option<&crate::client::reconciler::committed::Selection>,
+        ) -> anyhow::Result<
+            Option<(
+                crate::client::reconciler::committed::Selection,
+                Option<crate::client::reconciler::committed::SelectionChange>,
+            )>,
+        > {
+            self.reads.fetch_add(1, AtomicOrdering::Relaxed);
+            if self.current.lock().unwrap().2 != target {
+                return Err(anyhow::Error::new(
+                    crate::client::reconciler::attempt::CommittedTargetAdvanced,
+                ));
+            }
+            Ok(self
+                .selection
+                .clone()
+                .map(|selection| (selection, self.inferred_interruption)))
+        }
+    }
+
+    /// A build-only gate for the legacy stable-Local bridge. Production uses
+    /// RuntimeBuildService from the active Core-owned preparation session;
+    /// this fake records whether the workflow submitted *prepared* bytes.
+    struct PreparedLocalBuild;
+
+    #[async_trait]
+    impl crate::client::reconciler::ports::RuntimeBuildPort for PreparedLocalBuild {
+        async fn capture_content(
+            &self,
+            _: &chimera_config::profile::Profiles,
+        ) -> crate::client::reconciler::inputs::FrozenProfileContent {
+            Default::default()
+        }
+
+        fn core_spec(
+            &self,
+            _: &ClashCore,
+        ) -> Result<chimera_core_manager::CoreSpec, chimera_core::client::core_spec::CoreSpecError>
+        {
+            Ok(chimera_core_manager::CoreSpec {
+                kind: chimera_core_manager::CoreKind::Mihomo,
+                binary_path: "/tmp/prepared-local-core".into(),
+                version: None,
+                features: Vec::new(),
+            })
+        }
+
+        async fn build(
+            &self,
+            revision: crate::client::runtime::RuntimeRevision,
+            inputs: crate::client::reconciler::inputs::RuntimeInputs,
+            _: chimera_config::runtime::executor::ResolvedPortBindings,
+            _: bool,
+        ) -> Result<
+            Arc<crate::client::runtime::RuntimeSnapshot>,
+            chimera_core::client::runtime_build::RuntimeBuildError,
+        > {
+            Ok(Arc::new(crate::client::runtime::RuntimeSnapshot::new(
+                revision,
+                inputs.app.core,
+                b"mode: rule\n".to_vec(),
+                serde_yaml::Mapping::new(),
+            )))
+        }
+
+        async fn publish(
+            &self,
+            _: &crate::client::runtime::RuntimeSnapshot,
+        ) -> Result<(), chimera_contracts::publish::PublishRuntimeError> {
+            panic!("the Core owns publication after confirming a prepared apply")
+        }
+    }
+
+    struct UnusedPreparedCheck;
+    #[async_trait]
+    impl crate::client::reconciler::ports::RuntimeValidatorPort for UnusedPreparedCheck {
+        async fn check(
+            &self,
+            _: crate::client::reconciler::ports::RuntimeCheckRequest<'_>,
+        ) -> crate::client::reconciler::ports::RuntimeCheckOutcome {
+            panic!("source-committed preparation is not a precommit candidate check")
+        }
+    }
+
+    struct UnusedPreparedInbox;
+    #[async_trait]
+    impl crate::client::reconciler::check::CheckedCandidatePort for UnusedPreparedInbox {
+        async fn checked(
+            &self,
+            _: chimera_contracts::mutation::ConfigDomain,
+            _: ports::PreparedRuntime,
+            _: chimera_core_manager::CoreSpec,
+        ) -> Result<(), Arc<chimera_contracts::runtime_error::RuntimeError>> {
+            panic!("legacy prepared apply must not enroll a second Checked request")
+        }
+        fn source_committed(
+            &self,
+            _: chimera_contracts::mutation::ConfigDomain,
+            _: chimera_core::state::Version,
+        ) {
+            panic!("legacy prepared apply cannot publish a source")
+        }
+        fn abort_uncommitted(&self, _: chimera_contracts::mutation::ConfigDomain) {}
+        async fn checked_for_request(
+            &self,
+            _: chimera_contracts::mutation::ConfigDomain,
+            _: ports::PreparedRuntime,
+            _: chimera_core_manager::CoreSpec,
+            _: String,
+            _: bool,
+        ) -> Result<(), Arc<chimera_contracts::runtime_error::RuntimeError>> {
+            panic!("legacy prepared apply must not enroll a Checked receipt")
+        }
+        fn source_committed_for_request(
+            &self,
+            _: chimera_contracts::mutation::ConfigDomain,
+            _: chimera_core::state::Version,
+            _: String,
+        ) {
+            panic!("legacy prepared apply cannot publish a source")
+        }
+        fn abort_uncommitted_for_request(
+            &self,
+            _: chimera_contracts::mutation::ConfigDomain,
+            _: String,
+        ) {
+        }
+    }
+
+    #[tokio::test]
+    async fn stable_local_reconcile_uses_one_prepared_core_submission_and_source_fences() {
+        use crate::client::{
+            ports::{RuntimePreparationSession, SessionPortResolver},
+            reconciler::{
+                check::{Args, CandidateCheck},
+                committed::Selection,
+                inputs::{FrozenProfileContent, RuntimeInputs},
+            },
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let path = |name: &str| Utf8PathBuf::from_path_buf(dir.path().join(name)).unwrap();
+        let app = chimera_config::application::ChimeraAppConfig {
+            core: ClashCore::Mihomo,
+            enable_builtin_enhanced: false,
+            ..Default::default()
+        };
+        let clash = ClashConfig::default();
+        let profiles = chimera_config::profile::Profiles::default();
+        let target_inputs = RuntimeInputs {
+            app: app.clone(),
+            clash: clash.clone(),
+            profiles: Arc::new(profiles.clone()),
+            content: FrozenProfileContent::default(),
+        };
+        let target = target_inputs.checked_target_key().unwrap();
+        let selection = Selection::of(&target_inputs);
+        let app_manager = chimera_state_engine::PersistentStateManagerSetup::<
+            chimera_config::application::ChimeraAppConfig,
+        >::builder()
+        .config_path(path("application.yaml"))
+        .assemble()
+        .from_state(app.clone());
+        let clash_manager =
+            chimera_state_engine::PersistentStateManagerSetup::<ClashConfig>::builder()
+                .config_path(path("clash.yaml"))
+                .assemble()
+                .from_state(clash.clone());
+        let profile_manager =
+            PersistentStateManagerSetup::<chimera_config::profile::Profiles>::builder()
+                .config_path(path("profiles.yaml"))
+                .assemble()
+                .from_state(profiles)
+                .await
+                .unwrap();
+        let runtime_lifecycle = Arc::new(crate::client::runtime::RuntimeLifecycle::default());
+        let gate = Arc::new(CandidateCheck::new(Args {
+            application: app_manager.snapshot_handle(),
+            clash: clash_manager.snapshot_handle(),
+            profile_content: crate::state::mutation::ProfileContentReader::new(
+                profile_manager.snapshot_handle(),
+                crate::state::mutation::ProfileContentLock::default(),
+            ),
+            builder: Arc::new(PreparedLocalBuild),
+            session: RuntimePreparationSession {
+                revisions: runtime_lifecycle.revision_allocator(),
+                ports: Arc::new(SessionPortResolver::new(runtime_lifecycle)),
+            },
+            validator: Arc::new(UnusedPreparedCheck),
+            workflow: Arc::new(UnusedPreparedInbox),
+        }));
+        let core = Arc::new(ReceiptProofCore {
+            active: Mutex::new(None),
+            publish_wrong_target: false,
+            change_instance_between_reads: false,
+            status_reads: AtomicUsize::new(0),
+            submissions: AtomicUsize::new(0),
+            stops: AtomicUsize::new(0),
+            service_to_retire: None,
+            retire_calls: AtomicUsize::new(0),
+        });
+        let authority = TestSourceAuthority::for_selected_source(
+            SourceDomain::Profiles,
+            7,
+            &target,
+            selection.clone(),
+        );
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let workflow = CoreLifecycleWorkflow::new(
+            ApplicationClient::static_state(app.clone()),
+            ClashConfigClient::legacy_with(clash.clone()).unwrap(),
+            None,
+            core.clone(),
+            Arc::new(RecordingInstaller {
+                events: events.clone(),
+            }),
+            RuntimePaths::from_config_root(dir.path().to_path_buf()),
+            Arc::new(RecordingService { events }),
+        )
+        .with_source_authority(Some(authority.clone()));
+        workflow.install_checked_gate(gate).unwrap();
+
+        assert!(
+            workflow
+                .try_reconcile_prepared_local(&target, &app, &clash, RunType::Service)
+                .await
+                .is_none(),
+            "Service owner selection still belongs to S2, never the Local prepared helper"
+        );
+        workflow
+            .try_reconcile_prepared_local(&target, &app, &clash, RunType::Normal)
+            .await
+            .expect("a stable stopped Local Core can use the prepared path")
+            .unwrap();
+        assert_eq!(core.submissions.load(AtomicOrdering::Acquire), 1);
+        let receipt = core.active.lock().unwrap().clone().unwrap();
+        assert_eq!(receipt.target.as_deref(), Some(target.as_str()));
+        assert_eq!(
+            receipt.config_digest,
+            chimera_core_manager::payload_digest(b"mode: rule\n")
+        );
+        assert_eq!(workflow.applied_selection_for_tests(), Some(selection));
+        assert!(workflow.take_checked_connection_effect().is_none());
+        assert_eq!(
+            authority.reads.load(AtomicOrdering::Relaxed),
+            3,
+            "source target must be proved before the build, before Core, and after apply"
+        );
+
+        // A later source promotion cannot replay old prepared bytes or send
+        // a second Core command, even while the old accepted Core is running.
+        authority.current.lock().unwrap().2 = "superseded-source".into();
+        let err = workflow
+            .try_reconcile_prepared_local(&target, &app, &clash, RunType::Normal)
+            .await
+            .expect("source rejection is a real result, not a fallback license")
+            .unwrap_err();
+        assert!(
+            err.downcast_ref::<crate::client::reconciler::attempt::CommittedTargetAdvanced>()
+                .is_some()
+        );
+        assert_eq!(core.submissions.load(AtomicOrdering::Acquire), 1);
     }
 
     #[tokio::test]

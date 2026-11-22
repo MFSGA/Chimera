@@ -1036,10 +1036,12 @@ impl CoreLifecycleWorkflow {
             ),
             _ => false,
         };
-        // All non-Checked lifecycle operations may change the active Core or
-        // execution host, and do not yet return the ref AppliedCandidate.
-        // Never compare a later Checked selection against that obsolete state.
-        if !matches!(&command, Command::ApplyChecked { .. }) {
+        // Only SourceCommitted/Retry may need the last proven selection to
+        // compute the prepared Local Core's one-shot connection policy. All
+        // other legacy commands invalidate it before their first Core action.
+        let prepared_selection_candidate =
+            matches!(&command, Command::ReconcileSource | Command::Reconcile);
+        if !prepared_selection_candidate && !matches!(&command, Command::ApplyChecked { .. }) {
             self.applied_selection.lock().take();
         }
         let result = match command {
@@ -1209,6 +1211,9 @@ impl CoreLifecycleWorkflow {
                 }
             }
         };
+        if prepared_selection_candidate && result.is_err() {
+            self.applied_selection.lock().take();
+        }
         self.refresh_service_recovery_host().await;
         #[cfg(test)]
         {
@@ -1784,6 +1789,121 @@ impl CoreLifecycleWorkflow {
         }
     }
 
+    /// Ref's prepared submission for a stable Local Core owner. Startup and
+    /// Service handoffs still use their explicit S2 owner transitions: a
+    /// prepared submission may *not* select or retire a Core host.
+    ///
+    /// This returns None only before touching Core, when the canonical
+    /// session or the selected Local owner is unavailable. A proven stopped
+    /// Local owner has no old connections to interrupt; a live Local owner
+    /// requires both an instance-bound receipt and an applied selection. After admission,
+    /// all errors are returned to the one Actor as a real apply outcome;
+    /// no second legacy submit may replay the candidate.
+    pub(super) async fn try_reconcile_prepared_local(
+        &self,
+        target: &str,
+        app: &ChimeraAppConfig,
+        clash: &chimera_config::clash::config::ClashConfig,
+        run_type: crate::core::RunType,
+    ) -> Option<anyhow::Result<()>> {
+        if run_type != crate::core::RunType::Normal || self.core.outcome_uncertain() {
+            return None;
+        }
+        let authority = self.source_authority.as_ref()?;
+        let gate = self.checked_gate.get()?;
+        let before = self.core.status().await.ok()?;
+        if before.run_type != crate::core::RunType::Normal {
+            return None;
+        }
+        let current_receipt = self.core.active_runtime_receipt().await.ok()?;
+        let (receipt, previous) = match &before.state {
+            CoreState::Running => {
+                let receipt = current_receipt?;
+                if receipt.host != ExecutionHost::Local {
+                    return None;
+                }
+                (Some(receipt), Some(self.applied_selection.lock().clone()?))
+            }
+            CoreState::Stopped(_) if current_receipt.is_none() => (None, None),
+            _ => return None,
+        };
+
+        let expected = match authority
+            .verify_committed_prepared_target(target, previous.as_ref())
+            .await
+        {
+            Ok(Some(expected)) => expected,
+            Ok(None) => return None,
+            Err(error) => return Some(Err(error)),
+        };
+        let result = async {
+            let (prepared, core_spec) = gate
+                .prepare_committed_target(app.clone(), clash.clone(), target)
+                .await?;
+            let current = authority
+                .verify_committed_prepared_target(target, previous.as_ref())
+                .await?
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "committed source authority cannot prove the prepared Local target"
+                    )
+                })?;
+            if current != expected {
+                return Err(anyhow::Error::new(CommittedTargetAdvanced).context(
+                    "committed selection or interruption policy advanced during runtime build",
+                ));
+            }
+            let observed = self.core.status().await?;
+            let latest_receipt = self.core.active_runtime_receipt().await?;
+            let still_receipted = match (receipt.as_ref(), latest_receipt.as_ref()) {
+                (Some(before), Some(after)) => Arc::ptr_eq(before, after),
+                (None, None) => true,
+                _ => false,
+            };
+            if !same_core_status(&before, &observed) || !still_receipted {
+                return Err(
+                    crate::client::reconciler::attempt::OwnershipTransitionPending::waiting(
+                        "Local Core owner changed while preparing the committed product",
+                    )
+                    .into(),
+                );
+            }
+            let old_api = if expected.1.is_some() {
+                Some(self.core.capture_interruption_source().await)
+            } else {
+                None
+            };
+            let applied = self
+                .core
+                .reconcile_prepared_outcome(prepared, core_spec)
+                .await?;
+            let latest = authority
+                .verify_committed_prepared_target(target, previous.as_ref())
+                .await?
+                .ok_or_else(|| {
+                    anyhow::anyhow!("committed source authority was lost after Core apply")
+                })?;
+            if latest != expected {
+                return Err(anyhow::Error::new(CommittedTargetAdvanced)
+                    .context("committed selection or policy advanced after prepared Core apply"));
+            }
+            *self.applied_selection.lock() = Some(expected.0);
+            if let Some(change) = expected.1 {
+                *self.checked_connection_effect.lock() = Some(CheckedConnectionEffect {
+                    change,
+                    replaced: applied.replaced,
+                    prior: old_api.unwrap_or(Ok(None)),
+                });
+            }
+            Ok(())
+        }
+        .await;
+        if result.is_err() {
+            self.applied_selection.lock().take();
+        }
+        Some(result)
+    }
+
     async fn reconcile_with_trigger(&self, trigger: Trigger) -> anyhow::Result<()> {
         // Ref pending-product maintenance happens before rebuilding the target.
         // A manual Retry may repair the *same* confirmed runtime publication
@@ -1831,23 +1951,31 @@ impl CoreLifecycleWorkflow {
             let planned = self.planned_committed_round(&target, host, trigger).await?;
             let handled_by_plan = planned.is_some();
             let applied = if let Some(result) = planned {
+                self.applied_selection.lock().take();
                 result
             } else {
                 let admitted = self.attempt_policy.lock().allow(&target, host, trigger);
                 match admitted {
                     Ok(()) => {
-                        let applied = self
-                            .core
-                            .reconcile_profiles(
-                                clash,
-                                app.core,
-                                run_type,
-                                current,
-                                app,
-                                content,
-                                Some(target.clone()),
-                            )
-                            .await;
+                        let applied = if let Some(prepared) = self
+                            .try_reconcile_prepared_local(&target, &app, &clash, run_type)
+                            .await
+                        {
+                            prepared
+                        } else {
+                            self.applied_selection.lock().take();
+                            self.core
+                                .reconcile_profiles(
+                                    clash,
+                                    app.core,
+                                    run_type,
+                                    current,
+                                    app,
+                                    content,
+                                    Some(target.clone()),
+                                )
+                                .await
+                        };
                         self.attempt_policy.lock().record(
                             target.clone(),
                             host,
@@ -1887,11 +2015,13 @@ impl CoreLifecycleWorkflow {
             let planned = self.planned_committed_round(&target, host, trigger).await?;
             let handled_by_plan = planned.is_some();
             let result = if let Some(result) = planned {
+                self.applied_selection.lock().take();
                 result
             } else {
                 let admitted = self.attempt_policy.lock().allow(&target, host, trigger);
                 match admitted {
                     Ok(()) => {
+                        self.applied_selection.lock().take();
                         let result = self.core.reconcile(clash, target_core, run_type).await;
                         self.attempt_policy.lock().record(
                             target.clone(),
