@@ -221,6 +221,37 @@ fn manager_core_kind(core: ClashCore) -> CoreKind {
     }
 }
 
+/// A one-shot post-Core connection effect waiting for the Actor's final
+/// source-mailbox fence and Running verification. This does not own Core and
+/// cannot be executed by the worker before Completed is accepted.
+pub(in crate::client) struct CheckedConnectionEffect {
+    replaced: Option<bool>,
+    prior: anyhow::Result<Option<crate::core::actor_v2::api::ApiClient>>,
+}
+
+impl CheckedConnectionEffect {
+    pub(in crate::client) async fn finish(self) -> Option<String> {
+        match (self.replaced, self.prior) {
+            (Some(true), _) => None, // Replaced Core already retired connections.
+            (Some(false), Ok(None)) => None, // No previous running Core instance.
+            (Some(false), Ok(Some(api))) => {
+                crate::core::connection_interruption::ConnectionInterruptionService::on_mode_change(
+                    &api, true,
+                )
+                .await
+                .err()
+                .map(|error| format!("Mode interruption failed after Core apply: {error:#}"))
+            }
+            (Some(false), Err(error)) => Some(format!(
+                "Mode interruption could not capture the old Core: {error:#}"
+            )),
+            (None, _) => {
+                Some("Mode interruption was not attempted: Core replacement outcome unknown".into())
+            }
+        }
+    }
+}
+
 #[derive(Clone)]
 pub(in crate::client) struct CoreLifecycleWorkflow {
     application: ApplicationClient,
@@ -235,6 +266,9 @@ pub(in crate::client) struct CoreLifecycleWorkflow {
     /// authoritative source reads. Legacy rebuilds invalidate it because they
     /// do not yet hand back a confirmed applied selection.
     applied_selection: Arc<parking_lot::Mutex<Option<Selection>>>,
+    /// A checked source's post-apply Mode effect is held by the same
+    /// workflow until its sole Actor has fenced the Completed message.
+    checked_connection_effect: Arc<parking_lot::Mutex<Option<CheckedConnectionEffect>>>,
     /// The exact read-only source authority already used by Checked Apply.
     /// Ordinary startup/reconcile may adopt selection only when an active
     /// Core receipt and this authority agree on the full committed target.
@@ -329,6 +363,7 @@ impl CoreLifecycleWorkflow {
             content_reader: None,
             checked_gate: Arc::new(std::sync::OnceLock::new()),
             applied_selection: Arc::new(parking_lot::Mutex::new(None)),
+            checked_connection_effect: Arc::new(parking_lot::Mutex::new(None)),
             source_authority: None,
             core,
             installer,
@@ -385,6 +420,12 @@ impl CoreLifecycleWorkflow {
 
     pub(in crate::client) fn invalidate_applied_selection(&self) {
         self.applied_selection.lock().take();
+    }
+
+    pub(in crate::client) fn take_checked_connection_effect(
+        &self,
+    ) -> Option<CheckedConnectionEffect> {
+        self.checked_connection_effect.lock().take()
     }
 
     /// Ref's applied_selection follows an *observed Core result*, not a
@@ -893,22 +934,14 @@ impl CoreLifecycleWorkflow {
         match result {
             Ok((selection, interruption, source, replaced)) => {
                 *self.applied_selection.lock() = selection;
-                // ref apply.rs: a Started/Restarted/Switched runtime already
-                // retired the previous connections. Only a proven in-place
-                // Patched apply may close the old captured controller.
+                // The worker cannot know about source notices that reached
+                // the Actor after its final read. Defer the one-shot mode
+                // effect to Completed; only that mailbox can settle it.
                 if matches!(interruption, Some(SelectionChange::Mode)) {
-                    match (replaced, source) {
-                        (Some(false), Some(Ok(Some(api)))) => {
-                            if let Err(error) = crate::core::connection_interruption::ConnectionInterruptionService::on_mode_change(&api, true).await {
-                                tracing::warn!(%error, "checked mode applied, but old Core connection interruption failed");
-                            }
-                        }
-                        (Some(false), Some(Err(error))) => {
-                            tracing::warn!(%error, "checked mode applied, but pre-apply Core API could not be captured");
-                        }
-                        (None, _) => tracing::warn!("checked mode applied without a proven Core replacement outcome; not interrupting an unknown instance"),
-                        _ => {}
-                    }
+                    *self.checked_connection_effect.lock() = Some(CheckedConnectionEffect {
+                        replaced,
+                        prior: source.unwrap_or(Ok(None)),
+                    });
                 }
                 Ok(())
             }
@@ -924,6 +957,9 @@ impl CoreLifecycleWorkflow {
         command: Command,
         #[cfg(test)] startup_retry_target: &mut Option<StartupRetryTarget>,
     ) -> anyhow::Result<()> {
+        // The sole worker owns one command at a time. Any effect left over
+        // from a failed or superseded operation must not leak into the next.
+        self.checked_connection_effect.lock().take();
         #[cfg(test)]
         let refresh_startup_retry_identity =
             matches!(&command, Command::PatchApplicationConfig { .. });

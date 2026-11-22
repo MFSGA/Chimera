@@ -95,6 +95,48 @@ fn refresh_effect_ports(
     (service_observed || shutdown) || (reconciled && !source_advanced)
 }
 
+/// A checked Clash source CAS is not proof of runtime completion. Notify
+/// the legacy frontend only after the sole Actor settles Core and verifies
+/// the applied Running instance, never when the source merely saves.
+fn checked_mode_effect_can_finish(
+    result: &anyhow::Result<()>,
+    verified_running: bool,
+    source_advanced: bool,
+) -> bool {
+    result.is_ok() && verified_running && !source_advanced
+}
+
+/// On a source fallback, never discard an acknowledged Mode effect silently:
+/// only a *fresh* committed receipt with a mode intent and no matching Core
+/// dispatch can create outstanding effect debt. Duplicate/out-of-order notices
+/// do not create a second effect or overwrite the first operation's status.
+fn checked_mode_effect_deferred(
+    previous: Option<u64>,
+    version: u64,
+    mode_requested: bool,
+    checked_dispatched: bool,
+    running: bool,
+) -> bool {
+    mode_requested && !checked_dispatched && running && previous.is_none_or(|seen| version > seen)
+}
+
+fn checked_clash_notice(
+    checked_clash: bool,
+    result: &anyhow::Result<()>,
+    verified_running: bool,
+) -> Option<Result<(), String>> {
+    checked_clash.then(|| {
+        result
+            .as_ref()
+            .map_err(|error| format!("{error:#}"))
+            .and_then(|_| {
+                verified_running.then_some(()).ok_or_else(|| {
+                    "Clash source committed, but active Core apply was not verified".into()
+                })
+            })
+    })
+}
+
 fn completed_from_startup_report(report: StartupReport) -> CompletedLifecycleOperation {
     let result = report
         .outcome
@@ -580,6 +622,7 @@ struct ApplicationWorkflowState {
     service_release_debt: ServiceReleaseDebt,
     service_recovery_maintenance: Option<String>,
     product_maintenance: Option<String>,
+    mode_interruption_maintenance: Option<String>,
     service_recovery_timer: tokio::task::JoinHandle<()>,
     startup_recovery_pending: Arc<AtomicBool>,
 }
@@ -637,6 +680,7 @@ struct ActiveOperation {
     task: tokio::task::JoinHandle<()>,
     shutdown: bool,
     trigger: &'static str,
+    checked_clash: bool,
     /// Checked Apply already promotes its own exact verified selection.
     /// Legacy startup/reconcile must recover it from the confirmed receipt.
     checked_apply: bool,
@@ -806,6 +850,7 @@ impl ApplicationWorkflowState {
             service_release.as_deref(),
             self.service_recovery_maintenance.as_deref(),
             self.product_maintenance.as_deref(),
+            self.mode_interruption_maintenance.as_deref(),
         ]
         .into_iter()
         .flatten()
@@ -1124,6 +1169,7 @@ impl ApplicationWorkflowState {
         self.dirty = false;
         self.source_dirty = false;
         self.source_after_handoff = false;
+        self.mode_interruption_maintenance = None;
         while let Some(request) = self.pending.pop_front() {
             self.reject(request, anyhow::anyhow!("core lifecycle is shutting down"));
         }
@@ -1203,6 +1249,7 @@ impl ApplicationWorkflowState {
                 self.dirty = false;
                 self.source_dirty = false;
                 self.source_after_handoff = false;
+                self.mode_interruption_maintenance = None;
             }
             Command::StartCore => self.run_intent = RunIntent::Running,
             _ => {}
@@ -1282,6 +1329,13 @@ impl ApplicationWorkflowState {
         let id = request.response.id;
         let trigger = runtime_trigger(&request.command);
         let checked_apply = matches!(&request.command, Command::ApplyChecked { .. });
+        let checked_clash = matches!(
+            &request.command,
+            Command::ApplyChecked {
+                domain: SourceDomain::Clash,
+                ..
+            }
+        );
         let observed_sources = self.seen_sources.clone();
         self.reconciler.send_modify(|status| status.begin(id));
         let shutdown = matches!(&request.command, Command::Shutdown);
@@ -1490,6 +1544,7 @@ impl ApplicationWorkflowState {
             task,
             shutdown,
             trigger,
+            checked_clash,
             checked_apply,
             observed_sources,
         });
@@ -1541,6 +1596,7 @@ impl Actor for ApplicationWorkflowActor {
             service_release_debt: ServiceReleaseDebt::default(),
             service_recovery_maintenance: None,
             product_maintenance: None,
+            mode_interruption_maintenance: None,
             service_recovery_timer,
             startup_recovery_pending: args.startup_recovery_pending,
         })
@@ -1818,6 +1874,38 @@ impl Actor for ApplicationWorkflowActor {
                         } else {
                             workflow.lifecycle().invalidate_applied_selection();
                         }
+                    }
+                    // Unlike the worker, Completed owns the final observed
+                    // source-version fence and Running evidence. The previous
+                    // Core's connections may only be interrupted here; a
+                    // superseded checked product is never an effect success.
+                    if let Some(effect) = workflow.lifecycle().take_checked_connection_effect() {
+                        let issue = if checked_mode_effect_can_finish(
+                            &result,
+                            verified_running,
+                            source_advanced,
+                        ) {
+                            effect.finish().await
+                        } else {
+                            Some("Mode interruption was not settled: checked Core target was superseded or active runtime is unverified".to_owned())
+                        };
+                        if let Some(ref reason) = issue {
+                            tracing::warn!(%reason, "checked Mode connection effect degraded");
+                        }
+                        state.mode_interruption_maintenance = issue;
+                    }
+                    // Legacy SetConfig UI messages describe the outcome of
+                    // Core refresh, not source persistence. Checked Clash
+                    // follows the same semantics once the Actor settles it.
+                    if let Some(notice) =
+                        checked_clash_notice(active.checked_clash, &result, verified_running)
+                    {
+                        #[cfg(not(test))]
+                        crate::core::handle::Handle::notice_message(
+                            &crate::core::handle::Message::SetConfig(notice),
+                        );
+                        #[cfg(test)]
+                        let _ = notice;
                     }
                     // This belongs to the existing LocalRuntimeHost. The
                     // status projection only records outstanding publication
@@ -2240,6 +2328,14 @@ impl Actor for ApplicationWorkflowActor {
                 // consumed by this single command queue or explicitly
                 // deferred; never run its prepared bytes *and* a legacy build.
                 let previous = state.seen_sources.version(domain);
+                let mode_requested = request.as_deref().is_some_and(|receipt| {
+                    state.checked.pending.iter().any(|candidate| {
+                        candidate.domain == domain
+                            && candidate.request.as_deref() == Some(receipt)
+                            && candidate.interrupt_mode
+                    })
+                });
+                let mut checked_dispatched = false;
                 state.seen_sources.observe(domain, version);
                 state.reconciler.send_modify(|status| {
                     status.observe_source_only(domain, version);
@@ -2349,6 +2445,7 @@ impl Actor for ApplicationWorkflowActor {
                                 ..
                             }),
                         ) => {
+                            checked_dispatched = true;
                             let id = state.allocate_operation_id();
                             state.pending.push_back(Request {
                                 command: Command::ApplyChecked {
@@ -2383,6 +2480,22 @@ impl Actor for ApplicationWorkflowActor {
                     // request a latest-source recovery in the same owner.
                     state.source_dirty = true;
                     state.mark_runtime_dirty(&myself);
+                }
+                if checked_mode_effect_deferred(
+                    previous,
+                    version,
+                    mode_requested,
+                    checked_dispatched,
+                    state.run_intent == RunIntent::Running && !state.shutting_down,
+                ) {
+                    // The old/recovery ReconcileSource may rebuild current
+                    // bytes, but has no guaranteed old Core API/replaced
+                    // result. Preserve the non-retryable one-shot effect debt
+                    // visibly instead of marking the interruption complete.
+                    state.mode_interruption_maintenance = Some(format!(
+                        "Checked Clash source version {version} was deferred to latest-source recovery; its Mode interruption is not confirmed"
+                    ));
+                    state.publish_maintenance();
                 }
             }
             Message::ApplyCheckedCommitted {
@@ -14428,6 +14541,49 @@ mod tests {
     }
 
     #[test]
+    fn checked_mode_effects_and_clash_notifications_require_actor_completion_evidence() {
+        assert!(checked_mode_effect_can_finish(&Ok(()), true, false));
+        assert!(!checked_mode_effect_can_finish(&Ok(()), false, false));
+        assert!(!checked_mode_effect_can_finish(&Ok(()), true, true));
+        assert!(!checked_mode_effect_can_finish(
+            &Err(anyhow::anyhow!("Core refused")),
+            true,
+            false
+        ));
+
+        assert_eq!(checked_clash_notice(false, &Ok(()), true), None);
+        assert_eq!(checked_clash_notice(true, &Ok(()), true), Some(Ok(())));
+        let pending = checked_clash_notice(true, &Ok(()), false)
+            .unwrap()
+            .unwrap_err();
+        assert!(pending.contains("unverified") || pending.contains("not verified"));
+        let error = checked_clash_notice(true, &Err(anyhow::anyhow!("Core refused")), false)
+            .unwrap()
+            .unwrap_err();
+        assert!(error.contains("Core refused"));
+
+        assert!(checked_mode_effect_deferred(None, 1, true, false, true));
+        assert!(checked_mode_effect_deferred(Some(1), 2, true, false, true));
+        assert!(!checked_mode_effect_deferred(Some(1), 1, true, false, true));
+        assert!(!checked_mode_effect_deferred(Some(3), 2, true, false, true));
+        assert!(!checked_mode_effect_deferred(Some(1), 2, true, true, true));
+        assert!(!checked_mode_effect_deferred(
+            Some(1),
+            2,
+            false,
+            false,
+            true
+        ));
+        assert!(!checked_mode_effect_deferred(
+            Some(1),
+            2,
+            true,
+            false,
+            false
+        ));
+    }
+
+    #[test]
     fn superseded_source_does_not_publish_stale_effect_ports_or_assert_convergence() {
         let obsolete = Err(anyhow::Error::new(
             crate::client::reconciler::attempt::CommittedTargetAdvanced,
@@ -15093,6 +15249,15 @@ mod tests {
         assert_eq!(core.applies.load(AtomicOrdering::Relaxed), 1);
         assert_eq!(authority.reads.load(AtomicOrdering::Relaxed), 2);
         assert!(workflow.applied_selection_for_tests().is_none());
+        let effect = workflow
+            .take_checked_connection_effect()
+            .expect("mode interruption must remain unexecuted until Actor Completed");
+        assert!(workflow.take_checked_connection_effect().is_none());
+        let degraded = effect
+            .finish()
+            .await
+            .expect("injected old API capture failure");
+        assert!(degraded.contains("previous Core API unavailable"));
 
         // Ordinary Checked work does not inherit a prior mode request.
         let ordinary = TestSourceAuthority::for_source(SourceDomain::Clash, 13, "ordinary-update");
@@ -15112,6 +15277,7 @@ mod tests {
             .unwrap();
         assert_eq!(core.captures.load(AtomicOrdering::Relaxed), 1);
         assert_eq!(core.applies.load(AtomicOrdering::Relaxed), 2);
+        assert!(workflow.take_checked_connection_effect().is_none());
 
         // Source-version rejection must precede both API capture and Core.
         let stale = TestSourceAuthority::for_source(SourceDomain::Clash, 15, "newer-target");
@@ -15133,6 +15299,7 @@ mod tests {
         );
         assert_eq!(core.captures.load(AtomicOrdering::Relaxed), 1);
         assert_eq!(core.applies.load(AtomicOrdering::Relaxed), 2);
+        assert!(workflow.take_checked_connection_effect().is_none());
     }
 
     /// Model a Core apply which has already accepted the exact checked bytes
@@ -15540,6 +15707,68 @@ mod tests {
             Ok(std::path::PathBuf::from("/tmp/chimera-checked-mihomo"))
         })
         .unwrap()
+    }
+
+    #[tokio::test]
+    async fn deferred_checked_mode_effect_remains_visible_when_exact_owner_is_unavailable() {
+        let submits = Arc::new(Mutex::new(Vec::new()));
+        let client = CoreLifecycleClient::spawn(
+            Arc::new(ExactCheckedCore {
+                submits: submits.clone(),
+            }),
+            ApplicationClient::legacy().unwrap(),
+            ClashConfigClient::legacy().unwrap(),
+            RuntimePaths::from_config_root(std::path::PathBuf::from("test-runtime-root")),
+        )
+        .await
+        .unwrap();
+        client
+            .checked_candidate_for_domain_with_request_effect(
+                SourceDomain::Clash,
+                checked_runtime_fixture("committed-mode-target"),
+                checked_mihomo_spec(),
+                "mode-cas-receipt".to_owned(),
+                true,
+            )
+            .await
+            .unwrap();
+        // This test-only Core owner has no LiveSourceAuthority. The source
+        // is durable but the checked product cannot be safely submitted.
+        // Its one-shot Mode effect must not be lost with the fallback.
+        client.checked_source_committed_for_request(
+            SourceDomain::Clash,
+            17,
+            "mode-cas-receipt".to_owned(),
+        );
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                let status = client.reconciler_status();
+                if let Some(reason) = status.maintenance.as_deref()
+                    && reason.contains("Mode interruption is not confirmed")
+                {
+                    assert!(reason.contains("17"));
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("Mode effect debt must be visible after the source-only fallback");
+        assert!(submits.lock().unwrap().is_empty());
+        // Duplicate delivery cannot create another effect or clear the debt.
+        client.checked_source_committed_for_request(
+            SourceDomain::Clash,
+            17,
+            "mode-cas-receipt".to_owned(),
+        );
+        assert!(
+            client
+                .reconciler_status()
+                .maintenance
+                .as_deref()
+                .is_some_and(|reason| reason.contains("Mode interruption is not confirmed"))
+        );
+        client.shutdown().await.unwrap();
     }
 
     #[tokio::test]
