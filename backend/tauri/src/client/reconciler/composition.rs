@@ -88,13 +88,15 @@ impl CheckedCandidatePort for CoreLifecycleCheckedInbox {
         prepared: crate::client::core_lifecycle::ports::PreparedRuntime,
         core_spec: chimera_core_manager::CoreSpec,
         request: String,
+        interrupt_mode: bool,
     ) -> Result<(), Arc<chimera_contracts::runtime_error::RuntimeError>> {
         self.owner
-            .checked_candidate_for_domain_with_request(
+            .checked_candidate_for_domain_with_request_effect(
                 Self::source_domain(domain),
                 prepared,
                 core_spec,
                 request,
+                interrupt_mode,
             )
             .await
     }
@@ -297,6 +299,7 @@ mod tests {
             candidate: crate::client::core_lifecycle::ports::PreparedRuntime,
             core_spec: chimera_core_manager::CoreSpec,
             _request: String,
+            _interrupt_mode: bool,
         ) -> Result<(), Arc<RuntimeError>> {
             self.checked(domain, candidate, core_spec).await
         }

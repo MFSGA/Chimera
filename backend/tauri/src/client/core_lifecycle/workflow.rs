@@ -180,6 +180,7 @@ pub(in crate::client) enum Command {
         domain: super::super::reconciler::committed::SourceDomain,
         version: u64,
         authority: Arc<dyn crate::client::reconciler::authority::RuntimeSourceAuthority>,
+        interrupt_mode: bool,
     },
     /// One source notification requests a latest-committed-target round.
     ReconcileSource,
@@ -849,6 +850,7 @@ impl CoreLifecycleWorkflow {
         domain: crate::client::reconciler::committed::SourceDomain,
         version: u64,
         authority: Arc<dyn crate::client::reconciler::authority::RuntimeSourceAuthority>,
+        interrupt_mode: bool,
     ) -> anyhow::Result<()> {
         let checked_target = prepared
             .target
@@ -857,9 +859,18 @@ impl CoreLifecycleWorkflow {
             .to_owned();
         let previous = self.applied_selection.lock().clone();
         let result = async {
-            let interruption = authority
-                .verify_interruption(domain, version, &checked_target, previous.as_ref())
-                .await?;
+            let interruption = if interrupt_mode {
+                // Source-owned raw Clash patch has already proved that its
+                // durable transition changes mode and requests interruption.
+                // Do not depend on a possibly absent startup selection:
+                // the one-shot intent belongs to this exact Checked receipt.
+                authority.verify(domain, version, &checked_target).await?;
+                Some(SelectionChange::Mode)
+            } else {
+                authority
+                    .verify_interruption(domain, version, &checked_target, previous.as_ref())
+                    .await?
+            };
             // Capture only the pre-apply instance-bound controller. A failed
             // capture is a post-commit effect degradation, not a Core refusal.
             let source = if matches!(interruption, Some(SelectionChange::Mode)) {
@@ -954,9 +965,17 @@ impl CoreLifecycleWorkflow {
                 domain,
                 version,
                 authority,
+                interrupt_mode,
             } => {
-                self.apply_checked_runtime(prepared, core_spec, domain, version, authority)
-                    .await
+                self.apply_checked_runtime(
+                    prepared,
+                    core_spec,
+                    domain,
+                    version,
+                    authority,
+                    interrupt_mode,
+                )
+                .await
             }
             Command::StartCore => self.reconcile_with_trigger(Trigger::Start).await,
             #[cfg(test)]

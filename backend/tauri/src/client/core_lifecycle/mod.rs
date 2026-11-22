@@ -249,6 +249,9 @@ struct CheckedRuntimeCandidate {
     /// Source request identity, not a Core ownership lease. None preserves
     /// legacy Profiles admission where the version notice lacks a receipt.
     request: Option<String>,
+    /// Explicit mode interruption from the *source patch plan*, owned by
+    /// this Checked receipt. It is never reconstructed from an old Core mode.
+    interrupt_mode: bool,
     prepared: ports::PreparedRuntime,
     core_spec: chimera_core_manager::CoreSpec,
 }
@@ -271,6 +274,13 @@ impl CheckedRuntimeInbox {
         checked: CheckedRuntimeCandidate,
     ) -> Result<(), Arc<chimera_contracts::runtime_error::RuntimeError>> {
         use chimera_contracts::runtime_error::{RuntimeCheckUnavailable, RuntimeError};
+        if checked.interrupt_mode && checked.domain != SourceDomain::Clash {
+            return Err(Arc::new(RuntimeError::CheckUnavailable {
+                reason: RuntimeCheckUnavailable::CandidateUnavailable {
+                    reason: "checked mode interruption requires a Clash source receipt".into(),
+                },
+            }));
+        }
         if checked.prepared.target.is_none() {
             return Err(Arc::new(RuntimeError::CheckUnavailable {
                 reason: RuntimeCheckUnavailable::CandidateUnavailable {
@@ -470,6 +480,10 @@ enum Message {
     #[cfg(test)]
     ReadCheckedForTest {
         reply: RpcReplyPort<Option<(Option<String>, String, Vec<u8>)>>,
+    },
+    #[cfg(test)]
+    ReadAppliedSelectionForTest {
+        reply: RpcReplyPort<Option<super::reconciler::committed::Selection>>,
     },
     StartupRecoveryFinished {
         succeeded: bool,
@@ -1724,6 +1738,19 @@ impl Actor for ApplicationWorkflowActor {
                         result
                     };
                     let source_advanced = committed_target_advanced(&result);
+                    // A Checked worker may have promoted applied_selection
+                    // after its second authoritative read, while the Actor
+                    // already accepted a newer source notice. Completed is
+                    // the final source-version fence: revoke that selection
+                    // before subsequent mode changes inspect the baseline.
+                    if source_advanced
+                        && state
+                            .active
+                            .as_ref()
+                            .is_some_and(|active| active.checked_apply)
+                    {
+                        workflow.lifecycle().invalidate_applied_selection();
+                    }
                     let refresh_runtime_binding = refresh_effect_ports(
                         reconciled,
                         service_probe.is_some(),
@@ -2318,6 +2345,7 @@ impl Actor for ApplicationWorkflowActor {
                             Some(CheckedRuntimeCandidate {
                                 prepared,
                                 core_spec,
+                                interrupt_mode,
                                 ..
                             }),
                         ) => {
@@ -2329,6 +2357,7 @@ impl Actor for ApplicationWorkflowActor {
                                     domain,
                                     version,
                                     authority,
+                                    interrupt_mode,
                                 },
                                 response: Response { id, reply: None },
                                 deferred_retry: None,
@@ -2384,6 +2413,7 @@ impl Actor for ApplicationWorkflowActor {
                     let CheckedRuntimeCandidate {
                         prepared,
                         core_spec,
+                        interrupt_mode,
                         ..
                     } = checked.expect("uniquely matching checked candidate");
                     let id = state.allocate_operation_id();
@@ -2394,6 +2424,7 @@ impl Actor for ApplicationWorkflowActor {
                             domain,
                             version,
                             authority,
+                            interrupt_mode,
                         },
                         response: Response {
                             id,
@@ -2419,6 +2450,14 @@ impl Actor for ApplicationWorkflowActor {
             #[cfg(test)]
             Message::ReadSourceVersionsForTest { reply } => {
                 let _ = reply.send(state.seen_sources.clone());
+            }
+            #[cfg(test)]
+            Message::ReadAppliedSelectionForTest { reply } => {
+                let selection = state
+                    .workflow
+                    .as_ref()
+                    .and_then(|workflow| workflow.lifecycle().applied_selection_for_tests());
+                let _ = reply.send(selection);
             }
             #[cfg(test)]
             Message::ReadCheckedForTest { reply } => {
@@ -3764,7 +3803,7 @@ impl CoreLifecycleClient {
         prepared: ports::PreparedRuntime,
         core_spec: chimera_core_manager::CoreSpec,
     ) -> Result<(), Arc<chimera_contracts::runtime_error::RuntimeError>> {
-        self.checked_candidate_inner(domain, prepared, core_spec, None)
+        self.checked_candidate_inner(domain, prepared, core_spec, None, false)
             .await
     }
 
@@ -3775,7 +3814,19 @@ impl CoreLifecycleClient {
         core_spec: chimera_core_manager::CoreSpec,
         request: String,
     ) -> Result<(), Arc<chimera_contracts::runtime_error::RuntimeError>> {
-        self.checked_candidate_inner(domain, prepared, core_spec, Some(request))
+        self.checked_candidate_inner(domain, prepared, core_spec, Some(request), false)
+            .await
+    }
+
+    pub(in crate::client) async fn checked_candidate_for_domain_with_request_effect(
+        &self,
+        domain: SourceDomain,
+        prepared: ports::PreparedRuntime,
+        core_spec: chimera_core_manager::CoreSpec,
+        request: String,
+        interrupt_mode: bool,
+    ) -> Result<(), Arc<chimera_contracts::runtime_error::RuntimeError>> {
+        self.checked_candidate_inner(domain, prepared, core_spec, Some(request), interrupt_mode)
             .await
     }
 
@@ -3785,6 +3836,7 @@ impl CoreLifecycleClient {
         prepared: ports::PreparedRuntime,
         core_spec: chimera_core_manager::CoreSpec,
         request: Option<String>,
+        interrupt_mode: bool,
     ) -> Result<(), Arc<chimera_contracts::runtime_error::RuntimeError>> {
         use chimera_contracts::runtime_error::RuntimeError;
         match self.0.as_ref() {
@@ -3796,6 +3848,7 @@ impl CoreLifecycleClient {
                             checked: CheckedRuntimeCandidate {
                                 domain,
                                 request,
+                                interrupt_mode,
                                 prepared,
                                 core_spec,
                             },
@@ -3832,6 +3885,20 @@ impl CoreLifecycleClient {
     ) -> Result<(), Arc<chimera_contracts::runtime_error::RuntimeError>> {
         self.checked_candidate_for_domain(SourceDomain::Profiles, prepared, core_spec)
             .await
+    }
+
+    #[cfg(test)]
+    async fn applied_selection_for_tests(&self) -> Option<super::reconciler::committed::Selection> {
+        let CoreLifecycleClientInner::Actor { actor_ref, .. } = self.0.as_ref() else {
+            return None;
+        };
+        match actor_ref
+            .call(|reply| Message::ReadAppliedSelectionForTest { reply }, None)
+            .await
+        {
+            Ok(CallResult::Success(selection)) => selection,
+            _ => None,
+        }
     }
 
     #[cfg(test)]
@@ -14411,6 +14478,7 @@ mod tests {
         CheckedRuntimeCandidate {
             domain,
             request: None,
+            interrupt_mode: false,
             prepared: checked_runtime_fixture(target),
             core_spec: checked_mihomo_spec(),
         }
@@ -14479,6 +14547,46 @@ mod tests {
             checked.unwrap().prepared.target.as_deref(),
             Some("clash-other")
         );
+    }
+
+    #[test]
+    fn checked_mode_interruption_is_scoped_to_exact_clash_request() {
+        let mut inbox = CheckedRuntimeInbox::default();
+        let mut mode = checked_entry(SourceDomain::Clash, "mode-global");
+        mode.request = Some("mode-request".into());
+        mode.interrupt_mode = true;
+        inbox.accept(mode).unwrap();
+        let mut ordinary = checked_entry(SourceDomain::Clash, "other-clash");
+        ordinary.request = Some("ordinary-request".into());
+        inbox.accept(ordinary).unwrap();
+        let mut unrelated = checked_entry(SourceDomain::Profiles, "profile-target");
+        unrelated.request = Some("profile-request".into());
+        inbox.accept(unrelated).unwrap();
+        assert!(
+            inbox
+                .take_request(SourceDomain::Clash, "ordinary-request")
+                .is_some_and(|checked| !checked.interrupt_mode),
+            "a different same-domain Checked commit must not inherit the mode effect"
+        );
+        assert!(
+            inbox
+                .take_request(SourceDomain::Clash, "mode-request")
+                .is_some_and(|checked| checked.interrupt_mode),
+            "the exact mode CAS receipt must carry its one-shot effect"
+        );
+        assert_eq!(inbox.matching_count(SourceDomain::Profiles, None), 1);
+
+        let mut aborted = checked_entry(SourceDomain::Clash, "cas-conflicted");
+        aborted.request = Some("failed-cas".into());
+        aborted.interrupt_mode = true;
+        inbox.accept(aborted).unwrap();
+        assert_eq!(inbox.discard_request(SourceDomain::Clash, "failed-cas"), 1);
+        assert_eq!(inbox.matching_count(SourceDomain::Clash, None), 0);
+        assert_eq!(inbox.matching_count(SourceDomain::Profiles, None), 1);
+
+        let mut invalid = checked_entry(SourceDomain::Application, "invalid-effect");
+        invalid.interrupt_mode = true;
+        assert!(inbox.accept(invalid).is_err());
     }
 
     #[test]
@@ -14898,6 +15006,135 @@ mod tests {
         async fn on_profile_change(&self, _: bool) {}
     }
 
+    /// The source patch's explicit mode intent must survive an absent legacy
+    /// startup selection and reach the pre-apply old Core API capture.
+    struct ExplicitModeEffectCore {
+        captures: AtomicUsize,
+        applies: AtomicUsize,
+    }
+
+    #[async_trait]
+    impl CoreLifecyclePort for ExplicitModeEffectCore {
+        async fn reconcile(&self, _: ClashConfig, _: ClashCore, _: RunType) -> anyhow::Result<()> {
+            anyhow::bail!("checked mode must not use legacy reconcile")
+        }
+        async fn reconcile_prepared_outcome(
+            &self,
+            _prepared: ports::PreparedRuntime,
+            _core_spec: chimera_core_manager::CoreSpec,
+        ) -> anyhow::Result<ports::CheckedApplyOutcome> {
+            self.applies.fetch_add(1, AtomicOrdering::Relaxed);
+            Ok(ports::CheckedApplyOutcome {
+                replaced: Some(false),
+            })
+        }
+        async fn capture_interruption_source(
+            &self,
+        ) -> anyhow::Result<Option<crate::core::actor_v2::api::ApiClient>> {
+            self.captures.fetch_add(1, AtomicOrdering::Relaxed);
+            anyhow::bail!("fixture: previous Core API unavailable")
+        }
+        async fn stop(&self) -> anyhow::Result<()> {
+            Ok(())
+        }
+        async fn change_core(&self, _: ClashCore) -> anyhow::Result<()> {
+            Ok(())
+        }
+        async fn status(&self) -> anyhow::Result<CoreStatusSnapshot> {
+            Ok(CoreStatusSnapshot {
+                instance_id: None,
+                state: CoreState::Stopped(None),
+                state_changed_at: 0,
+                run_type: RunType::Normal,
+            })
+        }
+        fn recovery_notify(&self) -> Option<Arc<Notify>> {
+            None
+        }
+        async fn on_profile_change(&self, _: bool) {}
+    }
+
+    #[tokio::test]
+    async fn explicit_clash_mode_effect_prepares_old_instance_without_applied_selection() {
+        let core = Arc::new(ExplicitModeEffectCore {
+            captures: AtomicUsize::new(0),
+            applies: AtomicUsize::new(0),
+        });
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let workflow = CoreLifecycleWorkflow::new(
+            ApplicationClient::legacy().unwrap(),
+            ClashConfigClient::legacy().unwrap(),
+            None,
+            core.clone(),
+            Arc::new(RecordingInstaller {
+                events: events.clone(),
+            }),
+            RuntimePaths::from_config_root(std::path::PathBuf::from("test-runtime-root")),
+            Arc::new(RecordingService { events }),
+        );
+        assert!(workflow.applied_selection_for_tests().is_none());
+
+        let authority = TestSourceAuthority::for_source(SourceDomain::Clash, 12, "mode-global");
+        workflow
+            .execute(
+                Command::ApplyChecked {
+                    prepared: checked_runtime_fixture("mode-global"),
+                    core_spec: checked_mihomo_spec(),
+                    domain: SourceDomain::Clash,
+                    version: 12,
+                    authority: authority.clone(),
+                    interrupt_mode: true,
+                },
+                &mut None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(core.captures.load(AtomicOrdering::Relaxed), 1);
+        assert_eq!(core.applies.load(AtomicOrdering::Relaxed), 1);
+        assert_eq!(authority.reads.load(AtomicOrdering::Relaxed), 2);
+        assert!(workflow.applied_selection_for_tests().is_none());
+
+        // Ordinary Checked work does not inherit a prior mode request.
+        let ordinary = TestSourceAuthority::for_source(SourceDomain::Clash, 13, "ordinary-update");
+        workflow
+            .execute(
+                Command::ApplyChecked {
+                    prepared: checked_runtime_fixture("ordinary-update"),
+                    core_spec: checked_mihomo_spec(),
+                    domain: SourceDomain::Clash,
+                    version: 13,
+                    authority: ordinary,
+                    interrupt_mode: false,
+                },
+                &mut None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(core.captures.load(AtomicOrdering::Relaxed), 1);
+        assert_eq!(core.applies.load(AtomicOrdering::Relaxed), 2);
+
+        // Source-version rejection must precede both API capture and Core.
+        let stale = TestSourceAuthority::for_source(SourceDomain::Clash, 15, "newer-target");
+        assert!(
+            workflow
+                .execute(
+                    Command::ApplyChecked {
+                        prepared: checked_runtime_fixture("obsolete-mode"),
+                        core_spec: checked_mihomo_spec(),
+                        domain: SourceDomain::Clash,
+                        version: 14,
+                        authority: stale,
+                        interrupt_mode: true,
+                    },
+                    &mut None,
+                )
+                .await
+                .is_err()
+        );
+        assert_eq!(core.captures.load(AtomicOrdering::Relaxed), 1);
+        assert_eq!(core.applies.load(AtomicOrdering::Relaxed), 2);
+    }
+
     /// Model a Core apply which has already accepted the exact checked bytes
     /// but has not yet answered; source publishers remain free to commit while
     /// the sole lifecycle Core operation is in flight.
@@ -14982,6 +15219,7 @@ mod tests {
                         domain: SourceDomain::Profiles,
                         version: 7,
                         authority,
+                        interrupt_mode: false,
                     },
                     &mut None,
                 )
@@ -15056,6 +15294,7 @@ mod tests {
                     domain: SourceDomain::Clash,
                     version: 3,
                     authority: selected.clone(),
+                    interrupt_mode: false,
                 },
                 &mut None,
             )
@@ -15077,6 +15316,7 @@ mod tests {
                         domain: SourceDomain::Clash,
                         version: 4,
                         authority: stale,
+                        interrupt_mode: false,
                     },
                     &mut None,
                 )
@@ -15150,6 +15390,7 @@ mod tests {
                         domain: SourceDomain::Profiles,
                         version: 9,
                         authority,
+                        interrupt_mode: false,
                     },
                     &mut None,
                 )
@@ -15190,8 +15431,20 @@ mod tests {
         )
         .await
         .unwrap();
-        let authority =
-            TestSourceAuthority::for_source(SourceDomain::Profiles, 7, "old-checked-target");
+        let selection = crate::client::reconciler::committed::Selection::of(
+            &crate::client::reconciler::inputs::RuntimeInputs {
+                app: chimera_config::application::ChimeraAppConfig::default(),
+                clash: ClashConfig::default(),
+                profiles: Arc::new(chimera_config::profile::Profiles::default()),
+                content: Default::default(),
+            },
+        );
+        let authority = TestSourceAuthority::for_selected_source(
+            SourceDomain::Profiles,
+            7,
+            "old-checked-target",
+            selection,
+        );
         let original = checked_runtime_fixture("old-checked-target");
         let bytes = original.snapshot.product_bytes().to_vec();
         client
@@ -15251,6 +15504,10 @@ mod tests {
         );
         assert_eq!(core.submits.lock().unwrap().len(), 1);
         assert_eq!(core.submits.lock().unwrap()[0].0, bytes);
+        assert!(
+            client.applied_selection_for_tests().await.is_none(),
+            "the Completed mailbox supersession fence must revoke the prior checked selection",
+        );
         // Unlike a plain Retry, the invalidated command must arm one fresh
         // committed-source round in the same Actor, even without another
         // source commit or external Service event.

@@ -382,27 +382,32 @@ impl ClashConfigClient {
         let before = self.get_snapshot().await?;
         let mut next = before.state.clone();
         next.apply(patch);
-        self.commit_checked_candidate(before, next, gate).await
+        self.commit_checked_candidate(before, next, gate, false)
+            .await
     }
 
     /// One durable Clash commit implementation for ref-style typed and raw
-    /// source transitions. The caller must rule out host/port/mode effects
-    /// before invoking this checked-only Core apply path.
+    /// source transitions. The caller must rule out host/port/controller
+    /// effects and explicitly tag any mode-interruption one-shot intent.
     async fn commit_checked_candidate(
         &self,
         before: ClashConfigSnapshot,
         next: ClashConfig,
         gate: &Arc<super::reconciler::check::CandidateCheck>,
+        interrupt_mode: bool,
     ) -> Result<ClashCommitReport> {
         use crate::state::mutation::{DomainChange, RuntimeCandidate};
         let prepared = self.prepare_replace(next.clone()).await?;
         let checked_request = gate
-            .check_with_receipt(RuntimeCandidate {
-                change: DomainChange::Clash {
-                    candidate: Arc::new(next),
+            .check_with_receipt_effect(
+                RuntimeCandidate {
+                    change: DomainChange::Clash {
+                        candidate: Arc::new(next),
+                    },
+                    staged: Default::default(),
                 },
-                staged: Default::default(),
-            })
+                interrupt_mode,
+            )
             .await
             .map_err(anyhow::Error::new)?;
         let snapshot = match self
@@ -611,20 +616,24 @@ impl ClashConfigClient {
         validate_mixed_port_change(&plan, &current)?;
         validate_external_controller_change(owner, &plan, &current, &next).await?;
         let reaches_runtime = crate::state::mutation::impact::reaches_runtime(&current, &next, &[]);
-        // The ref source owner can commit these pure runtime inputs without
-        // a second legacy Core mutator. Keep mode, listener, authorization,
-        // and one-shot connection interruption on their existing pathways.
+        // The ref source owner can commit the allowed raw runtime inputs
+        // without a second Core mutator. The patch plan owns the exact
+        // one-shot mode interruption decision, carried with its Checked
+        // request through durable CAS and final Core apply. Listener,
+        // authorization, Service and host side effects stay on legacy paths.
         if allow_checked
             && reaches_runtime
             && checked_raw_clash_patch_eligible(
                 &patch,
-                &current,
                 &owner.get_app_config()?,
                 crate::core::service::ipc::get_ipc_state().is_connected(),
             )
             && let Some(gate) = owner.inner.checked_gate.as_ref()
         {
-            let report = self.commit_checked_candidate(before, next, gate).await?;
+            let interrupt_mode = plan.mode_changed && plan.break_on_mode_change;
+            let report = self
+                .commit_checked_candidate(before, next, gate, interrupt_mode)
+                .await?;
             // The source owner has already sent its exact Checked commit
             // receipt, so do not send legacy SourceCommitted for this version.
             return Ok(report);
@@ -976,25 +985,22 @@ fn checked_clash_patch_eligible(
 }
 
 /// Raw and ordinary (non-running) override callers share the ref checked
-/// Source Gate only for fields with no host, listener, controller-auth, or one-shot
-/// connection interruption effects. No explicit `mode` command is admitted,
-/// even if it asks to reapply the currently selected mode.
+/// Source Gate only for fields with no host/listener/controller effects.
+/// An explicit mode change is allowed because the calling source owner
+/// attaches its exact connection interruption intent to the Checked receipt.
 fn checked_raw_clash_patch_eligible(
     patch: &Mapping,
-    current: &ClashConfig,
     app: &chimera_config::application::ChimeraAppConfig,
     service_connected: bool,
 ) -> bool {
     if app.enable_service_mode || service_connected || patch.is_empty() {
         return false;
     }
-    patch.keys().all(|key| match key.as_str() {
-        // A mode change with interruption enabled must remain on the
-        // synchronous legacy path until the initial applied selection and
-        // in-place/replaced Core outcome can both be proved.
-        Some("mode") => !current.break_connection.on_mode_change,
-        Some("allow-lan" | "ipv6" | "log-level" | "unified-delay" | "tcp-concurrent") => true,
-        _ => false,
+    patch.keys().all(|key| {
+        matches!(
+            key.as_str(),
+            Some("mode" | "allow-lan" | "ipv6" | "log-level" | "unified-delay" | "tcp-concurrent")
+        )
     })
 }
 
@@ -1048,7 +1054,7 @@ mod tests {
     }
 
     #[test]
-    fn raw_override_checked_route_admits_only_pure_local_runtime_inputs() {
+    fn raw_override_checked_route_admits_only_local_runtime_inputs() {
         let mut app = chimera_config::application::ChimeraAppConfig::default();
         app.enable_service_mode = false;
         let mut patch = Mapping::new();
@@ -1061,28 +1067,20 @@ mod tests {
         ] {
             patch.insert(Value::String(key.into()), value);
         }
-        let mut before = ClashConfig::default();
-        before.break_connection.on_mode_change = true;
-        assert!(checked_raw_clash_patch_eligible(
-            &patch, &before, &app, false
-        ));
+        let before = ClashConfig::default();
         let next = apply_mapping_to_typed_clash(&before, &patch).unwrap();
+        assert!(checked_raw_clash_patch_eligible(&patch, &app, false));
         assert!(crate::state::mutation::impact::reaches_runtime(
             &before,
             &next,
             &[]
         ));
-        assert!(!checked_raw_clash_patch_eligible(
-            &patch, &before, &app, true
-        ));
+        assert!(!checked_raw_clash_patch_eligible(&patch, &app, true));
         app.enable_service_mode = true;
-        assert!(!checked_raw_clash_patch_eligible(
-            &patch, &before, &app, false
-        ));
+        assert!(!checked_raw_clash_patch_eligible(&patch, &app, false));
         app.enable_service_mode = false;
 
         for (key, value) in [
-            ("mode", Value::String("rule".into())),
             ("mixed-port", Value::Number(7890u16.into())),
             (
                 "external-controller",
@@ -1094,7 +1092,7 @@ mod tests {
             let mut with_effect = patch.clone();
             with_effect.insert(Value::String(key.into()), value);
             assert!(
-                !checked_raw_clash_patch_eligible(&with_effect, &before, &app, false),
+                !checked_raw_clash_patch_eligible(&with_effect, &app, false),
                 "explicit {key} must retain legacy effects and preflight"
             );
         }
@@ -1102,56 +1100,61 @@ mod tests {
         non_string_key.insert(Value::Bool(true), Value::Bool(true));
         assert!(!checked_raw_clash_patch_eligible(
             &non_string_key,
-            &before,
             &app,
             false
         ));
         assert!(!checked_raw_clash_patch_eligible(
             &Mapping::new(),
-            &before,
             &app,
             false
         ));
     }
 
     #[test]
-    fn unchanged_raw_mode_request_must_not_enter_checked_apply() {
+    fn mode_interruption_intent_follows_source_patch_plan_not_applied_selection() {
         let app = chimera_config::application::ChimeraAppConfig {
             enable_service_mode: false,
             ..Default::default()
         };
-        let mut mode_request = Mapping::new();
-        mode_request.insert("mode".into(), "rule".into());
         let mut current = ClashConfig::default();
         current.break_connection.on_mode_change = true;
-        assert_eq!(
-            current.overrides.mode(),
-            apply_mapping_to_typed_clash(&current, &mode_request)
-                .unwrap()
-                .overrides
-                .mode()
+        let mut mode_request = Mapping::new();
+        mode_request.insert("mode".into(), "rule".into());
+        let same = apply_mapping_to_typed_clash(&current, &mode_request).unwrap();
+        let same_plan = plan_clash_patch(&mode_request, &current, &same).unwrap();
+        assert!(!same_plan.mode_changed);
+        assert!(
+            !same_plan.mode_changed
+                && same_plan.break_on_mode_change == current.break_connection.on_mode_change
         );
-        assert!(!checked_raw_clash_patch_eligible(
-            &mode_request,
+        assert!(checked_raw_clash_patch_eligible(&mode_request, &app, false));
+        assert!(!crate::state::mutation::impact::reaches_runtime(
             &current,
-            &app,
-            false
-        ));
-        // A mode transition with explicitly disabled interruption has no
-        // one-shot connection effect and may use the exact Checked source.
-        current.break_connection.on_mode_change = false;
-        mode_request.insert("mode".into(), "global".into());
-        assert!(checked_raw_clash_patch_eligible(
-            &mode_request,
-            &current,
-            &app,
-            false
-        ));
-        assert!(crate::state::mutation::impact::reaches_runtime(
-            &current,
-            &apply_mapping_to_typed_clash(&current, &mode_request).unwrap(),
+            &same,
             &[]
         ));
+        mode_request.insert("ipv6".into(), Value::Bool(false));
+        assert!(checked_raw_clash_patch_eligible(&mode_request, &app, false));
+
+        mode_request.insert("mode".into(), "global".into());
+        let changed = apply_mapping_to_typed_clash(&current, &mode_request).unwrap();
+        let changed_plan = plan_clash_patch(&mode_request, &current, &changed).unwrap();
+        assert!(changed_plan.mode_changed && changed_plan.break_on_mode_change);
+        assert!(checked_raw_clash_patch_eligible(&mode_request, &app, false));
+        assert!(crate::state::mutation::impact::reaches_runtime(
+            &current,
+            &changed,
+            &[]
+        ));
+        // This boolean is attached to the exact checked CAS receipt before
+        // publishing the source. No inference from current applied_selection.
+        let checked_interruption = changed_plan.mode_changed && changed_plan.break_on_mode_change;
+        assert!(checked_interruption);
+        current.break_connection.on_mode_change = false;
+        let no_interruption = plan_clash_patch(&mode_request, &current, &changed).unwrap();
+        assert!(no_interruption.mode_changed);
+        assert!(!no_interruption.break_on_mode_change);
+        assert!(checked_raw_clash_patch_eligible(&mode_request, &app, false));
     }
 
     struct RecordingBridge {

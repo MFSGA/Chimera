@@ -48,6 +48,10 @@ pub(in crate::client) trait CheckedCandidatePort: Send + Sync + 'static {
         candidate: PreparedRuntime,
         core_spec: chimera_core_manager::CoreSpec,
         request: String,
+        /// Source-owned explicit mode transition, proven by the same Clash
+        /// patch plan that authorizes the durable CAS. The Core executor
+        /// must never re-infer this one-shot effect from current config.
+        interrupt_mode: bool,
     ) -> Result<(), Arc<RuntimeError>>;
     fn source_committed_for_request(&self, domain: ConfigDomain, version: Version, request: String);
     fn abort_uncommitted_for_request(&self, domain: ConfigDomain, request: String);
@@ -192,10 +196,29 @@ impl CandidateCheck {
         &self,
         candidate: RuntimeCandidate,
     ) -> Result<String, Arc<RuntimeError>> {
+        self.check_with_receipt_effect(candidate, false).await
+    }
+
+    /// Explicit one-shot mode interruption is attached to the exact checked
+    /// request *before* source CAS, and is discarded with that same request
+    /// on conflict. It is not a second postcommit Core writer.
+    pub(in crate::client) async fn check_with_receipt_effect(
+        &self,
+        candidate: RuntimeCandidate,
+        interrupt_mode: bool,
+    ) -> Result<String, Arc<RuntimeError>> {
         let (domain, prepared, core_spec) = self.validate(candidate).await?;
+        if interrupt_mode && domain != ConfigDomain::Clash {
+            return Err(Arc::new(RuntimeError::CheckUnavailable {
+                reason: RuntimeCheckUnavailable::CandidateUnavailable {
+                    reason: "mode interruption is only valid for a committed Clash source patch"
+                        .into(),
+                },
+            }));
+        }
         let request = chimera_core_manager::OperationId::generate().to_string();
         self.workflow
-            .checked_for_request(domain, prepared, core_spec, request.clone())
+            .checked_for_request(domain, prepared, core_spec, request.clone(), interrupt_mode)
             .await?;
         Ok(request)
     }
@@ -364,6 +387,7 @@ mod tests {
             candidate: PreparedRuntime,
             core_spec: chimera_core_manager::CoreSpec,
             _request: String,
+            _interrupt_mode: bool,
         ) -> Result<(), Arc<RuntimeError>> {
             self.checked(domain, candidate, core_spec).await
         }
