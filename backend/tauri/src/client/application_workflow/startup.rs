@@ -1801,7 +1801,12 @@ impl ApplicationWorkflow {
                 .await
                 .ok()
                 .map(|current| host_for_run_type(current.run_type));
-            if failed_owner == Some(ExecutionHost::Service) {
+            if failed_owner == Some(ExecutionHost::Service)
+                && lifecycle.startup_service_refusal_stopped().await
+            {
+                // A Core submission can succeed and then fail to publish
+                // RuntimeProduct. Never release a Service host still running
+                // that accepted Core, even if the outer result is Refused.
                 lifecycle.set_startup_failed_generation(service_ready_generation);
                 match lifecycle.release_service_owner().await {
                     Ok(fresh_service) => {

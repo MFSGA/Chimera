@@ -787,6 +787,34 @@ impl CoreLifecycleWorkflow {
         self.core.status().await
     }
 
+    /// A refused Service submission may have already applied its Core but
+    /// failed *afterwards* while promoting RuntimeProduct. The startup owner
+    /// may release Service only after a stable, non-synthetic Stopped state
+    /// with no accepted Core receipt. This independent proof also protects
+    /// other errors that arrived after a concurrent owner transition.
+    pub(in crate::client) async fn startup_service_refusal_stopped(&self) -> bool {
+        if self.core.outcome_uncertain() {
+            return false;
+        }
+        let Ok(before) = self.core.status().await else {
+            return false;
+        };
+        if before.run_type != crate::core::RunType::Service
+            || before.state_changed_at == 0
+            || !matches!(before.state, CoreState::Stopped(_))
+        {
+            return false;
+        }
+        if !matches!(self.core.active_runtime_receipt().await, Ok(None)) {
+            return false;
+        }
+        let Ok(after) = self.core.status().await else {
+            return false;
+        };
+        same_core_status(&before, &after)
+            && matches!(self.core.active_runtime_receipt().await, Ok(None))
+    }
+
     pub(in crate::client) async fn startup_service_command_settled(&self) -> bool {
         self.service.command_settled().await
     }
@@ -814,9 +842,10 @@ impl CoreLifecycleWorkflow {
     /// before reaching here. Reuse the exact committed-source preparation
     /// instead of the old inline YAML construction whenever the sole Core
     /// owner and authoritative source reader are available.
-    async fn try_startup_prepared_local(
+    async fn try_startup_prepared_selected(
         &self,
         app: &ChimeraAppConfig,
+        run_type: crate::core::RunType,
     ) -> Option<anyhow::Result<()>> {
         if self.profiles.is_none()
             || self.checked_gate.get().is_none()
@@ -835,8 +864,17 @@ impl CoreLifecycleWorkflow {
             Ok(committed) => committed,
             Err(error) => return Some(Err(error)),
         };
-        self.try_reconcile_prepared_local(&target, &app, &clash, crate::core::RunType::Normal)
-            .await
+        match run_type {
+            crate::core::RunType::Normal => {
+                self.try_reconcile_prepared_local(&target, &app, &clash, run_type)
+                    .await
+            }
+            crate::core::RunType::Service => {
+                self.try_reconcile_prepared_service(&target, &app, &clash)
+                    .await
+            }
+            crate::core::RunType::Elevated => None,
+        }
     }
 
     pub(in crate::client) async fn startup_reconcile_application(
@@ -844,12 +882,14 @@ impl CoreLifecycleWorkflow {
         app: ChimeraAppConfig,
         service_connected: bool,
     ) -> anyhow::Result<()> {
-        let result = if !service_connected {
-            if let Some(result) = self.try_startup_prepared_local(&app).await {
-                result
-            } else {
-                self.reconcile_application(app, service_connected).await
-            }
+        let selected = if service_connected {
+            crate::core::RunType::Service
+        } else {
+            crate::core::RunType::Normal
+        };
+        let result = if let Some(result) = self.try_startup_prepared_selected(&app, selected).await
+        {
+            result
         } else {
             self.reconcile_application(app, service_connected).await
         };
@@ -1618,13 +1658,7 @@ impl CoreLifecycleWorkflow {
         ) {
             return Err(refusal);
         }
-        let observed = match self.core.status().await {
-            Ok(observed) => observed,
-            Err(_) => return Err(refusal),
-        };
-        if observed.run_type != crate::core::RunType::Service
-            || !matches!(observed.state, CoreState::Stopped(_))
-        {
+        if !self.startup_service_refusal_stopped().await {
             return Err(refusal);
         }
 
@@ -1826,9 +1860,9 @@ impl CoreLifecycleWorkflow {
         }
     }
 
-    /// Ref's prepared submission for a stable Local Core owner. Startup and
-    /// Service handoffs still use their explicit S2 owner transitions: a
-    /// prepared submission may *not* select or retire a Core host.
+    /// Ref's prepared submission for an S2-selected and S3-proven Core owner.
+    /// Startup and Service handoffs still use their explicit S2 transitions:
+    /// a prepared submission may *not* select or retire a Core host.
     ///
     /// This returns None only before touching Core, when the canonical
     /// session or the selected Local owner is unavailable. A proven stopped
@@ -1843,20 +1877,68 @@ impl CoreLifecycleWorkflow {
         clash: &chimera_config::clash::config::ClashConfig,
         run_type: crate::core::RunType,
     ) -> Option<anyhow::Result<()>> {
-        if run_type != crate::core::RunType::Normal || self.core.outcome_uncertain() {
+        if run_type != crate::core::RunType::Normal {
+            return None;
+        }
+        self.try_reconcile_prepared_selected(target, app, clash, run_type)
+            .await
+    }
+
+    /// The selected Service endpoint uses the same exact PreparedRuntime
+    /// product and Core manager operation as Local. Only S2-proven Service
+    /// readiness can authorize admission; no host selection occurs here.
+    async fn try_reconcile_prepared_service(
+        &self,
+        target: &str,
+        app: &ChimeraAppConfig,
+        clash: &chimera_config::clash::config::ClashConfig,
+    ) -> Option<anyhow::Result<()>> {
+        self.try_reconcile_prepared_selected(target, app, clash, crate::core::RunType::Service)
+            .await
+    }
+
+    async fn try_reconcile_prepared_selected(
+        &self,
+        target: &str,
+        app: &ChimeraAppConfig,
+        clash: &chimera_config::clash::config::ClashConfig,
+        run_type: crate::core::RunType,
+    ) -> Option<anyhow::Result<()>> {
+        if self.core.outcome_uncertain() {
             return None;
         }
         let authority = self.source_authority.as_ref()?;
         let gate = self.checked_gate.get()?;
         let before = self.core.status().await.ok()?;
-        if before.run_type != crate::core::RunType::Normal {
+        if before.run_type != run_type {
             return None;
         }
+        // An unverified Service probe is not proof of a stopped Core. This
+        // check is independent from the Core router's status projection.
+        let service_before = if run_type == crate::core::RunType::Service {
+            let (service, generation) = self.service_evidence().await;
+            if !service_prepared_owner_proven(&before, &service) {
+                return Some(Err(
+                    crate::client::reconciler::attempt::OwnershipTransitionPending::waiting(
+                        "Service owner is not Ready or does not match the selected Core state",
+                    )
+                    .into(),
+                ));
+            }
+            Some((service, generation))
+        } else {
+            None
+        };
         let current_receipt = self.core.active_runtime_receipt().await.ok()?;
         let (receipt, previous) = match &before.state {
             CoreState::Running => {
                 let receipt = current_receipt?;
-                if receipt.host != ExecutionHost::Local {
+                let expected_host = match run_type {
+                    crate::core::RunType::Normal => ExecutionHost::Local,
+                    crate::core::RunType::Service => ExecutionHost::Service,
+                    crate::core::RunType::Elevated => return None,
+                };
+                if receipt.host != expected_host {
                     return None;
                 }
                 (Some(receipt), Some(self.applied_selection.lock().clone()?))
@@ -1891,6 +1973,20 @@ impl CoreLifecycleWorkflow {
                 ));
             }
             let observed = self.core.status().await?;
+            if let Some((service_before, generation_before)) = service_before.as_ref() {
+                let (service_after, generation_after) = self.service_evidence().await;
+                if generation_after != *generation_before
+                    || service_after != *service_before
+                    || !service_prepared_owner_proven(&observed, &service_after)
+                {
+                    return Err(
+                        crate::client::reconciler::attempt::OwnershipTransitionPending::waiting(
+                            "Service readiness or Core ownership changed while building the committed product",
+                        )
+                        .into(),
+                    );
+                }
+            }
             let latest_receipt = self.core.active_runtime_receipt().await?;
             let still_receipted = match (receipt.as_ref(), latest_receipt.as_ref()) {
                 (Some(before), Some(after)) => Arc::ptr_eq(before, after),
@@ -1900,7 +1996,7 @@ impl CoreLifecycleWorkflow {
             if !same_core_status(&before, &observed) || !still_receipted {
                 return Err(
                     crate::client::reconciler::attempt::OwnershipTransitionPending::waiting(
-                        "Local Core owner changed while preparing the committed product",
+                        "selected Core owner changed while preparing the committed product",
                     )
                     .into(),
                 );
@@ -1994,10 +2090,18 @@ impl CoreLifecycleWorkflow {
                 let admitted = self.attempt_policy.lock().allow(&target, host, trigger);
                 match admitted {
                     Ok(()) => {
-                        let applied = if let Some(prepared) = self
-                            .try_reconcile_prepared_local(&target, &app, &clash, run_type)
-                            .await
-                        {
+                        let prepared = match run_type {
+                            crate::core::RunType::Normal => {
+                                self.try_reconcile_prepared_local(&target, &app, &clash, run_type)
+                                    .await
+                            }
+                            crate::core::RunType::Service => {
+                                self.try_reconcile_prepared_service(&target, &app, &clash)
+                                    .await
+                            }
+                            crate::core::RunType::Elevated => None,
+                        };
+                        let applied = if let Some(prepared) = prepared {
                             prepared
                         } else {
                             self.applied_selection.lock().take();
@@ -3136,6 +3240,36 @@ async fn rollback_stale_proxy_action(
     }
 }
 
+/// S2-proven Service ownership must also describe the *same* selected Core
+/// lifecycle state before a prepared product is admitted. A synthetic
+/// timestamp-zero Stopped status or a ready but foreign daemon is not proof.
+fn service_prepared_owner_proven(observed: &CoreStatusSnapshot, service: &ServiceEvidence) -> bool {
+    if observed.run_type != crate::core::RunType::Service || observed.state_changed_at == 0 {
+        return false;
+    }
+    match (service, &observed.state) {
+        (
+            ServiceEvidence::CoreStopped {
+                ready: true,
+                runtime_owned: true,
+                ..
+            },
+            CoreState::Stopped(_),
+        ) => true,
+        (
+            ServiceEvidence::CoreRunning {
+                ready: true,
+                instance,
+                ..
+            },
+            CoreState::Running,
+        ) => instance
+            .as_ref()
+            .is_none_or(|expected| observed.instance_id.as_deref() == Some(expected.as_str())),
+        _ => false,
+    }
+}
+
 fn same_core_status(left: &CoreStatusSnapshot, right: &CoreStatusSnapshot) -> bool {
     let same_state = match (&left.state, &right.state) {
         (CoreState::Running, CoreState::Running) => true,
@@ -3289,6 +3423,89 @@ mod checked_connection_effect_tests {
     use super::*;
     use chimera_contracts::runtime::{DegradationPhase, DegradationReason, InterruptFailure};
     use chimera_core::actor_v2::api::ApiError;
+
+    #[test]
+    fn service_prepared_admission_requires_ready_matching_owner_and_real_timestamp() {
+        use chimera_core::actor_v2::service_policy::ServicePhase;
+
+        let stopped = CoreStatusSnapshot {
+            instance_id: None,
+            state: CoreState::Stopped(None),
+            state_changed_at: 7,
+            run_type: crate::core::RunType::Service,
+        };
+        let ready_stopped = ServiceEvidence::CoreStopped {
+            ready: true,
+            phase: ServicePhase::Ready,
+            runtime_owned: true,
+        };
+        assert!(service_prepared_owner_proven(&stopped, &ready_stopped));
+        assert!(!service_prepared_owner_proven(
+            &CoreStatusSnapshot {
+                state_changed_at: 0,
+                ..stopped.clone()
+            },
+            &ready_stopped
+        ));
+        assert!(!service_prepared_owner_proven(
+            &CoreStatusSnapshot {
+                run_type: crate::core::RunType::Normal,
+                ..stopped.clone()
+            },
+            &ready_stopped
+        ));
+        assert!(!service_prepared_owner_proven(
+            &stopped,
+            &ServiceEvidence::CoreStopped {
+                ready: false,
+                phase: ServicePhase::Unknown,
+                runtime_owned: true,
+            }
+        ));
+        assert!(!service_prepared_owner_proven(
+            &stopped,
+            &ServiceEvidence::CoreStopped {
+                ready: true,
+                phase: ServicePhase::Ready,
+                runtime_owned: false,
+            }
+        ));
+        assert!(!service_prepared_owner_proven(
+            &stopped,
+            &ServiceEvidence::ForeignCore {
+                ready: true,
+                phase: ServicePhase::Ready,
+            }
+        ));
+        assert!(!service_prepared_owner_proven(
+            &stopped,
+            &ServiceEvidence::Unreadable {
+                phase: ServicePhase::Unknown,
+            }
+        ));
+        let running = CoreStatusSnapshot {
+            instance_id: Some("owned-service-instance".into()),
+            state: CoreState::Running,
+            ..stopped
+        };
+        let owned = ServiceEvidence::CoreRunning {
+            ready: true,
+            phase: ServicePhase::Ready,
+            instance: Some("owned-service-instance".into()),
+            revision: None,
+        };
+        assert!(service_prepared_owner_proven(&running, &owned));
+        assert!(!service_prepared_owner_proven(
+            &running,
+            &ServiceEvidence::CoreRunning {
+                ready: true,
+                phase: ServicePhase::Ready,
+                instance: Some("foreign-service-instance".into()),
+                revision: None,
+            }
+        ));
+        assert!(!service_prepared_owner_proven(&running, &ready_stopped));
+    }
 
     #[test]
     fn core_api_interruption_failure_has_ref_typed_reason_and_wire_code() {

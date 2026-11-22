@@ -1930,12 +1930,15 @@ impl Actor for ApplicationWorkflowActor {
                     // This belongs to the existing LocalRuntimeHost. The
                     // status projection only records outstanding publication
                     // debt and cannot mutate or duplicate the runtime product.
-                    state.product_maintenance = workflow
-                        .lifecycle()
-                        .pending_runtime_product_target()
-                        .map(|target| {
-                            format!("RuntimeProduct publication pending for target {target}")
+                    let pending_product = workflow.lifecycle().pending_runtime_product_target();
+                    state.product_maintenance = pending_product.as_ref().map(|target| {
+                        format!("RuntimeProduct publication pending for target {target}")
+                    });
+                    if let Some(target) = pending_product.as_deref() {
+                        state.reconciler.send_modify(|status| {
+                            status.record_product_publication_pending(target);
                         });
+                    }
                     state.publish_maintenance();
                     state.workflow = Some(workflow);
                     if service_endpoint_recovery {
@@ -12739,13 +12742,23 @@ mod tests {
         );
         assert!(error.to_string().contains("RuntimeProduct"));
         assert_eq!(core.submissions.load(AtomicOrdering::Acquire), 1);
+        let pending = client.reconciler_status();
         assert!(
-            client
-                .reconciler_status()
+            pending
                 .maintenance
                 .as_deref()
                 .is_some_and(|reason| reason.contains("RuntimeProduct publication pending"))
         );
+        assert_eq!(pending.degradations.len(), 1);
+        assert_eq!(
+            pending.degradations[0].code,
+            "runtime_product_publish_failed"
+        );
+        assert_eq!(
+            pending.degradations[0].phase,
+            chimera_contracts::runtime::DegradationPhase::RuntimeBuild
+        );
+        assert!(pending.degradations[0].retryable);
 
         client
             .reconcile()
@@ -12755,6 +12768,7 @@ mod tests {
         assert_eq!(core.publications.load(AtomicOrdering::Acquire), 1);
         assert!(core.lifecycle.pending_confirmed_product().is_none());
         assert!(client.reconciler_status().maintenance.is_none());
+        assert!(client.reconciler_status().degradations.is_empty());
         assert!(matches!(
             client.reconciler_status().conclusion,
             Conclusion::Converged
@@ -15394,6 +15408,235 @@ mod tests {
         }
 
         async fn on_profile_change(&self, _: bool) {}
+    }
+
+    /// A selected Service host delegates the exact prepared Core bytes to
+    /// the same CoreLifecycle owner. The test does not provide an inline
+    /// reconcile fallback: that would conceal a second Core writer.
+    struct SelectedServicePreparedCore {
+        inner: Arc<ReceiptProofCore>,
+    }
+
+    #[async_trait]
+    impl CoreLifecyclePort for SelectedServicePreparedCore {
+        async fn reconcile(&self, _: ClashConfig, _: ClashCore, _: RunType) -> anyhow::Result<()> {
+            anyhow::bail!("selected Service startup must not invoke legacy inline Core reconcile")
+        }
+
+        async fn reconcile_profiles(
+            &self,
+            _: ClashConfig,
+            _: ClashCore,
+            _: RunType,
+            _: Arc<chimera_config::profile::Profiles>,
+            _: chimera_config::application::ChimeraAppConfig,
+            _: std::collections::BTreeMap<String, String>,
+            _: Option<String>,
+        ) -> anyhow::Result<()> {
+            anyhow::bail!("selected Service startup must use the prepared Core owner")
+        }
+
+        async fn reconcile_prepared_outcome(
+            &self,
+            prepared: ports::PreparedRuntime,
+            spec: chimera_core_manager::CoreSpec,
+        ) -> anyhow::Result<ports::CheckedApplyOutcome> {
+            let result = self
+                .inner
+                .reconcile_prepared_outcome(prepared, spec)
+                .await?;
+            let mut lock = self.inner.active.lock().unwrap();
+            let mut receipt = lock
+                .as_ref()
+                .expect("the prepared Core submission produced its receipt")
+                .as_ref()
+                .clone();
+            receipt.host = crate::core::actor_v2::control_endpoint::ExecutionHost::Service;
+            *lock = Some(Arc::new(receipt));
+            Ok(result)
+        }
+
+        async fn active_runtime_receipt(
+            &self,
+        ) -> anyhow::Result<Option<Arc<crate::client::runtime::RuntimeApplyReceipt>>> {
+            self.inner.active_runtime_receipt().await
+        }
+
+        async fn status(&self) -> anyhow::Result<CoreStatusSnapshot> {
+            let active = self.inner.active.lock().unwrap().is_some();
+            Ok(CoreStatusSnapshot {
+                instance_id: active.then(|| "9af54a67-fc31-4dcb-8422-26644c6277c8".into()),
+                state: if active {
+                    CoreState::Running
+                } else {
+                    CoreState::Stopped(None)
+                },
+                state_changed_at: if active { 2 } else { 1 },
+                run_type: RunType::Service,
+            })
+        }
+
+        async fn stop(&self) -> anyhow::Result<()> {
+            self.inner.stop().await
+        }
+
+        async fn change_core(&self, _: ClashCore) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        fn recovery_notify(&self) -> Option<Arc<Notify>> {
+            None
+        }
+
+        async fn on_profile_change(&self, _: bool) {}
+    }
+
+    #[tokio::test]
+    async fn service_startup_submits_one_prepared_core_only_for_ready_owned_service() {
+        use crate::client::{
+            ports::{RuntimePreparationSession, SessionPortResolver},
+            reconciler::{
+                check::{Args, CandidateCheck},
+                committed::Selection,
+                inputs::{FrozenProfileContent, RuntimeInputs},
+            },
+        };
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = |name: &str| Utf8PathBuf::from_path_buf(dir.path().join(name)).unwrap();
+        let app = chimera_config::application::ChimeraAppConfig {
+            core: ClashCore::Mihomo,
+            enable_builtin_enhanced: false,
+            enable_service_mode: true,
+            ..Default::default()
+        };
+        let clash = ClashConfig::default();
+        let profiles = chimera_config::profile::Profiles::default();
+        let source = RuntimeInputs {
+            app: app.clone(),
+            clash: clash.clone(),
+            profiles: Arc::new(profiles.clone()),
+            content: FrozenProfileContent::default(),
+        };
+        let target = source.checked_target_key().unwrap();
+        let selection = Selection::of(&source);
+        let app_manager = chimera_state_engine::PersistentStateManagerSetup::<
+            chimera_config::application::ChimeraAppConfig,
+        >::builder()
+        .config_path(path("application.yaml"))
+        .assemble()
+        .from_state(app.clone());
+        let clash_manager =
+            chimera_state_engine::PersistentStateManagerSetup::<ClashConfig>::builder()
+                .config_path(path("clash.yaml"))
+                .assemble()
+                .from_state(clash.clone());
+        let profile_manager =
+            PersistentStateManagerSetup::<chimera_config::profile::Profiles>::builder()
+                .config_path(path("profiles.yaml"))
+                .assemble()
+                .from_state(profiles)
+                .await
+                .unwrap();
+        let profile_snapshot = profile_manager.snapshot_handle();
+        let lifecycle = Arc::new(crate::client::runtime::RuntimeLifecycle::default());
+        let gate = Arc::new(CandidateCheck::new(Args {
+            application: app_manager.snapshot_handle(),
+            clash: clash_manager.snapshot_handle(),
+            profile_content: crate::state::mutation::ProfileContentReader::new(
+                profile_snapshot.clone(),
+                crate::state::mutation::ProfileContentLock::default(),
+            ),
+            builder: Arc::new(PreparedLocalBuild),
+            session: RuntimePreparationSession {
+                revisions: lifecycle.revision_allocator(),
+                ports: Arc::new(SessionPortResolver::new(lifecycle)),
+            },
+            validator: Arc::new(UnusedPreparedCheck),
+            workflow: Arc::new(UnusedPreparedInbox),
+        }));
+        let inner = Arc::new(ReceiptProofCore {
+            active: Mutex::new(None),
+            publish_wrong_target: false,
+            change_instance_between_reads: false,
+            status_reads: AtomicUsize::new(0),
+            submissions: AtomicUsize::new(0),
+            stops: AtomicUsize::new(0),
+            service_to_retire: None,
+            retire_calls: AtomicUsize::new(0),
+        });
+        let core = Arc::new(SelectedServicePreparedCore {
+            inner: inner.clone(),
+        });
+        let authority = TestSourceAuthority::for_selected_source(
+            SourceDomain::Profiles,
+            19,
+            &target,
+            selection.clone(),
+        );
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let ready = Arc::new(AtomicBool::new(false));
+        let service = Arc::new(ToggleStartupServiceProbe {
+            events: events.clone(),
+            ready: ready.clone(),
+            core_running: Arc::new(AtomicBool::new(false)),
+        });
+        let workflow = CoreLifecycleWorkflow::new(
+            ApplicationClient::static_state(app.clone()),
+            ClashConfigClient::legacy_with(clash).unwrap(),
+            Some(profile_snapshot),
+            core.clone(),
+            Arc::new(RecordingInstaller { events }),
+            RuntimePaths::from_config_root(dir.path().to_path_buf()),
+            service,
+        )
+        .with_source_authority(Some(authority.clone()));
+        workflow.install_checked_gate(gate).unwrap();
+        assert!(workflow.startup_service_refusal_stopped().await);
+
+        let unavailable = workflow
+            .startup_reconcile_application(app.clone(), true)
+            .await
+            .expect_err("a disconnected Service must not submit Core bytes");
+        assert!(
+            unavailable
+                .downcast_ref::<crate::client::reconciler::attempt::OwnershipTransitionPending>()
+                .is_some()
+        );
+        assert_eq!(inner.submissions.load(AtomicOrdering::Acquire), 0);
+
+        ready.store(true, AtomicOrdering::Release);
+        workflow
+            .startup_reconcile_application(app.clone(), true)
+            .await
+            .expect("S2-confirmed ready Service must reuse exact prepared bytes");
+        assert_eq!(inner.submissions.load(AtomicOrdering::Acquire), 1);
+        let receipt = inner.active.lock().unwrap().clone().unwrap();
+        assert_eq!(
+            receipt.host,
+            crate::core::actor_v2::control_endpoint::ExecutionHost::Service
+        );
+        assert_eq!(receipt.target.as_deref(), Some(target.as_str()));
+        assert_eq!(
+            receipt.config_digest,
+            chimera_core_manager::payload_digest(b"mode: rule\n")
+        );
+        assert_eq!(workflow.applied_selection_for_tests(), Some(selection));
+        assert_eq!(authority.reads.load(AtomicOrdering::Relaxed), 3);
+        assert!(workflow.take_checked_connection_effect().is_none());
+        assert!(
+            !workflow.startup_service_refusal_stopped().await,
+            "an accepted and running Service Core cannot be released on a later publish error"
+        );
+        // The injected Service probe still describes a stopped old Core; it
+        // cannot authorize a second running Service mutation.
+        assert!(
+            workflow
+                .startup_reconcile_application(app, true)
+                .await
+                .is_err()
+        );
+        assert_eq!(inner.submissions.load(AtomicOrdering::Acquire), 1);
     }
 
     #[tokio::test]

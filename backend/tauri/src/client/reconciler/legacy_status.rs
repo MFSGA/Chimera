@@ -79,6 +79,26 @@ impl ReconcilerStatus {
             .push(Degradation::from_shared(degradation));
     }
 
+    /// Only the active Core owner's confirmed-but-unpublished product can
+    /// produce this REF RuntimeBuild degradation. This records publication
+    /// debt without inventing an upstream RuntimeError cause that the old
+    /// CoreLifecycle port cannot yet return. Retrying it must not submit Core.
+    pub(crate) fn record_product_publication_pending(&mut self, target: &str) {
+        let message = format!("RuntimeProduct publication pending for target {target}");
+        if self.degradations.iter().any(|degradation| {
+            degradation.code == "runtime_product_publish_failed" && degradation.message == message
+        }) {
+            return;
+        }
+        self.seq = self.seq.saturating_add(1);
+        self.degradations.push(Degradation {
+            phase: chimera_contracts::runtime::DegradationPhase::RuntimeBuild,
+            code: "runtime_product_publish_failed".into(),
+            message,
+            retryable: true,
+        });
+    }
+
     /// A source-only commit is already durable, but no Core application was
     /// requested. Keep the previous runtime conclusion unchanged.
     pub(crate) fn observe_source_only(&mut self, domain: SourceDomain, version: u64) {
