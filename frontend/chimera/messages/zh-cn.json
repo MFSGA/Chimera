@@ -91,6 +91,8 @@
   "settings_clash_settings_managed_guard_field_enabled": "启用",
   "settings_clash_settings_managed_guard_field_disabled": "禁用",
   "settings_clash_settings_tun_stack_label": "TUN 堆栈",
+  "settings_clash_settings_tun_congestion_controller_label": "TCP 拥塞控制",
+  "settings_clash_settings_tun_congestion_controller_core_default": "内核默认",
   "settings_clash_settings_log_level_label": "日志级别",
   "settings_clash_settings_port_label": "端口设置",
   "settings_clash_settings_mixed_port_label": "混合端口",

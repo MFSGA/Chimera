@@ -15,6 +15,7 @@ import FieldFilterSwitch from './_modules/field-filter-switch';
 import IPv6Switch from './_modules/ipv6-switch';
 import LogLevelSelector from './_modules/log-level-selector';
 import ManagedGuardFieldSelector from './_modules/managed-guard-field-selector';
+import MipsCongestionControllerSelector from './_modules/mips-congestion-controller-selector';
 import MixedPortConfig from './_modules/mixed-port-config';
 import RandomPortSwitch from './_modules/random-port-switch';
 import TransparentProxyConfigSettings from './_modules/transparent-proxy-config';
@@ -43,6 +44,7 @@ const PatchSettings = () => {
         </SettingsCard>
 
         <TunStackSelector />
+        <MipsCongestionControllerSelector />
 
         <LogLevelSelector />
       </SettingsGroup>

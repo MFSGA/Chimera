@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import type { MutationOutcome } from '../../frontend/interface/src/ipc/bindings.js';
 import { openMainRoute } from './main-window.js';
+import { committedValue } from './profile-fixtures.js';
 
 const targetPath = '/main/settings/clash';
 
@@ -69,6 +71,11 @@ describe('main clash settings reference layout', () => {
             ':scope > [data-slot="tun-stack-selector-card"]',
           ),
         ),
+        mipsControllerDirect: Boolean(
+          patchGroup?.querySelector(
+            ':scope > [data-slot="mips-congestion-controller-selector-card"]',
+          ),
+        ),
         logLevelDirect: Boolean(
           patchGroup?.querySelector(
             ':scope > [data-slot="log-level-selector-card"]',
@@ -106,8 +113,18 @@ describe('main clash settings reference layout', () => {
       };
     });
 
-    assert.equal(state.patchDirectCards, 2, JSON.stringify(state, null, 2));
-    assert.equal(state.patchDirectChildren, 4, JSON.stringify(state, null, 2));
+    // The upstream MIPS controller card is present only for the selected MIPS
+    // stack. Do not mistake an additional conditional ref card for nesting.
+    assert.equal(
+      state.patchDirectCards,
+      state.mipsControllerDirect ? 3 : 2,
+      JSON.stringify(state, null, 2),
+    );
+    assert.equal(
+      state.patchDirectChildren,
+      state.mipsControllerDirect ? 5 : 4,
+      JSON.stringify(state, null, 2),
+    );
     assert.equal(state.tunStackDirect, true, JSON.stringify(state, null, 2));
     assert.equal(state.logLevelDirect, true, JSON.stringify(state, null, 2));
     assert.equal(state.portDirectCards, 1, JSON.stringify(state, null, 2));
@@ -139,6 +156,134 @@ describe('main clash settings reference layout', () => {
     if (evidencePath) {
       fs.mkdirSync(path.dirname(evidencePath), { recursive: true });
       await browser.saveScreenshot(evidencePath);
+    }
+  });
+});
+
+/**
+ * Ref network settings flow: choose the MIPS stack in the actual main UI,
+ * select a controller, read the persisted setting independently, then hand
+ * control back to the core. Only the TUN-disabled E2E config is eligible.
+ * No privileged TUN or host network action is part of this test.
+ */
+describe('Mihomo MIPS controller settings', () => {
+  type AppConfig = { core: string };
+  type ClashConfig = {
+    tun_stack: string;
+    enable_tun_mode: boolean;
+    tun_mips?: { congestion_controller?: string | null };
+  };
+
+  async function invoke<T>(command: string, args?: Record<string, unknown>) {
+    return browser.execute(
+      async (name, parameters) => {
+        const internals = (
+          window as typeof window & {
+            __TAURI_INTERNALS__: {
+              invoke: <R>(
+                name: string,
+                args?: Record<string, unknown>,
+              ) => Promise<R>;
+            };
+          }
+        ).__TAURI_INTERNALS__;
+        return internals.invoke<T>(name, parameters);
+      },
+      command,
+      args,
+    );
+  }
+
+  async function patch(command: string, value: Record<string, unknown>) {
+    committedValue(
+      await invoke<MutationOutcome<null>>(command, { patch: value }),
+      `MIPS E2E ${command}`,
+    );
+  }
+
+  it('selects a controller and restores the core default through visible controls', async () => {
+    const originalApp = await invoke<AppConfig>('get_app_config');
+    const originalClash = await invoke<ClashConfig>('get_clash_config');
+    assert.equal(
+      originalClash.enable_tun_mode,
+      false,
+      'MIPS settings E2E must not run with host TUN enabled',
+    );
+
+    try {
+      if (originalApp.core !== 'mihomo') {
+        await patch('patch_app_config', { core: 'mihomo' });
+      }
+      await patch('patch_clash_config', { tun_stack: 'gvisor' });
+      await openMainRoute(targetPath);
+
+      const stackTrigger = await $('[data-slot="tun-stack-selector-trigger"]');
+      await stackTrigger.waitForClickable({ timeout: 15_000 });
+      await stackTrigger.click();
+      const mipsOption = await $(
+        '//div[@role="menuitemcheckbox" and normalize-space()="MIPS"]',
+      );
+      await mipsOption.waitForClickable({ timeout: 15_000 });
+      await mipsOption.click();
+      await browser.waitUntil(
+        async () =>
+          (await invoke<ClashConfig>('get_clash_config')).tun_stack === 'mips',
+        {
+          timeout: 20_000,
+          timeoutMsg: 'Selecting MIPS did not persist the stack',
+        },
+      );
+      const controllerTrigger = await $(
+        '[data-slot="mips-congestion-controller-selector-trigger"]',
+      );
+      await controllerTrigger.waitForClickable({ timeout: 15_000 });
+      await controllerTrigger.click();
+      const bbrOption = await $(
+        '//div[@role="menuitemcheckbox" and normalize-space()="BBR"]',
+      );
+      await bbrOption.waitForClickable({ timeout: 15_000 });
+      await bbrOption.click();
+      await browser.waitUntil(
+        async () =>
+          (await invoke<ClashConfig>('get_clash_config')).tun_mips
+            ?.congestion_controller === 'bbr',
+        { timeout: 20_000, timeoutMsg: 'BBR selection did not persist' },
+      );
+
+      await browser.refresh();
+      const restoredLabel = await $(
+        '[data-slot="mips-congestion-controller-selector-trigger"]',
+      );
+      await restoredLabel.waitForDisplayed({ timeout: 20_000 });
+      assert.match(await restoredLabel.getText(), /BBR/);
+      await restoredLabel.click();
+      const defaultOption = await $(
+        '//div[@role="menuitemcheckbox" and (contains(., "默认") or contains(., "預設") or contains(., "default"))]',
+      );
+      await defaultOption.waitForClickable({ timeout: 15_000 });
+      await defaultOption.click();
+      await browser.waitUntil(
+        async () =>
+          (await invoke<ClashConfig>('get_clash_config')).tun_mips
+            ?.congestion_controller == null,
+        {
+          timeout: 20_000,
+          timeoutMsg: 'Core default did not clear the stored MIPS controller',
+        },
+      );
+    } finally {
+      // Restore only fields changed by this test, using the same supported
+      // typed mutations. Never delete another user's profiles or files.
+      await patch('patch_clash_config', {
+        tun_stack: originalClash.tun_stack,
+        tun_mips: {
+          congestion_controller:
+            originalClash.tun_mips?.congestion_controller ?? null,
+        },
+      });
+      if (originalApp.core !== 'mihomo') {
+        await patch('patch_app_config', { core: originalApp.core });
+      }
     }
   });
 });
