@@ -444,34 +444,6 @@ impl CoreLifecyclePort for LegacyCoreBridge {
             .await
     }
 
-    async fn prepare_profile_runtime(
-        &self,
-        clash: chimera_config::clash::config::ClashConfig,
-        target_core: ClashCore,
-        run_type: RunType,
-        profiles: Arc<chimera_config::profile::Profiles>,
-        app: chimera_config::application::ChimeraAppConfig,
-        staged_content: std::collections::BTreeMap<String, String>,
-        target: Option<String>,
-        operation_id: chimera_core_manager::OperationId,
-    ) -> anyhow::Result<(
-        crate::client::application_workflow::mutation::AppliedCandidate,
-        crate::client::application_workflow::mutation::CheckRecord,
-    )> {
-        self.facade()
-            .prepare_profile_runtime(
-                clash,
-                target_core,
-                run_type,
-                profiles,
-                app,
-                staged_content,
-                target,
-                operation_id,
-            )
-            .await
-    }
-
     async fn confirm_profile_runtime(
         &self,
         operation_id: chimera_core_manager::OperationId,

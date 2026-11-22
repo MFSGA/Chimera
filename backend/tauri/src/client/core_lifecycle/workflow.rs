@@ -3419,56 +3419,39 @@ impl ProfileRuntime for CoreLifecycleWorkflow {
         crate::client::application_workflow::mutation::AppliedCandidate,
         crate::client::application_workflow::mutation::CheckRecord,
     )> {
-        // Real Profile TCC Try owns a private candidate across its source
-        // decision. Build that candidate through the *same* ref session as
-        // Checked/committed sources, but do not enroll a Checked inbox entry
-        // or publish the product before TCC's own Confirm decision.
-        if let Some(gate) = self.checked_gate.get()
-            && self.core.runtime_preparation_session().is_some()
-        {
-            let run_type = crate::core::RunType::classify(
-                inputs.app.enable_service_mode,
-                crate::core::service::ipc::get_ipc_state(),
-            );
-            let (prepared, core_spec) = gate.prepare_profile_tcc_candidate(inputs).await?;
-            return self
-                .core
-                .prepare_profile_runtime_prepared(
-                    prepared,
-                    core_spec,
-                    run_type,
-                    operation_id.clone(),
+        // Running Profile TCC cannot safely apply an independently generated
+        // YAML/port/IPC revision. Only the live Core-owned ref CandidateCheck
+        // may create the precommit product; compatibility ports fail closed.
+        let gate = self.checked_gate.get().ok_or_else(|| {
+            anyhow::Error::new(
+                crate::client::application_workflow::mutation::RuntimeCheckFailure::
+                    candidate_unavailable(
+                        "Profile TCC requires the installed Core-owned strict candidate gate",
+                    ),
+            )
+        })?;
+        if self.core.runtime_preparation_session().is_none() {
+            return Err(crate::client::application_workflow::mutation::RuntimeCheckFailure::
+                candidate_unavailable(
+                    "Profile TCC requires the active Core-owned runtime preparation session",
                 )
-                .await;
+                .into());
         }
-        let target = inputs.checked_target_key().map_err(|error| {
-            anyhow::Error::new(
-                crate::client::application_workflow::mutation::RuntimeCheckFailure::
-                    candidate_unavailable(error.to_string()),
-            )
-        })?;
-        let (app, clash, profiles, profile_content) = inputs.into_parts().map_err(|error| {
-            anyhow::Error::new(
-                crate::client::application_workflow::mutation::RuntimeCheckFailure::
-                    candidate_unavailable(error.to_string()),
-            )
-        })?;
-        let target_core = app.core;
         let run_type = crate::core::RunType::classify(
-            app.enable_service_mode,
+            inputs.app.enable_service_mode,
             crate::core::service::ipc::get_ipc_state(),
         );
+        let (prepared, core_spec) =
+            gate.prepare_profile_tcc_candidate(inputs)
+                .await
+                .map_err(|error| {
+                    anyhow::Error::new(
+                    crate::client::application_workflow::mutation::RuntimeCheckFailure::
+                        candidate_unavailable(error.to_string()),
+                )
+                })?;
         self.core
-            .prepare_profile_runtime(
-                clash,
-                target_core,
-                run_type,
-                profiles,
-                app,
-                profile_content,
-                Some(target),
-                operation_id.clone(),
-            )
+            .prepare_profile_runtime_prepared(prepared, core_spec, run_type, operation_id.clone())
             .await
     }
 

@@ -16455,6 +16455,52 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn profile_tcc_try_without_core_owned_gate_fails_before_any_core_submit() {
+        use crate::client::{
+            application_workflow::mutation::{CheckRecord, RuntimeCheckFailure},
+            reconciler::inputs::{FrozenProfileContent, RuntimeInputs},
+        };
+
+        let submits = Arc::new(Mutex::new(Vec::new()));
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let workflow = CoreLifecycleWorkflow::new(
+            ApplicationClient::legacy().unwrap(),
+            ClashConfigClient::legacy().unwrap(),
+            None,
+            Arc::new(ExactCheckedCore {
+                submits: submits.clone(),
+            }),
+            Arc::new(RecordingInstaller {
+                events: events.clone(),
+            }),
+            RuntimePaths::from_config_root(std::path::PathBuf::from("test-runtime-root")),
+            Arc::new(RecordingService { events }),
+        );
+        let input = RuntimeInputs {
+            app: chimera_config::application::ChimeraAppConfig::default(),
+            clash: ClashConfig::default(),
+            profiles: Arc::new(chimera_config::profile::Profiles::default()),
+            content: FrozenProfileContent::default(),
+        };
+        let error = ProfileRuntime::prepare_profile_runtime(
+            &workflow,
+            input,
+            &chimera_core_manager::OperationId::generate(),
+        )
+        .await
+        .expect_err("a missing ref gate cannot trigger a second legacy YAML/Core submit");
+        let failure = error.downcast_ref::<RuntimeCheckFailure>().unwrap();
+        assert!(
+            matches!(failure.record(), CheckRecord::Unserviceable(reason)
+            if reason.contains("installed Core-owned strict candidate gate"))
+        );
+        assert!(
+            submits.lock().unwrap().is_empty(),
+            "a stopped or unconfigured Core must never receive fabricated Profile bytes"
+        );
+    }
+
+    #[tokio::test]
     async fn legacy_lifecycle_operation_invalidates_checked_selection_baseline() {
         use crate::client::reconciler::{committed::Selection, inputs::RuntimeInputs};
         let events = Arc::new(Mutex::new(Vec::new()));

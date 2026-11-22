@@ -468,21 +468,6 @@ pub(crate) trait CoreLifecyclePort: Send + Sync {
         anyhow::bail!("this Core adapter cannot hold a prepared Profile TCC candidate")
     }
 
-    async fn prepare_profile_runtime(
-        &self,
-        _clash: ClashConfig,
-        _target_core: ClashCore,
-        _run_type: RunType,
-        _profiles: Arc<chimera_config::profile::Profiles>,
-        _app: chimera_config::application::ChimeraAppConfig,
-        _staged_content: std::collections::BTreeMap<String, String>,
-        _target: Option<String>,
-        _operation_id: OperationId,
-    ) -> anyhow::Result<(AppliedCandidate, CheckRecord)> {
-        anyhow::bail!(
-            "this core lifecycle adapter cannot hold a Profile runtime until source commit"
-        )
-    }
     async fn confirm_profile_runtime(
         &self,
         _operation_id: OperationId,

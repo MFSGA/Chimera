@@ -598,34 +598,6 @@ impl LocalRuntimeHost {
         .context("prepared Profile TCC Try returned no held candidate")
     }
 
-    pub(crate) async fn prepare_profile_runtime(
-        &self,
-        clash: ClashConfig,
-        target_core: ClashCore,
-        endpoint: &dyn ControlEndpoint,
-        profiles: Arc<chimera_config::profile::Profiles>,
-        app: chimera_config::application::ChimeraAppConfig,
-        staged_content: std::collections::BTreeMap<String, String>,
-        target: Option<String>,
-        operation_id: OperationId,
-    ) -> anyhow::Result<(
-        crate::client::application_workflow::mutation::AppliedCandidate,
-        crate::client::application_workflow::mutation::CheckRecord,
-    )> {
-        self.reconcile_with_profile_source(
-            Some(clash),
-            target_core,
-            endpoint,
-            Some((profiles, app, staged_content)),
-            target,
-            Some(operation_id),
-            None,
-            None,
-        )
-        .await?
-        .context("Profile runtime preparation returned no candidate")
-    }
-
     pub(crate) async fn validate_profile_runtime(
         &self,
         clash: ClashConfig,
@@ -1078,8 +1050,13 @@ impl LocalRuntimeHost {
             candidate.product.revision == candidate.receipt.revision
                 && candidate.product.target_core == candidate.receipt.target_core
                 && chimera_core_manager::payload_digest(candidate.product.product_bytes())
-                    == candidate.receipt.config_digest,
-            "committed Profile product does not match its confirmed runtime receipt"
+                    == candidate.receipt.config_digest
+                && candidate
+                    .receipt
+                    .artifact
+                    .as_ref()
+                    .is_some_and(|artifact| { Arc::ptr_eq(artifact, &candidate.product) }),
+            "committed Profile product is not the exact candidate accepted by the Core"
         );
         let confirmed = self
             .lifecycle
@@ -1109,6 +1086,14 @@ impl LocalRuntimeHost {
                     .await?
             }
         };
+        // Verify the *held* precommit file before touching the publicly
+        // applied runtime product. A stale/misassociated TCC operation must
+        // not overwrite the product even briefly and then report mismatch.
+        let staged_bytes = candidate_file.read_verified().await?;
+        anyhow::ensure!(
+            staged_bytes.as_slice() == candidate.product.product_bytes(),
+            "held Profile TCC candidate differs from the accepted Core product"
+        );
         self.publish_profile_candidate(candidate_file, candidate.receipt, candidate.product)
             .await
     }
@@ -2201,6 +2186,86 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(endpoint.submitted.lock().unwrap().len(), 1);
+        host.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn profile_tcc_confirm_rejects_wrong_held_file_before_touching_public_product() {
+        let (_root, host, paths) = runtime_host_fixture().await;
+        let (prepared, spec) = prepared_runtime_fixture(Arc::from("mode: rule\n"));
+        let endpoint = recording_endpoint(true);
+        let operation_id = OperationId::generate();
+        let (accepted, _) = host
+            .prepare_profile_runtime_prepared(prepared, spec, &endpoint, operation_id.clone(), None)
+            .await
+            .unwrap();
+        let substituted = paths.create_candidate(b"mode: global\n").await.unwrap();
+        host.pending_profile_candidates
+            .lock()
+            .await
+            .insert(operation_id.clone(), substituted);
+        let error = host
+            .confirm_profile_runtime(&operation_id, accepted.clone())
+            .await
+            .expect_err("a mismatched held file may never overwrite the public product");
+        assert!(
+            error
+                .to_string()
+                .contains("held Profile TCC candidate differs")
+        );
+        assert!(!paths.product().exists());
+        assert!(host.lifecycle.snapshot().applied.is_none());
+        assert_eq!(endpoint.submitted.lock().unwrap().len(), 1);
+
+        // Once the bad file is discarded, the original accepted Core receipt
+        // may reconstruct only its exact bytes; no Core command is replayed.
+        host.confirm_profile_runtime(&operation_id, accepted.clone())
+            .await
+            .unwrap();
+        assert_eq!(
+            tokio::fs::read(paths.product()).await.unwrap(),
+            accepted.product.product_bytes()
+        );
+        assert_eq!(endpoint.submitted.lock().unwrap().len(), 1);
+        assert!(Arc::ptr_eq(
+            &host.lifecycle.snapshot().applied.unwrap(),
+            &accepted.product,
+        ));
+        host.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn profile_tcc_confirm_rejects_forged_product_identity_before_file_promotion() {
+        let (_root, host, paths) = runtime_host_fixture().await;
+        let (prepared, spec) = prepared_runtime_fixture(Arc::from("mode: rule\n"));
+        let endpoint = recording_endpoint(true);
+        let operation_id = OperationId::generate();
+        let (accepted, _) = host
+            .prepare_profile_runtime_prepared(prepared, spec, &endpoint, operation_id.clone(), None)
+            .await
+            .unwrap();
+        let forged = crate::client::application_workflow::mutation::AppliedCandidate {
+            replaced: accepted.replaced,
+            receipt: accepted.receipt.clone(),
+            product: Arc::new((*accepted.product).clone()),
+        };
+        assert!(
+            host.confirm_profile_runtime(&operation_id, forged)
+                .await
+                .is_err(),
+            "copying a product is not the exact accepted TCC artifact"
+        );
+        assert!(!paths.product().exists());
+        assert!(host.lifecycle.snapshot().applied.is_none());
+        assert_eq!(endpoint.submitted.lock().unwrap().len(), 1);
+        assert!(
+            host.pending_profile_candidates
+                .lock()
+                .await
+                .contains_key(&operation_id),
+            "a forged product must not consume the legitimate TCC candidate"
+        );
+        host.discard_profile_runtime(&operation_id).await;
         host.shutdown().await.unwrap();
     }
 
