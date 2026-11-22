@@ -246,6 +246,9 @@ pub(crate) use ports::{
 /// for validation. Do not re-resolve the binary at SourceCommitted or Apply.
 struct CheckedRuntimeCandidate {
     domain: SourceDomain,
+    /// Source request identity, not a Core ownership lease. None preserves
+    /// legacy Profiles admission where the version notice lacks a receipt.
+    request: Option<String>,
     prepared: ports::PreparedRuntime,
     core_spec: chimera_core_manager::CoreSpec,
 }
@@ -283,6 +286,17 @@ impl CheckedRuntimeInbox {
                 },
             }));
         }
+        if let Some(request) = checked.request.as_deref()
+            && self.pending.iter().any(|entry| {
+                entry.domain == checked.domain && entry.request.as_deref() == Some(request)
+            })
+        {
+            return Err(Arc::new(RuntimeError::CheckUnavailable {
+                reason: RuntimeCheckUnavailable::CandidateUnavailable {
+                    reason: "duplicate checked request identity for one source domain".into(),
+                },
+            }));
+        }
         self.pending.push_back(checked);
         Ok(())
     }
@@ -291,6 +305,24 @@ impl CheckedRuntimeInbox {
     /// token, discard every uncommitted proposal in that domain: another
     /// racing successful CAS will conservatively rebuild the latest source.
     /// Never discard checks admitted for the other source domains.
+    fn discard_request(&mut self, domain: SourceDomain, request: &str) -> usize {
+        let before = self.pending.len();
+        self.pending
+            .retain(|entry| entry.domain != domain || entry.request.as_deref() != Some(request));
+        before - self.pending.len()
+    }
+
+    fn take_request(
+        &mut self,
+        domain: SourceDomain,
+        request: &str,
+    ) -> Option<CheckedRuntimeCandidate> {
+        let index = self.pending.iter().position(|entry| {
+            entry.domain == domain && entry.request.as_deref() == Some(request)
+        })?;
+        self.pending.remove(index)
+    }
+
     fn discard_domain(&mut self, domain: SourceDomain) -> usize {
         let before = self.pending.len();
         self.pending.retain(|entry| entry.domain != domain);
@@ -355,6 +387,7 @@ enum Message {
     /// the next durable SourceCommitted can consume stale uncommitted bytes.
     AbortChecked {
         domain: SourceDomain,
+        request: Option<String>,
     },
     /// Install the single production ref CandidateCheck on the existing
     /// lifecycle workflow before any Application source mutation can run.
@@ -415,6 +448,7 @@ enum Message {
     CheckedSourceCommitted {
         domain: SourceDomain,
         version: u64,
+        request: Option<String>,
     },
     RuntimeDirty,
     DirtyTick,
@@ -1500,9 +1534,18 @@ impl Actor for ApplicationWorkflowActor {
         state: &mut Self::State,
     ) -> Result<(), ActorProcessingErr> {
         match message {
-            Message::AbortChecked { domain } => {
-                let count = state.checked.discard_domain(domain);
-                tracing::debug!(?domain, count, "discarded uncommitted checked candidates");
+            Message::AbortChecked { domain, request } => {
+                let count = if let Some(request) = request.as_deref() {
+                    state.checked.discard_request(domain, request)
+                } else {
+                    state.checked.discard_domain(domain)
+                };
+                tracing::debug!(
+                    ?domain,
+                    ?request,
+                    count,
+                    "discarded uncommitted checked candidates"
+                );
             }
             Message::InstallCandidateGate { gate, reply } => {
                 let result = if state.shutting_down {
@@ -2139,7 +2182,11 @@ impl Actor for ApplicationWorkflowActor {
                     }
                 }
             }
-            Message::CheckedSourceCommitted { domain, version } => {
+            Message::CheckedSourceCommitted {
+                domain,
+                version,
+                request,
+            } => {
                 // This is a distinct source notification from the legacy
                 // SourceCommitted variant: a checked receipt must either be
                 // consumed by this single command queue or explicitly
@@ -2153,13 +2200,22 @@ impl Actor for ApplicationWorkflowActor {
                     // Notifications are at-least-once; an already observed
                     // version must never run a second checked or legacy Core
                     // apply just because the cache was consumed by the first.
+                    if let Some(request) = request.as_deref() {
+                        // A duplicate/wrong notice must not leave an unused
+                        // receipt eligible for a later source version.
+                        state.checked.discard_request(domain, request);
+                    }
                     tracing::debug!(?domain, version, "duplicate checked commit ignored");
                 } else if previous.is_some_and(|seen| seen > version) {
                     // A source-only commit may have published a newer version
                     // before this checked CAS receipt reached the mailbox.
                     // Do not silently lose the earlier runtime intent: the
                     // authoritative *latest* source must be reconciled once.
-                    state.checked.pending.retain(|entry| entry.domain != domain);
+                    if let Some(request) = request.as_deref() {
+                        state.checked.discard_request(domain, request);
+                    } else {
+                        state.checked.discard_domain(domain);
+                    }
                     if state.run_intent == RunIntent::Running
                         && !state.uncertain
                         && !state.shutting_down
@@ -2227,7 +2283,14 @@ impl Actor for ApplicationWorkflowActor {
                     state.source_dirty = true;
                     state.mark_runtime_dirty(&myself);
                 } else if let Some(authority) = state.source_authority.as_ref().cloned() {
-                    let (selection, checked) = state.checked.take_unique(domain, None);
+                    let (selection, checked) = if let Some(request) = request.as_deref() {
+                        match state.checked.take_request(domain, request) {
+                            Some(checked) => (CheckedSelection::Matched, Some(checked)),
+                            None => (CheckedSelection::Missing, None),
+                        }
+                    } else {
+                        state.checked.take_unique(domain, None)
+                    };
                     match (selection, checked) {
                         (
                             CheckedSelection::Matched,
@@ -3679,6 +3742,28 @@ impl CoreLifecycleClient {
         prepared: ports::PreparedRuntime,
         core_spec: chimera_core_manager::CoreSpec,
     ) -> Result<(), Arc<chimera_contracts::runtime_error::RuntimeError>> {
+        self.checked_candidate_inner(domain, prepared, core_spec, None)
+            .await
+    }
+
+    pub(in crate::client) async fn checked_candidate_for_domain_with_request(
+        &self,
+        domain: SourceDomain,
+        prepared: ports::PreparedRuntime,
+        core_spec: chimera_core_manager::CoreSpec,
+        request: String,
+    ) -> Result<(), Arc<chimera_contracts::runtime_error::RuntimeError>> {
+        self.checked_candidate_inner(domain, prepared, core_spec, Some(request))
+            .await
+    }
+
+    async fn checked_candidate_inner(
+        &self,
+        domain: SourceDomain,
+        prepared: ports::PreparedRuntime,
+        core_spec: chimera_core_manager::CoreSpec,
+        request: Option<String>,
+    ) -> Result<(), Arc<chimera_contracts::runtime_error::RuntimeError>> {
         use chimera_contracts::runtime_error::RuntimeError;
         match self.0.as_ref() {
             CoreLifecycleClientInner::Actor { actor_ref, .. } => {
@@ -3688,6 +3773,7 @@ impl CoreLifecycleClient {
                         |reply| Message::Checked {
                             checked: CheckedRuntimeCandidate {
                                 domain,
+                                request,
                                 prepared,
                                 core_spec,
                             },
@@ -3769,9 +3855,24 @@ impl CoreLifecycleClient {
     /// one ordered mailbox; on cross-request same-domain ambiguity, the next
     /// successful commit falls back to authoritative latest-source recovery.
     pub(in crate::client) fn abort_uncommitted_checked(&self, domain: SourceDomain) {
+        self.abort_checked_inner(domain, None);
+    }
+
+    pub(in crate::client) fn abort_uncommitted_checked_request(
+        &self,
+        domain: SourceDomain,
+        request: String,
+    ) {
+        self.abort_checked_inner(domain, Some(request));
+    }
+
+    fn abort_checked_inner(&self, domain: SourceDomain, request: Option<String>) {
         match self.0.as_ref() {
             CoreLifecycleClientInner::Actor { actor_ref, .. } => {
-                if actor_ref.cast(Message::AbortChecked { domain }).is_err() {
+                if actor_ref
+                    .cast(Message::AbortChecked { domain, request })
+                    .is_err()
+                {
                     tracing::debug!(?domain, "checked abort skipped: Core owner is unavailable");
                 }
             }
@@ -3784,10 +3885,32 @@ impl CoreLifecycleClient {
     /// checked value through ApplyChecked; it does not enqueue the old
     /// SourceCommitted rebuild when a checked value was available.
     pub(in crate::client) fn checked_source_committed(&self, domain: SourceDomain, version: u64) {
+        self.checked_source_committed_inner(domain, version, None);
+    }
+
+    pub(in crate::client) fn checked_source_committed_for_request(
+        &self,
+        domain: SourceDomain,
+        version: u64,
+        request: String,
+    ) {
+        self.checked_source_committed_inner(domain, version, Some(request));
+    }
+
+    fn checked_source_committed_inner(
+        &self,
+        domain: SourceDomain,
+        version: u64,
+        request: Option<String>,
+    ) {
         match self.0.as_ref() {
             CoreLifecycleClientInner::Actor { actor_ref, .. } => {
                 if actor_ref
-                    .cast(Message::CheckedSourceCommitted { domain, version })
+                    .cast(Message::CheckedSourceCommitted {
+                        domain,
+                        version,
+                        request,
+                    })
                     .is_err()
                 {
                     tracing::warn!(
@@ -14265,6 +14388,7 @@ mod tests {
     fn checked_entry(domain: SourceDomain, target: &str) -> CheckedRuntimeCandidate {
         CheckedRuntimeCandidate {
             domain,
+            request: None,
             prepared: checked_runtime_fixture(target),
             core_spec: checked_mihomo_spec(),
         }
@@ -14333,6 +14457,30 @@ mod tests {
             checked.unwrap().prepared.target.as_deref(),
             Some("clash-other")
         );
+    }
+
+    #[test]
+    fn checked_inbox_rejects_duplicate_request_identity_without_touching_other_checks() {
+        let mut inbox = CheckedRuntimeInbox::default();
+        let mut checked = checked_entry(SourceDomain::Clash, "clash-a");
+        checked.request = Some("same-request".into());
+        inbox.accept(checked).unwrap();
+
+        let mut duplicate = checked_entry(SourceDomain::Clash, "clash-b");
+        duplicate.request = Some("same-request".into());
+        assert!(inbox.accept(duplicate).is_err());
+        assert_eq!(inbox.matching_count(SourceDomain::Clash, None), 1);
+
+        // The identity is scoped to its source domain; it cannot authorize
+        // applying a checked product belonging to a different domain.
+        let mut application = checked_entry(SourceDomain::Application, "app-a");
+        application.request = Some("same-request".into());
+        inbox.accept(application).unwrap();
+        assert_eq!(
+            inbox.discard_request(SourceDomain::Clash, "same-request"),
+            1
+        );
+        assert_eq!(inbox.matching_count(SourceDomain::Application, None), 1);
     }
 
     #[test]
@@ -15215,6 +15363,104 @@ mod tests {
             1,
             "a commit whose notification has not arrived must not apply twice"
         );
+    }
+
+    #[tokio::test]
+    async fn same_domain_request_receipts_abort_one_and_apply_exact_committed_bytes() {
+        use chimera_config::profile::Profiles;
+        let temp = tempfile::tempdir().unwrap();
+        let manager = PersistentStateManagerSetup::<Profiles>::builder()
+            .config_path(Utf8PathBuf::from_path_buf(temp.path().join("profiles.yaml")).unwrap())
+            .assemble()
+            .from_state(Profiles::default())
+            .await
+            .unwrap();
+        let snapshot = manager.snapshot_handle();
+        let reader = crate::state::mutation::ProfileContentReader::new(
+            snapshot.clone(),
+            crate::state::mutation::ProfileContentLock::default(),
+        );
+        let app = ApplicationClient::legacy().unwrap();
+        let clash = ClashConfigClient::legacy().unwrap();
+        let target = crate::client::reconciler::inputs::RuntimeInputs {
+            app: app.get_typed(),
+            clash: clash.get().unwrap(),
+            profiles: Arc::new(Profiles::default()),
+            content: Default::default(),
+        }
+        .checked_target_key()
+        .unwrap();
+        let submits = Arc::new(Mutex::new(Vec::new()));
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let tasks = TaskTracker::new();
+        let client = CoreLifecycleClient::spawn_with_profiles_and_content(
+            Arc::new(ExactCheckedCore {
+                submits: submits.clone(),
+            }),
+            app,
+            clash,
+            Some(snapshot),
+            Some(reader),
+            Some(Arc::new(EmptyManagedFiles)),
+            RuntimePaths::from_config_root(temp.path().join("runtime")),
+            Arc::new(RecordingInstaller {
+                events: events.clone(),
+            }),
+            Arc::new(RecordingService { events }),
+            CancellationToken::new(),
+            &tasks,
+        )
+        .await
+        .unwrap();
+
+        let mut aborted = checked_mihomo_spec();
+        aborted.binary_path = Utf8PathBuf::from("/tmp/aborted-clash-binary");
+        let mut other = checked_mihomo_spec();
+        other.binary_path = Utf8PathBuf::from("/tmp/uncommitted-clash-binary");
+        let mut committed = checked_mihomo_spec();
+        committed.binary_path = Utf8PathBuf::from("/tmp/committed-clash-binary");
+
+        for (request, spec) in [
+            ("abort-me", aborted),
+            ("other-uncommitted", other),
+            ("commit-me", committed.clone()),
+        ] {
+            client
+                .checked_candidate_for_domain_with_request(
+                    SourceDomain::Clash,
+                    checked_runtime_fixture(&target),
+                    spec,
+                    request.into(),
+                )
+                .await
+                .unwrap();
+        }
+        client.abort_uncommitted_checked_request(SourceDomain::Clash, "abort-me".into());
+        client.checked_source_committed_for_request(SourceDomain::Clash, 0, "commit-me".into());
+
+        tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                if submits.lock().unwrap().len() == 1 && client.status().active.is_none() {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("the exact committed Clash request should be applied");
+
+        let submitted = submits.lock().unwrap().clone();
+        assert_eq!(submitted.len(), 1);
+        assert_eq!(submitted[0].0, target);
+        assert_eq!(submitted[0].3, committed.binary_path.to_string());
+        assert_eq!(
+            client.checked_for_tests().await.unwrap().0.as_deref(),
+            Some(target.as_str()),
+            "unrelated same-domain proposal remains available"
+        );
+        client.abort_uncommitted_checked_request(SourceDomain::Clash, "other-uncommitted".into());
+        assert!(client.checked_for_tests().await.is_none());
+        assert_eq!(submits.lock().unwrap().len(), 1, "no second Core apply");
     }
 
     #[tokio::test]

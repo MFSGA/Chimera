@@ -379,41 +379,49 @@ impl ClashConfigClient {
         patch: ClashConfigPatch,
         gate: &Arc<super::reconciler::check::CandidateCheck>,
     ) -> Result<ClashCommitReport> {
-        use crate::state::mutation::{DomainChange, RuntimeCandidate, RuntimeGate as _};
+        use crate::state::mutation::{DomainChange, RuntimeCandidate};
         let before = self.get_snapshot().await?;
         let mut next = before.state.clone();
         next.apply(patch);
         let prepared = self.prepare_replace(next.clone()).await?;
-        gate.check(RuntimeCandidate {
-            change: DomainChange::Clash {
-                candidate: Arc::new(next),
-            },
-            staged: Default::default(),
-        })
-        .await
-        .map_err(anyhow::Error::new)?;
+        let checked_request = gate
+            .check_with_receipt(RuntimeCandidate {
+                change: DomainChange::Clash {
+                    candidate: Arc::new(next),
+                },
+                staged: Default::default(),
+            })
+            .await
+            .map_err(anyhow::Error::new)?;
         let snapshot = match self
             .replace_prepared_if_version(before.version, prepared)
             .await
         {
             Ok(ConditionalReplaceResult::Replaced(snapshot)) => snapshot,
             Ok(ConditionalReplaceResult::Conflict { actual_version }) => {
-                gate.abort_uncommitted(chimera_contracts::mutation::ConfigDomain::Clash);
+                gate.abort_with_receipt(
+                    chimera_contracts::mutation::ConfigDomain::Clash,
+                    checked_request.clone(),
+                );
                 bail!(
                     "clash config version conflict: expected {}, actual {actual_version}",
                     before.version,
                 );
             }
             Err(error) => {
-                gate.abort_uncommitted(chimera_contracts::mutation::ConfigDomain::Clash);
+                gate.abort_with_receipt(
+                    chimera_contracts::mutation::ConfigDomain::Clash,
+                    checked_request.clone(),
+                );
                 return Err(error.context("checked Clash source CAS did not confirm a commit"));
             }
         };
         // The source is now durable. Notify the only Core owner before any
         // optional mirror write can fail; do not perform a legacy inline apply.
-        gate.committed(
+        gate.committed_with_receipt(
             chimera_contracts::mutation::ConfigDomain::Clash,
             chimera_core::state::Version::new(snapshot.version),
+            checked_request,
         );
         let mut degradations = Vec::new();
         if let Err(error) = (|| {

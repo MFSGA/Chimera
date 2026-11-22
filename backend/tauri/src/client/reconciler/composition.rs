@@ -81,6 +81,45 @@ impl CheckedCandidatePort for CoreLifecycleCheckedInbox {
         self.owner
             .abort_uncommitted_checked(Self::source_domain(domain));
     }
+
+    async fn checked_for_request(
+        &self,
+        domain: chimera_contracts::mutation::ConfigDomain,
+        prepared: crate::client::core_lifecycle::ports::PreparedRuntime,
+        core_spec: chimera_core_manager::CoreSpec,
+        request: String,
+    ) -> Result<(), Arc<chimera_contracts::runtime_error::RuntimeError>> {
+        self.owner
+            .checked_candidate_for_domain_with_request(
+                Self::source_domain(domain),
+                prepared,
+                core_spec,
+                request,
+            )
+            .await
+    }
+
+    fn source_committed_for_request(
+        &self,
+        domain: chimera_contracts::mutation::ConfigDomain,
+        version: chimera_core::state::Version,
+        request: String,
+    ) {
+        self.owner.checked_source_committed_for_request(
+            Self::source_domain(domain),
+            *version,
+            request,
+        );
+    }
+
+    fn abort_uncommitted_for_request(
+        &self,
+        domain: chimera_contracts::mutation::ConfigDomain,
+        request: String,
+    ) {
+        self.owner
+            .abort_uncommitted_checked_request(Self::source_domain(domain), request);
+    }
 }
 
 pub(in crate::client) struct CandidateGateSources {
@@ -252,6 +291,24 @@ mod tests {
             self.source_notices.lock().unwrap().push((domain, version));
         }
         fn abort_uncommitted(&self, _domain: ConfigDomain) {}
+        async fn checked_for_request(
+            &self,
+            domain: ConfigDomain,
+            candidate: crate::client::core_lifecycle::ports::PreparedRuntime,
+            core_spec: chimera_core_manager::CoreSpec,
+            _request: String,
+        ) -> Result<(), Arc<RuntimeError>> {
+            self.checked(domain, candidate, core_spec).await
+        }
+        fn source_committed_for_request(
+            &self,
+            domain: ConfigDomain,
+            version: Version,
+            _request: String,
+        ) {
+            self.source_committed(domain, version);
+        }
+        fn abort_uncommitted_for_request(&self, _domain: ConfigDomain, _request: String) {}
     }
     #[derive(Default)]
     struct RecordingValidator(Mutex<Vec<(String, Vec<u8>)>>);

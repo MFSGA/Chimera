@@ -2225,7 +2225,8 @@ impl CoreLifecycleWorkflow {
         // The ref check ACKs *exact* prepared bytes with the one Core owner.
         // For an eligible local-host update we will notify CheckedSourceCommitted
         // after durable CAS; all host switch paths retain their old apply.
-        self.check_application_candidate(candidate.clone(), service_connected, use_checked)
+        let checked_request = self
+            .check_application_candidate(candidate.clone(), service_connected, use_checked)
             .await?;
 
         let committed = self
@@ -2235,11 +2236,14 @@ impl CoreLifecycleWorkflow {
         let committed_version = match committed {
             Ok(crate::state::ConditionalReplaceResult::Replaced(snapshot)) => snapshot.version,
             Ok(crate::state::ConditionalReplaceResult::Conflict { actual_version }) => {
-                if use_checked {
+                if let Some(request) = checked_request.as_ref() {
                     self.checked_gate
                         .get()
                         .expect("checked Application gate admitted this proposal")
-                        .abort_uncommitted(chimera_contracts::mutation::ConfigDomain::Application);
+                        .abort_with_receipt(
+                            chimera_contracts::mutation::ConfigDomain::Application,
+                            request.clone(),
+                        );
                 }
                 anyhow::bail!(
                     "application config version conflict: expected {}, actual {actual_version}",
@@ -2247,11 +2251,14 @@ impl CoreLifecycleWorkflow {
                 );
             }
             Err(error) => {
-                if use_checked {
+                if let Some(request) = checked_request.as_ref() {
                     self.checked_gate
                         .get()
                         .expect("checked Application gate admitted this proposal")
-                        .abort_uncommitted(chimera_contracts::mutation::ConfigDomain::Application);
+                        .abort_with_receipt(
+                            chimera_contracts::mutation::ConfigDomain::Application,
+                            request.clone(),
+                        );
                 }
                 return Err(error.context("failed to commit checked application config"));
             }
@@ -2263,14 +2270,14 @@ impl CoreLifecycleWorkflow {
             // checked notice while this command is active, and dispatches
             // ApplyChecked only after this source command finishes. No UI
             // callback is needed to make a successful source commit observable.
-            use crate::state::mutation::RuntimeGate as _;
             let gate = self
                 .checked_gate
                 .get()
                 .expect("checked gate admitted this commit");
-            gate.committed(
+            gate.committed_with_receipt(
                 chimera_contracts::mutation::ConfigDomain::Application,
                 chimera_core::state::Version::new(committed_version),
+                checked_request.expect("admitted checked Application has a receipt"),
             );
             // Do not run the legacy inline reconcile on this same version.
             return Ok(ApplicationPatchResult {
@@ -2316,14 +2323,14 @@ impl CoreLifecycleWorkflow {
         app: ChimeraAppConfig,
         service_connected: bool,
         use_checked: bool,
-    ) -> anyhow::Result<()> {
-        use crate::state::mutation::{DomainChange, RuntimeCandidate, RuntimeGate as _};
+    ) -> anyhow::Result<Option<String>> {
+        use crate::state::mutation::{DomainChange, RuntimeCandidate};
 
         if self.profiles.is_none() {
             // Only isolated test adapters may omit the authoritative Profiles
             // domain. Production must never silently waive a Core check.
             #[cfg(test)]
-            return Ok(());
+            return Ok(None);
             #[cfg(not(test))]
             anyhow::bail!("Application preflight requires the typed Profiles source");
         }
@@ -2337,13 +2344,18 @@ impl CoreLifecycleWorkflow {
             if use_checked {
                 // The ACK proves that one Core owner retained the exact
                 // validated candidate before the source is made durable.
-                return gate.check(candidate).await.map_err(anyhow::Error::new);
+                return gate
+                    .check_with_receipt(candidate)
+                    .await
+                    .map(Some)
+                    .map_err(anyhow::Error::new);
             }
             // Core selection and Service mode still use legacy postcommit
             // transitions; avoid an orphaned Checked inbox entry for them.
             return gate
                 .validate_only(candidate)
                 .await
+                .map(|()| None)
                 .map_err(anyhow::Error::new);
         }
         #[cfg(not(test))]
@@ -2365,6 +2377,7 @@ impl CoreLifecycleWorkflow {
             service_connected,
         )
         .await
+        .map(|()| None)
         .map_err(anyhow::Error::new)
     }
 

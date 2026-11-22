@@ -40,6 +40,17 @@ pub(in crate::client) trait CheckedCandidatePort: Send + Sync + 'static {
     /// Until the ref operation token travels through every source actor,
     /// conservatively abort the entire matching domain only.
     fn abort_uncommitted(&self, domain: ConfigDomain);
+    /// A source-owned request can identify its exact prepared product without
+    /// evicting concurrent successful checks for the same domain.
+    async fn checked_for_request(
+        &self,
+        domain: ConfigDomain,
+        candidate: PreparedRuntime,
+        core_spec: chimera_core_manager::CoreSpec,
+        request: String,
+    ) -> Result<(), Arc<RuntimeError>>;
+    fn source_committed_for_request(&self, domain: ConfigDomain, version: Version, request: String);
+    fn abort_uncommitted_for_request(&self, domain: ConfigDomain, request: String);
 }
 
 pub(in crate::client) struct CandidateCheck {
@@ -172,6 +183,35 @@ impl CandidateCheck {
         candidate: RuntimeCandidate,
     ) -> Result<(), Arc<RuntimeError>> {
         self.validate(candidate).await.map(|_| ())
+    }
+
+    /// Return a source-owned receipt only after the sole Core actor has ACKed
+    /// the specific checked bytes. The source must return this receipt on CAS
+    /// success or failure; no other same-domain proposal may be consumed.
+    pub(in crate::client) async fn check_with_receipt(
+        &self,
+        candidate: RuntimeCandidate,
+    ) -> Result<String, Arc<RuntimeError>> {
+        let (domain, prepared, core_spec) = self.validate(candidate).await?;
+        let request = chimera_core_manager::OperationId::generate().to_string();
+        self.workflow
+            .checked_for_request(domain, prepared, core_spec, request.clone())
+            .await?;
+        Ok(request)
+    }
+
+    pub(in crate::client) fn committed_with_receipt(
+        &self,
+        domain: ConfigDomain,
+        version: Version,
+        request: String,
+    ) {
+        self.workflow
+            .source_committed_for_request(domain, version, request);
+    }
+
+    pub(in crate::client) fn abort_with_receipt(&self, domain: ConfigDomain, request: String) {
+        self.workflow.abort_uncommitted_for_request(domain, request);
     }
 
     pub(in crate::client) fn abort_uncommitted(&self, domain: ConfigDomain) {
@@ -318,6 +358,24 @@ mod tests {
             self.committed.lock().unwrap().push((domain, version));
         }
         fn abort_uncommitted(&self, _domain: ConfigDomain) {}
+        async fn checked_for_request(
+            &self,
+            domain: ConfigDomain,
+            candidate: PreparedRuntime,
+            core_spec: chimera_core_manager::CoreSpec,
+            _request: String,
+        ) -> Result<(), Arc<RuntimeError>> {
+            self.checked(domain, candidate, core_spec).await
+        }
+        fn source_committed_for_request(
+            &self,
+            domain: ConfigDomain,
+            version: Version,
+            _request: String,
+        ) {
+            self.source_committed(domain, version);
+        }
+        fn abort_uncommitted_for_request(&self, _domain: ConfigDomain, _request: String) {}
     }
 
     async fn gate(
