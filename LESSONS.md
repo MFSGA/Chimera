@@ -1434,3 +1434,9 @@ backend/Cargo.toml -p chimera --lib core::clash::proxies::tests:: -- --nocapture
 - 证据：CI Windows Lint 的 Test backend workspace 在提交 `322bee21`（run `45067708384`）实际出现 `migration_child::tests::rejects_unexpected_args_and_child_paths_outside_absolute_roots` 失败：测试原先把 `/tmp/config`、`/tmp/data` 和 `/tmp/result` 当作合法绝对路径。Windows 的 `Path::is_absolute` 正确拒绝这些 Unix 式路径；其余 1211 项 Tauri 单测通过，不是生产安全检查应该降级。
 - 修复原则：只修改测试输入，使用 `tempfile::tempdir()` 在当前运行平台构造绝对路径，同时检查任一相对路径被拒绝、三个绝对参数可解析且解析结果不失真。保留生产 `PathBuf::is_absolute()`，不为 CI 关闭路径校验。
 - 验证边界：macOS 上目标 Rust 测试通过；Windows runner 的回归必须等修复提交触发新的 CI 后核对。上一轮 E2E smoke 的 legacy Profile 创建卡在 UI loading，虽然日志中可看到后续 CoreLifecycle 版本冲突，但目前无法证实根因，须继续使用失败时刻截图、原生日志和测试阶段标记定位，不绕开真实创建流程或把测试超时调高当成修复。
+
+### LESSON-20261122-002：Profile E2E 必须等待可见创建操作完成后再修改同一资源
+
+- 证据：Windows Tauri E2E run 45067708381 的 proxy-localization.e2e.ts 第309行是 save_profile_file，而不是点击 OK。创建后的 get_profiles 可读取新增 UID，但失败截图仍显示对话框和 OK loading；原生日志报告 execute/sync 超时。此前两轮 45062874258、45064250656 均同样失败。这说明测试可能在创建 UI 未结算前执行文件写入，不能仅凭截图确认具体 Rust await 的根因。
+- 测试修复：真实点击创建后先等待对话框名称输入框消失（ProfileDialog 只有 create.mutateAsync 完成后才 onClose），再读取 UID、保存文件、清空选择并通过用户点击激活。保留 UI/后端断言和测试资源恢复，并分别记录脱敏阶段日志。未增加脚本超时、跳过创建或修改生产代码。
+- 验证边界：E2E TypeScript 检查已通过；在本轮修复之前的最新 Windows smoke run 45070826318（SHA 607b6fdf）复现了同样的超时：阶段日志确认已点击创建、列表可见、权威 get_profiles 返回，堆栈指向第317行 save_profile_file。该 SHA 尚未包含“等待对话框关闭”修复，因此不能作为本轮修复的 E2E 结果。若停留在对话框，下一轮从阶段日志定位 create_profile/自动激活，而不是让保存操作与它竞争。
