@@ -305,6 +305,31 @@ impl CoreLifecyclePort for LegacyCoreBridge {
         self.facade().reconcile_prepared(prepared, core_spec).await
     }
 
+    async fn reconcile_prepared_outcome(
+        &self,
+        prepared: super::ports::PreparedRuntime,
+        core_spec: chimera_core_manager::CoreSpec,
+    ) -> anyhow::Result<super::ports::CheckedApplyOutcome> {
+        let replaced = self
+            .facade()
+            .reconcile_prepared_outcome(prepared, core_spec)
+            .await?;
+        Ok(super::ports::CheckedApplyOutcome {
+            replaced: Some(replaced),
+        })
+    }
+
+    async fn capture_interruption_source(
+        &self,
+    ) -> anyhow::Result<Option<crate::core::actor_v2::api::ApiClient>> {
+        // Active runtime receipt is fenced against the selected owner and
+        // its instance/revision. Never use the process-global ClashInfo cache.
+        if self.facade().active_runtime_receipt().await?.is_none() {
+            return Ok(None);
+        }
+        Ok(Some(self.facade().clash_api_client().await?))
+    }
+
     async fn retire_service_core(
         &self,
         expected_owner: chimera_core_manager::CoreOwner,

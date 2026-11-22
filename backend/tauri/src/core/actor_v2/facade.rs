@@ -452,6 +452,16 @@ impl CoreFacade {
         prepared: crate::client::core_lifecycle::ports::PreparedRuntime,
         core_spec: chimera_core_manager::CoreSpec,
     ) -> anyhow::Result<()> {
+        self.reconcile_prepared_outcome(prepared, core_spec)
+            .await
+            .map(|_| ())
+    }
+
+    pub(crate) async fn reconcile_prepared_outcome(
+        &self,
+        prepared: crate::client::core_lifecycle::ports::PreparedRuntime,
+        core_spec: chimera_core_manager::CoreSpec,
+    ) -> anyhow::Result<bool> {
         let local_runtime = self
             .local_runtime
             .as_ref()
@@ -472,20 +482,30 @@ impl CoreFacade {
                 ),
             "prepared runtime host is not the proven selected Core owner"
         );
+        // The lower-host operation registry owns admission, timeouts and
+        // uncertain outcomes, and intentionally has a Result<()> contract.
+        // Deliver the confirmed replacement kind through that same operation
+        // rather than invoking Core outside the serialized registry.
+        let (outcome_tx, outcome_rx) = tokio::sync::oneshot::channel();
         let result = self
             .run_local_mutation("checked runtime reconcile", async move {
-                local_runtime
-                    .reconcile_prepared(
+                let replaced = local_runtime
+                    .reconcile_prepared_outcome(
                         &prepared,
                         core_spec,
                         endpoint.as_ref(),
                         (observed.host, observed.generation),
                     )
-                    .await
+                    .await?;
+                let _ = outcome_tx.send(replaced);
+                Ok(())
             })
             .await;
         self.refresh_ws_binding().await;
-        result
+        result?;
+        outcome_rx
+            .await
+            .context("checked Core applied, but its replacement receipt was lost")
     }
 
     pub(crate) async fn reconcile(

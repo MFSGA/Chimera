@@ -10,7 +10,7 @@ use async_trait::async_trait;
 use chimera_config::runtime::executor::ProfileContentSource;
 
 use super::{
-    committed::{Selection, SourceDomain},
+    committed::{Selection, SelectionChange, SourceDomain},
     inputs::{FrozenProfileContent, RuntimeInputs},
 };
 use crate::{
@@ -40,6 +40,20 @@ pub(in crate::client) trait RuntimeSourceAuthority:
         version: u64,
         checked_target: &str,
     ) -> anyhow::Result<Option<Selection>> {
+        self.verify(domain, version, checked_target).await?;
+        Ok(None)
+    }
+
+    /// Prepare only an interruption justified by the same committed target
+    /// that was checked. A test adapter with no selection evidence may not
+    /// manufacture an interruption from source/document differences.
+    async fn verify_interruption(
+        &self,
+        domain: SourceDomain,
+        version: u64,
+        checked_target: &str,
+        _previous: Option<&Selection>,
+    ) -> anyhow::Result<Option<SelectionChange>> {
         self.verify(domain, version, checked_target).await?;
         Ok(None)
     }
@@ -131,12 +145,41 @@ impl LiveSourceAuthority {
             content: frozen,
         };
         let selection = Selection::of(&inputs);
+        let interrupt_on_mode = inputs.clash.break_connection.on_mode_change;
+        let interrupt_on_profile = inputs.clash.break_connection.on_profile_change;
         let target = inputs.checked_target_key()?;
         Ok(SourceTarget {
             versions: [app_version, clash_version, profiles_version],
             target,
             selection,
+            interrupt_on_mode,
+            interrupt_on_profile,
         })
+    }
+
+    async fn verify_target(
+        &self,
+        domain: SourceDomain,
+        version: u64,
+        checked_target: &str,
+    ) -> anyhow::Result<SourceTarget> {
+        let current = self.read_committed_target().await?;
+        // A moved Source or target is not a Core rejection. Preserve a
+        // typed identity-advanced cause so the sole lifecycle owner schedules
+        // a fresh latest-target reconcile rather than recording a refusal.
+        use super::attempt::CommittedTargetAdvanced;
+        if current.version(domain) != version {
+            return Err(anyhow::Error::new(CommittedTargetAdvanced).context(format!(
+                "committed {domain:?} version changed: expected {version}, observed {}",
+                current.version(domain)
+            )));
+        }
+        if current.target != checked_target {
+            return Err(anyhow::Error::new(CommittedTargetAdvanced).context(
+                "checked runtime target differs from the authoritative committed sources",
+            ));
+        }
+        Ok(current)
     }
 }
 
@@ -144,6 +187,8 @@ struct SourceTarget {
     versions: [u64; 3],
     target: String,
     selection: Selection,
+    interrupt_on_mode: bool,
+    interrupt_on_profile: bool,
 }
 
 impl SourceTarget {
@@ -175,23 +220,26 @@ impl RuntimeSourceAuthority for LiveSourceAuthority {
         version: u64,
         checked_target: &str,
     ) -> anyhow::Result<Option<Selection>> {
-        let current = self.read_committed_target().await?;
-        // A moved Source or target is not a Core rejection. Preserve a
-        // typed identity-advanced cause so the sole lifecycle owner schedules
-        // a fresh latest-target reconcile rather than recording a refusal.
-        use super::attempt::CommittedTargetAdvanced;
-        if current.version(domain) != version {
-            return Err(anyhow::Error::new(CommittedTargetAdvanced).context(format!(
-                "committed {domain:?} version changed: expected {version}, observed {}",
-                current.version(domain)
-            )));
-        }
-        if current.target != checked_target {
-            return Err(anyhow::Error::new(CommittedTargetAdvanced).context(
-                "checked runtime target differs from the authoritative committed sources",
-            ));
-        }
-        Ok(Some(current.selection))
+        Ok(Some(
+            self.verify_target(domain, version, checked_target)
+                .await?
+                .selection,
+        ))
+    }
+
+    async fn verify_interruption(
+        &self,
+        domain: SourceDomain,
+        version: u64,
+        checked_target: &str,
+        previous: Option<&Selection>,
+    ) -> anyhow::Result<Option<SelectionChange>> {
+        let current = self.verify_target(domain, version, checked_target).await?;
+        Ok(current.selection.interruption_with_policy(
+            previous,
+            current.interrupt_on_mode,
+            current.interrupt_on_profile,
+        ))
     }
 }
 
@@ -265,7 +313,9 @@ mod tests {
             .await
             .unwrap();
         let app = ApplicationClient::static_state(ChimeraAppConfig::default());
-        let clash = ClashConfigClient::legacy_with(ClashConfig::default()).unwrap();
+        let mut clash_state = ClashConfig::default();
+        clash_state.break_connection.on_mode_change = true;
+        let clash = ClashConfigClient::legacy_with(clash_state).unwrap();
         let content = Arc::new(Content(Mutex::new(BTreeMap::from([(
             "selected.yaml".to_owned(),
             "mode: rule\n".to_owned(),
@@ -289,6 +339,35 @@ mod tests {
                 .unwrap(),
             Some(initial.selection.clone()),
             "the applied selection must come from the same authoritative committed target"
+        );
+        use chimera_config::clash::config::overrides::{ClashGuardOverridesPatch, Mode};
+        use struct_patch::Patch as _;
+        let mut prior_clash = ClashConfig::default();
+        prior_clash.overrides.apply(ClashGuardOverridesPatch {
+            mode: Some(Mode::Global),
+            ..Default::default()
+        });
+        let previous = Selection::of(&RuntimeInputs {
+            app: ChimeraAppConfig::default(),
+            clash: prior_clash,
+            profiles: Arc::new(selected_profile()),
+            content: Default::default(),
+        });
+        assert_eq!(
+            authority
+                .verify_interruption(SourceDomain::Profiles, 0, &initial.target, Some(&previous),)
+                .await
+                .unwrap(),
+            Some(SelectionChange::Mode),
+            "mode interruption policy is frozen with the verified source"
+        );
+        assert_eq!(
+            authority
+                .verify_interruption(SourceDomain::Profiles, 0, &initial.target, None)
+                .await
+                .unwrap(),
+            None,
+            "an unknown applied selection never authorizes interruption"
         );
         let changed_version = authority
             .verify(SourceDomain::Profiles, 1, &initial.target)

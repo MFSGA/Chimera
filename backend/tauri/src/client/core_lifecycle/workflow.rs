@@ -27,7 +27,9 @@ use crate::client::reconciler::attempt::{
     AttemptPolicy, CommittedTargetAdvanced, ServiceFallbackDeferred, waiting_dependency,
 };
 use crate::client::reconciler::{
-    committed::Selection, inputs::RuntimeInputs, legacy_preparation::RuntimePreparation,
+    committed::{Selection, SelectionChange},
+    inputs::RuntimeInputs,
+    legacy_preparation::RuntimePreparation,
 };
 use crate::config::chimera::ClashCore;
 use crate::core::actor_v2::control_endpoint::ExecutionHost;
@@ -760,6 +762,76 @@ impl CoreLifecycleWorkflow {
         Ok(true)
     }
 
+    /// The sole Core owner's checked runtime execution. Carry the pre-apply
+    /// source-instance API and Core replacement verdict through this one
+    /// operation; never issue a second Core submit or interrupt a newly
+    /// started instance.
+    async fn apply_checked_runtime(
+        &self,
+        prepared: super::ports::PreparedRuntime,
+        core_spec: chimera_core_manager::CoreSpec,
+        domain: crate::client::reconciler::committed::SourceDomain,
+        version: u64,
+        authority: Arc<dyn crate::client::reconciler::authority::RuntimeSourceAuthority>,
+    ) -> anyhow::Result<()> {
+        let checked_target = prepared
+            .target
+            .as_deref()
+            .ok_or_else(|| anyhow::anyhow!("checked runtime has no source target identity"))?
+            .to_owned();
+        let previous = self.applied_selection.lock().clone();
+        let result = async {
+            let interruption = authority
+                .verify_interruption(domain, version, &checked_target, previous.as_ref())
+                .await?;
+            // Capture only the pre-apply instance-bound controller. A failed
+            // capture is a post-commit effect degradation, not a Core refusal.
+            let source = if matches!(interruption, Some(SelectionChange::Mode)) {
+                Some(self.core.capture_interruption_source().await)
+            } else {
+                None
+            };
+            let applied = self
+                .core
+                .reconcile_prepared_outcome(prepared, core_spec)
+                .await?;
+            // No stale source may be promoted into applied_selection, and
+            // an obsolete Core result cannot settle current runtime effects.
+            let selection = authority
+                .verify_selection(domain, version, &checked_target)
+                .await?;
+            Ok::<_, anyhow::Error>((selection, interruption, source, applied.replaced))
+        }
+        .await;
+        match result {
+            Ok((selection, interruption, source, replaced)) => {
+                *self.applied_selection.lock() = selection;
+                // ref apply.rs: a Started/Restarted/Switched runtime already
+                // retired the previous connections. Only a proven in-place
+                // Patched apply may close the old captured controller.
+                if matches!(interruption, Some(SelectionChange::Mode)) {
+                    match (replaced, source) {
+                        (Some(false), Some(Ok(Some(api)))) => {
+                            if let Err(error) = crate::core::connection_interruption::ConnectionInterruptionService::on_mode_change(&api, true).await {
+                                tracing::warn!(%error, "checked mode applied, but old Core connection interruption failed");
+                            }
+                        }
+                        (Some(false), Some(Err(error))) => {
+                            tracing::warn!(%error, "checked mode applied, but pre-apply Core API could not be captured");
+                        }
+                        (None, _) => tracing::warn!("checked mode applied without a proven Core replacement outcome; not interrupting an unknown instance"),
+                        _ => {}
+                    }
+                }
+                Ok(())
+            }
+            Err(error) => {
+                self.applied_selection.lock().take();
+                Err(error)
+            }
+        }
+    }
+
     pub(in crate::client) async fn execute(
         &self,
         command: Command,
@@ -807,40 +879,8 @@ impl CoreLifecycleWorkflow {
                 version,
                 authority,
             } => {
-                let target = prepared.target.as_deref().ok_or_else(|| {
-                    anyhow::anyhow!("checked runtime has no source target identity")
-                })?;
-                // Verify once before handing any bytes to Core and again
-                // after the Core owner confirms the apply. A later durable
-                // source commit may race this async Core operation. The old
-                // target's successful Core receipt must never be reported as
-                // latest-source convergence or settle Effects as current.
-                let checked_target = target.to_owned();
-                // Unknown until this *whole* operation confirms success.
-                // A failed check, uncertain lower Core result, or advanced
-                // source cannot establish the selection used by the runtime.
-                let result = async {
-                    authority.verify(domain, version, &checked_target).await?;
-                    self.core.reconcile_prepared(prepared, core_spec).await?;
-                    // Source advanced during Core apply must not be promoted
-                    // into an applied selection or a converged runtime status.
-                    // LiveSourceAuthority returns selection from its same
-                    // bounded read of the fully committed target.
-                    authority
-                        .verify_selection(domain, version, &checked_target)
-                        .await
-                }
-                .await;
-                match result {
-                    Ok(selection) => {
-                        *self.applied_selection.lock() = selection;
-                        Ok(())
-                    }
-                    Err(error) => {
-                        self.applied_selection.lock().take();
-                        Err(error)
-                    }
-                }
+                self.apply_checked_runtime(prepared, core_spec, domain, version, authority)
+                    .await
             }
             Command::StartCore => self.reconcile_with_trigger(Trigger::Start).await,
             #[cfg(test)]

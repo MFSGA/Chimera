@@ -28,7 +28,7 @@ impl Selection {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum SelectionChange {
+pub(in crate::client) enum SelectionChange {
     Mode,
     Profile,
 }
@@ -39,10 +39,25 @@ impl Selection {
         previous: Option<&Self>,
         clash: &chimera_config::clash::config::ClashConfig,
     ) -> Option<SelectionChange> {
+        self.interruption_with_policy(
+            previous,
+            clash.break_connection.on_mode_change,
+            clash.break_connection.on_profile_change,
+        )
+    }
+
+    /// A bounded source read can carry these two policies without returning
+    /// an unfenced Clash document to the Core executor.
+    pub(in crate::client) fn interruption_with_policy(
+        &self,
+        previous: Option<&Self>,
+        on_mode_change: bool,
+        on_profile_change: bool,
+    ) -> Option<SelectionChange> {
         let previous = previous?;
-        if previous.mode != self.mode && clash.break_connection.on_mode_change {
+        if previous.mode != self.mode && on_mode_change {
             Some(SelectionChange::Mode)
-        } else if previous.current != self.current && clash.break_connection.on_profile_change {
+        } else if previous.current != self.current && on_profile_change {
             Some(SelectionChange::Profile)
         } else {
             None

@@ -133,6 +133,14 @@ pub struct RuntimeTransformDiagnostics {
     pub failure: Option<RuntimeTransformFailureDiagnostics>,
 }
 
+/// Checked Core apply result after the lower owner confirmed its revision.
+/// The legacy port lacks replacement evidence: unknown must not be treated
+/// as an in-place config patch when deciding whether to interrupt a Core.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct CheckedApplyOutcome {
+    pub replaced: Option<bool>,
+}
+
 #[async_trait]
 pub(crate) trait CoreLifecyclePort: Send + Sync {
     /// The canonical prepared-runtime session, only present when this port
@@ -193,6 +201,27 @@ pub(crate) trait CoreLifecyclePort: Send + Sync {
         _core_spec: chimera_core_manager::CoreSpec,
     ) -> anyhow::Result<()> {
         anyhow::bail!("this CoreLifecycle port cannot submit checked runtime bytes")
+    }
+
+    /// Ref AppliedCandidate.replaced: only production hosts that retain the
+    /// authoritative Core reconcile verdict may report Some(replaced).
+    /// Legacy test adapters execute the original port and report Unknown.
+    async fn reconcile_prepared_outcome(
+        &self,
+        prepared: PreparedRuntime,
+        core_spec: chimera_core_manager::CoreSpec,
+    ) -> anyhow::Result<CheckedApplyOutcome> {
+        self.reconcile_prepared(prepared, core_spec).await?;
+        Ok(CheckedApplyOutcome { replaced: None })
+    }
+
+    /// Capture the *previous* running Core's instance-bound API before
+    /// replacing/patching it. Missing proof is not a license to interrupt
+    /// whichever Core happens to be running after the apply.
+    async fn capture_interruption_source(
+        &self,
+    ) -> anyhow::Result<Option<crate::core::actor_v2::api::ApiClient>> {
+        anyhow::bail!("this Core port cannot prove the pre-apply API instance")
     }
 
     /// Stop a Service-hosted Core after startup evidence proved that this

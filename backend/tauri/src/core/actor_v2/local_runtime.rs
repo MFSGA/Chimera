@@ -292,6 +292,21 @@ impl LocalRuntimeHost {
         endpoint: &dyn ControlEndpoint,
         expected_owner: (ExecutionHost, u64),
     ) -> anyhow::Result<()> {
+        self.reconcile_prepared_outcome(prepared, core_spec, endpoint, expected_owner)
+            .await
+            .map(|_| ())
+    }
+
+    /// Return the Core's *confirmed* replacement kind, not a guess based on
+    /// differences between persisted Clash documents. Source-instance
+    /// interruption can only use this evidence after a successful apply.
+    pub(crate) async fn reconcile_prepared_outcome(
+        &self,
+        prepared: &crate::client::core_lifecycle::ports::PreparedRuntime,
+        core_spec: chimera_core_manager::CoreSpec,
+        endpoint: &dyn ControlEndpoint,
+        expected_owner: (ExecutionHost, u64),
+    ) -> anyhow::Result<bool> {
         anyhow::ensure!(
             !self.closed.load(Ordering::Acquire),
             "the local core control plane is shutting down"
@@ -424,7 +439,8 @@ impl LocalRuntimeHost {
         // handles exact-file promotion and applied snapshot identity checks.
         self.lifecycle.publish_confirmed(receipt.clone());
         self.publish_profile_candidate(candidate, receipt, prepared.snapshot.clone())
-            .await
+            .await?;
+        Ok(reconcile_replaced(&outcome))
     }
 
     pub(crate) async fn reconcile(
@@ -1596,6 +1612,8 @@ mod tests {
             )>,
         >,
         apply_submission: bool,
+        /// Check replacement semantics independently from runtime receipt.
+        patched: bool,
     }
 
     #[async_trait::async_trait]
@@ -1668,7 +1686,11 @@ mod tests {
                 id: operation_id.to_string(),
                 phase: OperationPhase::Succeeded,
                 output: Some(OperationOutputInfo::Reconciled(ReconcileOutcomeInfo {
-                    outcome: ReconcileOutcomeKind::Started,
+                    outcome: if self.patched {
+                        ReconcileOutcomeKind::Patched
+                    } else {
+                        ReconcileOutcomeKind::Started
+                    },
                     revision,
                     warning: None,
                     failed_apply: None,
@@ -1734,6 +1756,7 @@ mod tests {
             }),
             submitted: StdMutex::new(Vec::new()),
             apply_submission,
+            patched: false,
         }
     }
 
@@ -1873,9 +1896,11 @@ mod tests {
         let endpoint = recording_endpoint(true);
         assert!(host.confirmed_runtime_receipt().is_none());
 
-        host.reconcile_prepared(&prepared, spec, &endpoint, (ExecutionHost::Local, 3))
+        let replaced = host
+            .reconcile_prepared_outcome(&prepared, spec, &endpoint, (ExecutionHost::Local, 3))
             .await
             .unwrap();
+        assert!(replaced, "Started is a confirmed Core replacement");
 
         let submits = endpoint.submitted.lock().unwrap();
         assert_eq!(submits.len(), 1);
@@ -1895,6 +1920,22 @@ mod tests {
             tokio::fs::read(paths.product()).await.unwrap(),
             bytes.as_bytes()
         );
+        host.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn checked_runtime_patched_core_reports_no_instance_replacement() {
+        let (_root, host, _paths) = runtime_host_fixture().await;
+        let (prepared, spec) = prepared_runtime_fixture("mode: global\n".into());
+        let mut endpoint = recording_endpoint(true);
+        endpoint.patched = true;
+        let replaced = host
+            .reconcile_prepared_outcome(&prepared, spec, &endpoint, (ExecutionHost::Local, 3))
+            .await
+            .unwrap();
+        assert!(!replaced, "Patched must retain the prior Core instance");
+        assert!(host.confirmed_runtime_receipt().is_some());
+        assert_eq!(endpoint.submitted.lock().unwrap().len(), 1);
         host.shutdown().await.unwrap();
     }
 
