@@ -4,12 +4,15 @@
 
 use std::sync::Arc;
 
-use crate::runtime::{
-    post_process::{OwnedFields, Ownership, OwnershipEntries},
-    value::{ConfigObject, ConfigValue},
+use crate::{
+    clash::{config::tun_stack::TunStack, features::TunKey},
+    runtime::{
+        post_process::{OwnedFields, Ownership, OwnershipEntries},
+        value::{ConfigObject, ConfigValue},
+    },
 };
 
-use super::{GuardInputs, TunFlavor, TunParams};
+use super::{GuardInputs, StepLogEntry, TunFlavor, TunParams, TunStackWrite};
 
 /// Every key post-processing decides: the guard's, then `tun` with its DNS
 /// takeover, then the `profile` cache.
@@ -131,8 +134,30 @@ fn tun_entries(tun: &TunParams) -> OwnershipEntries {
                 ),
             ]);
         }
-        TunFlavor::Standard { stack } => {
-            entries.push(("stack", Ownership::Forced(string(stack.as_ref()))));
+        TunFlavor::Standard {
+            stack,
+            congestion_controller,
+        } => {
+            // The stack is Nyanpasu's: providers write their configs for
+            // mihomo, so a profile's stack may not suit the selected core.
+            match stack {
+                TunStackWrite::Omitted => {}
+                TunStackWrite::Selected(stack)
+                | TunStackWrite::Downgraded { written: stack, .. } => entries.push((
+                    TunKey::Stack.as_str(),
+                    Ownership::Forced(string(stack.as_ref())),
+                )),
+            }
+            match (stack, congestion_controller) {
+                (_, Some(controller)) => entries.push((
+                    TunKey::CongestionController.as_str(),
+                    Ownership::Forced(string(controller.as_ref())),
+                )),
+                (TunStackWrite::Selected(TunStack::Mips), None) => {
+                    entries.push((TunKey::CongestionController.as_str(), Ownership::Removed));
+                }
+                _ => {}
+            }
             entries.extend([
                 ("dns-hijack", Ownership::Default(strings(&["any:53"]))),
                 (
@@ -143,6 +168,21 @@ fn tun_entries(tun: &TunParams) -> OwnershipEntries {
         }
     }
     entries
+}
+
+/// What the managed settings step reports about the settings it applied.
+pub(super) fn managed_settings_logs(tun: &TunParams) -> Vec<StepLogEntry> {
+    match tun.flavor {
+        TunFlavor::Standard {
+            stack: TunStackWrite::Downgraded { selected, written },
+            ..
+        } if tun.enable => vec![StepLogEntry::warn(format!(
+            "the selected core does not support the TUN stack `{}`; `{}` is used instead",
+            selected.as_ref(),
+            written.as_ref(),
+        ))],
+        _ => Vec::new(),
+    }
 }
 
 fn dns_entries(windows_fake_ip_filter: bool, flavor: TunFlavor) -> OwnershipEntries {

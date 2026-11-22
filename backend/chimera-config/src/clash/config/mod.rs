@@ -120,6 +120,26 @@ pub struct ClashConfig {
     /// Tun 堆栈选择
     #[patch(attribute(specta(optional)))]
     pub tun_stack: TunStack,
+
+    /// Preserved even while another stack is selected, exactly as in ref.
+    /// Default is required to read existing Chimera config documents.
+    #[serde(default)]
+    #[patch(nesting)]
+    #[patch(attribute(serde(default)))]
+    #[patch(attribute(specta(optional)))]
+    pub tun_mips: MipsConfig,
+}
+
+impl ClashConfig {
+    /// Stack-specific options are reachable only through the selected stack.
+    pub fn selected_tun_stack(&self) -> SelectedTunStack<'_> {
+        match self.tun_stack {
+            TunStack::System => SelectedTunStack::System,
+            TunStack::Gvisor => SelectedTunStack::Gvisor,
+            TunStack::Mixed => SelectedTunStack::Mixed,
+            TunStack::Mips => SelectedTunStack::Mips(&self.tun_mips),
+        }
+    }
 }
 
 fn default_expand_include_all() -> bool {
@@ -146,6 +166,7 @@ impl Default for ClashConfig {
             transparent_proxy: TransparentProxyConfig::default(),
             break_connection: BreakConnectionStrategy::default(),
             tun_stack: TunStack::default(),
+            tun_mips: MipsConfig::default(),
         }
     }
 }
@@ -332,6 +353,57 @@ mod patch_tests {
             assert!(loaded.enable_tun_mode);
             assert_eq!(loaded.tun_stack, TunStack::System);
         }
+    }
+
+    #[test]
+    fn mips_options_survive_switching_the_stack_away_and_back() {
+        let mut saved = serde_yaml_ng::to_value(ClashConfig::default()).unwrap();
+        saved.as_mapping_mut().unwrap().remove("tun_mips");
+        let mut config: ClashConfig = serde_yaml_ng::from_value(saved).unwrap();
+        assert_eq!(config.tun_mips, MipsConfig::default());
+
+        let patch =
+            |json: serde_json::Value| -> ClashConfigPatch { serde_json::from_value(json).unwrap() };
+        config.apply(patch(serde_json::json!({
+            "tun_stack": "mips",
+            "tun_mips": { "congestion_controller": "bbr3" },
+        })));
+        config.apply(patch(serde_json::json!({ "tun_stack": "system" })));
+        assert_eq!(config.selected_tun_stack(), SelectedTunStack::System);
+
+        let saved = serde_yaml_ng::to_string(&config).unwrap();
+        let mut config: ClashConfig = serde_yaml_ng::from_str(&saved).unwrap();
+        config.apply(patch(serde_json::json!({ "tun_stack": "mips" })));
+        let options = MipsConfig {
+            congestion_controller: Some(TunCongestionController::Bbr3),
+        };
+        assert_eq!(
+            config.selected_tun_stack(),
+            SelectedTunStack::Mips(&options)
+        );
+
+        // An explicit null hands the controller back to the core.
+        config.apply(patch(serde_json::json!({
+            "tun_mips": { "congestion_controller": null },
+        })));
+        assert_eq!(config.tun_mips.congestion_controller, None);
+    }
+
+    #[test]
+    fn stack_names_are_snake_case_on_disk() {
+        let config = ClashConfig {
+            tun_stack: TunStack::Mips,
+            tun_mips: MipsConfig {
+                congestion_controller: Some(TunCongestionController::Bbr3),
+            },
+            ..ClashConfig::default()
+        };
+        let saved = serde_yaml_ng::to_value(&config).unwrap();
+        assert_eq!(saved["tun_stack"], serde_yaml_ng::Value::from("mips"));
+        assert_eq!(
+            saved["tun_mips"]["congestion_controller"],
+            serde_yaml_ng::Value::from("bbr3")
+        );
     }
 
     #[test]

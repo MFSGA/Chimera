@@ -185,6 +185,7 @@ impl RequestedRuntimeFields {
                 || patch.enable_tun_mode.is_some()
                 || !patch.tun.is_empty()
                 || patch.tun_stack.is_some()
+                || !patch.tun_mips.is_empty()
                 || patch.mixed_port.kind.is_some()
                 || patch.mixed_port.start_port.is_some()
                 || patch.socks_port.is_some()
@@ -342,6 +343,9 @@ struct ClashRuntimeInputs<'a> {
     enable_tun_mode: bool,
     tun: &'a TunOverrides,
     tun_stack: TunStack,
+    /// Inactive MIPS settings are persisted but do not affect a build.
+    mips_congestion_controller:
+        Option<chimera_config::clash::config::tun_stack::TunCongestionController>,
     mixed_port: &'a PortStrategy,
     socks_port: Option<&'a PortStrategy>,
     http_port: Option<&'a PortStrategy>,
@@ -362,6 +366,9 @@ impl<'a> ClashRuntimeInputs<'a> {
             enable_tun_mode: clash.enable_tun_mode,
             tun: &clash.tun,
             tun_stack: clash.tun_stack,
+            mips_congestion_controller: (clash.tun_stack == TunStack::Mips)
+                .then_some(clash.tun_mips.congestion_controller)
+                .flatten(),
             mixed_port: &clash.mixed_port,
             socks_port: clash.socks_port.as_ref(),
             http_port: clash.http_port.as_ref(),
@@ -525,6 +532,26 @@ mod tests {
 
         let patch = ClashConfig::new_empty_patch();
         assert!(!RequestedRuntimeFields::of_clash(&patch).names_any());
+    }
+
+    #[test]
+    fn mips_options_are_runtime_inputs_only_for_the_active_stack() {
+        use chimera_config::clash::config::tun_stack::{TunCongestionController, TunStack};
+        let before = ClashConfig::default();
+        let mut inactive = before.clone();
+        inactive.tun_mips.congestion_controller = Some(TunCongestionController::Bbr3);
+        assert_eq!(classify_clash(&before, &inactive), RuntimeImpact::None);
+
+        let mut active = before;
+        active.tun_stack = TunStack::Mips;
+        let mut updated = active.clone();
+        updated.tun_mips.congestion_controller = Some(TunCongestionController::Bbr3);
+        assert_eq!(classify_clash(&active, &updated), RuntimeImpact::Reconcile);
+        let patch: ClashConfigPatch = serde_json::from_value(serde_json::json!({
+            "tun_mips": { "congestion_controller": "bbr3" }
+        }))
+        .unwrap();
+        assert!(RequestedRuntimeFields::of_clash(&patch).names_any());
     }
 
     #[test]

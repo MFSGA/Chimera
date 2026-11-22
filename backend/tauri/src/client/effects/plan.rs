@@ -59,6 +59,8 @@ pub struct ClashEffectFields {
     pub mode: Mode,
     pub enable_tun_mode: bool,
     pub tun_stack: TunStack,
+    pub mips_congestion_controller:
+        Option<chimera_config::clash::config::tun_stack::TunCongestionController>,
     pub mixed_port: PortStrategy,
     pub socks_port: Option<PortStrategy>,
     pub http_port: Option<PortStrategy>,
@@ -103,6 +105,9 @@ impl ApplicationEffectInputs {
                 mode: clash.overrides.mode(),
                 enable_tun_mode: clash.enable_tun_mode,
                 tun_stack: clash.tun_stack,
+                mips_congestion_controller: (clash.tun_stack == TunStack::Mips)
+                    .then_some(clash.tun_mips.congestion_controller)
+                    .flatten(),
                 mixed_port: clash.mixed_port.clone(),
                 socks_port: clash.socks_port.clone(),
                 http_port: clash.http_port.clone(),
@@ -458,6 +463,8 @@ struct ControlChannelDesired {
 struct RuntimeRebuildDesired {
     enable_tun_mode: bool,
     tun_stack: TunStack,
+    mips_congestion_controller:
+        Option<chimera_config::clash::config::tun_stack::TunCongestionController>,
     mixed_port: PortStrategy,
     socks_port: Option<PortStrategy>,
     http_port: Option<PortStrategy>,
@@ -488,6 +495,7 @@ impl ClashEffectFields {
             rebuild: RuntimeRebuildDesired {
                 enable_tun_mode: self.enable_tun_mode,
                 tun_stack: self.tun_stack,
+                mips_congestion_controller: self.mips_congestion_controller,
                 mixed_port: self.mixed_port.clone(),
                 socks_port: self.socks_port.clone(),
                 http_port: self.http_port.clone(),
@@ -574,6 +582,7 @@ mod tests {
                 mode: Mode::Rule,
                 enable_tun_mode: false,
                 tun_stack: TunStack::default(),
+                mips_congestion_controller: None,
                 mixed_port: PortStrategy::new_allow_fallback(7890),
                 socks_port: None,
                 http_port: None,
@@ -1008,6 +1017,29 @@ mod tests {
 
     /// Same exposure on the rebuild group: none of these fields is an
     /// application effect input, so each must rebuild and plan nothing.
+    #[test]
+    fn mips_option_rebuild_is_selected_stack_specific() {
+        use chimera_config::clash::config::tun_stack::{TunCongestionController, TunStack};
+        let app = ChimeraAppConfig::default();
+        let mut clash = ClashConfig::default();
+        let before = ApplicationEffectInputs::project(&app, &clash, None);
+        clash.tun_mips.congestion_controller = Some(TunCongestionController::Bbr3);
+        let unchanged = ApplicationEffectInputs::project(&app, &clash, None);
+        assert_eq!(
+            runtime_apply_kind(&before, &unchanged),
+            RuntimeApplyKind::None
+        );
+
+        clash.tun_stack = TunStack::Mips;
+        let active = ApplicationEffectInputs::project(&app, &clash, None);
+        clash.tun_mips.congestion_controller = Some(TunCongestionController::Reno);
+        let changed = ApplicationEffectInputs::project(&app, &clash, None);
+        assert_eq!(
+            runtime_apply_kind(&active, &changed),
+            RuntimeApplyKind::Rebuild
+        );
+    }
+
     #[test]
     fn every_rebuild_field_reports_rebuild_on_its_own() {
         fn assert_rebuild(label: &str, mutate: impl FnOnce(&mut ApplicationEffectInputs)) {
