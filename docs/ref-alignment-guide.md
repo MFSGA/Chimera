@@ -237,3 +237,14 @@ cargo clippy --manifest-path backend/Cargo.toml --all-targets --all-features
 - 影响的入口：主窗口 navbar、proxies、rules 代理图标及 provider 代理列表；legacy UI 和 agent 继续读共享接口。`rules-main-proxy-icon.e2e.ts` 先挂载旧 Profile 查询，再通过测试 fixture 激活新 Profile，验证当前 UI 跟随运行时数据更新。
 - 实际验证：`pnpm typecheck:chimera`、E2E TypeScript typecheck、`pnpm lint:frontend-boundaries`、前端 build 和 E2E harness unit（25/25）通过；`test:main` 14/14 specs 通过，其中该回归用例先挂载旧 Profile 查询再切换到 fixture Profile；`test:smoke` 4/4 specs（9 条用例）通过。该用例使用 IPC fixture 准备并由桌面 UI 观察，不代表真实网络流量验证。`test:settings` 整套 12/16，失败项和已知限制见 `DIFF-MAIN-SCROLL-VIEWPORT` 验证记录。
 - 收敛、移除或重新评估条件：迁移到 ref 的 query/event 架构后，重新核对 Profile 事件的代理快照失效语义；只有新架构在“缓存旧 Profile 后切换”的回归场景仍能更新时，才移除此兼容修正。
+
+### DIFF-RUNTIME-STORED-GRAPH：Runtime Pipeline 压缩快照与 Inspection 展开适配
+
+- ref commit：c4b35e04870a9caa53f21d10af6fcfde4a6f4c01（固定本地 ref，未修改）。
+- ref 路径与符号：backend/nyanpasu-config/src/runtime/snapshot.rs 中的 StoredConfigSnapshotsGraph、StoredConfigSnapshotState.changed_fields、KeyframePolicy、apply_patch、ConfigSnapshotsBuilder.push_delta、restore / restore_with_parent；runtime/executor/{builtin,artifact,mod}.rs 中的 filter_fields、RuntimeArtifact.graph / final_node 和快照记录。
+- Chimera 路径与符号：backend/chimera-config/src/runtime/{snapshot,executor}/；backend/chimera-core/src/client/{artifact_snapshot,runtime_build}.rs；Tauri 现有 runtime build 调用方。
+- 类别：临时迁移 / legacy UI 兼容。Shared executor 现已向上游返回压缩存储图及确定性的 final_node，字段过滤和 Guard/TUN 已知变更直接写入 Delta；序列化版本升级为 v3，旧 v2 快照缓存按版本拒绝后需要从源配置重建。此缓存不属于用户 Profile 文档。
+- 保留差异：Chimera 当前 RuntimeInspectionData 仍使用完整 ConfigSnapshotsGraph，以维护主界面、legacy UI 和 agent 的现有 inspection DTO。压缩图只在 artifact_snapshot 的适配边界展开。Chimera 的 Finalizing、TUN 分阶段处理、Chimera Client MMDB、可选监听器及 DNS/TUN 策略仍与 ref 的执行顺序或字段所有权存在差异；不将这一阶段误认为 Runtime Pipeline 全量完成对齐。
+- 验证边界：配置层单元测试（含 snapshot-persistence feature）271/271 通过；Core runtime build 7/7、artifact snapshot 3/3、Tauri Runtime Builder 11/11 通过。已覆盖顺序保持、负零符号、显式补丁重放、压缩图恢复、最终节点与配置一致、v2 缓存版本拒绝。编译警告仍存在；未执行真实桌面、内核、Service 或主机网络 E2E。
+- 风险与回退：L2，涉及运行时生成、Inspection 及快照缓存；若发现兼容回归，应回退本轮快照与执行器切片并由持久化源重建缓存，不回退或重写用户配置。
+- 收敛条件：下一轮让 RuntimeInspectionData 自身持有 StoredConfigSnapshotsGraph，并按 ref 用 restore / restore_with_parent 按需恢复节点，再统一收敛 ref 的单次字段所有权计划与执行顺序。保留 legacy UI 的展示能力和 Chimera Client/Service 兼容层，不复制新的平行运行时状态实现。
