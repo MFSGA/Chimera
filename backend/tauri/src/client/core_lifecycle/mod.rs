@@ -9640,6 +9640,62 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn waiting_service_submission_never_retires_owned_core_for_local_fallback() {
+        use chimera_core_manager::{CoreError, CoreErrorKind};
+
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let service_running = Arc::new(AtomicBool::new(true));
+        let core = Arc::new(PostcommitServiceFallbackCore {
+            events: events.clone(),
+            service_running: service_running.clone(),
+            selected: Mutex::new(RunType::Service),
+            local_running: AtomicBool::new(false),
+            refused_service: AtomicBool::new(false),
+            forbid_local: AtomicBool::new(false),
+        });
+        let app = chimera_config::application::ChimeraAppConfig {
+            enable_service_mode: true,
+            ..Default::default()
+        };
+        let service = Arc::new(ToggleStartupServiceProbe {
+            events: events.clone(),
+            ready: Arc::new(AtomicBool::new(true)),
+            core_running: service_running.clone(),
+        });
+        let workflow = CoreLifecycleWorkflow::new(
+            ApplicationClient::static_state(app),
+            ClashConfigClient::legacy().unwrap(),
+            None,
+            core.clone(),
+            Arc::new(RecordingInstaller {
+                events: events.clone(),
+            }),
+            RuntimePaths::from_config_root(std::path::PathBuf::from("test-runtime-root")),
+            service,
+        );
+        let target = workflow.startup_target_identity().await.unwrap();
+        let failure = CoreError::new(
+            CoreErrorKind::BackendUnavailable,
+            "Service still busy",
+            false,
+        );
+        let error = workflow
+            .fallback_after_service_refusal(&target, failure.clone().into())
+            .await
+            .unwrap_err();
+        assert_eq!(
+            error.downcast_ref::<CoreError>().and_then(|err| err.kind),
+            Some(CoreErrorKind::BackendUnavailable)
+        );
+        assert!(service_running.load(AtomicOrdering::Acquire));
+        assert!(!core.local_running.load(AtomicOrdering::Acquire));
+        assert!(
+            events.lock().unwrap().is_empty(),
+            "Waiting may not acquire the Service release lease or mutate the owner"
+        );
+    }
+
+    #[tokio::test]
     async fn postcommit_service_refusal_retires_owned_core_before_local_apply() {
         let events = Arc::new(Mutex::new(Vec::new()));
         let service_running = Arc::new(AtomicBool::new(true));

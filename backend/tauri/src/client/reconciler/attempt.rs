@@ -112,22 +112,65 @@ impl AttemptPolicy {
         result: &anyhow::Result<()>,
         uncertain: bool,
     ) {
-        let outcome = match result {
-            Ok(()) => AttemptOutcome::Applied,
-            Err(error) if uncertain => {
-                AttemptOutcome::Unknown(Arc::new(runtime_apply_error(error, true)))
-            }
-            Err(error) if waiting_dependency(error) => {
+        let outcome = match legacy_apply_verdict(result, uncertain, false) {
+            LegacyApplyVerdict::Applied => AttemptOutcome::Applied,
+            LegacyApplyVerdict::Refused(cause) => AttemptOutcome::Refused(cause),
+            LegacyApplyVerdict::Unknown(cause) => AttemptOutcome::Unknown(cause),
+            LegacyApplyVerdict::Waiting(_) => {
+                // Ref Waiting does not poison the target with a refusal;
+                // the next dependency observation can retry this source.
                 self.last = None;
                 return;
             }
-            Err(error) => AttemptOutcome::Refused(Arc::new(runtime_apply_error(error, false))),
         };
         self.last = Some(Attempt {
             target,
             host,
             outcome,
         });
+    }
+}
+
+/// Ref ApplyOutcome's four-way verdict projected onto the old CoreLifecycle
+/// port. Legacy commands return Result<()> rather than an AppliedCandidate;
+/// `Applied` here means only that the submit call returned successfully.
+/// The Actor still requires an independent Running/receipt proof before
+/// publishing Converged. Never manufacture a product, Core revision or host.
+#[derive(Debug, Clone)]
+pub(crate) enum LegacyApplyVerdict {
+    Applied,
+    Refused(Arc<RuntimeError>),
+    Waiting(Arc<RuntimeError>),
+    Unknown(Arc<RuntimeError>),
+}
+
+/// Classify an already-observed error without stripping the original Core
+/// Manager kind or turning an ownership-dependency wait into a refusal.
+pub(crate) fn legacy_error_verdict(
+    error: &anyhow::Error,
+    uncertain: bool,
+    source_advanced: bool,
+) -> LegacyApplyVerdict {
+    if uncertain {
+        LegacyApplyVerdict::Unknown(Arc::new(runtime_apply_error(error, true)))
+    } else if source_advanced || waiting_dependency(error) {
+        LegacyApplyVerdict::Waiting(Arc::new(runtime_apply_error(error, false)))
+    } else {
+        LegacyApplyVerdict::Refused(Arc::new(runtime_apply_error(error, false)))
+    }
+}
+
+pub(crate) fn legacy_apply_verdict(
+    result: &anyhow::Result<()>,
+    uncertain: bool,
+    source_advanced: bool,
+) -> LegacyApplyVerdict {
+    match result {
+        Err(error) => legacy_error_verdict(error, uncertain, source_advanced),
+        Ok(()) if uncertain => LegacyApplyVerdict::Unknown(Arc::new(RuntimeError::new(
+            "Core submission returned success while the execution owner still reports an uncertain outcome",
+        ))),
+        Ok(()) => LegacyApplyVerdict::Applied,
     }
 }
 
@@ -154,6 +197,76 @@ pub(crate) fn waiting_dependency(error: &anyhow::Error) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn legacy_result_verdict_matches_ref_waiting_refused_and_unknown_semantics() {
+        for kind in [
+            CoreErrorKind::RevisionConflict,
+            CoreErrorKind::OperationConflict,
+            CoreErrorKind::QueueFull,
+            CoreErrorKind::BackendUnavailable,
+        ] {
+            let failed = Err(CoreError::new(kind, "await owner", false).into());
+            let LegacyApplyVerdict::Waiting(cause) = legacy_apply_verdict(&failed, false, false)
+            else {
+                panic!("{kind:?} is a dependency wait even with retryable=false");
+            };
+            assert_eq!(cause.core_kind(), Some(kind));
+            assert!(matches!(
+                legacy_apply_verdict(&failed, true, false),
+                LegacyApplyVerdict::Unknown(_)
+            ));
+        }
+
+        let refused =
+            Err(CoreError::new(CoreErrorKind::ConfigCheckFailed, "invalid YAML", false).into());
+        let LegacyApplyVerdict::Refused(cause) = legacy_apply_verdict(&refused, false, false)
+        else {
+            panic!("configuration rejection must not be treated as waiting");
+        };
+        assert_eq!(cause.core_kind(), Some(CoreErrorKind::ConfigCheckFailed));
+        assert!(matches!(
+            legacy_apply_verdict(&refused, false, true),
+            LegacyApplyVerdict::Waiting(_)
+        ));
+        assert!(matches!(
+            legacy_apply_verdict(&refused, true, true),
+            LegacyApplyVerdict::Unknown(_)
+        ));
+        assert!(matches!(
+            legacy_apply_verdict(&Ok(()), false, false),
+            LegacyApplyVerdict::Applied
+        ));
+        assert!(matches!(
+            legacy_apply_verdict(&Ok(()), true, false),
+            LegacyApplyVerdict::Unknown(_)
+        ));
+    }
+
+    #[test]
+    fn waiting_does_not_poison_attempt_and_unknown_does_not_become_refused() {
+        let mut policy = AttemptPolicy::default();
+        policy.record(
+            "source-a".into(),
+            ExecutionHost::Service,
+            &Err(CoreError::new(CoreErrorKind::BackendUnavailable, "offline", false).into()),
+            false,
+        );
+        assert!(policy.snapshot().is_none());
+        policy.record(
+            "source-a".into(),
+            ExecutionHost::Service,
+            &Err(CoreError::new(CoreErrorKind::ConfigCheckFailed, "bad", false).into()),
+            true,
+        );
+        assert!(matches!(
+            policy.snapshot().unwrap().outcome,
+            AttemptOutcome::Unknown(_)
+        ));
+        policy
+            .allow("source-a", ExecutionHost::Service, Trigger::SourceCommitted)
+            .unwrap();
+    }
 
     #[test]
     fn refused_target_is_scoped_to_host_and_forceable_by_explicit_request() {

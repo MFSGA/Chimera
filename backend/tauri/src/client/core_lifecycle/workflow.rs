@@ -24,7 +24,7 @@ use crate::client::application_workflow::startup::{
 use crate::client::application_workflow::workflow::ApplicationWorkflow;
 use crate::client::application_workflow::workflow::ProfileRuntime;
 use crate::client::reconciler::attempt::{
-    AttemptPolicy, CommittedTargetAdvanced, ServiceFallbackDeferred, waiting_dependency,
+    AttemptPolicy, CommittedTargetAdvanced, ServiceFallbackDeferred,
 };
 use crate::client::reconciler::{
     committed::{Selection, SelectionChange},
@@ -1562,7 +1562,18 @@ impl CoreLifecycleWorkflow {
         target: &str,
         refusal: anyhow::Error,
     ) -> anyhow::Result<()> {
-        if self.core.outcome_uncertain() || waiting_dependency(&refusal) {
+        // A Service-to-Local fallback is authorized only by a *refused*
+        // Service submission. Unknown and Waiting outcomes cannot prove
+        // the Service owner stopped safely and must retain the original
+        // reason for the single Actor to retry or recover.
+        if !matches!(
+            crate::client::reconciler::attempt::legacy_error_verdict(
+                &refusal,
+                self.core.outcome_uncertain(),
+                false,
+            ),
+            crate::client::reconciler::attempt::LegacyApplyVerdict::Refused(_)
+        ) {
             return Err(refusal);
         }
         let observed = match self.core.status().await {

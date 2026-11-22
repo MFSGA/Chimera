@@ -6,11 +6,12 @@
 //! round, not copied from an unprocessed SourceCommitted message.
 use std::{collections::VecDeque, sync::Arc};
 
-use chimera_core::client::reconciler::plan::{
-    Conclusion, RunIntent, RuntimeError, runtime_apply_error,
-};
+use chimera_core::client::reconciler::plan::{Conclusion, RunIntent, RuntimeError};
 
-use super::legacy_mutation::RoundRecord;
+use super::{
+    attempt::{LegacyApplyVerdict, legacy_apply_verdict},
+    legacy_mutation::RoundRecord,
+};
 
 use super::committed::{SourceDomain, SourceVersions};
 use crate::client::runtime::Degradation;
@@ -104,6 +105,7 @@ impl ReconcilerStatus {
         self.seq = self.seq.saturating_add(1);
         self.active = None;
         self.seen.merge(observed_sources);
+        let verdict = legacy_apply_verdict(result, outcome_uncertain, source_advanced);
         self.conclusion = if trigger == "Shutdown" {
             Conclusion::Closed
         } else if trigger == "ServiceRelease" {
@@ -111,19 +113,17 @@ impl ReconcilerStatus {
             // not a new runtime application. Its failure must not revoke a
             // separately proven Converged runtime conclusion.
             self.conclusion.clone()
-        } else if outcome_uncertain {
+        } else if let LegacyApplyVerdict::Unknown(cause) = &verdict {
             Conclusion::Unknown {
-                cause: Arc::new(match result.as_ref() {
-                    Err(error) => runtime_apply_error(error, true),
-                    Ok(()) => RuntimeError::new("core lifecycle outcome is uncertain"),
-                }),
+                cause: cause.clone(),
             }
-        } else if let Err(error) = result {
-            let cause = Arc::new(runtime_apply_error(error, false));
-            if source_advanced || super::attempt::waiting_dependency(error) {
-                Conclusion::Waiting { cause }
-            } else {
-                Conclusion::NotInEffect { cause }
+        } else if let LegacyApplyVerdict::Waiting(cause) = &verdict {
+            Conclusion::Waiting {
+                cause: cause.clone(),
+            }
+        } else if let LegacyApplyVerdict::Refused(cause) = &verdict {
+            Conclusion::NotInEffect {
+                cause: cause.clone(),
             }
         } else if intent == RunIntent::Stopped && trigger == "Stop" && verified_stopped {
             Conclusion::Inactive
@@ -245,6 +245,87 @@ mod tests {
         assert_eq!(status.recent.len(), HISTORY_LEN);
         assert_eq!(status.recent.front().unwrap().operation_id, 13);
         assert!(status.active.is_none());
+    }
+
+    #[test]
+    fn legacy_core_verdicts_project_ref_outcome_without_inventing_applied_receipts() {
+        use chimera_core_manager::{CoreError, CoreErrorKind};
+
+        let mut status = ReconcilerStatus::default();
+        let sampled = SourceVersions::default();
+        status.begin(30);
+        status.finish(
+            30,
+            "Startup",
+            &sampled,
+            RunIntent::Running,
+            &Err(CoreError::new(CoreErrorKind::ConfigCheckFailed, "bad source", false).into()),
+            true,
+            false,
+            false,
+            false,
+            false,
+        );
+        assert!(matches!(status.conclusion, Conclusion::NotInEffect { .. }));
+        status.begin(31);
+        status.finish(
+            31,
+            "ServiceReadiness",
+            &sampled,
+            RunIntent::Running,
+            &Err(CoreError::new(CoreErrorKind::BackendUnavailable, "host offline", false).into()),
+            true,
+            false,
+            false,
+            false,
+            false,
+        );
+        assert!(matches!(status.conclusion, Conclusion::Waiting { .. }));
+        status.begin(32);
+        status.finish(
+            32,
+            "SourceCommitted",
+            &sampled,
+            RunIntent::Running,
+            &Err(CoreError::new(CoreErrorKind::ApplyFailed, "unobserved", false).into()),
+            true,
+            false,
+            false,
+            true,
+            false,
+        );
+        assert!(matches!(status.conclusion, Conclusion::Unknown { .. }));
+        status.begin(33);
+        status.finish(
+            33,
+            "Startup",
+            &sampled,
+            RunIntent::Running,
+            &Ok(()),
+            true,
+            false,
+            false,
+            false,
+            false,
+        );
+        assert!(
+            matches!(status.conclusion, Conclusion::Waiting { .. }),
+            "a legacy Ok without a Running receipt must not claim Converged"
+        );
+        status.begin(34);
+        status.finish(
+            34,
+            "Startup",
+            &sampled,
+            RunIntent::Running,
+            &Ok(()),
+            true,
+            true,
+            false,
+            false,
+            false,
+        );
+        assert!(matches!(status.conclusion, Conclusion::Converged));
     }
 
     #[test]
