@@ -10,7 +10,10 @@ use crate::{
         TransformDefinition,
     },
     runtime::{
-        executor::{PortError, ProfileContentSource, ScriptRunOutcome, ScriptRunner, StepLogEntry},
+        executor::{
+            PortError, ProfileContentSource, ScriptExecutionError, ScriptOperation, ScriptRunner,
+            StepLogEntry,
+        },
         value::ConfigValue,
     },
 };
@@ -49,15 +52,18 @@ impl ProfileContentSource for MapContentSource {
 pub enum RunReply {
     Replace(serde_json::Value, Vec<StepLogEntry>),
     Fail(String, Vec<StepLogEntry>),
+    MissingEngine(ScriptOperation),
 }
 
 pub enum PredicateReply {
+    MissingEngine,
     Fixed(bool),
     ByItem(fn(&ConfigValue) -> bool),
     Fail(String),
 }
 
 pub enum ExprReply {
+    MissingEngine,
     Fixed(serde_json::Value),
     Fail(String),
 }
@@ -72,25 +78,38 @@ pub struct FakeScriptRunner {
 }
 
 impl ScriptRunner for FakeScriptRunner {
-    fn run(&self, _runtime: ScriptRuntime, source: &str, config: &ConfigValue) -> ScriptRunOutcome {
+    fn run(
+        &self,
+        runtime: ScriptRuntime,
+        source: &str,
+        config: &ConfigValue,
+        logs: &mut Vec<StepLogEntry>,
+    ) -> Result<ConfigValue, PortError> {
         match self.runs.get(source) {
-            Some(RunReply::Replace(json, logs)) => ScriptRunOutcome {
-                result: Ok(ConfigValue::try_from(json.clone()).expect("fake run json")),
-                logs: logs.clone(),
-            },
-            Some(RunReply::Fail(message, logs)) => ScriptRunOutcome {
-                result: Err(message.clone().into()),
-                logs: logs.clone(),
-            },
-            None => ScriptRunOutcome {
-                result: Ok(config.clone()),
-                logs: Vec::new(),
-            },
+            Some(RunReply::Replace(json, entries)) => {
+                logs.extend(entries.clone());
+                Ok(ConfigValue::try_from(json.clone()).expect("fake run json"))
+            }
+            Some(RunReply::Fail(message, entries)) => {
+                logs.extend(entries.clone());
+                Err(message.clone().into())
+            }
+            Some(RunReply::MissingEngine(operation)) => Err(ScriptExecutionError::StartEngine {
+                runtime,
+                operation: *operation,
+            }
+            .into()),
+            None => Ok(config.clone()),
         }
     }
 
     fn eval_item_predicate(&self, expr: &str, item: &ConfigValue) -> Result<bool, PortError> {
         match self.predicates.get(expr) {
+            Some(PredicateReply::MissingEngine) => Err(ScriptExecutionError::StartEngine {
+                runtime: ScriptRuntime::Lua,
+                operation: ScriptOperation::ItemPredicate,
+            }
+            .into()),
             Some(PredicateReply::Fixed(value)) => Ok(*value),
             Some(PredicateReply::ByItem(judge)) => Ok(judge(item)),
             Some(PredicateReply::Fail(message)) => Err(message.clone().into()),
@@ -100,6 +119,11 @@ impl ScriptRunner for FakeScriptRunner {
 
     fn eval_item_expr(&self, expr: &str, item: &ConfigValue) -> Result<ConfigValue, PortError> {
         match self.exprs.get(expr) {
+            Some(ExprReply::MissingEngine) => Err(ScriptExecutionError::StartEngine {
+                runtime: ScriptRuntime::Lua,
+                operation: ScriptOperation::ItemExpression,
+            }
+            .into()),
             Some(ExprReply::Fixed(json)) => {
                 Ok(ConfigValue::try_from(json.clone()).expect("fake expr json"))
             }

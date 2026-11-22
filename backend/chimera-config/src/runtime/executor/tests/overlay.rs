@@ -2,7 +2,10 @@ use serde_json::json;
 
 use super::support::{ExprReply, FakeScriptRunner, PredicateReply};
 use crate::runtime::{
-    executor::{StepLogLevel, overlay::apply_overlay},
+    executor::{
+        RuntimePipelineError, ScriptExecutionError, ScriptOperation, StepLogLevel,
+        overlay::apply_overlay,
+    },
     value::ConfigValue,
 };
 
@@ -23,7 +26,7 @@ fn apply_with(
     runner: &FakeScriptRunner,
 ) -> (serde_json::Value, Vec<(StepLogLevel, String)>) {
     let mut logs = Vec::new();
-    let (result, _) = apply_overlay(&value(overlay), value(config), runner, &mut logs);
+    let (result, _) = apply_overlay(&value(overlay), value(config), runner, &mut logs).unwrap();
     (
         result.to_json(),
         logs.into_iter()
@@ -41,7 +44,8 @@ fn overlay_reports_non_mapping_and_filter_execution_failures() {
         value(json!({ "proxies": [] })),
         &runner,
         &mut logs,
-    );
+    )
+    .unwrap();
     assert!(failed);
     assert_eq!(result.to_json(), json!({ "proxies": [] }));
 
@@ -56,8 +60,59 @@ fn overlay_reports_non_mapping_and_filter_execution_failures() {
         value(json!({ "proxies": [{ "name": "a" }] })),
         &runner,
         &mut logs,
-    );
+    )
+    .unwrap();
     assert!(failed);
+}
+
+// Unit contract: a missing Lua predicate engine is not a false predicate.
+// A false predicate changes the selected proxies silently; upstream rejects.
+#[test]
+fn missing_lua_predicate_engine_rejects_overlay() {
+    let mut runner = FakeScriptRunner::default();
+    runner
+        .predicates
+        .insert("predicate".to_string(), PredicateReply::MissingEngine);
+    let mut logs = Vec::new();
+    let error = apply_overlay(
+        &value(json!({ "filter__proxies": "predicate" })),
+        value(json!({ "proxies": [{ "name": "a" }] })),
+        &runner,
+        &mut logs,
+    );
+    assert!(matches!(
+        error,
+        Err(RuntimePipelineError::ExecuteScript {
+            source: ScriptExecutionError::StartEngine {
+                runtime: crate::profile::ScriptRuntime::Lua,
+                operation: ScriptOperation::ItemPredicate,
+            }
+        })
+    ));
+}
+
+#[test]
+fn missing_lua_expression_engine_rejects_overlay() {
+    let mut runner = FakeScriptRunner::default();
+    runner
+        .exprs
+        .insert("expression".to_string(), ExprReply::MissingEngine);
+    let mut logs = Vec::new();
+    let error = apply_overlay(
+        &value(json!({ "filter__proxies": { "when": "true", "expr": "expression" } })),
+        value(json!({ "proxies": [{ "name": "a" }] })),
+        &runner,
+        &mut logs,
+    );
+    assert!(matches!(
+        error,
+        Err(RuntimePipelineError::ExecuteScript {
+            source: ScriptExecutionError::StartEngine {
+                runtime: crate::profile::ScriptRuntime::Lua,
+                operation: ScriptOperation::ItemExpression,
+            }
+        })
+    ));
 }
 
 #[test]

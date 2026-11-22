@@ -1,44 +1,64 @@
-//! Structural failures only; transform-level failures go to step logs (spec D7).
+//! Structural and missing-capability failures; ordinary script failures go to step logs.
 
-use thiserror::Error;
+use serde::Serialize;
+use snafu::Snafu;
+use specta::Type;
 
 use crate::{
     profile::{ManagedProfilePath, ProfileId},
     runtime::snapshot::SnapshotBuildError,
 };
 
-use super::ports::PortError;
+use super::{ports::PortError, script_error::ScriptExecutionError};
 
-#[derive(Debug, Error)]
+/// Wire shape for the app's error channel: library sources are skipped and
+/// reach the user only through the error's `Debug` detail.
+#[derive(Debug, Snafu, Serialize, Type)]
+#[snafu(visibility(pub(crate)))]
+#[serde(tag = "kind", rename_all = "snake_case")]
 pub enum RuntimePipelineError {
-    #[error("selected profile {0} not found")]
-    SelectedProfileNotFound(ProfileId),
+    #[snafu(display("could not execute script: {source}"))]
+    ExecuteScript { source: ScriptExecutionError },
 
-    #[error("selected profile {0} is not a Config")]
-    SelectedProfileNotConfig(ProfileId),
+    #[snafu(display("selected profile {profile} not found"))]
+    SelectedProfileNotFound { profile: ProfileId },
 
-    #[error("composition {composition} member {member} invalid: {reason}")]
+    #[snafu(display("selected profile {profile} is not a Config"))]
+    SelectedProfileNotConfig { profile: ProfileId },
+
+    #[snafu(display("composition {composition} member {member} invalid: {reason}"))]
     CompositionMemberInvalid {
         composition: ProfileId,
         member: ProfileId,
         reason: String,
     },
 
-    #[error("read profile {profile} content at {path}: {source}")]
+    #[snafu(display("read profile {profile} content at {path}: {source}"))]
     ContentSource {
         profile: ProfileId,
         path: ManagedProfilePath,
-        #[source]
+        #[serde(skip)]
         source: PortError,
     },
 
-    #[error("parse profile {profile} as config: {message}")]
+    #[snafu(display("parse profile {profile} as config: {message}"))]
     ParseProfile { profile: ProfileId, message: String },
 
-    #[error(transparent)]
-    Snapshot(#[from] SnapshotBuildError),
+    #[snafu(transparent)]
+    Snapshot {
+        #[serde(skip)]
+        source: SnapshotBuildError,
+    },
 
     /// Theoretically unreachable invariant breaks (e.g. guard serialization).
-    #[error("internal executor invariant: {0}")]
-    Internal(String),
+    #[snafu(display("internal executor invariant: {message}"))]
+    Internal { message: String },
+}
+
+/// Preserve missing capabilities while leaving ordinary port errors to their existing policy.
+pub(super) fn ordinary_script_error(error: PortError) -> Result<PortError, RuntimePipelineError> {
+    match error.downcast::<ScriptExecutionError>() {
+        Ok(source) => Err(RuntimePipelineError::ExecuteScript { source: *source }),
+        Err(error) => Ok(error),
+    }
 }

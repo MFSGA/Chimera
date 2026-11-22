@@ -104,7 +104,7 @@ impl RuntimeBuilder {
                     .graph
                     .nodes
                     .iter()
-                    .find(|node| node.key == log.key)
+                    .find(|node| node.tag.node_key() == log.key)
                     .expect("executor logs must belong to a snapshot node")
                     .tag
                     .clone(),
@@ -334,7 +334,7 @@ mod tests {
     use chimera_config::{
         profile::{ManagedProfilePath, ScriptRuntime},
         runtime::{
-            executor::{PortError, ScriptRunOutcome},
+            executor::{PortError, StepLogEntry},
             value::ConfigValue,
         },
     };
@@ -349,11 +349,14 @@ mod tests {
 
     struct PassthroughScripts;
     impl ScriptRunner for PassthroughScripts {
-        fn run(&self, _: ScriptRuntime, _: &str, config: &ConfigValue) -> ScriptRunOutcome {
-            ScriptRunOutcome {
-                result: Ok(config.clone()),
-                logs: vec![],
-            }
+        fn run(
+            &self,
+            _: ScriptRuntime,
+            _: &str,
+            config: &ConfigValue,
+            _: &mut Vec<StepLogEntry>,
+        ) -> Result<ConfigValue, PortError> {
+            Ok(config.clone())
         }
         fn eval_item_predicate(&self, _: &str, _: &ConfigValue) -> Result<bool, PortError> {
             Ok(true)
@@ -365,11 +368,14 @@ mod tests {
 
     struct RejectingScripts;
     impl ScriptRunner for RejectingScripts {
-        fn run(&self, _: ScriptRuntime, _: &str, _: &ConfigValue) -> ScriptRunOutcome {
-            ScriptRunOutcome {
-                result: Err("forced transform failure".into()),
-                logs: vec![],
-            }
+        fn run(
+            &self,
+            _: ScriptRuntime,
+            _: &str,
+            _: &ConfigValue,
+            _: &mut Vec<StepLogEntry>,
+        ) -> Result<ConfigValue, PortError> {
+            Err("forced transform failure".into())
         }
         fn eval_item_predicate(&self, _: &str, _: &ConfigValue) -> Result<bool, PortError> {
             Ok(true)

@@ -10,6 +10,7 @@ mod overlay;
 mod plan;
 mod ports;
 mod scoped;
+mod script_error;
 mod value_util;
 
 #[cfg(test)]
@@ -21,7 +22,8 @@ use indexmap::{IndexMap, IndexSet};
 
 pub use artifact::{RuntimeArtifact, StepLog, StepLogEntry, StepLogLevel, TransformFailure};
 pub use error::RuntimePipelineError;
-pub use ports::{PortError, ProfileContentSource, ScriptRunOutcome, ScriptRunner};
+pub use ports::{PortError, ProfileContentSource, ScriptRunner};
+pub use script_error::{ScriptExecutionError, ScriptOperation};
 
 use crate::{
     clash::config::{
@@ -164,20 +166,20 @@ pub(crate) fn apply_transform(
     runner: &dyn ScriptRunner,
     transform_id: &ProfileId,
     current: &Arc<ConfigValue>,
-) -> (Arc<ConfigValue>, TransformKind, Vec<StepLogEntry>, bool) {
+) -> Result<(Arc<ConfigValue>, TransformKind, Vec<StepLogEntry>, bool), RuntimePipelineError> {
     let mut entries = Vec::new();
 
     let Some(item) = profiles.items.get(transform_id) else {
         entries.push(StepLogEntry::error(format!(
             "transform {transform_id} not found, passthrough"
         )));
-        return (current.clone(), TransformKind::Overlay, entries, true);
+        return Ok((current.clone(), TransformKind::Overlay, entries, true));
     };
     let ProfileDefinition::Transform { transform } = &item.definition else {
         entries.push(StepLogEntry::error(format!(
             "profile {transform_id} is not a transform, passthrough"
         )));
-        return (current.clone(), TransformKind::Overlay, entries, true);
+        return Ok((current.clone(), TransformKind::Overlay, entries, true));
     };
 
     let kind = transform.kind();
@@ -188,15 +190,15 @@ pub(crate) fn apply_transform(
             entries.push(StepLogEntry::error(format!(
                 "read transform {transform_id} source at {path} failed, passthrough: {error}"
             )));
-            return (current.clone(), kind, entries, true);
+            return Ok((current.clone(), kind, entries, true));
         }
     };
 
-    match transform {
+    Ok(match transform {
         TransformDefinition::Overlay(_) => match parse_config_document(&text) {
             Ok(document) => {
                 let (next, failed) =
-                    overlay::apply_overlay(&document, (**current).clone(), runner, &mut entries);
+                    overlay::apply_overlay(&document, (**current).clone(), runner, &mut entries)?;
                 (Arc::new(next), kind, entries, failed)
             }
             Err(message) => {
@@ -207,18 +209,17 @@ pub(crate) fn apply_transform(
             }
         },
         TransformDefinition::Script(script) => {
-            let outcome = runner.run(script.runtime, &text, current);
-            entries.extend(outcome.logs);
-            match outcome.result {
+            match runner.run(script.runtime, &text, current, &mut entries) {
                 Ok(next) => (Arc::new(next), kind, entries, false),
                 Err(error) => {
+                    let error = error::ordinary_script_error(error)?;
                     // Parity: enhance/utils.rs:118 — error log + passthrough.
                     entries.push(StepLogEntry::error(error.to_string()));
                     (current.clone(), kind, entries, true)
                 }
             }
         }
-    }
+    })
 }
 
 /// Executes the full pipeline for one target (spec §7.1 table + shared tail).
@@ -240,13 +241,15 @@ pub fn execute(
             )
         }
         ExecutionTarget::Selected(id) => {
-            let item = inputs
-                .profiles
-                .items
-                .get(id)
-                .ok_or_else(|| RuntimePipelineError::SelectedProfileNotFound(id.clone()))?;
+            let item = inputs.profiles.items.get(id).ok_or_else(|| {
+                RuntimePipelineError::SelectedProfileNotFound {
+                    profile: id.clone(),
+                }
+            })?;
             let ProfileDefinition::Config { config } = &item.definition else {
-                return Err(RuntimePipelineError::SelectedProfileNotConfig(id.clone()));
+                return Err(RuntimePipelineError::SelectedProfileNotConfig {
+                    profile: id.clone(),
+                });
             };
             match config {
                 crate::profile::ConfigDefinition::File(_) => {
@@ -279,7 +282,7 @@ pub fn execute(
     // builtin×N → finalizing.
     for (index, transform_id) in inputs.profiles.global_transforms.iter().enumerate() {
         let (next, kind, entries, failed) =
-            apply_transform(inputs.profiles, content, runner, transform_id, &working);
+            apply_transform(inputs.profiles, content, runner, transform_id, &working)?;
         let tag = OperatorTag::GlobalTransform {
             selected_profile_id: selected.clone(),
             transform_profile_id: transform_id.clone(),
@@ -301,54 +304,73 @@ pub fn execute(
 
     let stage1 = builtin::stage1_fields_for_core(&inputs.profiles.valid, inputs.core_supports_mmdb);
     let prefilter = working.clone();
-    working = Arc::new(builtin::whitelist_filter(
-        &working,
-        &stage1,
-        inputs.whitelist_enabled,
-    ));
+    let (filtered, patch) = if inputs.whitelist_enabled {
+        builtin::filter_fields(&working, &stage1)
+    } else {
+        ((*working).clone(), json_patch::Patch(Vec::new()))
+    };
+    working = Arc::new(filtered);
     let step = |step| OperatorTag::BuiltinStep {
         selected_profile_id: selected.clone(),
         step,
     };
-    builder.push(step(BuiltinStepKind::WhitelistFieldFilter), working.clone())?;
+    builder.push_delta(
+        step(BuiltinStepKind::WhitelistFieldFilter),
+        working.clone(),
+        patch,
+    )?;
 
     // Preserve Chimera's existing guard -> TUN processing order. Independent
     // snapshots expose the inherited and managed effects without changing the
     // configuration the built-in scripts receive.
     let ownership = plan::ownership(&inputs.guard, &inputs.tun);
-    let (inherited, _) =
+    let (inherited, patch) =
         crate::runtime::post_process::keep_inherited(&working, &prefilter, &ownership.guard);
     working = Arc::new(inherited);
-    builder.push(step(BuiltinStepKind::KeepUnmanaged), working.clone())?;
+    builder.push_delta(step(BuiltinStepKind::KeepUnmanaged), working.clone(), patch)?;
 
-    let (managed, _) = crate::runtime::post_process::apply_settings(&working, &ownership.guard);
+    let (managed, patch) = crate::runtime::post_process::apply_settings(&working, &ownership.guard);
     working = Arc::new(managed);
-    builder.push(step(BuiltinStepKind::ManagedSettings), working.clone())?;
+    builder.push_delta(
+        step(BuiltinStepKind::ManagedSettings),
+        working.clone(),
+        patch,
+    )?;
 
-    let (inherited, _) =
+    let (inherited, patch) =
         crate::runtime::post_process::keep_inherited(&working, &prefilter, &ownership.tun);
     working = Arc::new(inherited);
-    builder.push(step(BuiltinStepKind::TunKeepUnmanaged), working.clone())?;
+    builder.push_delta(
+        step(BuiltinStepKind::TunKeepUnmanaged),
+        working.clone(),
+        patch,
+    )?;
 
-    let (managed, _) = crate::runtime::post_process::apply_settings(&working, &ownership.tun);
+    let (managed, patch) = crate::runtime::post_process::apply_settings(&working, &ownership.tun);
     working = Arc::new(managed);
-    builder.push(step(BuiltinStepKind::TunManagedSettings), working.clone())?;
+    builder.push_delta(
+        step(BuiltinStepKind::TunManagedSettings),
+        working.clone(),
+        patch,
+    )?;
 
     for (index, builtin_transform) in inputs.builtin_transforms.iter().enumerate() {
-        let outcome = runner.run(
+        let mut entries = Vec::new();
+        let result = runner.run(
             builtin_transform.runtime,
             &builtin_transform.source,
             &working,
+            &mut entries,
         );
         let tag = OperatorTag::BuiltinTransform {
             selected_profile_id: selected.clone(),
             name: builtin_transform.name.clone(),
             step_index: index as u32,
         };
-        let mut entries = outcome.logs;
-        let next = match outcome.result {
+        let next = match result {
             Ok(value) => Arc::new(value),
             Err(error) => {
+                let error = error::ordinary_script_error(error)?;
                 // Parity: builtin errors are swallowed with a log (mod.rs:136-141),
                 // now retained instead of discarded (spec §13 #7).
                 entries.push(StepLogEntry::error(error.to_string()));
@@ -393,11 +415,12 @@ pub fn execute(
         builtin::known_fields_for_core(inputs.core_supports_mmdb).any(|field| field == key)
     });
 
-    let graph = builder.build()?;
+    let (graph, final_node) = builder.build_stored_with_current()?;
     let transform_failures = logs.failures.clone();
     Ok(RuntimeArtifact {
         final_config: working,
         graph,
+        final_node,
         step_logs: logs.into_step_logs(),
         applied_fields,
         transform_failures,

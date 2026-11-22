@@ -6,11 +6,13 @@ use indexmap::IndexSet;
 use serde::{Deserialize, Serialize};
 
 use crate::runtime::{
-    snapshot::{ConfigSnapshotsGraph, SnapshotNodeKey},
+    snapshot::{Idx, SnapshotNodeKey, StoredConfigSnapshotsGraph},
     value::ConfigValue,
 };
 
 /// 1:1 with the legacy `LogSpan` wire shape (enhance/utils.rs:18-25).
+///
+/// Declaration order is severity (`Log` lowest, `Error` highest); `Ord` relies on it.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, specta::Type,
 )]
@@ -58,15 +60,17 @@ pub struct StepLog {
 #[derive(Debug, Clone, PartialEq)]
 pub struct RuntimeArtifact {
     pub final_config: Arc<ConfigValue>,
-    pub graph: ConfigSnapshotsGraph,
+    pub graph: StoredConfigSnapshotsGraph,
+    /// The node of `graph` whose config is `final_config`.
+    pub final_node: Idx,
     pub step_logs: Vec<StepLog>,
     pub applied_fields: IndexSet<String>,
-    /// Failures passed through by the lenient executor. Candidate validation
-    /// rejects these while committed runtime rebuilds may retain passthrough.
+    /// Execution failures that the legacy lenient pipeline passed through.
+    /// Candidate validation must refuse these even when the final YAML parses.
     pub transform_failures: Vec<TransformFailure>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, specta::Type)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize, specta::Type)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum TransformFailure {
     Profile { id: String },

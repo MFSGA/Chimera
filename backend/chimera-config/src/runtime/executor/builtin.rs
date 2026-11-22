@@ -4,6 +4,7 @@
 use std::sync::Arc;
 
 use indexmap::IndexMap;
+use json_patch::{Patch, PatchOperation, RemoveOperation, jsonptr::PointerBuf};
 
 use crate::runtime::{
     post_process::{OwnershipEntries, apply_defaults, apply_settings},
@@ -118,6 +119,28 @@ pub(super) fn stage1_fields_for_core(valid: &[String], core_supports_mmdb: bool)
     fields
 }
 
+/// Keeps the top-level keys in `allow`, with the patch that removes the rest.
+pub(super) fn filter_fields(config: &ConfigValue, allow: &[String]) -> (ConfigValue, Patch) {
+    let Some(map) = config.as_object_arc() else {
+        return (config.clone(), Patch(Vec::new()));
+    };
+    let mut removed = Vec::new();
+    let mut filtered = ConfigObject::with_capacity(map.len());
+    for (key, value) in map.iter() {
+        if allow.iter().any(|allowed| allowed.as_str() == key.as_ref()) {
+            filtered.insert(key.clone(), value.clone());
+        } else {
+            removed.push(PatchOperation::Remove(RemoveOperation {
+                path: PointerBuf::from_tokens([key.as_ref()]),
+            }));
+        }
+    }
+    if removed.is_empty() {
+        return (config.clone(), Patch(removed));
+    }
+    (ConfigValue::Object(Arc::new(filtered)), Patch(removed))
+}
+
 pub(super) fn whitelist_filter(
     config: &ConfigValue,
     allow: &[String],
@@ -126,15 +149,7 @@ pub(super) fn whitelist_filter(
     if !enabled {
         return config.clone();
     }
-    let Some(map) = config.as_object_arc() else {
-        return config.clone();
-    };
-    let filtered: ConfigObject = map
-        .iter()
-        .filter(|(key, _)| allow.iter().any(|allowed| allowed.as_str() == key.as_ref()))
-        .map(|(key, value)| (key.clone(), value.clone()))
-        .collect();
-    ConfigValue::Object(Arc::new(filtered))
+    filter_fields(config, allow).0
 }
 
 /// Legacy HANDLE overwrite (enhance/mod.rs:110-116): typed overrides + caller

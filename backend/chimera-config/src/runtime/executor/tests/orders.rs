@@ -13,8 +13,8 @@ use crate::{
     runtime::{
         executor::{
             BuiltinTransform, ExecutionTarget, GuardInputs, ResolvedPortBindings,
-            RuntimePipelineError, RuntimePipelineInputs, StepLogLevel, TunFlavor, TunParams,
-            execute,
+            RuntimePipelineError, RuntimePipelineInputs, ScriptExecutionError, ScriptOperation,
+            StepLogLevel, TunFlavor, TunParams, execute,
         },
         snapshot::{BuiltinStepKind, ConfigExecutionRole, OperatorTag},
     },
@@ -106,8 +106,9 @@ fn selected_file_config_records_canonical_mainline() {
     );
 
     let artifact = execute(&inputs, &content, &FakeScriptRunner::default()).unwrap();
+    let graph = artifact.graph.materialize().unwrap();
 
-    let tags: Vec<_> = artifact.graph.nodes.iter().map(|node| &node.tag).collect();
+    let tags: Vec<_> = graph.nodes.iter().map(|node| &node.tag).collect();
     assert!(matches!(
         tags[0],
         OperatorTag::FileConfigRoot {
@@ -159,7 +160,7 @@ fn selected_file_config_records_canonical_mainline() {
     {
         assert!(matches!(tags[9 + index], OperatorTag::BuiltinStep { step, .. } if *step == kind));
     }
-    assert_eq!(artifact.graph.nodes.len(), 13);
+    assert_eq!(graph.nodes.len(), 13);
 
     // 语义断言：scoped + global 追加都生效，guard 覆盖 mode。
     let config = artifact.final_config.to_json();
@@ -268,9 +269,9 @@ tun: { auto-route: false, stack: system }
     inputs.tun.enable = true;
     inputs.tun.overrides.auto_route = ManageableField::Unmanaged;
     let artifact = execute(&inputs, &content, &FakeScriptRunner::default()).unwrap();
-    let root = &artifact.graph.nodes[0].snapshot.config;
-    let filtered = artifact
-        .graph
+    let graph = artifact.graph.materialize().unwrap();
+    let root = &graph.nodes[0].snapshot.config;
+    let filtered = graph
         .nodes
         .iter()
         .find(|node| {
@@ -283,8 +284,7 @@ tun: { auto-route: false, stack: system }
             )
         })
         .unwrap();
-    let managed_tun = artifact
-        .graph
+    let managed_tun = graph
         .nodes
         .iter()
         .find(|node| {
@@ -327,9 +327,9 @@ extra: ignored
     let mut inputs = base_inputs(&profiles, ExecutionTarget::Selected(pid("sub-a")), &ov, &[]);
     inputs.tun.enable = true;
     let artifact = execute(&inputs, &content, &FakeScriptRunner::default()).unwrap();
+    let graph = artifact.graph.materialize().unwrap();
     let find = |kind| {
-        artifact
-            .graph
+        graph
             .nodes
             .iter()
             .find(|node| {
@@ -409,6 +409,7 @@ fn composition_with_base_matches_recording_contract() {
     let inputs = base_inputs(&profiles, ExecutionTarget::Selected(pid("all")), &ov, &[]);
 
     let artifact = execute(&inputs, &content, &FakeScriptRunner::default()).unwrap();
+    let graph = artifact.graph.materialize().unwrap();
     let config = artifact.final_config.to_json();
 
     // 11 条规则：只提取 proxies、按序追加、不合并其他字段、不去重。
@@ -423,8 +424,8 @@ fn composition_with_base_matches_recording_contract() {
     assert!(config.get("extra").is_none());
 
     // 图形状（对齐 snapshot.rs composition 测试期望形态）。
-    let nodes = &artifact.graph.nodes;
-    let root = artifact.graph.root_id as usize;
+    let nodes = &graph.nodes;
+    let root = graph.root_id as usize;
     assert!(matches!(
         &nodes[root].tag,
         OperatorTag::CompositionRoot { base: Some(_), .. }
@@ -474,16 +475,14 @@ fn composition_without_base_starts_from_clean_seed() {
     let inputs = base_inputs(&profiles, ExecutionTarget::Selected(pid("clean")), &ov, &[]);
 
     let artifact = execute(&inputs, &content, &FakeScriptRunner::default()).unwrap();
+    let graph = artifact.graph.materialize().unwrap();
 
-    let root = artifact.graph.root_id as usize;
+    let root = graph.root_id as usize;
     assert!(matches!(
-        &artifact.graph.nodes[root].tag,
+        &graph.nodes[root].tag,
         OperatorTag::CompositionRoot { base: None, .. }
     ));
-    assert_eq!(
-        artifact.graph.nodes[root].snapshot.config,
-        json!({ "proxies": [] })
-    );
+    assert_eq!(graph.nodes[root].snapshot.config, json!({ "proxies": [] }));
     let final_config = artifact.final_config.to_json();
     let names: Vec<&str> = final_config["proxies"]
         .as_array()
@@ -508,8 +507,9 @@ fn bare_target_reuses_shared_tail_with_none_selected() {
     let inputs = base_inputs(&profiles, ExecutionTarget::Bare, &ov, &[]);
 
     let artifact = execute(&inputs, &content, &FakeScriptRunner::default()).unwrap();
+    let graph = artifact.graph.materialize().unwrap();
 
-    let tags: Vec<_> = artifact.graph.nodes.iter().map(|node| &node.tag).collect();
+    let tags: Vec<_> = graph.nodes.iter().map(|node| &node.tag).collect();
     assert!(matches!(tags[0], OperatorTag::BareRoot));
     assert!(matches!(
         tags[1],
@@ -555,14 +555,15 @@ fn script_transform_failure_is_lenient_with_anchored_error_log() {
     let inputs = base_inputs(&profiles, ExecutionTarget::Selected(pid("sub-a")), &ov, &[]);
 
     let artifact = execute(&inputs, &content, &runner).unwrap();
+    let graph = artifact.graph.materialize().unwrap();
 
     // 透传：scoped 节点值 == root 值。
     assert_eq!(
-        artifact.graph.nodes[1].snapshot.config,
-        artifact.graph.nodes[0].snapshot.config
+        graph.nodes[1].snapshot.config,
+        graph.nodes[0].snapshot.config
     );
     // error 日志锚定在该 ScopedTransform 节点键上。
-    let scoped_key = artifact.graph.nodes[1].key.clone();
+    let scoped_key = graph.nodes[1].key.clone();
     let log = artifact
         .step_logs
         .iter()
@@ -581,6 +582,135 @@ fn script_transform_failure_is_lenient_with_anchored_error_log() {
     );
 }
 
+// Unit contract: a selected file with a JavaScript transform and an unavailable
+// engine must reject construction. The former lenient implementation returned
+// an artifact, silently leaving the transform unexecuted.
+#[test]
+fn missing_transform_engine_rejects_runtime_instead_of_keeping_the_old_config() {
+    let profiles = profiles_with(
+        Some("sub-a"),
+        &[],
+        &[],
+        vec![
+            config_file_item("sub-a", "sub-a.yaml", &["script"]),
+            script_item("script", "script.js", ScriptRuntime::JavaScript),
+        ],
+    );
+    let content = MapContentSource::from_pairs(&[
+        ("sub-a.yaml", "proxies: []\n"),
+        ("script.js", "script-source"),
+    ]);
+    let mut runner = FakeScriptRunner::default();
+    runner.runs.insert(
+        "script-source".to_string(),
+        RunReply::MissingEngine(ScriptOperation::Transform),
+    );
+    let ov = overrides();
+    let inputs = base_inputs(&profiles, ExecutionTarget::Selected(pid("sub-a")), &ov, &[]);
+
+    assert!(matches!(
+        execute(&inputs, &content, &runner),
+        Err(RuntimePipelineError::ExecuteScript {
+            source: ScriptExecutionError::StartEngine {
+                runtime: ScriptRuntime::JavaScript,
+                operation: ScriptOperation::Transform
+            }
+        })
+    ));
+}
+
+// Unit contract: an unavailable engine also stops the built-in transform path.
+// This guards against swallowing the error after the user profile has built.
+#[test]
+fn missing_builtin_engine_rejects_runtime_instead_of_logging_and_continuing() {
+    let profiles = Profiles::default();
+    let content = MapContentSource::from_pairs(&[]);
+    let mut runner = FakeScriptRunner::default();
+    runner.runs.insert(
+        "builtin-source".to_string(),
+        RunReply::MissingEngine(ScriptOperation::Transform),
+    );
+    let builtins = [BuiltinTransform {
+        name: "builtin".to_string(),
+        runtime: ScriptRuntime::JavaScript,
+        source: "builtin-source".to_string(),
+    }];
+    let ov = overrides();
+    let inputs = base_inputs(&profiles, ExecutionTarget::Bare, &ov, &builtins);
+
+    assert!(matches!(
+        execute(&inputs, &content, &runner),
+        Err(RuntimePipelineError::ExecuteScript {
+            source: ScriptExecutionError::StartEngine {
+                runtime: ScriptRuntime::JavaScript,
+                operation: ScriptOperation::Transform
+            }
+        })
+    ));
+}
+
+// Unit contract: the executor publishes a compact, parent-relative graph,
+// not an expanded copy. Every node must restore byte-equivalent ordered JSON
+// and the last main-line node must be the configuration actually built.
+// This would fail when direct ownership patches replay with reordered keys.
+#[test]
+fn runtime_pipeline_stored_graph_restores_every_node_and_its_final_config() {
+    let profiles = profiles_with(
+        Some("sub-a"),
+        &[],
+        &["tun", "dns"],
+        vec![config_file_item("sub-a", "sub-a.yaml", &[])],
+    );
+    let content = MapContentSource::from_pairs(&[(
+        "sub-a.yaml",
+        "mode: global\nunknown: removed\ntun: { stack: system }\nproxies: []\nrules: [MATCH,DIRECT]\n",
+    )]);
+    let ov = overrides();
+    let mut inputs = base_inputs(&profiles, ExecutionTarget::Selected(pid("sub-a")), &ov, &[]);
+    inputs.tun.enable = true;
+    let artifact = execute(&inputs, &content, &FakeScriptRunner::default()).unwrap();
+    crate::runtime::snapshot::assert_restore_matches_materialize(&artifact.graph);
+
+    let final_node = &artifact.graph.nodes[artifact.final_node as usize];
+    assert!(matches!(
+        final_node.tag,
+        OperatorTag::BuiltinStep {
+            step: BuiltinStepKind::Finalizing,
+            ..
+        }
+    ));
+    assert_eq!(
+        serde_json::to_string(&artifact.graph.restore(artifact.final_node).unwrap()).unwrap(),
+        serde_json::to_string(&artifact.final_config.to_json()).unwrap(),
+        "the stored final node must be the exact ordered generated config"
+    );
+
+    let filtered = artifact
+        .graph
+        .nodes
+        .iter()
+        .find(|node| {
+            matches!(
+                node.tag,
+                OperatorTag::BuiltinStep {
+                    step: BuiltinStepKind::WhitelistFieldFilter,
+                    ..
+                }
+            )
+        })
+        .unwrap();
+    assert!(matches!(
+        filtered.snapshot.payload,
+        crate::runtime::snapshot::SnapshotPayload::Delta(_)
+    ));
+    assert!(
+        filtered
+            .changed_fields
+            .as_ref()
+            .unwrap()
+            .contains("unknown")
+    );
+}
 #[test]
 fn missing_selected_content_is_strict_error() {
     let profiles = profiles_with(

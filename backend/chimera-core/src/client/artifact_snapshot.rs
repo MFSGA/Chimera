@@ -1,6 +1,6 @@
 //! Pure RuntimeArtifact mapping following ref client/artifact_snapshot.rs.
-//! Chimera keeps the legacy output layout and Mapping document until its
-//! RuntimeBuild and snapshot storage representation move together.
+//! Chimera retains the existing materialized Inspection wire projection while
+//! RuntimeArtifact itself now carries the reference keyframe/delta graph.
 
 use anyhow::{Context, Result};
 use chimera_config::{
@@ -132,6 +132,7 @@ pub fn artifact_to_snapshot_data(
     let RuntimeArtifact {
         final_config,
         graph,
+        final_node,
         step_logs,
         applied_fields,
         ..
@@ -142,6 +143,23 @@ pub fn artifact_to_snapshot_data(
         .as_mapping()
         .cloned()
         .context("final runtime config is not a mapping")?;
+    anyhow::ensure!(
+        matches!(
+            graph.nodes.get(final_node as usize).map(|node| &node.tag),
+            Some(
+                chimera_config::runtime::snapshot::OperatorTag::BuiltinStep {
+                    step: chimera_config::runtime::snapshot::BuiltinStepKind::Finalizing,
+                    ..
+                }
+            )
+        ),
+        "runtime inspection graph has no finalizing step"
+    );
+    // Compatibility boundary: the legacy inspection DTO keeps full per-node
+    // configs, while the executor and stored archive share ref's compact form.
+    let graph = graph
+        .materialize()
+        .context("runtime inspection graph cannot be restored")?;
     let output = map_postprocessing(&step_logs, profiles, builtin_names);
     let exists_keys = applied_fields.into_iter().collect();
     Ok(ArtifactSnapshotData {
@@ -149,20 +167,7 @@ pub fn artifact_to_snapshot_data(
         exists_keys,
         postprocessing_output: output,
         inspection: RuntimeInspectionData {
-            final_node: graph
-                .nodes
-                .iter()
-                .rposition(|node| {
-                    matches!(
-                        &node.tag,
-                        chimera_config::runtime::snapshot::OperatorTag::BuiltinStep {
-                            step: chimera_config::runtime::snapshot::BuiltinStepKind::Finalizing,
-                            ..
-                        }
-                    )
-                })
-                .context("runtime inspection graph has no finalizing step")?
-                as u32,
+            final_node,
             graph,
             step_logs,
         },
@@ -264,7 +269,7 @@ mod tests {
                 final_config.clone(),
             )
             .unwrap();
-        let graph = builder.build().unwrap();
+        let (graph, final_node) = builder.build_stored_with_current().unwrap();
         let fields: IndexSet<String> = ["mixed-port", "tun", "dns"]
             .into_iter()
             .map(str::to_owned)
@@ -273,6 +278,7 @@ mod tests {
             RuntimeArtifact {
                 final_config,
                 graph,
+                final_node,
                 step_logs: Vec::new(),
                 applied_fields: fields,
                 transform_failures: Vec::new(),
@@ -294,13 +300,15 @@ mod tests {
     #[test]
     fn an_artifact_without_finalizing_node_fails_instead_of_publishing() {
         let config = Arc::new(ConfigValue::try_from(serde_json::json!({"mode": "rule"})).unwrap());
-        let graph = ConfigSnapshotsBuilder::new_root(config.clone(), OperatorTag::BareRoot)
-            .build()
-            .unwrap();
+        let (graph, final_node) =
+            ConfigSnapshotsBuilder::new_root(config.clone(), OperatorTag::BareRoot)
+                .build_stored_with_current()
+                .unwrap();
         let error = artifact_to_snapshot_data(
             RuntimeArtifact {
                 final_config: config,
                 graph,
+                final_node,
                 step_logs: Vec::new(),
                 applied_fields: IndexSet::new(),
                 transform_failures: Vec::new(),
