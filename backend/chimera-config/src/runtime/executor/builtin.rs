@@ -12,9 +12,7 @@ use crate::runtime::{
 };
 
 #[cfg(test)]
-use super::value_util::{obj_get, obj_insert};
-#[cfg(test)]
-use super::{GuardInputs, TunFlavor, TunParams, error::RuntimePipelineError, plan};
+use super::{GuardInputs, TunParams, error::RuntimePipelineError, plan};
 #[cfg(test)]
 use crate::runtime::post_process::keep_inherited;
 
@@ -228,21 +226,14 @@ pub(super) fn final_field_filter(
     next
 }
 
-/// Apply the declarative plan's mandatory settings and then its defaults.
-/// Runs only after built-in transforms, retaining the original field order.
+/// Unit helper for inspecting one declarative ownership plan.
+#[cfg(test)]
 pub(super) fn apply_runtime_defaults(
     config: &ConfigValue,
     entries: &OwnershipEntries,
 ) -> ConfigValue {
     let (settings, _) = apply_settings(config, entries);
     apply_defaults(&settings, entries).0
-}
-
-/// The pre-plan finalizer, used to verify the new ownership path exactly.
-#[cfg(test)]
-pub(super) fn legacy_runtime_defaults(config: &ConfigValue, tun: &TunParams) -> ConfigValue {
-    let next = apply_tun(config, tun);
-    apply_cache(&next)
 }
 
 /// The last postprocessing pass changes only the top-level field ordering.
@@ -261,143 +252,6 @@ fn strip_chimera_client_fields(config: &ConfigValue) -> ConfigValue {
     let mut filtered = (**map).clone();
     filtered.retain(|key, _| key.as_ref() != "mmdb");
     ConfigValue::Object(Arc::new(filtered))
-}
-
-#[cfg(test)]
-fn object_of(value: Option<&ConfigValue>) -> ConfigObject {
-    value
-        .and_then(ConfigValue::as_object_arc)
-        .map(|map| (**map).clone())
-        .unwrap_or_default()
-}
-
-#[cfg(test)]
-fn append_default(map: &mut ConfigObject, key: &str, value: ConfigValue) {
-    if !map.contains_key(key) {
-        map.insert(Arc::from(key), value);
-    }
-}
-
-#[cfg(test)]
-fn string_value(text: &str) -> ConfigValue {
-    ConfigValue::String(Arc::from(text))
-}
-
-#[cfg(test)]
-fn string_list(items: &[&str]) -> ConfigValue {
-    ConfigValue::Array(Arc::from(
-        items
-            .iter()
-            .map(|item| string_value(item))
-            .collect::<Vec<_>>(),
-    ))
-}
-
-/// Mirrors enhance/tun.rs:26-109; `revise!` overwrites and `append!` fills
-/// missing keys only.
-#[cfg(test)]
-fn apply_tun(config: &ConfigValue, params: &TunParams) -> ConfigValue {
-    let existing = obj_get(config, "tun");
-    if !params.enable && existing.is_none() {
-        return config.clone();
-    }
-
-    let mut tun = object_of(existing);
-    tun.insert(Arc::from("enable"), ConfigValue::Bool(params.enable));
-    if params.enable {
-        match params.flavor {
-            TunFlavor::ClashRs => {
-                append_default(&mut tun, "device-id", string_value("dev://utun1989"));
-            }
-            TunFlavor::ChimeraClient => {
-                // These fields belong to Chimera Client's legacy core contract.
-                append_default(&mut tun, "device-id", string_value("dev://utun1989"));
-                append_default(&mut tun, "route-all", ConfigValue::Bool(true));
-                append_default(&mut tun, "dns-hijack", ConfigValue::Bool(true));
-                append_default(
-                    &mut tun,
-                    "so-mark",
-                    ConfigValue::Number(serde_json::Number::from(7777)),
-                );
-            }
-            TunFlavor::Standard { stack } => {
-                append_default(&mut tun, "stack", string_value(stack.as_ref()));
-                append_default(&mut tun, "dns-hijack", string_list(&["any:53"]));
-                append_default(&mut tun, "auto-detect-interface", ConfigValue::Bool(true));
-            }
-        }
-    }
-
-    let mut next = obj_insert(config, "tun", ConfigValue::Object(Arc::new(tun)));
-    if params.enable {
-        next = apply_tun_dns(&next, params.windows_fake_ip_filter, params.flavor);
-    }
-    next
-}
-
-#[cfg(test)]
-fn apply_tun_dns(
-    config: &ConfigValue,
-    windows_fake_ip_filter: bool,
-    flavor: TunFlavor,
-) -> ConfigValue {
-    let mut dns = object_of(obj_get(config, "dns"));
-    dns.insert(Arc::from("enable"), ConfigValue::Bool(true));
-    append_default(&mut dns, "enhanced-mode", string_value("fake-ip"));
-    if flavor == TunFlavor::ChimeraClient {
-        // Keep the Client DNS defaults separate from the reference core flavors.
-        append_default(
-            &mut dns,
-            "nameserver",
-            string_list(&[
-                "https://dns.alidns.com/dns-query",
-                "114.114.114.114",
-                "223.5.5.5",
-                "8.8.8.8",
-            ]),
-        );
-        append_default(
-            &mut dns,
-            "default-nameserver",
-            string_list(&["114.114.114.114", "1.1.1.1", "8.8.8.8"]),
-        );
-    } else {
-        append_default(&mut dns, "fake-ip-range", string_value("198.18.0.1/16"));
-        append_default(
-            &mut dns,
-            "nameserver",
-            string_list(&["114.114.114.114", "223.5.5.5", "8.8.8.8"]),
-        );
-        append_default(
-            &mut dns,
-            "fallback",
-            ConfigValue::Array(Arc::from(Vec::<ConfigValue>::new())),
-        );
-    }
-    if windows_fake_ip_filter {
-        append_default(
-            &mut dns,
-            "fake-ip-filter",
-            string_list(&[
-                "dns.msftncsi.com",
-                "www.msftncsi.com",
-                "www.msftconnecttest.com",
-            ]),
-        );
-    }
-    obj_insert(config, "dns", ConfigValue::Object(Arc::new(dns)))
-}
-
-/// Mirrors enhance/mod.rs:250-261: existing `profile` keys are not merged.
-#[cfg(test)]
-fn apply_cache(config: &ConfigValue) -> ConfigValue {
-    if obj_get(config, "profile").is_some() {
-        return config.clone();
-    }
-    let mut profile: ConfigObject = IndexMap::new();
-    profile.insert(Arc::from("store-selected"), ConfigValue::Bool(true));
-    profile.insert(Arc::from("store-fake-ip"), ConfigValue::Bool(false));
-    obj_insert(config, "profile", ConfigValue::Object(Arc::new(profile)))
 }
 
 /// Mirrors field.rs:115-147: known keys use HANDLE++OTHERS++DEFAULT order;

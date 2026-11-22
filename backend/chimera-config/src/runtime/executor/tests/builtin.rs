@@ -10,8 +10,8 @@ use crate::{
             TunFlavor, TunParams,
             builtin::{
                 apply_runtime_defaults, apply_tun_overrides_with_source, finalize,
-                finalize_for_core, known_fields, known_fields_for_core, legacy_runtime_defaults,
-                stage1_fields, stage1_fields_for_core, whitelist_filter,
+                finalize_for_core, known_fields, known_fields_for_core, stage1_fields,
+                stage1_fields_for_core, whitelist_filter,
             },
         },
         value::ConfigValue,
@@ -261,7 +261,8 @@ fn tun_enabled_standard_appends_defaults_and_dns() {
     let result = finalize(&config, &params, false).to_json();
 
     assert_eq!(result["tun"]["enable"], json!(true));
-    assert_eq!(result["tun"]["stack"], json!("system"));
+    // Ref owns the selected stack, overriding incompatible subscription fields.
+    assert_eq!(result["tun"]["stack"], json!("gvisor"));
     assert_eq!(result["tun"]["dns-hijack"], json!(["any:53"]));
     assert_eq!(result["tun"]["auto-route"], json!(true));
     assert_eq!(result["tun"]["auto-detect-interface"], json!(true));
@@ -510,52 +511,52 @@ fn cache_does_not_merge_into_existing_profile_key() {
 }
 
 #[test]
-fn planned_defaults_match_legacy_for_every_tun_flavor_and_profile_shape() {
+fn unified_plan_defaults_cover_tun_flavors_without_replacing_user_dns_values() {
     use crate::runtime::executor::plan;
 
-    let samples = [
-        json!({}),
-        json!({ "tun": { "stack": "system", "auto-route": "custom" } }),
-        json!({ "dns": { "enable": false, "nameserver": ["1.1.1.1"] } }),
-        json!({ "tun": { "enable": "custom", "device-id": "local" },
-                "dns": { "enhanced-mode": "redir-host", "fallback": ["9.9.9.9"] },
-                "profile": { "persist": true } }),
-        json!({ "tun": "invalid-table", "dns": "invalid-table", "profile": null }),
-        json!({ "proxies": [], "profile": { "store-selected": false },
-                "dns": { "default-nameserver": ["8.8.4.4"] } }),
-        json!({ "tun": { "route-all": false, "dns-hijack": false, "so-mark": 52 },
-                "dns": { "fake-ip-filter": ["local.test"] } }),
-    ];
     let flavors = [
         TunFlavor::ClashRs,
         TunFlavor::ChimeraClient,
         TunFlavor::Standard {
             stack: TunStack::Gvisor,
         },
-        TunFlavor::Standard {
-            stack: TunStack::System,
-        },
     ];
-    for enable in [false, true] {
-        for windows_fake_ip_filter in [false, true] {
-            for flavor in flavors {
-                let tun = TunParams {
-                    enable,
-                    overrides: TunOverrides::default(),
-                    flavor,
-                    windows_fake_ip_filter,
-                };
-                let planned = plan::final_defaults_ownership(&tun);
-                for sample in &samples {
-                    let source = value(sample.clone());
-                    let actual = apply_runtime_defaults(&source, &planned);
-                    let expected = legacy_runtime_defaults(&source, &tun);
-                    assert_eq!(
-                        serde_json::to_string(&actual.to_json()).unwrap(),
-                        serde_json::to_string(&expected.to_json()).unwrap(),
-                        "declarative defaults must retain exact old values and map order: {tun:?} {sample}"
-                    );
-                }
+    for flavor in flavors {
+        let tun = TunParams {
+            enable: true,
+            overrides: TunOverrides::default(),
+            flavor,
+            windows_fake_ip_filter: true,
+        };
+        let source = value(json!({
+            "tun": {"stack": "system", "route-all": false},
+            "dns": {"nameserver": ["1.1.1.1"], "enhanced-mode": "redir-host"},
+            "profile": {"store-selected": false}
+        }));
+        let config =
+            apply_runtime_defaults(&source, &plan::final_defaults_ownership(&tun)).to_json();
+        assert_eq!(config["tun"]["enable"], json!(true));
+        assert_eq!(config["dns"]["enable"], json!(true));
+        assert_eq!(config["dns"]["nameserver"], json!(["1.1.1.1"]));
+        assert_eq!(config["dns"]["enhanced-mode"], json!("redir-host"));
+        assert_eq!(config["profile"], json!({"store-selected": false}));
+        assert_eq!(
+            config["dns"]["fake-ip-filter"][0],
+            json!("dns.msftncsi.com")
+        );
+        match flavor {
+            TunFlavor::Standard { stack } => {
+                assert_eq!(config["tun"]["stack"], json!(stack.as_ref()));
+                assert_eq!(config["tun"]["dns-hijack"], json!(["any:53"]));
+            }
+            TunFlavor::ClashRs => {
+                assert_eq!(config["tun"]["device-id"], json!("dev://utun1989"));
+            }
+            TunFlavor::ChimeraClient => {
+                assert_eq!(config["tun"]["stack"], json!("system"));
+                assert_eq!(config["tun"]["route-all"], json!(false));
+                assert_eq!(config["tun"]["dns-hijack"], json!(true));
+                assert!(config["dns"].get("fake-ip-range").is_none());
             }
         }
     }

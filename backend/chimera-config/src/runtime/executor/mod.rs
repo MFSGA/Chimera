@@ -34,6 +34,7 @@ use crate::{
         ProfileDefinition, ProfileId, Profiles, ScriptRuntime, TransformDefinition, TransformKind,
     },
     runtime::{
+        post_process::{apply_defaults, apply_settings, keep_inherited},
         snapshot::{
             BuiltinStepKind, ConfigExecutionRole, ConfigSnapshotsBuilder, OperatorTag,
             SnapshotNodeKey,
@@ -302,57 +303,40 @@ pub fn execute(
         .map(|map| map.keys().map(|key| key.to_ascii_lowercase()).collect())
         .unwrap_or_default();
 
-    let stage1 = builtin::stage1_fields_for_core(&inputs.profiles.valid, inputs.core_supports_mmdb);
-    let prefilter = working.clone();
-    let (filtered, patch) = if inputs.whitelist_enabled {
-        builtin::filter_fields(&working, &stage1)
-    } else {
-        ((*working).clone(), json_patch::Patch(Vec::new()))
-    };
-    working = Arc::new(filtered);
+    // Reference tail: field filter -> restore inherited values -> unified
+    // managed settings -> defaults -> builtin scripts. One ownership plan
+    // decides Guard, TUN, DNS and profile cache together.
     let step = |step| OperatorTag::BuiltinStep {
         selected_profile_id: selected.clone(),
         step,
     };
-    builder.push_delta(
-        step(BuiltinStepKind::WhitelistFieldFilter),
-        working.clone(),
-        patch,
-    )?;
-
-    // Preserve Chimera's existing guard -> TUN processing order. Independent
-    // snapshots expose the inherited and managed effects without changing the
-    // configuration the built-in scripts receive.
     let ownership = plan::ownership(&inputs.guard, &inputs.tun);
-    let (inherited, patch) =
-        crate::runtime::post_process::keep_inherited(&working, &prefilter, &ownership.guard);
-    working = Arc::new(inherited);
-    builder.push_delta(step(BuiltinStepKind::KeepUnmanaged), working.clone(), patch)?;
+    if inputs.whitelist_enabled {
+        let stage1 =
+            builtin::stage1_fields_for_core(&inputs.profiles.valid, inputs.core_supports_mmdb);
+        let (filtered, patch) = builtin::filter_fields(&working, &stage1);
+        let filtered = Arc::new(filtered);
+        builder.push_delta(
+            step(BuiltinStepKind::WhitelistFieldFilter),
+            filtered.clone(),
+            patch,
+        )?;
+        let (next, patch) = keep_inherited(&filtered, &working, &ownership);
+        working = Arc::new(next);
+        builder.push_delta(step(BuiltinStepKind::KeepUnmanaged), working.clone(), patch)?;
+    }
 
-    let (managed, patch) = crate::runtime::post_process::apply_settings(&working, &ownership.guard);
-    working = Arc::new(managed);
+    let (next, patch) = apply_settings(&working, &ownership);
+    working = Arc::new(next);
     builder.push_delta(
         step(BuiltinStepKind::ManagedSettings),
         working.clone(),
         patch,
     )?;
 
-    let (inherited, patch) =
-        crate::runtime::post_process::keep_inherited(&working, &prefilter, &ownership.tun);
-    working = Arc::new(inherited);
-    builder.push_delta(
-        step(BuiltinStepKind::TunKeepUnmanaged),
-        working.clone(),
-        patch,
-    )?;
-
-    let (managed, patch) = crate::runtime::post_process::apply_settings(&working, &ownership.tun);
-    working = Arc::new(managed);
-    builder.push_delta(
-        step(BuiltinStepKind::TunManagedSettings),
-        working.clone(),
-        patch,
-    )?;
+    let (next, patch) = apply_defaults(&working, &ownership);
+    working = Arc::new(next);
+    builder.push_delta(step(BuiltinStepKind::Defaults), working.clone(), patch)?;
 
     for (index, builtin_transform) in inputs.builtin_transforms.iter().enumerate() {
         let mut entries = Vec::new();
@@ -391,12 +375,6 @@ pub fn execute(
         inputs.core_supports_mmdb,
     ));
     builder.push(step(BuiltinStepKind::FinalFieldFilter), working.clone())?;
-
-    working = Arc::new(builtin::apply_runtime_defaults(
-        &working,
-        &ownership.final_defaults,
-    ));
-    builder.push(step(BuiltinStepKind::Defaults), working.clone())?;
 
     if inputs.expand_include_all {
         let (next, entries) = include_all::expand_include_all(&working);
