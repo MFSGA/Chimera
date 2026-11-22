@@ -1428,3 +1428,9 @@ backend/Cargo.toml -p chimera --lib core::clash::proxies::tests:: -- --nocapture
 - 真实 48 条 Core TCP/HTTP 流关闭后从原生 Traffic Store 查询 Close history，实际点击 Closed/All 标签、右键 View Details，并验证历史行无 Close Connection 能力。Linux E2E 本轮 5+4+3+1=13/13；未执行跨平台 Native 授权或双击验证。
 
 - **最新 Reconciler 基线回归**：安全快进至 0f838d75 后重新构建 Tauri Native E2E，真实 live 5/5、Main 4/4、Legacy 3/3、detail subscription 1/1 总共 13/13 通过。跨模块重构后需验证 Profile 激活与真实 Core 流程，而非沿用旧版 SHA 的截图或测试结果。
+
+### LESSON-20261122-001：CI 中的绝对路径测试必须使用平台本机路径
+
+- 证据：CI Windows Lint 的 Test backend workspace 在提交 `322bee21`（run `45067708384`）实际出现 `migration_child::tests::rejects_unexpected_args_and_child_paths_outside_absolute_roots` 失败：测试原先把 `/tmp/config`、`/tmp/data` 和 `/tmp/result` 当作合法绝对路径。Windows 的 `Path::is_absolute` 正确拒绝这些 Unix 式路径；其余 1211 项 Tauri 单测通过，不是生产安全检查应该降级。
+- 修复原则：只修改测试输入，使用 `tempfile::tempdir()` 在当前运行平台构造绝对路径，同时检查任一相对路径被拒绝、三个绝对参数可解析且解析结果不失真。保留生产 `PathBuf::is_absolute()`，不为 CI 关闭路径校验。
+- 验证边界：macOS 上目标 Rust 测试通过；Windows runner 的回归必须等修复提交触发新的 CI 后核对。上一轮 E2E smoke 的 legacy Profile 创建卡在 UI loading，虽然日志中可看到后续 CoreLifecycle 版本冲突，但目前无法证实根因，须继续使用失败时刻截图、原生日志和测试阶段标记定位，不绕开真实创建流程或把测试超时调高当成修复。
