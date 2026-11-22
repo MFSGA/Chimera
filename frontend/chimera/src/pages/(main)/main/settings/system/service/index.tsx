@@ -1,5 +1,6 @@
 import { useIsAppImage } from '@chimera/interface';
 import { createFileRoute } from '@tanstack/react-router';
+import { PageTitle } from '@/components/page-title';
 import { OS } from '@/consts';
 import * as m from '@/paraglide/messages';
 import AutoLaunchSwitch from '../_modules/auto-launch-switch';
@@ -14,10 +15,15 @@ import {
   SettingsGroup,
   SettingsLabel,
 } from '../../_modules/settings-card';
-import { SettingsTitle } from '../../_modules/settings-title';
 
 export const Route = createFileRoute('/(main)/main/settings/system/service/')({
   component: RouteComponent,
+  staticData: {
+    crumb: {
+      title: () => m.settings_label_service(),
+      parent: () => ({ to: '/main/settings' }),
+    },
+  },
 });
 
 const SystemService = () => {
@@ -83,7 +89,7 @@ function RouteComponent() {
 
   return (
     <>
-      <SettingsTitle>{m.settings_label_service()}</SettingsTitle>
+      <PageTitle legacySlot="settings-title" />
 
       <div className="space-y-4 px-4 pb-4">
         {!isAppImage.data && <SystemService />}

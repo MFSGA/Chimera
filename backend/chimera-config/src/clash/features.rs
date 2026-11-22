@@ -13,7 +13,10 @@ use strum::VariantArray;
 
 use crate::{
     application::ClashCore,
-    clash::config::tun_stack::{TunCongestionController, TunStack},
+    clash::config::{
+        dns::{DnsKey, EnhancedMode, FakeIpFilterMode},
+        tun_stack::{TunCongestionController, TunStack},
+    },
     runtime::value::{ConfigObject, ConfigValue},
 };
 
@@ -41,6 +44,12 @@ impl<T: VariantArray + Copy> FieldSupport<T> {
         } else {
             Self::Values(values)
         }
+    }
+}
+
+impl<T> FieldSupport<T> {
+    pub fn is_ignored(&self) -> bool {
+        matches!(self, Self::Ignored)
     }
 }
 
@@ -175,6 +184,41 @@ impl ClashCore {
     }
 }
 
+/// DNS keys and value forms understood by the selected core.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, specta::Type)]
+pub struct DnsFeatures {
+    pub keys: FieldSupport<DnsKey>,
+    pub enhanced_mode: FieldSupport<EnhancedMode>,
+    pub fake_ip_filter_mode: FieldSupport<FakeIpFilterMode>,
+    /// Clash-rs accepts only a single target under policy/hosts.
+    pub list_values: bool,
+    pub fallback_filter_geosite: bool,
+}
+
+impl ClashCore {
+    pub fn dns_features(self) -> DnsFeatures {
+        let mihomo = matches!(
+            self,
+            Self::Mihomo | Self::MihomoAlpha | Self::ChimeraClient | Self::ChimeraClientAlpha
+        );
+        DnsFeatures {
+            keys: FieldSupport::from_matrix(|key| reads_dns_key(self, key)),
+            enhanced_mode: FieldSupport::from_matrix(|mode| reads_enhanced_mode(self, mode)),
+            fake_ip_filter_mode: FieldSupport::from_matrix(|mode| {
+                mihomo
+                    && matches!(
+                        mode,
+                        FakeIpFilterMode::Blacklist
+                            | FakeIpFilterMode::Whitelist
+                            | FakeIpFilterMode::Rule
+                    )
+            }),
+            list_values: mihomo,
+            fallback_filter_geosite: mihomo,
+        }
+    }
+}
+
 /// mihomo parses `tun.stack` case-insensitively into gVisor, System, Mixed and
 /// Mips (`constant/tun.go`; Mips since v1.19.31, commit `ab405bad`) and fails
 /// the whole config on anything else.
@@ -212,6 +256,43 @@ fn reads_tun_congestion_controller(core: ClashCore, controller: TunCongestionCon
             ClashPremium | ClashRs | ClashRsAlpha | ChimeraClient | ChimeraClientAlpha,
             Cubic | Reno | Bbr | Bbr3,
         ) => false,
+    }
+}
+
+fn reads_enhanced_mode(core: ClashCore, _mode: EnhancedMode) -> bool {
+    !matches!(core, ClashCore::ClashPremium)
+}
+
+fn reads_dns_key(core: ClashCore, key: DnsKey) -> bool {
+    use DnsKey::*;
+    let mihomo = matches!(
+        core,
+        ClashCore::Mihomo
+            | ClashCore::MihomoAlpha
+            | ClashCore::ChimeraClient
+            | ClashCore::ChimeraClientAlpha
+    );
+    let clash_rs = matches!(core, ClashCore::ClashRs | ClashCore::ClashRsAlpha);
+    match key {
+        Enable
+        | Listen
+        | EnhancedMode
+        | FakeIpRange
+        | FakeIpFilter
+        | UseHosts
+        | DefaultNameserver
+        | Nameserver
+        | Fallback
+        | ProxyServerNameserver
+        | NameserverPolicy
+        | FallbackFilter => mihomo || clash_rs,
+        Ipv6 | RespectRules => mihomo || clash_rs,
+        FakeIpRange6
+        | FakeIpFilterMode
+        | UseSystemHosts
+        | PreferH3
+        | DirectNameserver
+        | DirectNameserverFollowPolicy => mihomo,
     }
 }
 
@@ -346,5 +427,33 @@ mod tests {
                 "congestion_controller": { "kind": "values", "value": ["cubic", "reno", "bbr", "bbr3"] },
             } })
         );
+    }
+
+    #[test]
+    fn every_supported_core_has_dns_features() {
+        for core in [
+            ClashCore::Mihomo,
+            ClashCore::MihomoAlpha,
+            ClashCore::ChimeraClient,
+            ClashCore::ChimeraClientAlpha,
+            ClashCore::ClashRs,
+            ClashCore::ClashRsAlpha,
+        ] {
+            assert!(!core.dns_features().keys.is_ignored(), "{core}");
+        }
+        assert!(ClashCore::ClashPremium.dns_features().keys.is_ignored());
+    }
+
+    #[test]
+    fn clash_rs_cannot_receive_mihomo_only_dns_keys() {
+        let rs = ClashCore::ClashRs.dns_features();
+        assert!(!rs.keys.supports(&DnsKey::PreferH3));
+        assert!(!rs.keys.supports(&DnsKey::FakeIpFilterMode));
+        assert!(!rs.list_values);
+        assert!(!rs.fallback_filter_geosite);
+        let mihomo = ClashCore::Mihomo.dns_features();
+        assert!(mihomo.keys.supports(&DnsKey::PreferH3));
+        assert!(mihomo.keys.supports(&DnsKey::FakeIpFilterMode));
+        assert!(mihomo.list_values);
     }
 }

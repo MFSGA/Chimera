@@ -11,7 +11,7 @@ use std::{
 
 use anyhow::{Context, Result};
 use chimera_ipc::api::core::v2::CoreApiConnection;
-use clash_api::{ProviderName, Proxy, ProxyName, ProxyProvider};
+use clash_api::{DnsQuery, DnsResponse, ProviderName, Proxy, ProxyName, ProxyProvider};
 use futures_util::{Stream, StreamExt};
 use indexmap::IndexMap;
 use serde::Serialize;
@@ -260,6 +260,21 @@ impl ApiClient {
 
     pub async fn version(&self) -> ApiResult<clash_api::Version> {
         self.execute(DEFAULT_API_TIMEOUT, self.client.version())
+            .await
+    }
+
+    pub async fn dns_query(&self, query: &DnsQuery) -> ApiResult<DnsResponse> {
+        self.execute(DEFAULT_API_TIMEOUT, self.client.dns_query(query))
+            .await
+    }
+
+    pub async fn flush_dns_cache(&self) -> ApiResult<()> {
+        self.execute(DEFAULT_API_TIMEOUT, self.client.flush_dns_cache())
+            .await
+    }
+
+    pub async fn flush_fake_ip_cache(&self) -> ApiResult<()> {
+        self.execute(DEFAULT_API_TIMEOUT, self.client.flush_fake_ip_cache())
             .await
     }
 

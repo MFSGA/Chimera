@@ -7,16 +7,16 @@ use chimera_config::{
     application::{ChimeraAppConfig, ClashCore},
     clash::{
         config::{
-            ClashConfig, TransparentProxyMode, TransparentProxyValidationError,
+            ClashConfig, TransparentProxyMode, TransparentProxyValidationError, dns::render_hosts,
             tun_stack::SelectedTunStack,
         },
         features::{FieldSupport, TunFeatures, UnsupportedConfigValue},
     },
     profile::Profiles,
     runtime::executor::{
-        BuiltinTransform, ExecutionTarget, GuardInputs, ProfileContentSource, ResolvedPortBindings,
-        RuntimeArtifact, RuntimePipelineError, RuntimePipelineInputs, ScriptRunner,
-        TransformFailure, TunFlavor, TunParams, TunStackWrite, execute,
+        BuiltinTransform, DnsParams, ExecutionTarget, GuardInputs, ProfileContentSource,
+        ResolvedPortBindings, RuntimeArtifact, RuntimePipelineError, RuntimePipelineInputs,
+        ScriptRunner, TransformFailure, TunFlavor, TunParams, TunStackWrite, execute,
     },
     runtime::snapshot::OperatorTag,
 };
@@ -47,6 +47,8 @@ pub enum RuntimeBuildError {
     TransparentProxyRequiresServiceMode,
     #[error("the selected core does not support {values:?}")]
     UnsupportedConfigValues { values: Vec<UnsupportedConfigValue> },
+    #[error("DNS/Hosts takeover is not yet supported for the selected core: {0:?}")]
+    UnsupportedDnsCore(chimera_config::application::ClashCore),
     #[error(transparent)]
     Pipeline(#[from] RuntimePipelineError),
     #[error("runtime candidate contains failed transforms: {failures:?}")]
@@ -157,6 +159,31 @@ impl RuntimeBuilder {
             .clash
             .validate_transparent_proxy(input.app.core, cfg!(target_os = "linux"))?;
 
+        let features = input.app.core.dns_features();
+        if features.keys.is_ignored()
+            && (input.clash.managed_dns().is_some() || input.clash.managed_hosts().is_some())
+        {
+            return Err(RuntimeBuildError::UnsupportedDnsCore(input.app.core));
+        }
+
+        let mut dns_warnings = Vec::new();
+        let dns_table = input
+            .clash
+            .managed_dns()
+            .and_then(|dns| dns.render(&features))
+            .map(|rendered| {
+                dns_warnings.extend(rendered.warnings);
+                rendered.table
+            });
+        let hosts_table = input
+            .clash
+            .managed_hosts()
+            .and_then(|hosts| render_hosts(hosts, &features))
+            .map(|rendered| {
+                dns_warnings.extend(rendered.warnings);
+                rendered.table
+            });
+
         let target = match &input.profiles.current {
             Some(uid) => ExecutionTarget::Selected(uid.clone()),
             None => ExecutionTarget::Bare,
@@ -182,6 +209,11 @@ impl RuntimeBuilder {
                 overrides: input.clash.tun,
                 flavor: derive_tun_flavor(input.app.core, input.clash.selected_tun_stack()),
                 windows_fake_ip_filter: cfg!(windows),
+            },
+            dns: DnsParams {
+                dns: dns_table,
+                hosts: hosts_table,
+                warnings: dns_warnings,
             },
             expand_include_all: input.clash.expand_include_all,
             builtin_transforms,

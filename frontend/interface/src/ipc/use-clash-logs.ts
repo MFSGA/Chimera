@@ -7,7 +7,8 @@ export type ClashLog = {
 };
 
 export const useClashLogs = () => {
-  const { logs, isLoading, error, clearHistory } = useClashWSContext();
+  const { logs, isLoading, error, clearHistory, retrySnapshot } =
+    useClashWSContext();
 
   const clean = {
     mutateAsync: () => clearHistory('logs'),
@@ -18,5 +19,6 @@ export const useClashLogs = () => {
     isLoading,
     error,
     clean,
+    retry: retrySnapshot,
   };
 };

@@ -117,6 +117,26 @@ impl ChimeraClient {
         })
     }
 
+    pub async fn clash_api_query_dns(
+        &self,
+        name: String,
+        record_type: String,
+    ) -> Result<clash_api::DnsResponse> {
+        let record_type = clash_api::DnsRecordType::new(record_type)?;
+        let query = clash_api::DnsQuery::new(name, record_type)?;
+        Ok(self.clash_api_client().await?.dns_query(&query).await?)
+    }
+
+    pub async fn clash_api_flush_dns_cache(&self) -> Result<()> {
+        self.clash_api_client().await?.flush_dns_cache().await?;
+        Ok(())
+    }
+
+    pub async fn clash_api_flush_fake_ip_cache(&self) -> Result<()> {
+        self.clash_api_client().await?.flush_fake_ip_cache().await?;
+        Ok(())
+    }
+
     pub async fn clash_rules(&self) -> Result<RulesRes> {
         let rules = self.clash_api_client().await?.rules().await?;
         Ok(RulesRes {

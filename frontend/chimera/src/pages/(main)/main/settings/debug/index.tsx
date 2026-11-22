@@ -1,5 +1,6 @@
 import { createFileRoute } from '@tanstack/react-router';
 import { AnimatePresence } from 'motion/react';
+import { PageTitle } from '@/components/page-title';
 import * as m from '@/paraglide/messages';
 import {
   SettingsCard,
@@ -7,7 +8,6 @@ import {
   SettingsGroup,
   SettingsLabel,
 } from '../_modules/settings-card';
-import { SettingsTitle } from '../_modules/settings-title';
 import AdvanceToolsSwitch from './_modules/advance-tools-switch';
 import BlockTaskViewer from './_modules/block-task-viewer';
 import { useDebugContext } from './_modules/debug-provider';
@@ -17,6 +17,7 @@ import WindowDebug from './_modules/window-debug';
 
 export const Route = createFileRoute('/(main)/main/settings/debug/')({
   component: RouteComponent,
+  staticData: { crumb: { title: () => m.settings_label_debug() } },
 });
 
 const PathUtilsSettings = () => {
@@ -62,7 +63,7 @@ const AdvanceToolsSettings = () => {
 function RouteComponent() {
   return (
     <>
-      <SettingsTitle>{m.settings_label_debug()}</SettingsTitle>
+      <PageTitle legacySlot="settings-title" />
 
       <div className="space-y-4 px-4 pb-4">
         <PathUtilsSettings />

@@ -1,15 +1,21 @@
 import { createFileRoute } from '@tanstack/react-router';
+import { PageTitle } from '@/components/page-title';
 import * as m from '@/paraglide/messages';
 import LogLevelSelector from '../_modules/log-level-selector';
 import ManagedGuardFieldSelector from '../_modules/managed-guard-field-selector';
 import { SettingsGroup, SettingsLabel } from '../../_modules/settings-card';
-import { SettingsTitle } from '../../_modules/settings-title';
 import BreakWhenModeChangeSwitch from '../../chimera/_modules/break-when-mode-change-switch';
 import BreakWhenProfileChangeSwitch from '../../chimera/_modules/break-when-profile-change-switch';
 import BreakWhenProxyChangeSwitch from '../../chimera/_modules/break-when-proxy-change-switch';
 
 export const Route = createFileRoute('/(main)/main/settings/clash/core/')({
   component: RouteComponent,
+  staticData: {
+    crumb: {
+      title: () => m.settings_label_core_settings(),
+      parent: () => ({ to: '/main/settings' }),
+    },
+  },
 });
 
 const CoreBehaviorSettings = () => (
@@ -37,7 +43,7 @@ const ConnectionSettings = () => (
 function RouteComponent() {
   return (
     <>
-      <SettingsTitle>{m.settings_label_core_settings()}</SettingsTitle>
+      <PageTitle legacySlot="settings-title" />
       <div className="space-y-4 px-4 pb-4">
         <CoreBehaviorSettings />
         <ConnectionSettings />

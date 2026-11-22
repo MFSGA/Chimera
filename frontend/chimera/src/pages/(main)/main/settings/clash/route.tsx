@@ -1,4 +1,5 @@
 import { createFileRoute, Outlet, useMatchRoute } from '@tanstack/react-router';
+import { PageTitle } from '@/components/page-title';
 import * as m from '@/paraglide/messages';
 import {
   SettingsCard,
@@ -6,7 +7,6 @@ import {
   SettingsGroup,
   SettingsLabel,
 } from '../_modules/settings-card';
-import { SettingsTitle } from '../_modules/settings-title';
 import AllowLanSwitch from './_modules/allow-lan-switch';
 import CoreManagerCard from './_modules/core-manager-card';
 import ExpandIncludeAllSwitch from './_modules/expand-include-all-switch';
@@ -23,6 +23,7 @@ import TunStackSelector from './_modules/tun-stack-selector';
 
 export const Route = createFileRoute('/(main)/main/settings/clash')({
   component: RouteComponent,
+  staticData: { crumb: { title: () => m.settings_clash_settings_title() } },
 });
 
 const PatchSettings = () => {
@@ -137,7 +138,7 @@ function RouteComponent() {
 
   return (
     <>
-      <SettingsTitle>{m.settings_clash_settings_title()}</SettingsTitle>
+      <PageTitle legacySlot="settings-title" />
 
       <div className="space-y-4 px-4 pb-4">
         <PatchSettings />

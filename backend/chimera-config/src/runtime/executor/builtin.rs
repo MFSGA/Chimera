@@ -6,10 +6,9 @@ use std::sync::Arc;
 use indexmap::IndexMap;
 use json_patch::{Patch, PatchOperation, RemoveOperation, jsonptr::PointerBuf};
 
-use crate::runtime::{
-    post_process::{OwnershipEntries, apply_defaults, apply_settings},
-    value::{ConfigObject, ConfigValue},
-};
+#[cfg(test)]
+use crate::runtime::post_process::{OwnershipEntries, apply_defaults, apply_settings};
+use crate::runtime::value::{ConfigObject, ConfigValue};
 
 #[cfg(test)]
 use super::{GuardInputs, TunParams, error::RuntimePipelineError, plan};

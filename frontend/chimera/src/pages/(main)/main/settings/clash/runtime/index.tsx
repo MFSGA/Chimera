@@ -1,4 +1,5 @@
 import { createFileRoute } from '@tanstack/react-router';
+import { PageTitle } from '@/components/page-title';
 import * as m from '@/paraglide/messages';
 import ExpandIncludeAllSwitch from '../_modules/expand-include-all-switch';
 import FieldFilterCard from '../_modules/field-filter-card';
@@ -9,11 +10,16 @@ import {
   SettingsGroup,
   SettingsLabel,
 } from '../../_modules/settings-card';
-import { SettingsTitle } from '../../_modules/settings-title';
 import EnableBuiltinEnhancedSwitch from '../../chimera/_modules/enable-builtin-enhanced-switch';
 
 export const Route = createFileRoute('/(main)/main/settings/clash/runtime/')({
   component: RouteComponent,
+  staticData: {
+    crumb: {
+      title: () => m.settings_label_runtime(),
+      parent: () => ({ to: '/main/settings' }),
+    },
+  },
 });
 
 const FieldFilterSettings = () => (
@@ -45,7 +51,7 @@ const ProfileProcessingSettings = () => (
 function RouteComponent() {
   return (
     <>
-      <SettingsTitle>{m.settings_label_runtime()}</SettingsTitle>
+      <PageTitle legacySlot="settings-title" />
       <div className="space-y-4 px-4 pb-4">
         <FieldFilterSettings />
         <ProfileProcessingSettings />

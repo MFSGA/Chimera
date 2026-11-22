@@ -7,12 +7,13 @@ use chimera_config::{
     clash::config::{
         ClashConfig, ClashControlChannel,
         clash_strategy::port::{ExternalControllerStrategy, PortStrategy},
+        dns::{DnsSettings, OneOrMany},
         overrides::{ClashGuardOverrides, TunOverrides},
         tun_stack::TunStack,
     },
     profile::{ManagedProfilePath, ProfileDefinition, ProfileId, Profiles},
 };
-use indexmap::IndexSet;
+use indexmap::{IndexMap, IndexSet};
 
 use crate::state::profiles::ProfilesActor;
 
@@ -113,6 +114,8 @@ struct ClashRuntimeInputs<'a> {
     external_controller: &'a ExternalControllerStrategy,
     control_channel: ClashControlChannel,
     disable_http_controller: bool,
+    dns: Option<&'a DnsSettings>,
+    hosts: Option<&'a IndexMap<String, OneOrMany>>,
 }
 
 /// The fields of `clash` the runtime reads, and nothing else.
@@ -136,6 +139,8 @@ fn clash_runtime_inputs(clash: &ClashConfig) -> ClashRuntimeInputs<'_> {
         external_controller: &clash.external_controller,
         control_channel: clash.clash_control_channel,
         disable_http_controller: clash.clash_ipc_disable_http_controller,
+        dns: clash.managed_dns(),
+        hosts: clash.managed_hosts(),
     }
 }
 
@@ -266,6 +271,35 @@ mod tests {
         assert_ne!(clash_target(&before), clash_target(&after));
         after.enable_tun_mode = before.enable_tun_mode;
         assert!(!reaches_runtime(&before, &after, &[]));
+    }
+
+    #[test]
+    fn dns_and_hosts_drafts_do_not_rebuild_until_takeover() {
+        use chimera_config::clash::config::dns::{ControlSource, OneOrMany};
+
+        let before = ClashConfig::default();
+        let mut after = before.clone();
+        after.dns.nameserver = vec!["https://example.test/dns-query".into()];
+        after
+            .hosts
+            .insert("local.test".into(), OneOrMany::One("127.0.0.1".into()));
+        assert!(!reaches_runtime(&before, &after, &[]));
+        assert_eq!(clash_target(&before), clash_target(&after));
+
+        after.dns_control = ControlSource::Chimera;
+        assert!(reaches_runtime(&before, &after, &[]));
+        assert_ne!(clash_target(&before), clash_target(&after));
+
+        let mut edited = after.clone();
+        edited.dns.enable = false;
+        assert!(reaches_runtime(&after, &edited, &[]));
+
+        edited = after.clone();
+        edited.hosts_control = ControlSource::Chimera;
+        assert!(reaches_runtime(&after, &edited, &[]));
+        let mut new_hosts = edited.clone();
+        new_hosts.hosts.clear();
+        assert!(reaches_runtime(&edited, &new_hosts, &[]));
     }
 
     #[test]

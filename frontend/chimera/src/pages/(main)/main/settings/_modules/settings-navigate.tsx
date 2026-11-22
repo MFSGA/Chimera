@@ -6,10 +6,11 @@ import {
   NavigationListItemText,
   type NavigationListItemColor,
 } from '@chimera/ui/navigation-list';
-import { Link, useLinkProps } from '@tanstack/react-router';
+import { Link, useLinkProps, useMatchRoute } from '@tanstack/react-router';
 import DataObjectRounded from '~icons/material-symbols/data-object-rounded';
 import DeployedCodeRounded from '~icons/material-symbols/deployed-code-rounded';
 import DesktopWindowsRounded from '~icons/material-symbols/desktop-windows-rounded';
+import DnsRounded from '~icons/material-symbols/dns-rounded';
 import FrameBugOutlineRounded from '~icons/material-symbols/frame-bug-outline-rounded';
 import KeyboardRounded from '~icons/material-symbols/keyboard-rounded';
 import LanRounded from '~icons/material-symbols/lan-rounded';
@@ -44,6 +45,7 @@ function SettingsNavigationItem({
   label: string;
   description: string;
 }) {
+  const matchRoute = useMatchRoute();
   const linkProps = useLinkProps(
     {
       ...props,
@@ -51,11 +53,17 @@ function SettingsNavigationItem({
     } as Parameters<typeof useLinkProps>[0],
     ref as ForwardedRef<Element>,
   );
-  const isActive = linkProps['aria-current'] === 'page';
+  const isActive = Boolean(
+    matchRoute({
+      to: props.to,
+      fuzzy: !props.activeOptions?.exact,
+      includeSearch: false,
+    }),
+  );
 
   return (
     <NavigationListItem active={isActive} asChild>
-      <a {...linkProps}>
+      <a {...linkProps} aria-current={isActive ? 'page' : undefined}>
         {image ? (
           <NavigationListItemIcon image>{icon}</NavigationListItemIcon>
         ) : (
@@ -109,6 +117,13 @@ export default function SettingsNavigate() {
           icon={<LanRounded />}
           label={m.settings_label_network()}
           description={m.settings_label_network_description()}
+        />
+        <SettingsNavigationItem
+          to="/main/settings/clash/dns"
+          color="purple"
+          icon={<DnsRounded />}
+          label={m.dns_title()}
+          description={m.dns_nav_description()}
         />
         <SettingsNavigationItem
           to="/main/settings/clash/control"

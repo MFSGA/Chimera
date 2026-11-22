@@ -1,8 +1,8 @@
 import { createFileRoute } from '@tanstack/react-router';
+import { PageTitle } from '@/components/page-title';
 import * as m from '@/paraglide/messages';
 import LightenAnimationEffectsSwitch from '../_modules/lighten-animation-effects-switch';
 import { SettingsGroup, SettingsLabel } from '../../_modules/settings-card';
-import { SettingsTitle } from '../../_modules/settings-title';
 import CustomCssCard from '../../user-interface/_modules/custom-css-card';
 import LanguageSelector from '../../user-interface/_modules/language-selector';
 import ThemeColorConfig from '../../user-interface/_modules/theme-color-config';
@@ -12,6 +12,12 @@ export const Route = createFileRoute(
   '/(main)/main/settings/chimera/interface/',
 )({
   component: RouteComponent,
+  staticData: {
+    crumb: {
+      title: () => m.settings_user_interface_title(),
+      parent: () => ({ to: '/main/settings' }),
+    },
+  },
   head: () => ({
     meta: [{ title: m.settings_user_interface_title() }],
   }),
@@ -53,7 +59,7 @@ const CustomCssSettings = () => (
 function RouteComponent() {
   return (
     <>
-      <SettingsTitle>{m.settings_user_interface_title()}</SettingsTitle>
+      <PageTitle legacySlot="settings-title" />
       <div className="space-y-4 px-4 pb-4">
         <LanguageSettings />
         <ThemeModeSettings />

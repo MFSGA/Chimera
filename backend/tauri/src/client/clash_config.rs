@@ -1015,6 +1015,8 @@ fn should_reconcile_clash_patch(
     crate::state::mutation::impact::reaches_runtime(before, after, &[])
         || crate::client::application_workflow::impact::RequestedRuntimeFields::of_clash(patch)
             .names_any()
+        || (patch.dns.is_some() && after.managed_dns().is_some())
+        || (patch.hosts.is_some() && after.managed_hosts().is_some())
 }
 
 #[cfg(test)]
@@ -1376,6 +1378,169 @@ mod tests {
             &runtime_changed,
             &runtime_patch
         ));
+    }
+
+    #[tokio::test]
+    async fn profile_owned_dns_draft_persists_without_core_check_or_apply() {
+        use chimera_config::clash::config::dns::OneOrMany;
+        use indexmap::IndexMap;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = Utf8PathBuf::from_path_buf(dir.path().join("clash-config.yaml")).unwrap();
+        let client = ClashConfigClient::new(
+            path.clone(),
+            ClashConfig::default(),
+            Arc::new(RecordingBridge {
+                mirrored_tun: Arc::new(Mutex::new(None)),
+            }),
+        )
+        .await
+        .unwrap();
+
+        let before = client.get_snapshot().await.unwrap();
+        let mut dns = before.state.dns.clone();
+        dns.nameserver = vec!["https://dns.example.test/dns-query".into()];
+        let hosts = IndexMap::from([("internal.test".into(), OneOrMany::One("192.0.2.20".into()))]);
+        let mut patch = ClashConfig::new_empty_patch();
+        patch.dns = Some(dns.clone());
+        patch.hosts = Some(hosts.clone());
+
+        let report = client
+            .patch_typed_config_with(
+                patch,
+                |_candidate| async {
+                    panic!("an inactive DNS draft must not request a core candidate check");
+                    #[allow(unreachable_code)]
+                    Ok(())
+                },
+                || async {
+                    panic!("an inactive DNS draft must not restart the core");
+                    #[allow(unreachable_code)]
+                    Ok(())
+                },
+                || Ok(()),
+            )
+            .await
+            .unwrap();
+
+        assert!(!report.reaches_runtime);
+        assert_eq!(report.snapshot.version, before.version + 1);
+        assert_eq!(report.snapshot.state.dns_control, before.state.dns_control);
+        assert_eq!(
+            report.snapshot.state.hosts_control,
+            before.state.hosts_control
+        );
+        assert_eq!(report.snapshot.state.dns, dns);
+        assert_eq!(report.snapshot.state.hosts, hosts);
+
+        let persisted: ClashConfig =
+            serde_yaml::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(persisted.dns, dns);
+        assert_eq!(persisted.hosts, hosts);
+    }
+
+    #[tokio::test]
+    async fn dns_takeover_checks_full_candidate_before_atomic_source_commit() {
+        use chimera_config::clash::config::dns::{ControlSource, OneOrMany};
+        use indexmap::IndexMap;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = Utf8PathBuf::from_path_buf(dir.path().join("clash-config.yaml")).unwrap();
+        let client = ClashConfigClient::new(
+            path.clone(),
+            ClashConfig::default(),
+            Arc::new(RecordingBridge {
+                mirrored_tun: Arc::new(Mutex::new(None)),
+            }),
+        )
+        .await
+        .unwrap();
+
+        let before = client.get_snapshot().await.unwrap();
+        let mut dns = before.state.dns.clone();
+        dns.nameserver = vec!["https://one.one.one.one/dns-query".into()];
+        let hosts = IndexMap::from([("new.test".into(), OneOrMany::One("192.0.2.123".into()))]);
+        let mut patch = ClashConfig::new_empty_patch();
+        patch.dns = Some(dns.clone());
+        patch.hosts = Some(hosts.clone());
+        patch.dns_control = Some(ControlSource::Chimera);
+        patch.hosts_control = Some(ControlSource::Chimera);
+
+        // A rejection must leave both tables and both control selectors
+        // unchanged, rather than publishing half of the requested takeover.
+        let rejected_original = before.state.clone();
+        let error = client
+            .patch_typed_config_with(
+                patch.clone(),
+                move |candidate| {
+                    let original = rejected_original.clone();
+                    async move {
+                        assert_eq!(candidate.dns_control, ControlSource::Chimera);
+                        assert_eq!(candidate.hosts_control, ControlSource::Chimera);
+                        assert_ne!(candidate.dns, original.dns);
+                        assert_ne!(candidate.hosts, original.hosts);
+                        anyhow::bail!("injected DNS candidate validation failure")
+                    }
+                },
+                || async {
+                    panic!("the rejected DNS candidate must never touch the running core");
+                    #[allow(unreachable_code)]
+                    Ok(())
+                },
+                || Ok(()),
+            )
+            .await
+            .unwrap_err();
+        assert!(format!("{error:#}").contains("injected DNS candidate validation failure"));
+        let unchanged = client.get_snapshot().await.unwrap();
+        assert_eq!(unchanged.version, before.version);
+        assert_eq!(unchanged.state.dns_control, ControlSource::Profile);
+        assert_eq!(unchanged.state.hosts_control, ControlSource::Profile);
+        assert_eq!(unchanged.state.dns, before.state.dns);
+        assert_eq!(unchanged.state.hosts, before.state.hosts);
+
+        let preflight = client.clone();
+        let applying = client.clone();
+        let report = client
+            .patch_typed_config_with(
+                patch,
+                move |candidate| async move {
+                    assert_eq!(preflight.get_typed().dns_control, ControlSource::Profile);
+                    assert_eq!(candidate.dns_control, ControlSource::Chimera);
+                    assert_eq!(candidate.hosts_control, ControlSource::Chimera);
+                    assert_eq!(
+                        candidate.dns.nameserver[0],
+                        "https://one.one.one.one/dns-query"
+                    );
+                    assert_eq!(
+                        candidate.hosts["new.test"],
+                        OneOrMany::One("192.0.2.123".into())
+                    );
+                    Ok(())
+                },
+                move || async move {
+                    let committed = applying.get_typed();
+                    assert_eq!(committed.dns_control, ControlSource::Chimera);
+                    assert_eq!(committed.hosts_control, ControlSource::Chimera);
+                    assert_eq!(
+                        committed.dns.nameserver[0],
+                        "https://one.one.one.one/dns-query"
+                    );
+                    assert!(committed.hosts.contains_key("new.test"));
+                    Ok(())
+                },
+                || Ok(()),
+            )
+            .await
+            .unwrap();
+        assert!(report.reaches_runtime);
+        assert_eq!(report.snapshot.version, before.version + 1);
+        let persisted: ClashConfig =
+            serde_yaml::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(persisted.dns_control, ControlSource::Chimera);
+        assert_eq!(persisted.hosts_control, ControlSource::Chimera);
+        assert_eq!(persisted.dns, dns);
+        assert_eq!(persisted.hosts, hosts);
     }
 
     #[tokio::test]
