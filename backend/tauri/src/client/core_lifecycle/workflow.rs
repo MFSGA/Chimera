@@ -322,6 +322,11 @@ pub(in crate::client) struct CoreLifecycleWorkflow {
     /// A checked source's post-apply Mode effect is held by the same
     /// workflow until its sole Actor has fenced the Completed message.
     checked_connection_effect: Arc<parking_lot::Mutex<Option<CheckedConnectionEffect>>>,
+    /// A one-round observed Core terminal, shared only with the existing
+    /// Reconciler policy and Actor Completed. Never records a source commit
+    /// or replaces the independent Running/source convergence fence.
+    prepared_outcome:
+        Arc<parking_lot::Mutex<Option<crate::client::reconciler::mutation::ApplyOutcome>>>,
     /// The exact read-only source authority already used by Checked Apply.
     /// Ordinary startup/reconcile may adopt selection only when an active
     /// Core receipt and this authority agree on the full committed target.
@@ -417,6 +422,7 @@ impl CoreLifecycleWorkflow {
             checked_gate: Arc::new(std::sync::OnceLock::new()),
             applied_selection: Arc::new(parking_lot::Mutex::new(None)),
             checked_connection_effect: Arc::new(parking_lot::Mutex::new(None)),
+            prepared_outcome: Arc::new(parking_lot::Mutex::new(None)),
             source_authority: None,
             core,
             installer,
@@ -479,6 +485,14 @@ impl CoreLifecycleWorkflow {
         &self,
     ) -> Option<CheckedConnectionEffect> {
         self.checked_connection_effect.lock().take()
+    }
+
+    /// Consume the observed Prepared terminal only in the owner Actor's
+    /// Completed message; source commits and old Core ports have none.
+    pub(in crate::client) fn take_prepared_outcome(
+        &self,
+    ) -> Option<crate::client::reconciler::mutation::ApplyOutcome> {
+        self.prepared_outcome.lock().take()
     }
 
     /// Ref's applied_selection follows an *observed Core result*, not a
@@ -1024,6 +1038,9 @@ impl CoreLifecycleWorkflow {
             .reconcile_prepared_submission(prepared, spec)
             .await?;
         let mapped = crate::client::reconciler::apply::prepared_submission_outcome(&verdict);
+        // The producer retains only the Core registry's *observed* result.
+        // A missing report or rejected identity never invents Applied.
+        *self.prepared_outcome.lock() = mapped.clone();
         match verdict {
             super::ports::PreparedSubmission::Applied(applied) => {
                 if let Some(crate::client::reconciler::mutation::ApplyOutcome::Applied(candidate)) =
@@ -1130,6 +1147,7 @@ impl CoreLifecycleWorkflow {
         // The sole worker owns one command at a time. Any effect left over
         // from a failed or superseded operation must not leak into the next.
         self.checked_connection_effect.lock().take();
+        self.prepared_outcome.lock().take();
         #[cfg(test)]
         let refresh_startup_retry_identity =
             matches!(&command, Command::PatchApplicationConfig { .. });
@@ -2155,11 +2173,13 @@ impl CoreLifecycleWorkflow {
                                 )
                                 .await
                         };
-                        self.attempt_policy.lock().record(
+                        let observed = self.prepared_outcome.lock().clone();
+                        self.attempt_policy.lock().record_prepared(
                             target.clone(),
                             host,
                             &applied,
                             self.core.outcome_uncertain(),
+                            observed.as_ref(),
                         );
                         applied
                     }
@@ -3013,6 +3033,9 @@ impl CoreLifecycleWorkflow {
         &self,
         app: ChimeraAppConfig,
     ) -> anyhow::Result<()> {
+        // The earlier rejected Service candidate is not the Local fallback's
+        // terminal; a second admitted Core command must supersede its verdict.
+        self.prepared_outcome.lock().take();
         let clash = self.clash.get()?;
         if self.profiles.is_none() {
             return self

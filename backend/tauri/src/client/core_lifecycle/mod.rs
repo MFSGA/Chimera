@@ -1810,6 +1810,10 @@ impl Actor for ApplicationWorkflowActor {
                         result
                     };
                     let source_advanced = committed_target_advanced(&result);
+                    // Consume the Core's genuine terminal once. The source
+                    // notification fence below still decides whether this
+                    // observed result can settle the current target.
+                    let prepared_outcome = workflow.lifecycle().take_prepared_outcome();
                     // A Checked worker may have promoted applied_selection
                     // after its second authoritative read, while the Actor
                     // already accepted a newer source notice. Completed is
@@ -2063,7 +2067,7 @@ impl Actor for ApplicationWorkflowActor {
                         state.publish_maintenance();
                     }
                     state.reconciler.send_modify(|status| {
-                        status.finish(
+                        status.finish_observed(
                             active.response.id,
                             active.trigger,
                             &active.observed_sources,
@@ -2074,6 +2078,7 @@ impl Actor for ApplicationWorkflowActor {
                             verified_stopped,
                             state.uncertain,
                             source_advanced,
+                            prepared_outcome.as_ref(),
                         );
                         if let Some(degradation) = round_connection_degradation {
                             status.record_system_degradation(degradation);

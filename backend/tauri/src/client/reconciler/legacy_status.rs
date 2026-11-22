@@ -9,7 +9,7 @@ use std::{collections::VecDeque, sync::Arc};
 use chimera_core::client::reconciler::plan::{Conclusion, RunIntent, RuntimeError};
 
 use super::{
-    attempt::{LegacyApplyVerdict, legacy_apply_verdict},
+    attempt::{LegacyApplyVerdict, observed_apply_verdict},
     legacy_mutation::RoundRecord,
 };
 
@@ -122,10 +122,43 @@ impl ReconcilerStatus {
         outcome_uncertain: bool,
         source_advanced: bool,
     ) {
+        self.finish_observed(
+            operation_id,
+            trigger,
+            observed_sources,
+            intent,
+            result,
+            reconciled,
+            verified_running,
+            verified_stopped,
+            outcome_uncertain,
+            source_advanced,
+            None,
+        )
+    }
+
+    /// The one Actor's final source and Core-running evidence remains the
+    /// convergence authority. An observed Prepared terminal supplies the
+    /// upstream typed cause, not a shortcut to Converged.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn finish_observed(
+        &mut self,
+        operation_id: u64,
+        trigger: &str,
+        observed_sources: &SourceVersions,
+        intent: RunIntent,
+        result: &anyhow::Result<()>,
+        reconciled: bool,
+        verified_running: bool,
+        verified_stopped: bool,
+        outcome_uncertain: bool,
+        source_advanced: bool,
+        prepared: Option<&super::mutation::ApplyOutcome>,
+    ) {
         self.seq = self.seq.saturating_add(1);
         self.active = None;
         self.seen.merge(observed_sources);
-        let verdict = legacy_apply_verdict(result, outcome_uncertain, source_advanced);
+        let verdict = observed_apply_verdict(result, outcome_uncertain, source_advanced, prepared);
         self.conclusion = if trigger == "Shutdown" {
             Conclusion::Closed
         } else if trigger == "ServiceRelease" {
@@ -177,6 +210,88 @@ impl ReconcilerStatus {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn actor_completion_keeps_typed_prepared_terminal_without_bypassing_source_fence() {
+        use super::super::mutation::ApplyOutcome;
+        let mut status = ReconcilerStatus::default();
+        let cause = Arc::new(RuntimeError::CoreRolledBack {
+            reason: Some("Core restored original revision".into()),
+        });
+        let outcome = ApplyOutcome::Refused {
+            cause: cause.clone(),
+        };
+        let generic = Err(anyhow::anyhow!("legacy Core error lost rollback details"));
+        status.begin(11);
+        status.finish_observed(
+            11,
+            "SourceCommitted",
+            &SourceVersions::default(),
+            RunIntent::Running,
+            &generic,
+            true,
+            false,
+            false,
+            false,
+            false,
+            Some(&outcome),
+        );
+        assert!(matches!(
+            &status.conclusion,
+            Conclusion::NotInEffect {cause: actual} if Arc::ptr_eq(actual, &cause)
+        ));
+        assert!(matches!(
+            status.recent.back().and_then(|record| record.cause.as_ref()),
+            Some(actual) if Arc::ptr_eq(actual, &cause)
+        ));
+        // If a newer source arrived in the mailbox, its independent source
+        // fence wins over the older terminal's original refusal.
+        status.begin(12);
+        let superseded = Err(anyhow::Error::new(
+            crate::client::reconciler::attempt::CommittedTargetAdvanced,
+        ));
+        status.finish_observed(
+            12,
+            "SourceCommitted",
+            &SourceVersions::default(),
+            RunIntent::Running,
+            &superseded,
+            true,
+            false,
+            false,
+            false,
+            true,
+            Some(&outcome),
+        );
+        assert!(matches!(status.conclusion, Conclusion::Waiting { .. }));
+
+        let unknown = Arc::new(RuntimeError::SubmissionUnobserved {
+            failure: chimera_contracts::runtime_error::CoreFailure {
+                kind: None,
+                message: "Core terminal lost".into(),
+                retryable: false,
+                operation_id: Some("original-op-id".into()),
+            },
+        });
+        status.begin(13);
+        status.finish_observed(
+            13,
+            "Retry",
+            &SourceVersions::default(),
+            RunIntent::Running,
+            &generic,
+            true,
+            false,
+            false,
+            true,
+            false,
+            Some(&ApplyOutcome::Unknown(unknown.clone())),
+        );
+        assert!(matches!(
+            &status.conclusion,
+            Conclusion::Unknown {cause: actual} if Arc::ptr_eq(actual, &unknown)
+        ));
+    }
 
     #[test]
     fn system_effect_degradation_is_structured_and_scoped_to_completed_round() {
