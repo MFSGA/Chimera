@@ -1452,3 +1452,9 @@ backend/Cargo.toml -p chimera --lib core::clash::proxies::tests:: -- --nocapture
 - Windows E2E run 45074585452（commit e7ef4ea7）原生 wdio 证据：Add 及本地物化在不到 50ms 内完成，候选 Build 和 Core -t 在约 0.4s 内完成；随后 CandidateCheck::check 等待 CoreLifecycleCheckedInbox::checked 的 ACK 约 68.5 秒才返回成功。此前基于 UI 等待与文件状态的猜测均不构成该处的根因证明。
 - 检查顺序：先用 cfg(feature = e2e) 的 CoreLifecycle Actor handler 消息计时确定是 Completed 内的观察 await、ServiceReadiness/ObserveService 的异步 I/O，还是其他 mailbox 排队；再构建慢端口与并发 Checked 的真实 Actor 测试，并在单一 Core owner 内修复。不得把候选写入另一份独立 Checked inbox，或在原 Actor 未保留确切文档时虚报 ACK。
 - E2E 控件等待/脚本超时不应扩大到 68 秒，因为那会隐藏用户可见创建延迟。Profiler 和日志应只记录固定阶段与时长，不泄露配置源、UID 或服务凭证；正式构建不包含 E2E 探针。
+
+### LESSON-20261122-005：读状态不等于有新证据；禁止 Service watch 高频推送 CoreLifecycle 工作
+
+- Windows E2E run 45076380623 的 Actor 耗时探针定位出同一种 NotInstalled Service 状态的重复 watch 更新导致 CoreLifecycle 每次都排队 ServiceReadiness。首次 Profile Checked admission 等待约 61.4s，但 CheckedInbox 处理本身为 0ms，根因是邮箱中数百条重复服务状态后续工作，而非配置校验或 Profile 发布慢。
+- 修复策略：独立计算 Service 语义证据是否改变，只在 phase、ready generation、ownership、compat、Core state/identity/revision、retry policy 等真实变更时 cast follow-up，不能直接丢掉所有 ServiceReadiness，也不能将 Checked ACK 移交第二 owner。启动恢复的证据函数仍保留原有单独判定。
+- 防回归：测试重复上千次相同 Service 状态不触发 follow-up；检查真实状态变化仍触发。保持 Windows 原生 UI 30 秒行为断言不变，并用失败 artifact 内 E2E mailbox stage 的数量和 Checked admission 时延验收，而不是把超时改为 90 秒。
