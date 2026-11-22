@@ -225,29 +225,82 @@ fn manager_core_kind(core: ClashCore) -> CoreKind {
 /// source-mailbox fence and Running verification. This does not own Core and
 /// cannot be executed by the worker before Completed is accepted.
 pub(in crate::client) struct CheckedConnectionEffect {
+    change: SelectionChange,
     replaced: Option<bool>,
     prior: anyhow::Result<Option<crate::core::actor_v2::api::ApiClient>>,
 }
 
 impl CheckedConnectionEffect {
-    pub(in crate::client) async fn finish(self) -> Option<String> {
+    fn degradation(
+        change: SelectionChange,
+        message: String,
+        cause: chimera_contracts::runtime::InterruptFailure,
+    ) -> chimera_contracts::runtime::Degradation {
+        use chimera_contracts::runtime::{Degradation, DegradationPhase, DegradationReason};
+        Degradation {
+            phase: DegradationPhase::SystemEffect,
+            reason: match change {
+                SelectionChange::Mode => DegradationReason::ModeInterruptionFailed { cause },
+                SelectionChange::Profile => DegradationReason::ProfileInterruptionFailed { cause },
+            },
+            message,
+            retryable: false,
+        }
+    }
+
+    fn from_error(
+        change: SelectionChange,
+        error: anyhow::Error,
+    ) -> chimera_contracts::runtime::Degradation {
+        use chimera_contracts::runtime::InterruptFailure;
+        use chimera_core::actor_v2::api::ApiError;
+        // Keep REF's typed API failure identity; avoid parsing error strings.
+        let cause = match error.downcast_ref::<ApiError>() {
+            Some(ApiError::Stale) => InterruptFailure::Stale,
+            Some(ApiError::Unavailable(_)) => InterruptFailure::Unavailable,
+            Some(ApiError::Timeout) => InterruptFailure::Timeout,
+            Some(ApiError::Protocol(_)) => InterruptFailure::Protocol,
+            None => InterruptFailure::Unavailable,
+        };
+        Self::degradation(change, format!("{error:#}"), cause)
+    }
+
+    /// An obsolete or unverified Core result must never close the old API;
+    /// preserve its non-retryable one-shot effect as typed degradation.
+    pub(in crate::client) fn deferred(
+        self,
+        reason: &str,
+    ) -> chimera_contracts::runtime::Degradation {
+        Self::degradation(
+            self.change,
+            reason.to_owned(),
+            chimera_contracts::runtime::InterruptFailure::Unavailable,
+        )
+    }
+
+    pub(in crate::client) async fn finish(self) -> Option<chimera_contracts::runtime::Degradation> {
         match (self.replaced, self.prior) {
             (Some(true), _) => None, // Replaced Core already retired connections.
             (Some(false), Ok(None)) => None, // No previous running Core instance.
             (Some(false), Ok(Some(api))) => {
-                crate::core::connection_interruption::ConnectionInterruptionService::on_mode_change(
-                    &api, true,
-                )
-                .await
-                .err()
-                .map(|error| format!("Mode interruption failed after Core apply: {error:#}"))
+                let result = match self.change {
+                    SelectionChange::Mode => {
+                        crate::core::connection_interruption::ConnectionInterruptionService::on_mode_change(&api, true).await
+                    }
+                    SelectionChange::Profile => {
+                        crate::core::connection_interruption::ConnectionInterruptionService::on_profile_change(&api, true).await
+                    }
+                };
+                result
+                    .err()
+                    .map(|error| Self::from_error(self.change, error))
             }
-            (Some(false), Err(error)) => Some(format!(
-                "Mode interruption could not capture the old Core: {error:#}"
+            (Some(false), Err(error)) => Some(Self::from_error(self.change, error)),
+            (None, _) => Some(Self::degradation(
+                self.change,
+                "Core replacement outcome is unknown; connection interruption not attempted".into(),
+                chimera_contracts::runtime::InterruptFailure::Unavailable,
             )),
-            (None, _) => {
-                Some("Mode interruption was not attempted: Core replacement outcome unknown".into())
-            }
         }
     }
 }
@@ -914,7 +967,7 @@ impl CoreLifecycleWorkflow {
             };
             // Capture only the pre-apply instance-bound controller. A failed
             // capture is a post-commit effect degradation, not a Core refusal.
-            let source = if matches!(interruption, Some(SelectionChange::Mode)) {
+            let source = if interruption.is_some() {
                 Some(self.core.capture_interruption_source().await)
             } else {
                 None
@@ -937,8 +990,9 @@ impl CoreLifecycleWorkflow {
                 // The worker cannot know about source notices that reached
                 // the Actor after its final read. Defer the one-shot mode
                 // effect to Completed; only that mailbox can settle it.
-                if matches!(interruption, Some(SelectionChange::Mode)) {
+                if let Some(change) = interruption {
                     *self.checked_connection_effect.lock() = Some(CheckedConnectionEffect {
+                        change,
                         replaced,
                         prior: source.unwrap_or(Ok(None)),
                     });
@@ -3010,5 +3064,56 @@ impl ProfileRuntime for CoreLifecycleWorkflow {
     fn request_runtime_rebuild(&self) {
         // The owning ApplicationWorkflowActor schedules dirty work after this
         // mutation releases the serialized execution domain.
+    }
+}
+
+#[cfg(test)]
+mod checked_connection_effect_tests {
+    use super::*;
+    use chimera_contracts::runtime::{DegradationPhase, DegradationReason, InterruptFailure};
+    use chimera_core::actor_v2::api::ApiError;
+
+    #[test]
+    fn core_api_interruption_failure_has_ref_typed_reason_and_wire_code() {
+        let cases = [
+            (ApiError::Stale, InterruptFailure::Stale),
+            (
+                ApiError::Unavailable("retired".into()),
+                InterruptFailure::Unavailable,
+            ),
+            (ApiError::Timeout, InterruptFailure::Timeout),
+        ];
+        for (error, expected) in cases {
+            let degradation = CheckedConnectionEffect::from_error(
+                SelectionChange::Mode,
+                anyhow::Error::new(error),
+            );
+            assert!(
+                matches!(degradation.reason, DegradationReason::ModeInterruptionFailed { cause } if cause == expected)
+            );
+            assert_eq!(degradation.phase, DegradationPhase::SystemEffect);
+            assert!(!degradation.retryable);
+            assert_eq!(
+                crate::client::runtime::Degradation::from_shared(degradation).code,
+                "mode_interruption_failed"
+            );
+        }
+    }
+
+    #[test]
+    fn stale_profile_effect_retains_profile_reason_after_source_fence() {
+        let effect = CheckedConnectionEffect {
+            change: SelectionChange::Profile,
+            replaced: Some(false),
+            prior: Err(anyhow::Error::new(ApiError::Stale)),
+        };
+        let degradation = effect.deferred("newer Profiles source reached mailbox");
+        assert!(matches!(
+            degradation.reason,
+            DegradationReason::ProfileInterruptionFailed {
+                cause: InterruptFailure::Unavailable
+            }
+        ));
+        assert_eq!(degradation.message, "newer Profiles source reached mailbox");
     }
 }

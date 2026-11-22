@@ -64,6 +64,18 @@ impl ReconcilerStatus {
     pub(crate) fn begin(&mut self, operation_id: u64) {
         self.seq = self.seq.saturating_add(1);
         self.active = Some(operation_id);
+        // REF: degradations describe the current Core round, not errors
+        // inherited from an unrelated successfully completed request.
+        self.degradations.clear();
+    }
+
+    pub(crate) fn record_system_degradation(
+        &mut self,
+        degradation: chimera_contracts::runtime::Degradation,
+    ) {
+        self.seq = self.seq.saturating_add(1);
+        self.degradations
+            .push(Degradation::from_shared(degradation));
     }
 
     /// A source-only commit is already durable, but no Core application was
@@ -145,6 +157,46 @@ impl ReconcilerStatus {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn system_effect_degradation_is_structured_and_scoped_to_completed_round() {
+        use chimera_contracts::runtime::{
+            Degradation as SharedDegradation, DegradationPhase, DegradationReason, InterruptFailure,
+        };
+        let mut status = ReconcilerStatus::default();
+        status.begin(1);
+        status.finish(
+            1,
+            "SourceCommitted",
+            &SourceVersions::default(),
+            RunIntent::Running,
+            &Ok(()),
+            true,
+            true,
+            false,
+            false,
+            false,
+        );
+        assert!(matches!(status.conclusion, Conclusion::Converged));
+        status.record_system_degradation(SharedDegradation {
+            phase: DegradationPhase::SystemEffect,
+            reason: DegradationReason::ProfileInterruptionFailed {
+                cause: InterruptFailure::Stale,
+            },
+            message: "previous Core API is stale".into(),
+            retryable: false,
+        });
+        assert!(matches!(status.conclusion, Conclusion::Converged));
+        assert_eq!(status.degradations.len(), 1);
+        assert_eq!(status.degradations[0].code, "profile_interruption_failed");
+        assert_eq!(status.degradations[0].phase, DegradationPhase::SystemEffect);
+        assert!(!status.degradations[0].retryable);
+        status.begin(2);
+        assert!(
+            status.degradations.is_empty(),
+            "a new round must not inherit the previous effect failure"
+        );
+    }
 
     #[test]
     fn maintenance_changes_do_not_assert_runtime_convergence_or_advance_sources() {

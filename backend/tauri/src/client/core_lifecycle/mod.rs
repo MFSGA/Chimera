@@ -120,6 +120,22 @@ fn checked_mode_effect_deferred(
     mode_requested && !checked_dispatched && running && previous.is_none_or(|seen| version > seen)
 }
 
+fn deferred_mode_effect_degradation(version: u64) -> chimera_contracts::runtime::Degradation {
+    use chimera_contracts::runtime::{
+        Degradation, DegradationPhase, DegradationReason, InterruptFailure,
+    };
+    Degradation {
+        phase: DegradationPhase::SystemEffect,
+        reason: DegradationReason::ModeInterruptionFailed {
+            cause: InterruptFailure::Unavailable,
+        },
+        message: format!(
+            "Checked Clash source version {version} was deferred to latest-source recovery; its Mode interruption is not confirmed"
+        ),
+        retryable: false,
+    }
+}
+
 fn checked_clash_notice(
     checked_clash: bool,
     result: &anyhow::Result<()>,
@@ -622,7 +638,7 @@ struct ApplicationWorkflowState {
     service_release_debt: ServiceReleaseDebt,
     service_recovery_maintenance: Option<String>,
     product_maintenance: Option<String>,
-    mode_interruption_maintenance: Option<String>,
+    connection_interruption_maintenance: Option<String>,
     service_recovery_timer: tokio::task::JoinHandle<()>,
     startup_recovery_pending: Arc<AtomicBool>,
 }
@@ -850,7 +866,7 @@ impl ApplicationWorkflowState {
             service_release.as_deref(),
             self.service_recovery_maintenance.as_deref(),
             self.product_maintenance.as_deref(),
-            self.mode_interruption_maintenance.as_deref(),
+            self.connection_interruption_maintenance.as_deref(),
         ]
         .into_iter()
         .flatten()
@@ -1169,7 +1185,7 @@ impl ApplicationWorkflowState {
         self.dirty = false;
         self.source_dirty = false;
         self.source_after_handoff = false;
-        self.mode_interruption_maintenance = None;
+        self.connection_interruption_maintenance = None;
         while let Some(request) = self.pending.pop_front() {
             self.reject(request, anyhow::anyhow!("core lifecycle is shutting down"));
         }
@@ -1249,7 +1265,7 @@ impl ApplicationWorkflowState {
                 self.dirty = false;
                 self.source_dirty = false;
                 self.source_after_handoff = false;
-                self.mode_interruption_maintenance = None;
+                self.connection_interruption_maintenance = None;
             }
             Command::StartCore => self.run_intent = RunIntent::Running,
             _ => {}
@@ -1596,7 +1612,7 @@ impl Actor for ApplicationWorkflowActor {
             service_release_debt: ServiceReleaseDebt::default(),
             service_recovery_maintenance: None,
             product_maintenance: None,
-            mode_interruption_maintenance: None,
+            connection_interruption_maintenance: None,
             service_recovery_timer,
             startup_recovery_pending: args.startup_recovery_pending,
         })
@@ -1879,6 +1895,7 @@ impl Actor for ApplicationWorkflowActor {
                     // source-version fence and Running evidence. The previous
                     // Core's connections may only be interrupted here; a
                     // superseded checked product is never an effect success.
+                    let mut round_connection_degradation = None;
                     if let Some(effect) = workflow.lifecycle().take_checked_connection_effect() {
                         let issue = if checked_mode_effect_can_finish(
                             &result,
@@ -1887,12 +1904,15 @@ impl Actor for ApplicationWorkflowActor {
                         ) {
                             effect.finish().await
                         } else {
-                            Some("Mode interruption was not settled: checked Core target was superseded or active runtime is unverified".to_owned())
+                            Some(effect.deferred("Connection interruption was not settled: checked Core target was superseded or active runtime is unverified"))
                         };
-                        if let Some(ref reason) = issue {
-                            tracing::warn!(%reason, "checked Mode connection effect degraded");
+                        if let Some(ref degradation) = issue {
+                            tracing::warn!(reason = ?degradation.reason, message = %degradation.message, "checked connection effect degraded");
                         }
-                        state.mode_interruption_maintenance = issue;
+                        state.connection_interruption_maintenance = issue
+                            .as_ref()
+                            .map(|degradation| degradation.message.clone());
+                        round_connection_degradation = issue;
                     }
                     // Legacy SetConfig UI messages describe the outcome of
                     // Core refresh, not source persistence. Checked Clash
@@ -2052,6 +2072,9 @@ impl Actor for ApplicationWorkflowActor {
                             state.uncertain,
                             source_advanced,
                         );
+                        if let Some(degradation) = round_connection_degradation {
+                            status.record_system_degradation(degradation);
+                        }
                     });
                     let deferred_retry_error = result.as_ref().err().map(ToString::to_string);
                     let deferred_retry_retryable = result.as_ref().err().is_some_and(
@@ -2492,9 +2515,11 @@ impl Actor for ApplicationWorkflowActor {
                     // bytes, but has no guaranteed old Core API/replaced
                     // result. Preserve the non-retryable one-shot effect debt
                     // visibly instead of marking the interruption complete.
-                    state.mode_interruption_maintenance = Some(format!(
-                        "Checked Clash source version {version} was deferred to latest-source recovery; its Mode interruption is not confirmed"
-                    ));
+                    let degradation = deferred_mode_effect_degradation(version);
+                    state.connection_interruption_maintenance = Some(degradation.message.clone());
+                    state.reconciler.send_modify(|status| {
+                        status.record_system_degradation(degradation);
+                    });
                     state.publish_maintenance();
                 }
             }
@@ -14974,6 +14999,7 @@ mod tests {
         current: Mutex<(SourceDomain, u64, String)>,
         reads: AtomicUsize,
         selection: Option<crate::client::reconciler::committed::Selection>,
+        inferred_interruption: Option<crate::client::reconciler::committed::SelectionChange>,
     }
 
     impl TestSourceAuthority {
@@ -14982,6 +15008,21 @@ mod tests {
                 current: Mutex::new((domain, version, target.to_owned())),
                 reads: AtomicUsize::new(0),
                 selection: None,
+                inferred_interruption: None,
+            })
+        }
+
+        fn for_inferred_interruption(
+            domain: SourceDomain,
+            version: u64,
+            target: &str,
+            change: crate::client::reconciler::committed::SelectionChange,
+        ) -> Arc<Self> {
+            Arc::new(Self {
+                current: Mutex::new((domain, version, target.to_owned())),
+                reads: AtomicUsize::new(0),
+                selection: None,
+                inferred_interruption: Some(change),
             })
         }
 
@@ -14995,6 +15036,7 @@ mod tests {
                 current: Mutex::new((domain, version, target.to_owned())),
                 reads: AtomicUsize::new(0),
                 selection: Some(selection),
+                inferred_interruption: None,
             })
         }
     }
@@ -15026,6 +15068,17 @@ mod tests {
         ) -> anyhow::Result<Option<crate::client::reconciler::committed::Selection>> {
             self.verify(domain, version, target).await?;
             Ok(self.selection.clone())
+        }
+
+        async fn verify_interruption(
+            &self,
+            domain: SourceDomain,
+            version: u64,
+            target: &str,
+            _previous: Option<&crate::client::reconciler::committed::Selection>,
+        ) -> anyhow::Result<Option<crate::client::reconciler::committed::SelectionChange>> {
+            self.verify(domain, version, target).await?;
+            Ok(self.inferred_interruption)
         }
 
         async fn selection_for_applied_target(
@@ -15257,7 +15310,18 @@ mod tests {
             .finish()
             .await
             .expect("injected old API capture failure");
-        assert!(degraded.contains("previous Core API unavailable"));
+        assert!(degraded.message.contains("previous Core API unavailable"));
+        assert!(matches!(
+            degraded.reason,
+            chimera_contracts::runtime::DegradationReason::ModeInterruptionFailed {
+                cause: chimera_contracts::runtime::InterruptFailure::Unavailable,
+            }
+        ));
+        assert_eq!(
+            degraded.phase,
+            chimera_contracts::runtime::DegradationPhase::SystemEffect
+        );
+        assert!(!degraded.retryable);
 
         // Ordinary Checked work does not inherit a prior mode request.
         let ordinary = TestSourceAuthority::for_source(SourceDomain::Clash, 13, "ordinary-update");
@@ -15300,6 +15364,68 @@ mod tests {
         assert_eq!(core.captures.load(AtomicOrdering::Relaxed), 1);
         assert_eq!(core.applies.load(AtomicOrdering::Relaxed), 2);
         assert!(workflow.take_checked_connection_effect().is_none());
+    }
+
+    #[tokio::test]
+    async fn checked_profile_selection_interrupts_only_after_confirmed_core_apply() {
+        use crate::client::reconciler::committed::SelectionChange;
+        let core = Arc::new(ExplicitModeEffectCore {
+            captures: AtomicUsize::new(0),
+            applies: AtomicUsize::new(0),
+        });
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let workflow = CoreLifecycleWorkflow::new(
+            ApplicationClient::legacy().unwrap(),
+            ClashConfigClient::legacy().unwrap(),
+            None,
+            core.clone(),
+            Arc::new(RecordingInstaller {
+                events: events.clone(),
+            }),
+            RuntimePaths::from_config_root(std::path::PathBuf::from("test-runtime-root")),
+            Arc::new(RecordingService { events }),
+        );
+        let authority = TestSourceAuthority::for_inferred_interruption(
+            SourceDomain::Profiles,
+            19,
+            "selected-profile",
+            SelectionChange::Profile,
+        );
+        workflow
+            .execute(
+                Command::ApplyChecked {
+                    prepared: checked_runtime_fixture("selected-profile"),
+                    core_spec: checked_mihomo_spec(),
+                    domain: SourceDomain::Profiles,
+                    version: 19,
+                    authority: authority.clone(),
+                    interrupt_mode: false,
+                },
+                &mut None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(core.captures.load(AtomicOrdering::Relaxed), 1);
+        assert_eq!(core.applies.load(AtomicOrdering::Relaxed), 1);
+        assert_eq!(authority.reads.load(AtomicOrdering::Relaxed), 2);
+        let effect = workflow
+            .take_checked_connection_effect()
+            .expect("Profile selection change must retain pre-apply Core API");
+        assert!(workflow.take_checked_connection_effect().is_none());
+        let degradation = effect
+            .finish()
+            .await
+            .expect("injected old Core API failure");
+        assert!(matches!(
+            degradation.reason,
+            chimera_contracts::runtime::DegradationReason::ProfileInterruptionFailed {
+                cause: chimera_contracts::runtime::InterruptFailure::Unavailable,
+            }
+        ));
+        assert_eq!(
+            crate::client::runtime::Degradation::from_shared(degradation).code,
+            "profile_interruption_failed"
+        );
     }
 
     /// Model a Core apply which has already accepted the exact checked bytes
@@ -15755,6 +15881,14 @@ mod tests {
         .await
         .expect("Mode effect debt must be visible after the source-only fallback");
         assert!(submits.lock().unwrap().is_empty());
+        let reported = client.reconciler_status().degradations;
+        assert_eq!(reported.len(), 1);
+        assert_eq!(reported[0].code, "mode_interruption_failed");
+        assert_eq!(
+            reported[0].phase,
+            chimera_contracts::runtime::DegradationPhase::SystemEffect
+        );
+        assert!(!reported[0].retryable);
         // Duplicate delivery cannot create another effect or clear the debt.
         client.checked_source_committed_for_request(
             SourceDomain::Clash,
