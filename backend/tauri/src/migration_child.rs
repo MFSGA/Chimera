@@ -290,23 +290,31 @@ mod tests {
     use super::*;
     #[test]
     fn rejects_unexpected_args_and_child_paths_outside_absolute_roots() {
+        // Use platform-native absolute paths. `/tmp` is rooted on Unix but
+        // is not a fully qualified absolute Windows path (CI windows-latest).
+        let temp = tempfile::tempdir().unwrap();
+        let config = temp.path().join("config");
+        let data = temp.path().join("data");
+        let result = temp.path().join("result.json");
+        assert!(config.is_absolute() && data.is_absolute() && result.is_absolute());
         assert!(parse_child_arguments(vec![]).is_err());
         assert!(
             parse_child_arguments(vec![
                 "relative".into(),
-                "/tmp/data".into(),
-                "/tmp/out".into()
+                data.clone().into_os_string(),
+                result.clone().into_os_string(),
             ])
             .is_err()
         );
-        assert!(
-            parse_child_arguments(vec![
-                "/tmp/config".into(),
-                "/tmp/data".into(),
-                "/tmp/result".into()
-            ])
-            .is_ok()
-        );
+        let (parsed, parsed_result) = parse_child_arguments(vec![
+            config.clone().into_os_string(),
+            data.clone().into_os_string(),
+            result.clone().into_os_string(),
+        ])
+        .expect("platform-native absolute paths must be accepted");
+        assert_eq!(parsed.app_config_dir(), config);
+        assert_eq!(parsed.app_data_dir(), data);
+        assert_eq!(parsed_result, result);
     }
 
     #[test]
