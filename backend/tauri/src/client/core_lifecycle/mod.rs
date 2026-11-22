@@ -14687,6 +14687,7 @@ mod tests {
     struct TestSourceAuthority {
         current: Mutex<(SourceDomain, u64, String)>,
         reads: AtomicUsize,
+        selection: Option<crate::client::reconciler::committed::Selection>,
     }
 
     impl TestSourceAuthority {
@@ -14694,6 +14695,20 @@ mod tests {
             Arc::new(Self {
                 current: Mutex::new((domain, version, target.to_owned())),
                 reads: AtomicUsize::new(0),
+                selection: None,
+            })
+        }
+
+        fn for_selected_source(
+            domain: SourceDomain,
+            version: u64,
+            target: &str,
+            selection: crate::client::reconciler::committed::Selection,
+        ) -> Arc<Self> {
+            Arc::new(Self {
+                current: Mutex::new((domain, version, target.to_owned())),
+                reads: AtomicUsize::new(0),
+                selection: Some(selection),
             })
         }
     }
@@ -14715,6 +14730,16 @@ mod tests {
                 .context("the authoritative current source does not match the checked target"));
             }
             Ok(())
+        }
+
+        async fn verify_selection(
+            &self,
+            domain: SourceDomain,
+            version: u64,
+            target: &str,
+        ) -> anyhow::Result<Option<crate::client::reconciler::committed::Selection>> {
+            self.verify(domain, version, target).await?;
+            Ok(self.selection.clone())
         }
     }
 
@@ -14889,6 +14914,106 @@ mod tests {
             &[(original_bytes, binary)],
             "the only Core owner submitted the original Checked bytes exactly once"
         );
+    }
+
+    #[tokio::test]
+    async fn checked_apply_records_only_authoritatively_confirmed_selection() {
+        use crate::client::reconciler::{committed::Selection, inputs::RuntimeInputs};
+        let selection = Selection::of(&RuntimeInputs {
+            app: chimera_config::application::ChimeraAppConfig::default(),
+            clash: ClashConfig::default(),
+            profiles: Arc::new(chimera_config::profile::Profiles::default()),
+            content: Default::default(),
+        });
+        let submits = Arc::new(Mutex::new(Vec::new()));
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let workflow = CoreLifecycleWorkflow::new(
+            ApplicationClient::legacy().unwrap(),
+            ClashConfigClient::legacy().unwrap(),
+            None,
+            Arc::new(ExactCheckedCore {
+                submits: submits.clone(),
+            }),
+            Arc::new(RecordingInstaller {
+                events: events.clone(),
+            }),
+            RuntimePaths::from_config_root(std::path::PathBuf::from("test-runtime-root")),
+            Arc::new(RecordingService { events }),
+        );
+        let selected = TestSourceAuthority::for_selected_source(
+            SourceDomain::Clash,
+            3,
+            "checked-selected",
+            selection.clone(),
+        );
+        workflow
+            .execute(
+                Command::ApplyChecked {
+                    prepared: checked_runtime_fixture("checked-selected"),
+                    core_spec: checked_mihomo_spec(),
+                    domain: SourceDomain::Clash,
+                    version: 3,
+                    authority: selected.clone(),
+                },
+                &mut None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(selected.reads.load(AtomicOrdering::Relaxed), 2);
+        assert_eq!(submits.lock().unwrap().len(), 1);
+        assert_eq!(workflow.applied_selection_for_tests(), Some(selection));
+
+        // The second candidate is stale before its Core submission, so the
+        // previous selection cannot be used as a new interruption baseline.
+        let stale = TestSourceAuthority::for_source(SourceDomain::Clash, 4, "newer-target");
+        assert!(
+            workflow
+                .execute(
+                    Command::ApplyChecked {
+                        prepared: checked_runtime_fixture("obsolete-target"),
+                        core_spec: checked_mihomo_spec(),
+                        domain: SourceDomain::Clash,
+                        version: 4,
+                        authority: stale,
+                    },
+                    &mut None,
+                )
+                .await
+                .is_err()
+        );
+        assert_eq!(workflow.applied_selection_for_tests(), None);
+        assert_eq!(submits.lock().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn legacy_lifecycle_operation_invalidates_checked_selection_baseline() {
+        use crate::client::reconciler::{committed::Selection, inputs::RuntimeInputs};
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let workflow = CoreLifecycleWorkflow::new(
+            ApplicationClient::legacy().unwrap(),
+            ClashConfigClient::legacy().unwrap(),
+            None,
+            Arc::new(ExactCheckedCore {
+                submits: Arc::new(Mutex::new(Vec::new())),
+            }),
+            Arc::new(RecordingInstaller {
+                events: events.clone(),
+            }),
+            RuntimePaths::from_config_root(std::path::PathBuf::from("test-runtime-root")),
+            Arc::new(RecordingService { events }),
+        );
+        let selection = Selection::of(&RuntimeInputs {
+            app: chimera_config::application::ChimeraAppConfig::default(),
+            clash: ClashConfig::default(),
+            profiles: Arc::new(chimera_config::profile::Profiles::default()),
+            content: Default::default(),
+        });
+        workflow.set_applied_selection_for_tests(selection);
+        // A legacy Retry may rebuild or replace the Core without returning
+        // the ref AppliedCandidate selection. Clear the Checked baseline
+        // even if the legacy retry itself cannot converge.
+        let _ = workflow.execute(Command::Reconcile, &mut None).await;
+        assert!(workflow.applied_selection_for_tests().is_none());
     }
 
     #[tokio::test]

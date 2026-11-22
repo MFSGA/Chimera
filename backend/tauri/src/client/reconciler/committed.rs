@@ -13,13 +13,13 @@ use std::future::Future;
 use super::inputs::RuntimeInputs;
 use chimera_config::{clash::config::overrides::Mode, profile::ProfileId};
 
-#[derive(Clone)]
-pub(super) struct Selection {
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(in crate::client) struct Selection {
     mode: Mode,
     current: Option<ProfileId>,
 }
 impl Selection {
-    pub(super) fn of(inputs: &RuntimeInputs) -> Self {
+    pub(in crate::client) fn of(inputs: &RuntimeInputs) -> Self {
         Self {
             mode: inputs.clash.overrides.mode(),
             current: inputs.profiles.current.clone(),
@@ -27,14 +27,14 @@ impl Selection {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum SelectionChange {
     Mode,
     Profile,
 }
 
 impl Selection {
-    pub(super) fn interruption(
+    pub(in crate::client) fn interruption(
         &self,
         previous: Option<&Self>,
         clash: &chimera_config::clash::config::ClashConfig,

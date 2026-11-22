@@ -26,7 +26,9 @@ use crate::client::application_workflow::workflow::ProfileRuntime;
 use crate::client::reconciler::attempt::{
     AttemptPolicy, CommittedTargetAdvanced, ServiceFallbackDeferred, waiting_dependency,
 };
-use crate::client::reconciler::{inputs::RuntimeInputs, legacy_preparation::RuntimePreparation};
+use crate::client::reconciler::{
+    committed::Selection, inputs::RuntimeInputs, legacy_preparation::RuntimePreparation,
+};
 use crate::config::chimera::ClashCore;
 use crate::core::actor_v2::control_endpoint::ExecutionHost;
 use crate::enhance::FsProfileContentSource;
@@ -226,6 +228,10 @@ pub(in crate::client) struct CoreLifecycleWorkflow {
     /// session and Profiles gate have been assembled. Shared by clones of
     /// the sole lifecycle workflow, not an independent runtime owner.
     checked_gate: Arc<std::sync::OnceLock<Arc<crate::client::reconciler::check::CandidateCheck>>>,
+    /// A baseline exists only after an exact Checked apply and two successful
+    /// authoritative source reads. Legacy rebuilds invalidate it because they
+    /// do not yet hand back a confirmed applied selection.
+    applied_selection: Arc<parking_lot::Mutex<Option<Selection>>>,
     core: Arc<dyn CoreLifecyclePort>,
     installer: Arc<dyn BinaryInstaller>,
     service: Arc<dyn ServiceLifecyclePort>,
@@ -315,6 +321,7 @@ impl CoreLifecycleWorkflow {
             profiles,
             content_reader: None,
             checked_gate: Arc::new(std::sync::OnceLock::new()),
+            applied_selection: Arc::new(parking_lot::Mutex::new(None)),
             core,
             installer,
             service,
@@ -358,6 +365,16 @@ impl CoreLifecycleWorkflow {
     ) -> Self {
         self.service_status = Some(service_status);
         self
+    }
+
+    #[cfg(test)]
+    pub(super) fn applied_selection_for_tests(&self) -> Option<Selection> {
+        self.applied_selection.lock().clone()
+    }
+
+    #[cfg(test)]
+    pub(super) fn set_applied_selection_for_tests(&self, selection: Selection) {
+        *self.applied_selection.lock() = Some(selection);
     }
 
     pub(in crate::client) fn startup_owner_unproven_handle(&self) -> Arc<AtomicBool> {
@@ -770,6 +787,12 @@ impl CoreLifecycleWorkflow {
             ),
             _ => false,
         };
+        // All non-Checked lifecycle operations may change the active Core or
+        // execution host, and do not yet return the ref AppliedCandidate.
+        // Never compare a later Checked selection against that obsolete state.
+        if !matches!(&command, Command::ApplyChecked { .. }) {
+            self.applied_selection.lock().take();
+        }
         let result = match command {
             Command::ProfileMutation(_) => {
                 anyhow::bail!("Profile mutations must run through ApplicationWorkflowActor")
@@ -793,13 +816,31 @@ impl CoreLifecycleWorkflow {
                 // target's successful Core receipt must never be reported as
                 // latest-source convergence or settle Effects as current.
                 let checked_target = target.to_owned();
-                authority.verify(domain, version, &checked_target).await?;
-                self.core.reconcile_prepared(prepared, core_spec).await?;
-                // A changed source is typed CommittedTargetAdvanced by the
-                // live authority. The sole Actor's Completed handler already
-                // schedules its existing latest-source recovery on that type.
-                // Do not replay Core from here: that would create two owners.
-                authority.verify(domain, version, &checked_target).await
+                // Unknown until this *whole* operation confirms success.
+                // A failed check, uncertain lower Core result, or advanced
+                // source cannot establish the selection used by the runtime.
+                let result = async {
+                    authority.verify(domain, version, &checked_target).await?;
+                    self.core.reconcile_prepared(prepared, core_spec).await?;
+                    // Source advanced during Core apply must not be promoted
+                    // into an applied selection or a converged runtime status.
+                    // LiveSourceAuthority returns selection from its same
+                    // bounded read of the fully committed target.
+                    authority
+                        .verify_selection(domain, version, &checked_target)
+                        .await
+                }
+                .await;
+                match result {
+                    Ok(selection) => {
+                        *self.applied_selection.lock() = selection;
+                        Ok(())
+                    }
+                    Err(error) => {
+                        self.applied_selection.lock().take();
+                        Err(error)
+                    }
+                }
             }
             Command::StartCore => self.reconcile_with_trigger(Trigger::Start).await,
             #[cfg(test)]

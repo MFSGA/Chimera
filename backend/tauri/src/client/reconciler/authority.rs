@@ -10,7 +10,7 @@ use async_trait::async_trait;
 use chimera_config::runtime::executor::ProfileContentSource;
 
 use super::{
-    committed::SourceDomain,
+    committed::{Selection, SourceDomain},
     inputs::{FrozenProfileContent, RuntimeInputs},
 };
 use crate::{
@@ -30,6 +30,19 @@ pub(in crate::client) trait RuntimeSourceAuthority:
         version: u64,
         checked_target: &str,
     ) -> anyhow::Result<()>;
+
+    /// Return a selection only when the *same bounded authoritative read*
+    /// proved the checked target. Legacy test authorities can prove an apply
+    /// without exposing selection; such an unknown value is never inferred.
+    async fn verify_selection(
+        &self,
+        domain: SourceDomain,
+        version: u64,
+        checked_target: &str,
+    ) -> anyhow::Result<Option<Selection>> {
+        self.verify(domain, version, checked_target).await?;
+        Ok(None)
+    }
 }
 
 pub(in crate::client) struct LiveSourceAuthority {
@@ -111,16 +124,18 @@ impl LiveSourceAuthority {
                 .target_key(),
             "authoritative application or Clash content changed without a version update"
         );
-        let target = RuntimeInputs {
+        let inputs = RuntimeInputs {
             app,
             clash,
             profiles,
             content: frozen,
-        }
-        .checked_target_key()?;
+        };
+        let selection = Selection::of(&inputs);
+        let target = inputs.checked_target_key()?;
         Ok(SourceTarget {
             versions: [app_version, clash_version, profiles_version],
             target,
+            selection,
         })
     }
 }
@@ -128,6 +143,7 @@ impl LiveSourceAuthority {
 struct SourceTarget {
     versions: [u64; 3],
     target: String,
+    selection: Selection,
 }
 
 impl SourceTarget {
@@ -148,6 +164,17 @@ impl RuntimeSourceAuthority for LiveSourceAuthority {
         version: u64,
         checked_target: &str,
     ) -> anyhow::Result<()> {
+        self.verify_selection(domain, version, checked_target)
+            .await
+            .map(|_| ())
+    }
+
+    async fn verify_selection(
+        &self,
+        domain: SourceDomain,
+        version: u64,
+        checked_target: &str,
+    ) -> anyhow::Result<Option<Selection>> {
         let current = self.read_committed_target().await?;
         // A moved Source or target is not a Core rejection. Preserve a
         // typed identity-advanced cause so the sole lifecycle owner schedules
@@ -164,7 +191,7 @@ impl RuntimeSourceAuthority for LiveSourceAuthority {
                 "checked runtime target differs from the authoritative committed sources",
             ));
         }
-        Ok(())
+        Ok(Some(current.selection))
     }
 }
 
@@ -255,6 +282,14 @@ mod tests {
             .verify(SourceDomain::Profiles, 0, &initial.target)
             .await
             .unwrap();
+        assert_eq!(
+            authority
+                .verify_selection(SourceDomain::Profiles, 0, &initial.target)
+                .await
+                .unwrap(),
+            Some(initial.selection.clone()),
+            "the applied selection must come from the same authoritative committed target"
+        );
         let changed_version = authority
             .verify(SourceDomain::Profiles, 1, &initial.target)
             .await
@@ -283,10 +318,10 @@ mod tests {
             .insert("selected.yaml".into(), "mode: direct\n".into());
         assert!(
             authority
-                .verify(SourceDomain::Profiles, 0, &initial.target)
+                .verify_selection(SourceDomain::Profiles, 0, &initial.target)
                 .await
                 .is_err(),
-            "a changed file invalidates the target even without a source version change"
+            "a changed file cannot authorize a new applied selection"
         );
         content.0.lock().unwrap().remove("selected.yaml");
         assert!(
