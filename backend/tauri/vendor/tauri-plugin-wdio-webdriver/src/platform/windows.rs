@@ -269,6 +269,41 @@ impl<R: Runtime + 'static> PlatformExecutor<R> for WindowsExecutor<R> {
         self.evaluate_js_inner(script).await
     }
 
+    // Reload using WebView2's native navigation API, not ExecuteScript with
+    // window.location.reload(). A scripted reload can discard its own script
+    // completion callback during navigation, holding the per-webview script
+    // lock until timeout and stalling the next E2E command (especially in a
+    // background WebView). Keep the COM call on the WebView's UI thread.
+    async fn refresh(&self) -> Result<(), WebDriverErrorResponse> {
+        let (tx, rx) = oneshot::channel();
+        self.window
+            .with_webview(move |webview| unsafe {
+                let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+                let result = rebind_controller(&webview)
+                    .CoreWebView2()
+                    .and_then(|core| core.Reload())
+                    .map_err(|error| error.to_string());
+                let _ = tx.send(result);
+            })
+            .map_err(|error| WebDriverErrorResponse::unknown_error(&error.to_string()))?;
+
+        match tokio::time::timeout(
+            std::time::Duration::from_millis(self.timeouts.script_ms),
+            rx,
+        )
+        .await
+        {
+            Ok(Ok(Ok(()))) => Ok(()),
+            Ok(Ok(Err(error))) => Err(WebDriverErrorResponse::unknown_error(&format!(
+                "WebView2 native reload failed: {error}"
+            ))),
+            Ok(Err(_)) => Err(WebDriverErrorResponse::unknown_error(
+                "WebView2 native reload callback was dropped",
+            )),
+            Err(_) => Err(WebDriverErrorResponse::script_timeout()),
+        }
+    }
+
     // =========================================================================
     // Screenshots
     // =========================================================================

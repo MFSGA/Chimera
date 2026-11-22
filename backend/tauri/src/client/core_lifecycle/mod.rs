@@ -5634,6 +5634,7 @@ mod tests {
         events: Arc<Mutex<Vec<&'static str>>>,
         state: CoreState,
         state_changed_at: i64,
+        run_type: RunType,
         active_kind: Option<chimera_core_manager::CoreKind>,
         receipt_error: bool,
     }
@@ -7819,7 +7820,7 @@ mod tests {
                 instance_id: None,
                 state: self.state.clone(),
                 state_changed_at: self.state_changed_at,
-                run_type: RunType::Normal,
+                run_type: self.run_type,
             })
         }
 
@@ -17452,6 +17453,7 @@ mod tests {
             events: events.clone(),
             state,
             state_changed_at,
+            run_type: RunType::Normal,
             active_kind,
             receipt_error,
         });
@@ -17492,6 +17494,7 @@ mod tests {
                 events: events.clone(),
                 state: CoreState::Stopped(None),
                 state_changed_at: 1,
+                run_type: RunType::Normal,
                 active_kind: None,
                 receipt_error: false,
             }),
@@ -17541,6 +17544,7 @@ mod tests {
                 events: events.clone(),
                 state: CoreState::Stopped(None),
                 state_changed_at: 1,
+                run_type: RunType::Normal,
                 active_kind: None,
                 receipt_error: false,
             }),

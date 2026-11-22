@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { openMainRoute } from './main-window.js';
 
-const targetPath = '/main/logs';
+const targetPath = '/main/rules';
 
 describe('main tooltip reference surface', () => {
   before(async () => {
@@ -32,7 +32,11 @@ describe('main tooltip reference surface', () => {
   });
 
   it('keeps ref padding on the animated inner surface', async () => {
-    const firstSidebarLink = await $('[data-slot="slider-sidebar"] a');
+    // The Rules rail owns a real Radix Tooltip for each collapsed proxy link.
+    // The Logs navigation rail has labels but does not render Tooltip roots.
+    const firstSidebarLink = await $(
+      '[data-slot="rules-proxy-item"][data-proxy-item-kind="all"]',
+    );
     await firstSidebarLink.waitForDisplayed({ timeout: 15_000 });
     const target = await browser.execute((element) => {
       const rect = element.getBoundingClientRect();
@@ -199,6 +203,15 @@ describe('main tooltip reference surface', () => {
     await browser
       .action('pointer', { parameters: { pointerType: 'mouse' } })
       .move({ origin: 'viewport', x: safeX, y: safeY, duration: 200 })
+      .perform();
+    // Radix Tooltip is hoverable by default. Pointerleave first builds its
+    // trigger-to-content grace polygon; a *subsequent* real pointermove
+    // outside that polygon closes it. WebView2's embedded driver does not
+    // synthesize intermediate mousemove frames for one W3C move action.
+    await browser
+      .action('pointer', { parameters: { pointerType: 'mouse' } })
+      .pause(100)
+      .move({ origin: 'viewport', x: safeX - 4, y: safeY, duration: 100 })
       .perform();
     await browser.waitUntil(
       async () =>
