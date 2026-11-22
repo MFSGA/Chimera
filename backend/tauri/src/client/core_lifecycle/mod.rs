@@ -1568,6 +1568,41 @@ impl ApplicationWorkflowState {
     }
 }
 
+// The Windows desktop regression needs to distinguish a slow Core operation
+// from a synchronous Actor mailbox handler blocking a Checked ACK. This probe
+// is compiled only into the isolated E2E executable; it never changes admission.
+#[cfg(feature = "e2e")]
+struct E2eCoreMailboxProbe {
+    kind: &'static str,
+    started: std::time::Instant,
+}
+
+#[cfg(feature = "e2e")]
+impl E2eCoreMailboxProbe {
+    fn begin(kind: &'static str) -> Self {
+        if matches!(
+            kind,
+            "checked" | "completed" | "service_readiness" | "service_recovery_tick"
+        ) {
+            tracing::warn!(target: "chimera::e2e_core_mailbox", kind, stage = "entered", "CoreLifecycle mailbox stage");
+        }
+        Self {
+            kind,
+            started: std::time::Instant::now(),
+        }
+    }
+}
+
+#[cfg(feature = "e2e")]
+impl Drop for E2eCoreMailboxProbe {
+    fn drop(&mut self) {
+        let elapsed_ms = self.started.elapsed().as_millis();
+        if elapsed_ms >= 100 || matches!(self.kind, "checked" | "completed") {
+            tracing::warn!(target: "chimera::e2e_core_mailbox", kind = self.kind, stage = "finished", elapsed_ms = elapsed_ms as u64, "CoreLifecycle mailbox stage");
+        }
+    }
+}
+
 impl Actor for ApplicationWorkflowActor {
     type Msg = Message;
     type State = ApplicationWorkflowState;
@@ -1624,6 +1659,17 @@ impl Actor for ApplicationWorkflowActor {
         message: Self::Msg,
         state: &mut Self::State,
     ) -> Result<(), ActorProcessingErr> {
+        #[cfg(feature = "e2e")]
+        let _mailbox_probe = E2eCoreMailboxProbe::begin(match &message {
+            Message::Checked { .. } => "checked",
+            Message::Completed { .. } => "completed",
+            Message::ObserveService { .. } => "observe_service",
+            Message::ServiceReadiness => "service_readiness",
+            Message::ServiceProbeFailed => "service_probe_failed",
+            Message::ServiceRecoveryTick => "service_recovery_tick",
+            Message::Request(_) => "request",
+            _ => "other",
+        });
         match message {
             Message::AbortChecked { domain, request } => {
                 let count = if let Some(request) = request.as_deref() {
@@ -1838,6 +1884,8 @@ impl Actor for ApplicationWorkflowActor {
                     } else {
                         None
                     };
+                    #[cfg(feature = "e2e")]
+                    tracing::warn!(target: "chimera::e2e_core_mailbox", stage = "completed_binding_observed", "CoreLifecycle completion stage");
                     let active = state
                         .active
                         .take()
@@ -1851,6 +1899,8 @@ impl Actor for ApplicationWorkflowActor {
                     {
                         std::panic::resume_unwind(panic);
                     }
+                    #[cfg(feature = "e2e")]
+                    tracing::warn!(target: "chimera::e2e_core_mailbox", stage = "completed_worker_joined", "CoreLifecycle completion stage");
                     // A successful command alone is not proof that the Core
                     // reached Running or Stopped. Publish Converged/Inactive
                     // only after sampling the runtime owner.
@@ -1860,6 +1910,8 @@ impl Actor for ApplicationWorkflowActor {
                         } else {
                             None
                         };
+                    #[cfg(feature = "e2e")]
+                    tracing::warn!(target: "chimera::e2e_core_mailbox", stage = "completed_core_status_observed", "CoreLifecycle completion stage");
                     let verified_running = if reconciled && result.is_ok() {
                         if let Some(observed) = observed_core.as_ref() {
                             workflow
@@ -1872,6 +1924,8 @@ impl Actor for ApplicationWorkflowActor {
                     } else {
                         false
                     };
+                    #[cfg(feature = "e2e")]
+                    tracing::warn!(target: "chimera::e2e_core_mailbox", stage = "completed_running_verified", "CoreLifecycle completion stage");
                     let verified_stopped = active.trigger == "Stop"
                         && observed_core.as_ref().is_some_and(|snapshot| {
                             matches!(
@@ -1895,6 +1949,8 @@ impl Actor for ApplicationWorkflowActor {
                             workflow.lifecycle().invalidate_applied_selection();
                         }
                     }
+                    #[cfg(feature = "e2e")]
+                    tracing::warn!(target: "chimera::e2e_core_mailbox", stage = "completed_selection_recovery_finished", "CoreLifecycle completion stage");
                     // Unlike the worker, Completed owns the final observed
                     // source-version fence and Running evidence. The previous
                     // Core's connections may only be interrupted here; a
@@ -1918,6 +1974,8 @@ impl Actor for ApplicationWorkflowActor {
                             .map(|degradation| degradation.message.clone());
                         round_connection_degradation = issue;
                     }
+                    #[cfg(feature = "e2e")]
+                    tracing::warn!(target: "chimera::e2e_core_mailbox", stage = "completed_connection_effect_finished", "CoreLifecycle completion stage");
                     // Legacy SetConfig UI messages describe the outcome of
                     // Core refresh, not source persistence. Checked Clash
                     // follows the same semantics once the Actor settles it.
@@ -2129,6 +2187,8 @@ impl Actor for ApplicationWorkflowActor {
                         }
                     }
 
+                    #[cfg(feature = "e2e")]
+                    tracing::warn!(target: "chimera::e2e_core_mailbox", stage = "completed_retry_settled", "CoreLifecycle completion stage");
                     if (retry_reconcile_on_failure && failed || source_advanced)
                         && !state.uncertain
                         && !state.shutting_down
