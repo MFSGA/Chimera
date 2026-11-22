@@ -623,6 +623,9 @@ struct ActiveOperation {
     task: tokio::task::JoinHandle<()>,
     shutdown: bool,
     trigger: &'static str,
+    /// Checked Apply already promotes its own exact verified selection.
+    /// Legacy startup/reconcile must recover it from the confirmed receipt.
+    checked_apply: bool,
     observed_sources: SourceVersions,
 }
 
@@ -1264,6 +1267,7 @@ impl ApplicationWorkflowState {
 
         let id = request.response.id;
         let trigger = runtime_trigger(&request.command);
+        let checked_apply = matches!(&request.command, Command::ApplyChecked { .. });
         let observed_sources = self.seen_sources.clone();
         self.reconciler.send_modify(|status| status.begin(id));
         let shutdown = matches!(&request.command, Command::Shutdown);
@@ -1472,6 +1476,7 @@ impl ApplicationWorkflowState {
             task,
             shutdown,
             trigger,
+            checked_apply,
             observed_sources,
         });
         self.publish();
@@ -1771,6 +1776,22 @@ impl Actor for ApplicationWorkflowActor {
                                 chimera_ipc::api::status::CoreState::Stopped(_)
                             )
                         });
+                    // The upstream reconciler records selection after a
+                    // confirmed runtime apply, not when a source saves.
+                    // Legacy startup, readiness and Retry use a Result<()>
+                    // Core port; recover only if both Core and source target
+                    // still match. Checked Apply has already done its own
+                    // exact-version selection check and must not be reset.
+                    if reconciled && !active.checked_apply {
+                        if result.is_ok() && verified_running && !source_advanced {
+                            workflow
+                                .lifecycle()
+                                .recover_applied_selection_from_receipt()
+                                .await;
+                        } else {
+                            workflow.lifecycle().invalidate_applied_selection();
+                        }
+                    }
                     // This belongs to the existing LocalRuntimeHost. The
                     // status projection only records outstanding publication
                     // debt and cannot mutate or duplicate the runtime product.
@@ -2906,7 +2927,8 @@ impl CoreLifecycleClient {
         )
         .with_shutdown(shutdown.child_token())
         .with_service_status(service_status_rx.clone())
-        .with_profile_content_reader(content_reader);
+        .with_profile_content_reader(content_reader)
+        .with_source_authority(source_authority.clone());
         let startup_owner_unproven = lifecycle.startup_owner_unproven_handle();
         #[cfg(not(test))]
         let startup_owner_unproven_signal = startup_owner_unproven.clone();
@@ -14741,6 +14763,86 @@ mod tests {
             self.verify(domain, version, target).await?;
             Ok(self.selection.clone())
         }
+
+        async fn selection_for_applied_target(
+            &self,
+            target: &str,
+        ) -> anyhow::Result<Option<crate::client::reconciler::committed::Selection>> {
+            self.reads.fetch_add(1, AtomicOrdering::Relaxed);
+            Ok((self.current.lock().unwrap().2 == target)
+                .then(|| self.selection.clone())
+                .flatten())
+        }
+    }
+
+    #[tokio::test]
+    async fn legacy_running_receipt_recovers_only_matching_authoritative_selection() {
+        use crate::client::reconciler::{committed::Selection, inputs::RuntimeInputs};
+
+        let selection = Selection::of(&RuntimeInputs {
+            app: chimera_config::application::ChimeraAppConfig::default(),
+            clash: ClashConfig::default(),
+            profiles: Arc::new(chimera_config::profile::Profiles::default()),
+            content: Default::default(),
+        });
+        let authority = TestSourceAuthority::for_selected_source(
+            SourceDomain::Profiles,
+            12,
+            "running-target",
+            selection.clone(),
+        );
+        let core = Arc::new(ReceiptProofCore {
+            active: Mutex::new(Some(startup_test_receipt(Some("running-target".into())))),
+            publish_wrong_target: false,
+            change_instance_between_reads: false,
+            status_reads: AtomicUsize::new(0),
+            submissions: AtomicUsize::new(0),
+            stops: AtomicUsize::new(0),
+            service_to_retire: None,
+            retire_calls: AtomicUsize::new(0),
+        });
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let workflow = CoreLifecycleWorkflow::new(
+            ApplicationClient::legacy().unwrap(),
+            ClashConfigClient::legacy().unwrap(),
+            None,
+            core.clone(),
+            Arc::new(RecordingInstaller {
+                events: events.clone(),
+            }),
+            RuntimePaths::from_config_root(std::path::PathBuf::from("test-runtime-root")),
+            Arc::new(RecordingService { events }),
+        )
+        .with_source_authority(Some(authority.clone()));
+
+        workflow.recover_applied_selection_from_receipt().await;
+        assert_eq!(
+            workflow.applied_selection_for_tests(),
+            Some(selection.clone())
+        );
+        assert_eq!(authority.reads.load(AtomicOrdering::Relaxed), 2);
+        assert_eq!(
+            core.submissions.load(AtomicOrdering::Relaxed),
+            0,
+            "recovering selection is read-only; never apply Core a second time"
+        );
+
+        // A later committed source invalidates the old applied target even
+        // while its instance-bound Core receipt is still Running.
+        authority.current.lock().unwrap().2 = "newer-target".into();
+        workflow.recover_applied_selection_from_receipt().await;
+        assert_eq!(workflow.applied_selection_for_tests(), None);
+
+        authority.current.lock().unwrap().2 = "running-target".into();
+        workflow.recover_applied_selection_from_receipt().await;
+        assert_eq!(workflow.applied_selection_for_tests(), Some(selection));
+
+        // A stopped/retired Core has no prior applied selection, even when
+        // the committed documents still match the old receipt.
+        *core.active.lock().unwrap() = None;
+        workflow.recover_applied_selection_from_receipt().await;
+        assert_eq!(workflow.applied_selection_for_tests(), None);
+        assert_eq!(core.submissions.load(AtomicOrdering::Relaxed), 0);
     }
 
     struct ExactCheckedCore {

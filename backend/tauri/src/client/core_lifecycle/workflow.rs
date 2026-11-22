@@ -234,6 +234,10 @@ pub(in crate::client) struct CoreLifecycleWorkflow {
     /// authoritative source reads. Legacy rebuilds invalidate it because they
     /// do not yet hand back a confirmed applied selection.
     applied_selection: Arc<parking_lot::Mutex<Option<Selection>>>,
+    /// The exact read-only source authority already used by Checked Apply.
+    /// Ordinary startup/reconcile may adopt selection only when an active
+    /// Core receipt and this authority agree on the full committed target.
+    source_authority: Option<Arc<dyn crate::client::reconciler::authority::RuntimeSourceAuthority>>,
     core: Arc<dyn CoreLifecyclePort>,
     installer: Arc<dyn BinaryInstaller>,
     service: Arc<dyn ServiceLifecyclePort>,
@@ -324,6 +328,7 @@ impl CoreLifecycleWorkflow {
             content_reader: None,
             checked_gate: Arc::new(std::sync::OnceLock::new()),
             applied_selection: Arc::new(parking_lot::Mutex::new(None)),
+            source_authority: None,
             core,
             installer,
             service,
@@ -361,12 +366,83 @@ impl CoreLifecycleWorkflow {
         self
     }
 
+    pub(super) fn with_source_authority(
+        mut self,
+        authority: Option<Arc<dyn crate::client::reconciler::authority::RuntimeSourceAuthority>>,
+    ) -> Self {
+        self.source_authority = authority;
+        self
+    }
+
     pub(super) fn with_service_status(
         mut self,
         service_status: watch::Receiver<ServiceHostStatus>,
     ) -> Self {
         self.service_status = Some(service_status);
         self
+    }
+
+    pub(in crate::client) fn invalidate_applied_selection(&self) {
+        self.applied_selection.lock().take();
+    }
+
+    /// Ref's applied_selection follows an *observed Core result*, not a
+    /// successfully saved document. The legacy startup/reconcile actor only
+    /// reports Result<()>; its already-confirmed live receipt and the same
+    /// bounded source authority used by Checked Apply can prove the selection.
+    /// Unknown, stopped, Service-handoff, or advanced sources clear the value.
+    pub(in crate::client) async fn recover_applied_selection_from_receipt(&self) {
+        let Some(authority) = self.source_authority.as_ref() else {
+            self.applied_selection.lock().take();
+            return;
+        };
+        let first = match self.core.active_runtime_receipt().await {
+            Ok(Some(receipt)) if receipt.target.is_some() => receipt,
+            Ok(_) => {
+                self.applied_selection.lock().take();
+                return;
+            }
+            Err(error) => {
+                tracing::debug!(%error, "cannot prove active Core for selection recovery");
+                self.applied_selection.lock().take();
+                return;
+            }
+        };
+        let target = first.target.as_deref().expect("checked above");
+        let selection = match authority.selection_for_applied_target(target).await {
+            Ok(selection) => selection,
+            Err(error) => {
+                tracing::debug!(%error, "cannot prove committed sources for selection recovery");
+                None
+            }
+        };
+        // Recheck the complete source target across the asynchronous Core
+        // observation. A source commit racing this read must not seed a
+        // selection that was never proven to match the running bytes.
+        let latest_selection = authority
+            .selection_for_applied_target(target)
+            .await
+            .ok()
+            .flatten();
+        // The source reads were asynchronous. Reject an intervening Core
+        // replacement or second apply even if its document target is equal.
+        let still_active = self
+            .core
+            .active_runtime_receipt()
+            .await
+            .ok()
+            .flatten()
+            .is_some_and(|latest| {
+                latest.target == first.target
+                    && latest.host == first.host
+                    && latest.applied_revision == first.applied_revision
+                    && latest.config_digest == first.config_digest
+            });
+        *self.applied_selection.lock() = if still_active && selection == latest_selection {
+            selection
+        } else {
+            None
+        };
     }
 
     #[cfg(test)]

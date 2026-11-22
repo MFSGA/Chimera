@@ -57,6 +57,17 @@ pub(in crate::client) trait RuntimeSourceAuthority:
         self.verify(domain, version, checked_target).await?;
         Ok(None)
     }
+
+    /// Re-adopt the selection of a legacy startup/reconcile *only* when its
+    /// instance-bound Core receipt identifies the complete latest committed
+    /// target. Unlike Checked Apply, no individual source domain version is
+    /// carried by the old Core port. Unknown test ports must fail closed.
+    async fn selection_for_applied_target(
+        &self,
+        _applied_target: &str,
+    ) -> anyhow::Result<Option<Selection>> {
+        Ok(None)
+    }
 }
 
 pub(in crate::client) struct LiveSourceAuthority {
@@ -241,6 +252,14 @@ impl RuntimeSourceAuthority for LiveSourceAuthority {
             current.interrupt_on_profile,
         ))
     }
+
+    async fn selection_for_applied_target(
+        &self,
+        applied_target: &str,
+    ) -> anyhow::Result<Option<Selection>> {
+        let current = self.read_committed_target().await?;
+        Ok((current.target == applied_target).then_some(current.selection))
+    }
 }
 
 #[cfg(test)]
@@ -328,6 +347,22 @@ mod tests {
         );
         let initial = authority.read_committed_target().await.unwrap();
         assert_eq!(initial.version(SourceDomain::Profiles), 0);
+        assert_eq!(
+            authority
+                .selection_for_applied_target(&initial.target)
+                .await
+                .unwrap(),
+            Some(initial.selection.clone()),
+            "legacy applied selection requires the exact committed target"
+        );
+        assert!(
+            authority
+                .selection_for_applied_target("previously-applied-core-target")
+                .await
+                .unwrap()
+                .is_none(),
+            "a running Core receipt for obsolete bytes cannot become the selection baseline"
+        );
         authority
             .verify(SourceDomain::Profiles, 0, &initial.target)
             .await
@@ -395,6 +430,14 @@ mod tests {
             .lock()
             .unwrap()
             .insert("selected.yaml".into(), "mode: direct\n".into());
+        assert!(
+            authority
+                .selection_for_applied_target(&initial.target)
+                .await
+                .unwrap()
+                .is_none(),
+            "a changed managed file invalidates the old Core receipt's selection"
+        );
         assert!(
             authority
                 .verify_selection(SourceDomain::Profiles, 0, &initial.target)

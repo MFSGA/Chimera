@@ -1,5 +1,12 @@
 # ref 对齐进度
 
+## DIFF-159（Runtime Reconciler）：启动与普通 Reconcile 从已确认 Core 回执恢复 applied_selection（2026-11-22）
+
+- **上游映射 / 目标 / 非目标**：固定只读 `ref@c4b35e04870a9caa53f21d10af6fcfde4a6f4c01`；对照 `ref/backend/nyanpasu-core/src/client/reconciler/apply.rs` 仅在 `ApplyOutcome::Applied` 后建立 `applied_selection` 的语义，解决 Chimera 历史 Startup/Retry/Source Reconcile 仍走独立 `CoreLifecyclePort::reconcile_profiles`，没有给 Checked Apply 路径建立已应用 mode/profile 选择基线的问题。目标是保留现有单 Core Owner、Service/S2、TUN、双 UI 和 Agent 的运行方式，不借源配置提交推断已应用 Core，**本轮不直接放宽断连策略开启时 raw mode 的 Checked 准入**。
+- **唯一 Actor 的成功完成结算**：复用 `CoreLifecycleWorkflow::applied_selection`，安装和 CoreLifecycle Actor 共用的只读 `LiveSourceAuthority`。`ApplicationWorkflowActor::Completed` 已完成 source-version mailbox race fence 后，仅对于 **非 Checked 的 reconciled 命令**，并且 `result.is_ok() && verified_running && !source_advanced` 时调用 `recover_applied_selection_from_receipt`；失败、停止或不确定直接清空基线。真正 Checked Apply 仍独立使用精确源版本前后校验，不从普通 Reconcile 回执覆盖或清除。
+- **证明方式 / 拒绝原则**：`LiveSourceAuthority::selection_for_applied_target` 使用与 Checked Apply 相同的三域有界、内容锁保护的完整 `RuntimeInputs::target_key` 读取，**只有**旧式运行时回执的 `target` 与最新已提交目标相等才返回 `Selection`；缺少来源权威、回执 `target=None`、当前 Core 非 Running/实例不匹配、最新内容变化、读取失败或执行期间 Core 换实例都拒绝恢复。执行侧对 `CoreLifecyclePort::active_runtime_receipt` 做前后两个实例绑定回执确认，对源权威选择重复读取并要求一致；只读，不重新生成配置、不提交 Core、不修改持久数据。普通生命周期命令进入时清除可能过时的先前选择，只有成功/证据齐全才恢复。保留 `patch_running_clash_overrides` 的同步 `TransactionOutcome` 和旧 mode 断连路径。
+- **测试与待办**：新增 `legacy_running_receipt_recovers_only_matching_authoritative_selection` 验证匹配恢复、源晋升拒绝、运行 Core 退出拒绝，且整个恢复过程没有第二次 Core 提交；扩展 `authoritative_target_covers_committed_source_versions_and_managed_content` 检查旧回执目标匹配与管理 Profile 文件改变后的拒绝。下一步需要以这些运行中的 **已验证** selection 为基础，将 `on_mode_change=true` 的 Checked 准入和单次旧 Core 中断与强制的 CAS/owner 提交屏障连接；在这之前保留旧同步模式切换，避免源变更或启动竞态漏断连。现有 Windows CI/Tauri E2E 不能以 Mac Rust 测试替代。本机 `CARGO_INCREMENTAL=0 cargo test --manifest-path backend/Cargo.toml -p chimera --lib --quiet` 完整回归 **1182 passed / 0 failed / 1 ignored**，新增选择基线恢复测试及已有上下游异常分支全部运行；编译器仍报告既有 async 类型递归未来兼容性警告。rustfmt、clippy、签名和远端推送以实际完成结果为准。
+
 ## DIFF-158（Runtime Reconciler）：贯通 Core 替换回执与模式切换断连的源实例保护（2026-11-22）
 
 - **ref 对照 / 范围 / 前置证据**：只读 `ref@c4b35e04870a9caa53f21d10af6fcfde4a6f4c01`，对齐 `ref/backend/nyanpasu-core/src/client/reconciler/apply.rs` 中 `AppliedCandidate.replaced`、`applied_selection` 与 Apply 后 `finish_interruption` 的关键先后关系，不额外创建 Runtime/Core writer 或改变本地 `master`、UI/Agent 公共 API。上一轮已证明 Checked source 版本和 `applied_selection` 的先决条件。本轮不修改 Service/TUN/系统端口的宿主副作用，不把未经证实的下层完成结果解释为热更新。
