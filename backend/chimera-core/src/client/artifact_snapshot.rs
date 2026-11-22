@@ -1,6 +1,6 @@
 //! Pure RuntimeArtifact mapping following ref client/artifact_snapshot.rs.
-//! Chimera retains the existing materialized Inspection wire projection while
-//! RuntimeArtifact itself now carries the reference keyframe/delta graph.
+//! The runtime artifact and shared inspection retain the reference
+//! keyframe/delta graph; legacy UI output stays a separate projection.
 
 use anyhow::{Context, Result};
 use chimera_config::{
@@ -155,11 +155,15 @@ pub fn artifact_to_snapshot_data(
         ),
         "runtime inspection graph has no finalizing step"
     );
-    // Compatibility boundary: the legacy inspection DTO keeps full per-node
-    // configs, while the executor and stored archive share ref's compact form.
-    let graph = graph
-        .materialize()
-        .context("runtime inspection graph cannot be restored")?;
+    // Keep ref's compact graph in the shared inspection model.
+    // Validate the promoted final node against the generated configuration.
+    let restored = graph
+        .restore(final_node)
+        .context("runtime inspection final config cannot be restored")?;
+    anyhow::ensure!(
+        restored == final_config.to_json(),
+        "runtime inspection final node differs from the generated config"
+    );
     let output = map_postprocessing(&step_logs, profiles, builtin_names);
     let exists_keys = applied_fields.into_iter().collect();
     Ok(ArtifactSnapshotData {
@@ -295,6 +299,44 @@ mod tests {
         assert_eq!(data.inspection.final_node, 1);
         assert!(data.postprocessing_output.scopes.is_empty());
         assert!(data.postprocessing_output.global.is_empty());
+    }
+
+    #[test]
+    fn a_finalizing_node_mismatched_with_runtime_yaml_cannot_be_published() {
+        let root = Arc::new(ConfigValue::try_from(serde_json::json!({"mode": "rule"})).unwrap());
+        let selected =
+            Arc::new(ConfigValue::try_from(serde_json::json!({"mode": "global"})).unwrap());
+        let mut builder = ConfigSnapshotsBuilder::new_root(root, OperatorTag::BareRoot);
+        builder
+            .push(
+                OperatorTag::BuiltinStep {
+                    selected_profile_id: None,
+                    step: BuiltinStepKind::Finalizing,
+                },
+                selected,
+            )
+            .unwrap();
+        let (graph, final_node) = builder.build_stored_with_current().unwrap();
+        let incorrect_final =
+            Arc::new(ConfigValue::try_from(serde_json::json!({"mode": "direct"})).unwrap());
+        let error = artifact_to_snapshot_data(
+            RuntimeArtifact {
+                final_config: incorrect_final,
+                graph,
+                final_node,
+                step_logs: Vec::new(),
+                applied_fields: IndexSet::new(),
+                transform_failures: Vec::new(),
+            },
+            &Profiles::default(),
+            &[],
+        )
+        .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("differs from the generated config")
+        );
     }
 
     #[test]

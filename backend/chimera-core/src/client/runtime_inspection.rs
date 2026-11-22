@@ -7,8 +7,8 @@ use chimera_config::{
     runtime::{
         executor::{StepLog, StepLogEntry, StepLogLevel},
         snapshot::{
-            BuiltinStepKind, ConfigSnapshot, ConfigSnapshotsBuilder, ConfigSnapshotsGraph,
-            OperatorTag, SnapshotDiffHunk, changed_fields_between,
+            BuiltinStepKind, ConfigSnapshot, ConfigSnapshotsBuilder, OperatorTag, SnapshotDiffHunk,
+            StoredConfigSnapshotsGraph, changed_fields_between,
         },
         value::ConfigValue,
     },
@@ -18,7 +18,7 @@ use serde::Serialize;
 
 #[derive(Debug, Clone)]
 pub struct RuntimeInspectionData {
-    pub graph: ConfigSnapshotsGraph,
+    pub graph: StoredConfigSnapshotsGraph,
     /// The node that owns the built YAML, not an arbitrary terminal branch.
     pub final_node: u32,
     pub step_logs: Vec<StepLog>,
@@ -31,7 +31,7 @@ impl RuntimeInspectionData {
         let config = ConfigValue::try_from(serde_json::json!({}))
             .expect("empty JSON object is a valid runtime config value");
         let graph = ConfigSnapshotsBuilder::new_root(Arc::new(config), OperatorTag::BareRoot)
-            .build()
+            .build_stored()
             .expect("bare runtime inspection graph must build");
         Self {
             final_node: graph.root_id,
@@ -121,7 +121,8 @@ impl RuntimeInspectionData {
         };
         // Compare unredacted values so paths changed only under a secret are
         // retained, while the final API response always redacts values.
-        let changed_fields = changed_fields_between(&parent_node.snapshot.config, &config)
+        let parent_config = self.graph.restore(parent)?;
+        let changed_fields = changed_fields_between(&parent_config, &config)
             .map(|fields| fields.into_iter().collect());
         Ok(EffectiveInspection {
             config,
@@ -167,7 +168,6 @@ impl RuntimeInspectionData {
                     tag: node.tag.clone(),
                     next: node.next.clone().unwrap_or_default(),
                     changed_fields: node
-                        .snapshot
                         .changed_fields
                         .as_ref()
                         .map(|fields| fields.iter().cloned().collect()),
@@ -214,38 +214,33 @@ impl RuntimeInspectionData {
             inspection_id == snapshot_id,
             "runtime snapshot changed; refresh the inspection"
         );
-        if let Some(effective) = effective.filter(|_| node_id as usize == self.graph.nodes.len()) {
-            let yaml = serde_yaml::to_string(&redact_config(effective.config.clone()))?;
-            let parent = &self.graph.nodes[effective.parent as usize];
-            return Ok(RuntimeInspectionContent {
-                diff: Some(RuntimeInspectionDiff {
-                    parent_id: effective.parent,
-                    hunks: ConfigSnapshot::new_unchanged(redact_config(
-                        parent.snapshot.config.clone(),
-                    ))
-                    .diff_yaml_to(&yaml)?,
-                }),
-                yaml,
-                logs: Vec::new(),
-            });
-        }
-        let node = self
-            .graph
-            .nodes
-            .get(node_id as usize)
-            .ok_or_else(|| anyhow::anyhow!("runtime snapshot node does not exist"))?;
-        let yaml = serde_yaml::to_string(&redact_config(node.snapshot.config.clone()))?;
+        let (tag, config, parent) = match effective {
+            Some(effective) if node_id as usize == self.graph.nodes.len() => (
+                &effective.tag,
+                effective.config.clone(),
+                Some((effective.parent, self.graph.restore(effective.parent)?)),
+            ),
+            _ => {
+                let node = self
+                    .graph
+                    .nodes
+                    .get(node_id as usize)
+                    .ok_or_else(|| anyhow::anyhow!("runtime snapshot node does not exist"))?;
+                let (config, parent) = self.graph.restore_with_parent(node_id)?;
+                (&node.tag, config, parent)
+            }
+        };
+        // Match ref: restore the selected node only when requested. Redact
+        // both sides before producing YAML and a human-readable diff.
+        let yaml = serde_yaml::to_string(&redact_config(config))?;
+        let key = tag.node_key();
         Ok(RuntimeInspectionContent {
-            diff: self
-                .graph
-                .comparison_parent(node_id)
-                .map(|parent_id| -> anyhow::Result<_> {
+            diff: parent
+                .map(|(parent_id, parent)| -> anyhow::Result<_> {
                     Ok(RuntimeInspectionDiff {
                         parent_id,
-                        hunks: ConfigSnapshot::new_unchanged(redact_config(
-                            self.graph.nodes[parent_id as usize].snapshot.config.clone(),
-                        ))
-                        .diff_yaml_to(&yaml)?,
+                        hunks: ConfigSnapshot::new_unchanged(redact_config(parent))
+                            .diff_yaml_to(&yaml)?,
                     })
                 })
                 .transpose()?,
@@ -253,7 +248,7 @@ impl RuntimeInspectionData {
             logs: self
                 .step_logs
                 .iter()
-                .filter(|log| log.key == node.key)
+                .filter(|log| log.key == key)
                 .flat_map(|log| log.entries.iter().cloned())
                 .collect(),
         })
@@ -290,13 +285,118 @@ mod tests {
         );
     }
 
+    /// Source configs are independent of the inspector. This checks that a
+    /// stored delta is replayed only on request, that the summary reports its
+    /// unredacted changed paths, and that both YAML and diff redact secrets.
+    #[test]
+    fn stored_delta_inspection_replays_and_redacts_config_and_parent_diff() {
+        use chimera_config::runtime::snapshot::{KeyframePolicy, SnapshotPayload};
+
+        let input = serde_json::json!({
+            "mode": "rule",
+            "secret": "old-secret",
+            "proxies": ["a", "b"],
+            "rules": ["MATCH,DIRECT"],
+        });
+        let expected = serde_json::json!({
+            "mode": "global",
+            "secret": "new-secret",
+            "proxies": ["a", "b"],
+            "rules": ["MATCH,DIRECT"],
+        });
+        let mut builder = ConfigSnapshotsBuilder::new_root_with_keyframe_policy(
+            Arc::new(ConfigValue::try_from(input).unwrap()),
+            OperatorTag::BareRoot,
+            KeyframePolicy {
+                delta_to_full_ratio: 10.0,
+            },
+        );
+        let tag = OperatorTag::BuiltinStep {
+            selected_profile_id: None,
+            step: BuiltinStepKind::Finalizing,
+        };
+        builder
+            .push(
+                tag.clone(),
+                Arc::new(ConfigValue::try_from(expected).unwrap()),
+            )
+            .unwrap();
+        let (graph, final_node) = builder.build_stored_with_current().unwrap();
+        assert!(matches!(
+            graph.nodes[final_node as usize].snapshot.payload,
+            SnapshotPayload::Delta(_)
+        ));
+
+        let data = RuntimeInspectionData {
+            graph,
+            final_node,
+            step_logs: vec![StepLog {
+                key: tag.node_key(),
+                entries: vec![StepLogEntry::new(StepLogLevel::Info, "generated")],
+            }],
+        };
+        let summary = data.inspection_summary("version-3", "3", "mihomo", None, None);
+        assert_eq!(summary.final_id, final_node);
+        let changed = summary.nodes[final_node as usize]
+            .changed_fields
+            .as_ref()
+            .unwrap();
+        assert!(changed.contains(&"secret".to_owned()));
+        assert!(changed.contains(&"mode".to_owned()));
+
+        let content = data
+            .inspection_content("version-3", None, "version-3", final_node)
+            .unwrap();
+        let parsed: serde_json::Value = serde_yaml::from_str(&content.yaml).unwrap();
+        assert_eq!(parsed["mode"], "global");
+        assert_eq!(parsed["secret"], "<redacted>");
+        assert_eq!(content.logs[0].message, "generated");
+        assert_eq!(content.diff.as_ref().unwrap().parent_id, 0);
+        assert!(!content.diff.as_ref().unwrap().hunks.is_empty());
+        assert!(!format!("{content:?}").contains("old-secret"));
+        assert!(!format!("{content:?}").contains("new-secret"));
+    }
+
+    /// A stored graph may be corrupted by a persistence or replay failure.
+    /// The inspection API must return an error instead of partial YAML.
+    #[test]
+    fn invalid_stored_delta_is_not_exposed_as_partial_inspection_yaml() {
+        let root = Arc::new(ConfigValue::try_from(serde_json::json!({"mode": "rule"})).unwrap());
+        let mut builder = ConfigSnapshotsBuilder::new_root(root.clone(), OperatorTag::BareRoot);
+        let invalid_patch = serde_json::from_value(serde_json::json!([
+            {"op": "replace", "path": "/mode", "value": "global"},
+            {"op": "remove", "path": "/missing"}
+        ]))
+        .unwrap();
+        builder
+            .push_delta(
+                OperatorTag::BuiltinStep {
+                    selected_profile_id: None,
+                    step: BuiltinStepKind::Finalizing,
+                },
+                root,
+                invalid_patch,
+            )
+            .unwrap();
+        let (graph, final_node) = builder.build_stored_with_current().unwrap();
+        let data = RuntimeInspectionData {
+            graph,
+            final_node,
+            step_logs: Vec::new(),
+        };
+        assert!(
+            data.inspection_content("version-3", None, "version-3", final_node)
+                .is_err()
+        );
+    }
+
     #[test]
     fn effective_view_keeps_sensitive_changed_paths_but_redacts_values() {
         let root = Arc::new(
             ConfigValue::try_from(serde_json::json!({"mode": "rule", "secret": "old"})).unwrap(),
         );
         let graph = ConfigSnapshotsBuilder::new_root(root, OperatorTag::BareRoot)
-            .build()
+            .build_stored()
             .unwrap();
         let data = RuntimeInspectionData {
             final_node: graph.root_id,
