@@ -119,6 +119,10 @@ impl CandidateCheck {
             DomainChange::Clash { .. } => ConfigDomain::Clash,
             DomainChange::Profiles { .. } => ConfigDomain::Profiles,
         };
+        #[cfg(feature = "e2e")]
+        if domain == ConfigDomain::Profiles {
+            tracing::warn!(target: "chimera::e2e_profile", stage = "candidate_check_entered", "Profile RuntimeGate stage");
+        }
         let app = match &candidate.change {
             DomainChange::Application { candidate } => candidate.as_ref().clone(),
             _ => self.application.load().state.clone(),
@@ -140,6 +144,10 @@ impl CandidateCheck {
                     .1
             }
         };
+        #[cfg(feature = "e2e")]
+        if domain == ConfigDomain::Profiles {
+            tracing::warn!(target: "chimera::e2e_profile", stage = "candidate_content_captured", "Profile RuntimeGate stage");
+        }
         for (path, content) in candidate.staged {
             inputs.content.0.insert(path, Ok(content));
         }
@@ -154,10 +162,18 @@ impl CandidateCheck {
                     },
                 })
             })?;
+        #[cfg(feature = "e2e")]
+        if domain == ConfigDomain::Profiles {
+            tracing::warn!(target: "chimera::e2e_profile", stage = "candidate_prepared", "Profile RuntimeGate stage");
+        }
         let core_spec = self
             .preparation
             .core_spec(&prepared.snapshot.target_core)
             .map_err(|source| Arc::new(RuntimeError::ResolveCoreBinary { source }))?;
+        #[cfg(feature = "e2e")]
+        if domain == ConfigDomain::Profiles {
+            tracing::warn!(target: "chimera::e2e_profile", stage = "candidate_validator_started", "Profile RuntimeGate stage");
+        }
         match self
             .validator
             .check(RuntimeCheckRequest {
@@ -166,7 +182,13 @@ impl CandidateCheck {
             })
             .await
         {
-            RuntimeCheckOutcome::Passed => Ok((domain, prepared, core_spec)),
+            RuntimeCheckOutcome::Passed => {
+                #[cfg(feature = "e2e")]
+                if domain == ConfigDomain::Profiles {
+                    tracing::warn!(target: "chimera::e2e_profile", stage = "candidate_validator_passed", "Profile RuntimeGate stage");
+                }
+                Ok((domain, prepared, core_spec))
+            }
             RuntimeCheckOutcome::Rejected { kind, message } => {
                 Err(Arc::new(RuntimeError::CoreRejectedConfig {
                     core_kind: kind,
@@ -379,7 +401,16 @@ impl CandidateCheck {
 impl RuntimeGate for CandidateCheck {
     async fn check(&self, candidate: RuntimeCandidate) -> Result<(), Arc<RuntimeError>> {
         let (domain, prepared, core_spec) = self.validate(candidate).await?;
-        self.workflow.checked(domain, prepared, core_spec).await
+        #[cfg(feature = "e2e")]
+        if domain == ConfigDomain::Profiles {
+            tracing::warn!(target: "chimera::e2e_profile", stage = "candidate_checked_admission_start", "Profile RuntimeGate stage");
+        }
+        let result = self.workflow.checked(domain, prepared, core_spec).await;
+        #[cfg(feature = "e2e")]
+        if domain == ConfigDomain::Profiles {
+            tracing::warn!(target: "chimera::e2e_profile", stage = "candidate_checked_admission_finished", succeeded = result.is_ok(), "Profile RuntimeGate stage");
+        }
+        result
     }
 
     fn committed(&self, domain: ConfigDomain, version: Version) {
