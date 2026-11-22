@@ -319,6 +319,16 @@ impl CoreLifecyclePort for LegacyCoreBridge {
         })
     }
 
+    async fn reconcile_prepared_settlement(
+        &self,
+        prepared: super::ports::PreparedRuntime,
+        core_spec: chimera_core_manager::CoreSpec,
+    ) -> anyhow::Result<super::ports::PreparedCoreSettlement> {
+        self.facade()
+            .reconcile_prepared_settlement(prepared, core_spec)
+            .await
+    }
+
     async fn capture_interruption_source(
         &self,
     ) -> anyhow::Result<Option<crate::core::actor_v2::api::ApiClient>> {

@@ -141,6 +141,68 @@ pub(crate) struct CheckedApplyOutcome {
     pub replaced: Option<bool>,
 }
 
+/// The Core's result and its *separate* derived-product publication verdict.
+/// `Applied` is never inferred from a successful source commit. Production
+/// must return the actual accepted receipt and the exact submitted product;
+/// old compatibility ports leave those fields absent rather than inventing
+/// a Core/RuntimeProduct identity.
+#[derive(Debug, Clone)]
+pub(crate) struct PreparedCoreSettlement {
+    pub replaced: Option<bool>,
+    pub confirmed: Option<Arc<RuntimeApplyReceipt>>,
+    pub product: Option<Arc<crate::client::runtime::RuntimeSnapshot>>,
+    pub publication: PreparedProductPublication,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum PreparedProductPublication {
+    Published,
+    Pending { reason: String },
+    Unobserved,
+}
+
+impl PreparedCoreSettlement {
+    /// The real accepted candidate carries one exact source, Core revision,
+    /// product and digest. Old test/compatibility adapters are explicitly
+    /// Unobserved; a half-filled receipt may never pretend to be Applied.
+    pub(crate) fn validate_identity(&self, target: &str) -> anyhow::Result<()> {
+        match (&self.confirmed, &self.product) {
+            (None, None) if self.publication == PreparedProductPublication::Unobserved => Ok(()),
+            (Some(receipt), Some(product)) => {
+                anyhow::ensure!(
+                    receipt.target.as_deref() == Some(target),
+                    "confirmed Core receipt belongs to a different committed source"
+                );
+                anyhow::ensure!(
+                    receipt.revision == product.revision
+                        && receipt.target_core == product.target_core
+                        && receipt.config_digest
+                            == chimera_core_manager::payload_digest(product.product_bytes()),
+                    "confirmed Core receipt does not match the accepted runtime product"
+                );
+                anyhow::ensure!(
+                    receipt
+                        .artifact
+                        .as_ref()
+                        .is_some_and(|saved| Arc::ptr_eq(saved, product)),
+                    "confirmed Core receipt did not retain the exact submitted product"
+                );
+                Ok(())
+            }
+            _ => anyhow::bail!("prepared Core result has no coherent accepted product receipt"),
+        }
+    }
+
+    pub(crate) fn require_published(self) -> anyhow::Result<CheckedApplyOutcome> {
+        if let PreparedProductPublication::Pending { reason } = self.publication {
+            anyhow::bail!("Core applied but RuntimeProduct publication failed: {reason}");
+        }
+        Ok(CheckedApplyOutcome {
+            replaced: self.replaced,
+        })
+    }
+}
+
 #[async_trait]
 pub(crate) trait CoreLifecyclePort: Send + Sync {
     /// The canonical prepared-runtime session, only present when this port
@@ -213,6 +275,24 @@ pub(crate) trait CoreLifecyclePort: Send + Sync {
     ) -> anyhow::Result<CheckedApplyOutcome> {
         self.reconcile_prepared(prepared, core_spec).await?;
         Ok(CheckedApplyOutcome { replaced: None })
+    }
+
+    /// Ref's AppliedCandidate boundary. Unlike the compatibility Result<bool>
+    /// entry above, a confirmed Core revision may be successful even when
+    /// publishing its derived RuntimeProduct fails. Only a real production
+    /// owner can supply the corresponding receipt and product evidence.
+    async fn reconcile_prepared_settlement(
+        &self,
+        prepared: PreparedRuntime,
+        core_spec: chimera_core_manager::CoreSpec,
+    ) -> anyhow::Result<PreparedCoreSettlement> {
+        let applied = self.reconcile_prepared_outcome(prepared, core_spec).await?;
+        Ok(PreparedCoreSettlement {
+            replaced: applied.replaced,
+            confirmed: None,
+            product: None,
+            publication: PreparedProductPublication::Unobserved,
+        })
     }
 
     /// Capture the *previous* running Core's instance-bound API before

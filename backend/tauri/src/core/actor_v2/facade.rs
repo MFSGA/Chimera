@@ -462,6 +462,21 @@ impl CoreFacade {
         prepared: crate::client::core_lifecycle::ports::PreparedRuntime,
         core_spec: chimera_core_manager::CoreSpec,
     ) -> anyhow::Result<bool> {
+        self.reconcile_prepared_settlement(prepared, core_spec)
+            .await?
+            .require_published()?
+            .replaced
+            .ok_or_else(|| anyhow::anyhow!("the Core did not provide a replacement verdict"))
+    }
+
+    /// The serialized lower-host registry returns exactly one confirmed Core
+    /// result. The publication verdict is data, not an operation failure:
+    /// losing a post-apply filesystem write must never trigger a new submit.
+    pub(crate) async fn reconcile_prepared_settlement(
+        &self,
+        prepared: crate::client::core_lifecycle::ports::PreparedRuntime,
+        core_spec: chimera_core_manager::CoreSpec,
+    ) -> anyhow::Result<crate::client::core_lifecycle::ports::PreparedCoreSettlement> {
         let local_runtime = self
             .local_runtime
             .as_ref()
@@ -489,23 +504,31 @@ impl CoreFacade {
         let (outcome_tx, outcome_rx) = tokio::sync::oneshot::channel();
         let result = self
             .run_local_mutation("checked runtime reconcile", async move {
-                let replaced = local_runtime
-                    .reconcile_prepared_outcome(
+                let settled = local_runtime
+                    .reconcile_prepared_settlement(
                         &prepared,
                         core_spec,
                         endpoint.as_ref(),
                         (observed.host, observed.generation),
                     )
                     .await?;
-                let _ = outcome_tx.send(replaced);
+                let _ = outcome_tx.send(settled);
                 Ok(())
             })
             .await;
         self.refresh_ws_binding().await;
         result?;
-        outcome_rx
-            .await
-            .context("checked Core applied, but its replacement receipt was lost")
+        match outcome_rx.await {
+            Ok(settlement) => Ok(settlement),
+            Err(_) => {
+                // The registry reported success but lost the only real
+                // AppliedCandidate evidence. Isolate until a live receipt
+                // can be recovered; never turn this into a safe retry.
+                self.invalidate_local_ports();
+                self.outcome_uncertain.store(true, Ordering::Release);
+                anyhow::bail!("prepared Core applied, but its settlement receipt was lost")
+            }
+        }
     }
 
     pub(crate) async fn reconcile(
@@ -1214,7 +1237,7 @@ impl CoreFacade {
         if accepted.target.as_deref() != Some(target) {
             return Ok(false);
         }
-        if !runtime.republish_pending_runtime_product(&accepted)? {
+        if !runtime.republish_pending_runtime_product(&accepted).await? {
             return Ok(false);
         }
         anyhow::ensure!(

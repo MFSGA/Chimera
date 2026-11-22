@@ -307,6 +307,25 @@ impl LocalRuntimeHost {
         endpoint: &dyn ControlEndpoint,
         expected_owner: (ExecutionHost, u64),
     ) -> anyhow::Result<bool> {
+        let settled = self
+            .reconcile_prepared_settlement(prepared, core_spec, endpoint, expected_owner)
+            .await?
+            .require_published()?;
+        settled
+            .replaced
+            .ok_or_else(|| anyhow::anyhow!("the Core did not provide a replacement verdict"))
+    }
+
+    /// Submit and confirm the Core *once*. A failure to publish the derived
+    /// file or snapshot is not a Core refusal or a reason to resubmit bytes.
+    /// Keep the accepted receipt and product for receipt-fenced repair.
+    pub(crate) async fn reconcile_prepared_settlement(
+        &self,
+        prepared: &crate::client::core_lifecycle::ports::PreparedRuntime,
+        core_spec: chimera_core_manager::CoreSpec,
+        endpoint: &dyn ControlEndpoint,
+        expected_owner: (ExecutionHost, u64),
+    ) -> anyhow::Result<crate::client::core_lifecycle::ports::PreparedCoreSettlement> {
         anyhow::ensure!(
             !self.closed.load(Ordering::Acquire),
             "the local core control plane is shutting down"
@@ -438,9 +457,26 @@ impl LocalRuntimeHost {
         // Publish only the verified Core outcome. `publish_profile_candidate`
         // handles exact-file promotion and applied snapshot identity checks.
         self.lifecycle.publish_confirmed(receipt.clone());
-        self.publish_profile_candidate(candidate, receipt, prepared.snapshot.clone())
-            .await?;
-        Ok(reconcile_replaced(&outcome))
+        let publication = match self
+            .publish_profile_candidate(candidate, receipt.clone(), prepared.snapshot.clone())
+            .await
+        {
+            Ok(()) => crate::client::core_lifecycle::ports::PreparedProductPublication::Published,
+            Err(error) => {
+                tracing::warn!(%error, "Core applied the prepared runtime, but product publication needs repair");
+                crate::client::core_lifecycle::ports::PreparedProductPublication::Pending {
+                    reason: format!("{error:#}"),
+                }
+            }
+        };
+        Ok(
+            crate::client::core_lifecycle::ports::PreparedCoreSettlement {
+                replaced: Some(reconcile_replaced(&outcome)),
+                confirmed: Some(receipt),
+                product: Some(prepared.snapshot.clone()),
+                publication,
+            },
+        )
     }
 
     pub(crate) async fn reconcile(
@@ -1344,17 +1380,48 @@ impl LocalRuntimeHost {
     /// Repair only the derived snapshot publication for a still-active Core
     /// receipt. The caller first checks the selected endpoint's live revision;
     /// this method does not re-submit runtime bytes or touch Profile sources.
-    pub(crate) fn republish_pending_runtime_product(
+    pub(crate) async fn republish_pending_runtime_product(
         &self,
         receipt: &Arc<RuntimeApplyReceipt>,
     ) -> anyhow::Result<bool> {
         if self.closed.load(Ordering::Acquire) || self.outcome_uncertain() {
             return Ok(false);
         }
-        let Some(product) = self.lifecycle.republish_confirmed_product(receipt)? else {
+        let Some((pending_receipt, product)) = self.lifecycle.pending_confirmed_product() else {
             return Ok(false);
         };
-        Config::publish_applied_runtime_legacy(&product.config);
+        if !Arc::ptr_eq(&pending_receipt, receipt) {
+            return Ok(false);
+        }
+        let promoted = self
+            .lifecycle
+            .snapshot()
+            .promoted
+            .as_ref()
+            .is_some_and(|current| Arc::ptr_eq(current, &product));
+        if !promoted {
+            // Core already accepted these exact bytes. Repair only the
+            // derived file; do not call Reconcile/prepare another candidate.
+            crate::client::runtime::restore_product(
+                self.runtime_paths.product(),
+                product.product_bytes(),
+            )
+            .await?;
+            if !self
+                .lifecycle
+                .accepted_confirmed_receipt()
+                .is_some_and(|active| Arc::ptr_eq(&active, receipt))
+            {
+                // A newer Core receipt superseded this file while it was
+                // being promoted; it must never become the Applied snapshot.
+                return Ok(false);
+            }
+            self.lifecycle.publish_promoted(product.clone());
+        }
+        let Some(published) = self.lifecycle.republish_confirmed_product(receipt)? else {
+            return Ok(false);
+        };
+        Config::publish_applied_runtime_legacy(&published.config);
         Ok(true)
     }
 
@@ -1919,6 +1986,87 @@ mod tests {
         assert_eq!(
             tokio::fs::read(paths.product()).await.unwrap(),
             bytes.as_bytes()
+        );
+        host.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn confirmed_prepared_core_survives_product_promotion_failure_and_repairs_without_resubmit()
+     {
+        use crate::client::core_lifecycle::ports::PreparedProductPublication;
+
+        let (_root, host, paths) = runtime_host_fixture().await;
+        let (prepared, spec) = prepared_runtime_fixture("mode: rule\n".into());
+        let expected_product = prepared.snapshot.clone();
+        let endpoint = recording_endpoint(true);
+
+        // A directory in place of the generated YAML product makes atomic
+        // file promotion fail *after* the real Core endpoint accepted it.
+        tokio::fs::create_dir_all(paths.product()).await.unwrap();
+        let settled = host
+            .reconcile_prepared_settlement(&prepared, spec, &endpoint, (ExecutionHost::Local, 3))
+            .await
+            .expect("the Core applied, even though publication failed");
+        assert_eq!(settled.replaced, Some(true));
+        settled.validate_identity("committed-source-42").unwrap();
+        assert!(settled.validate_identity("an-obsolete-source").is_err());
+        let mut forged = settled.clone();
+        forged.product = Some(Arc::new((*expected_product).clone()));
+        assert!(
+            forged.validate_identity("committed-source-42").is_err(),
+            "a copied product is not the exact accepted Core artifact"
+        );
+        assert!(matches!(
+            settled.publication,
+            PreparedProductPublication::Pending { .. }
+        ));
+        let accepted = settled
+            .confirmed
+            .expect("accepted Core receipt is not a publish receipt");
+        assert!(Arc::ptr_eq(
+            &accepted,
+            &host.accepted_runtime_receipt().unwrap()
+        ));
+        assert!(Arc::ptr_eq(
+            settled
+                .product
+                .as_ref()
+                .expect("confirmed bytes are retained"),
+            &expected_product
+        ));
+        assert_eq!(endpoint.submitted.lock().unwrap().len(), 1);
+        assert_eq!(
+            host.pending_runtime_product_target().as_deref(),
+            Some("committed-source-42")
+        );
+        assert!(host.lifecycle.snapshot().applied.is_none());
+        assert!(host.lifecycle.snapshot().promoted.is_none());
+
+        tokio::fs::remove_dir_all(paths.product()).await.unwrap();
+        assert!(
+            host.republish_pending_runtime_product(&accepted)
+                .await
+                .unwrap()
+        );
+        assert_eq!(
+            tokio::fs::read(paths.product()).await.unwrap(),
+            expected_product.product_bytes()
+        );
+        assert_eq!(
+            endpoint.submitted.lock().unwrap().len(),
+            1,
+            "publish recovery must not resubmit Core"
+        );
+        assert!(host.pending_runtime_product_target().is_none());
+        assert!(Arc::ptr_eq(
+            &host.lifecycle.snapshot().applied.unwrap(),
+            &expected_product
+        ));
+        assert!(
+            !host
+                .republish_pending_runtime_product(&accepted)
+                .await
+                .unwrap()
         );
         host.shutdown().await.unwrap();
     }

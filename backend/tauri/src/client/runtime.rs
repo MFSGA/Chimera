@@ -496,24 +496,41 @@ impl RuntimeLifecycle {
 
     /// The ref pending-product boundary, retained by the *existing* runtime
     /// lifecycle rather than duplicated in the higher CoreLifecycle actor.
-    /// A promoted product is retryable only against the very same accepted
-    /// Core receipt. A newer confirmation or an invalidated receipt makes the
-    /// older product ineligible; it must never be re-published as current.
+    /// A confirmed receipt carries its exact built artifact even if *file*
+    /// promotion failed before `publish_promoted`. That product may be repaired
+    /// only against the same accepted Core receipt; the host must promote the
+    /// exact bytes to disk before calling `republish_confirmed_product`.
+    /// A newer confirmation or an invalidated receipt makes the old product
+    /// ineligible; it must never be re-published as current.
     pub fn pending_confirmed_product(
         &self,
     ) -> Option<(Arc<RuntimeApplyReceipt>, Arc<RuntimeSnapshot>)> {
         let state = self.state.read();
         let receipt = state.confirmed.as_ref()?.clone();
-        let product = state.promoted.as_ref()?.clone();
-        if !state.confirmed_available
-            || state
-                .applied
-                .as_ref()
-                .is_some_and(|applied| applied.identity_eq(&product))
-            || receipt.revision != product.revision
-            || receipt.config_digest
-                != chimera_core_manager::payload_digest(product.product_bytes())
-            || receipt.target_core != product.target_core
+        if !state.confirmed_available {
+            return None;
+        }
+        let matches_receipt = |product: &Arc<RuntimeSnapshot>| {
+            receipt.revision == product.revision
+                && receipt.config_digest
+                    == chimera_core_manager::payload_digest(product.product_bytes())
+                && receipt.target_core == product.target_core
+        };
+        let product = state
+            .promoted
+            .as_ref()
+            .filter(|product| matches_receipt(product))
+            .or_else(|| {
+                receipt
+                    .artifact
+                    .as_ref()
+                    .filter(|product| matches_receipt(product))
+            })?
+            .clone();
+        if state
+            .applied
+            .as_ref()
+            .is_some_and(|applied| applied.identity_eq(&product))
         {
             return None;
         }
@@ -1394,9 +1411,22 @@ mod tests {
         let mut receipt = crate::client::ports::test_runtime_receipt(Default::default());
         receipt.revision = product.revision;
         receipt.config_digest = chimera_core_manager::payload_digest(product.product_bytes());
+        receipt.artifact = Some(product.clone());
         let receipt = Arc::new(receipt);
 
         lifecycle.publish_confirmed(receipt.clone());
+        let (staged_receipt, staged_product) = lifecycle
+            .pending_confirmed_product()
+            .expect("an accepted Core receipt retains the exact product before file promotion");
+        assert!(Arc::ptr_eq(&staged_receipt, &receipt));
+        assert!(Arc::ptr_eq(&staged_product, &product));
+        assert!(
+            lifecycle
+                .republish_confirmed_product(&receipt)
+                .unwrap()
+                .is_none(),
+            "unpromoted bytes must never be marked Applied without repairing the disk file"
+        );
         lifecycle.publish_promoted(product.clone());
         let (pending_receipt, pending_product) = lifecycle
             .pending_confirmed_product()

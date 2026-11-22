@@ -1051,8 +1051,9 @@ impl CoreLifecycleWorkflow {
             };
             let applied = self
                 .core
-                .reconcile_prepared_outcome(prepared, core_spec)
+                .reconcile_prepared_settlement(prepared, core_spec)
                 .await?;
+            applied.validate_identity(&checked_target)?;
             // No stale source may be promoted into applied_selection, and
             // an obsolete Core result cannot settle current runtime effects.
             let selection = authority
@@ -2008,8 +2009,9 @@ impl CoreLifecycleWorkflow {
             };
             let applied = self
                 .core
-                .reconcile_prepared_outcome(prepared, core_spec)
+                .reconcile_prepared_settlement(prepared, core_spec)
                 .await?;
+            applied.validate_identity(target)?;
             let latest = authority
                 .verify_committed_prepared_target(target, previous.as_ref())
                 .await?
