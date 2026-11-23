@@ -211,6 +211,9 @@ struct ChimeraClientInner {
     system_dns: Arc<dyn SystemDnsCache>,
     traffic_store: parking_lot::Mutex<Option<Arc<dyn chimera_traffic::TrafficStore>>>,
     traffic: parking_lot::RwLock<Option<crate::core::traffic::TrafficClient>>,
+    /// The same opt-in source-address cache serves the traffic recorder and
+    /// the explicit public-egress probe, without spawning a second probe.
+    local_source: Arc<traffic::LocalSourceCache>,
     geo_index: parking_lot::RwLock<Option<crate::core::geo::GeoIndexClient>>,
     ui_sink: Arc<dyn UiEventSink>,
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -598,6 +601,10 @@ impl ChimeraClient {
             .map(|(core, service)| {
                 chimera_core::actor_v2::facade::CoreFacade::new(core.clone(), service.clone())
             });
+        let local_source = Arc::new(traffic::LocalSourceCache::new(
+            typed.application.clone(),
+            typed.clash_config.clone(),
+        ));
         let inner = ChimeraClientInner {
             application: typed.application,
             session_state: typed.session_state,
@@ -621,6 +628,7 @@ impl ChimeraClient {
             system_dns,
             traffic_store: parking_lot::Mutex::new(None),
             traffic: parking_lot::RwLock::new(None),
+            local_source,
             geo_index: parking_lot::RwLock::new(None),
             ui_sink,
             #[cfg(not(any(target_os = "android", target_os = "ios")))]

@@ -364,3 +364,11 @@ cargo clippy --manifest-path backend/Cargo.toml --all-targets --all-features
 - 显示语义：TUN Stack 和 MIPS 控制器选择器只遍历 ConfigFeatures.tun 的 FieldSupport.Values；Ignored 不展示选项，尚未获得能力查询时亦不推测。MIPS 仍仅在所选栈为 mips 时显示，保存时沿用现有配置接口和持久化逻辑。核心名称与自有 Chimera Client 特性由 backend/chimera-config/src/clash/features.rs 统一决定。
 - 本轮边界：只迁移读能力、查询失效和界面选项来源；未修改 Core/TUN/DNS 生成、Profile 数据、Service 所有权及 UI 以外的调用方。未运行任何测试或编译验证（按用户要求）；完成了代码格式化与源码差异审阅。TypeScript Specta 绑定按上游结构同步，后续正式 CI 仍应检查生成器一致性和 Windows 原生菜单表现。
 - 收敛：这是此前 MIPS 菜单标注的能力查询缺口，不再需要以 Mihomo/MihomoAlpha 名称检查代替 RPC。剩余特殊 UI/legacy 差异按独立迁移条目处理。
+
+### DIFF-TRAFFIC-LOCAL-SOURCE-CACHE：迁入 ref 的受授权本机出口来源归因
+
+- ref 基线：4607a7379f0aa060daf55b369dc8103dda929d82；ref/backend/nyanpasu-core/src/client/traffic.rs::LocalSourceCache。上游把明确探测到的本机 IPv4/IPv6 出口地址注入 Traffic owner，并在用户关闭探测、启用 TUN 或本机透明代理时屏蔽；不会根据代理出口自行推断本机 IP。
+- 迁移前：backend/tauri/src/client/traffic.rs 始终用 NoLocalSource 填充 TrafficArgs.local_source，虽然 backend/tauri/src/network_info.rs::probe_direct_egress 已有完整的 opt-in、STUN/HTTP echo 和 capture gate，Traffic 仍无法使用已授权探测结果。
+- 迁移后：client::traffic::LocalSourceCache 使用当前唯一 ApplicationClient 与 ClashConfigClient 提交状态，显式 probe 的结果按地址族解析后写入共享缓存；ChimeraClientInner.local_source 是唯一缓存持有者，TrafficArgs 复用相同 Arc，未引入第二个网络探测或 Core/Service owner。明确禁止捕获模式、未授权时的本机来源归因，读出前重新执行和网络探测完全相同的 gate。
+- Chimera 特有安全适配：地址与探测开始时的两个源版本一同保存。网络探测期间发生任意提交版本更新的结果不入缓存，已缓存数据在任一源版本变更后不再使用，防止用户关掉探测、切换网络捕获模式又恢复时误把旧代理出口认成本机地址。后续只有用户再次显式探测才能刷新缓存。
+- 本轮仅后端流量来源归因，不改变网络探测端点、配置文件、DNS/代理/透明捕获运行时或前端接口。未执行任何单元测试、编译检查或桌面 E2E（用户指定）；已做 Rustfmt 和静态代码/差异审阅。当前所有异步任务仍由现有网络探测请求和 Traffic actor 持有，不新增长期后台 worker。

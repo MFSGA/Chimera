@@ -124,7 +124,7 @@ pub fn ip_lookup_providers() -> Vec<IpLookupProviderInfo> {
     IpLookupProvider::ALL.into_iter().map(Into::into).collect()
 }
 
-fn blocked(app: &ChimeraAppConfig, clash: &ClashConfig) -> Option<DirectEgress> {
+pub(crate) fn blocked(app: &ChimeraAppConfig, clash: &ClashConfig) -> Option<DirectEgress> {
     if !app.enable_local_ip_probe {
         Some(DirectEgress::Disabled)
     } else if clash.enable_tun_mode {
@@ -181,6 +181,7 @@ pub async fn probe_direct_egress(client: &ChimeraClient) -> anyhow::Result<Direc
     if let Some(reason) = current_gate(client)? {
         return Ok(reason);
     }
+    let source_versions = client.direct_egress_source_versions();
     let snapshot = client.get_app_config()?;
     let sources =
         ProbeSources::from_config(&snapshot, Arc::new(LiveProbePermission(client.clone())));
@@ -189,10 +190,15 @@ pub async fn probe_direct_egress(client: &ChimeraClient) -> anyhow::Result<Direc
     if let Some(reason) = current_gate(client)? {
         return Ok(reason);
     }
-    Ok(DirectEgress::Probed {
+    let result = DirectEgress::Probed {
         ipv4: ipv4.map(|answer| locate(client, answer)),
         ipv6: ipv6.map(|answer| locate(client, answer)),
-    })
+    };
+    // Ref LocalSourceCache: record the user's explicit result, not inferred
+    // proxy egress. The traffic reader independently rechecks current capture
+    // and consent before using either address.
+    client.record_direct_egress(&result, source_versions);
+    Ok(result)
 }
 
 /// Explicit desktop user action: test all transports without saving results;
