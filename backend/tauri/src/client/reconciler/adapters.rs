@@ -31,6 +31,8 @@ impl super::ports::RuntimeValidatorPort for CoreCheckValidator {
         &self,
         request: super::ports::RuntimeCheckRequest<'_>,
     ) -> super::ports::RuntimeCheckOutcome {
+        #[cfg(feature = "e2e")]
+        tracing::warn!(target: "chimera::e2e_profile", stage = "local_config_check_started", "Runtime candidate core validation stage");
         let support = self
             .core
             .check_config(CheckSubmission {
@@ -41,6 +43,8 @@ impl super::ports::RuntimeValidatorPort for CoreCheckValidator {
                 staged_config: None,
             })
             .await;
+        #[cfg(feature = "e2e")]
+        tracing::warn!(target: "chimera::e2e_profile", stage = "local_config_check_finished", "Runtime candidate core validation stage");
         classify_check_support(support)
     }
 }

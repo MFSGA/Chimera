@@ -622,6 +622,8 @@ impl ProfilesActor {
             .mutations
             .ensure_ready()
             .map_err(|error| ProfilesError::Persist(error.to_string()))?;
+        #[cfg(feature = "e2e")]
+        tracing::warn!(target: "chimera::e2e_profile", stage = "state_write_ready", "Profile source transaction stage");
         let reaches_runtime = !Self::source_only_document_change(before, &next, &hints, class);
         if reaches_runtime {
             state
@@ -636,16 +638,22 @@ impl ProfilesActor {
                 })
                 .await
                 .map_err(Self::runtime_gate_failure)?;
+            #[cfg(feature = "e2e")]
+            tracing::warn!(target: "chimera::e2e_profile", stage = "state_write_gate_passed", "Profile source transaction stage");
         }
         // Use the same publication fence as ref's Profile source actor.
         // A concurrent committed-content reader cannot observe a mixed
         // Profiles document and managed-file generation during the write.
         let fence = state.content_lock.write().await;
+        #[cfg(feature = "e2e")]
+        tracing::warn!(target: "chimera::e2e_profile", stage = "state_write_publish_start", "Profile source transaction stage");
         let result = state
             .manager
             .replace_if_version(expected_version, next.clone())
             .await;
         drop(fence);
+        #[cfg(feature = "e2e")]
+        tracing::warn!(target: "chimera::e2e_profile", stage = "state_write_publish_finished", "Profile source transaction stage");
         match result {
             Ok(ReplaceIfVersionResult::Replaced) => {
                 let version = *state.manager.snapshot_handle().load().version.as_ref();
@@ -777,6 +785,8 @@ impl ProfilesActor {
             Self::persist_candidate(state, expected_version, &before, candidate, hints, class)
                 .await?;
         Self::reconcile_committed(myself, state, &snapshot).await;
+        #[cfg(feature = "e2e")]
+        tracing::warn!(target: "chimera::e2e_profile", stage = "state_write_reconcile_finished", "Profile source transaction stage");
         Ok(CommitReport {
             affects_current: Self::evaluate_affects(&affects, &before, &snapshot),
             snapshot,
@@ -1011,6 +1021,8 @@ impl ProfilesActor {
         cleanup_path: Option<ManagedProfilePath>,
         created: Option<ProfileId>,
     ) -> Result<CommitReport, ProfilesError> {
+        #[cfg(feature = "e2e")]
+        tracing::warn!(target: "chimera::e2e_profile", stage = "file_commit_start", "Profile source transaction stage");
         let candidate = Self::prepare_candidate(next)?;
         let expected_revision = candidate.revision();
         state
@@ -1162,6 +1174,8 @@ impl ProfilesActor {
             })
             .await?
         };
+        #[cfg(feature = "e2e")]
+        tracing::warn!(target: "chimera::e2e_profile", stage = "file_commit_publish_start", "Profile source transaction stage");
         let result = state
             .manager
             .replace_if_version_with_local_write(
@@ -1171,6 +1185,8 @@ impl ProfilesActor {
                 recover,
             )
             .await;
+        #[cfg(feature = "e2e")]
+        tracing::warn!(target: "chimera::e2e_profile", stage = "file_commit_publish_finished", "Profile source transaction stage");
         // Publication or compensation settled in the source owner. Do not
         // hold the file fence while reconciling source jobs or runtime.
         drop(
@@ -1276,6 +1292,8 @@ impl ProfilesActor {
                 });
             }
         }
+        #[cfg(feature = "e2e")]
+        tracing::warn!(target: "chimera::e2e_profile", stage = "file_commit_source_published", "Profile source transaction stage");
         let version = *state.manager.snapshot_handle().load().version.as_ref();
         let touched = match &affects {
             AffectsRule::Touched(uid) => Some(uid),
@@ -1289,7 +1307,11 @@ impl ProfilesActor {
         );
         let runtime_degradations = Vec::new();
         let snapshot = Arc::new(candidate);
+        #[cfg(feature = "e2e")]
+        tracing::warn!(target: "chimera::e2e_profile", stage = "file_commit_reconcile_start", "Profile source transaction stage");
         Self::reconcile_committed(myself, state, &snapshot).await;
+        #[cfg(feature = "e2e")]
+        tracing::warn!(target: "chimera::e2e_profile", stage = "file_commit_reconcile_finished", "Profile source transaction stage");
         let mut degradations = Vec::new();
         if let Some(prepared) = prepared {
             if let Err(error) =
@@ -1728,6 +1750,8 @@ impl Actor for ProfilesActor {
                 let _ = reply.send(result);
             }
             ProfilesActorMessage::SetCurrentIfNone { uid, reply } => {
+                #[cfg(feature = "e2e")]
+                tracing::warn!(target: "chimera::e2e_profile", stage = "auto_activate_received", "Profile source transaction stage");
                 // Atomic conditional activation: select `uid` only when nothing
                 // is currently selected. Serialized actor message handling makes
                 // this read-then-write race-free without a second RPC, so a
@@ -1740,6 +1764,8 @@ impl Actor for ProfilesActor {
                         Ok(AffectsRule::CurrentChanged)
                     })
                     .await;
+                    #[cfg(feature = "e2e")]
+                    tracing::warn!(target: "chimera::e2e_profile", stage = "auto_activate_replied", succeeded = result.is_ok(), "Profile source transaction stage");
                     let _ = reply.send(result.map(Some));
                 }
             }
@@ -1784,6 +1810,8 @@ impl Actor for ProfilesActor {
                 initial_file,
                 reply,
             } => {
+                #[cfg(feature = "e2e")]
+                tracing::warn!(target: "chimera::e2e_profile", stage = "add_received", "Profile source transaction stage");
                 let versioned = state.manager.snapshot_handle().load();
                 let expected_version = versioned.version;
                 let before = versioned.state.clone();
@@ -1834,6 +1862,8 @@ impl Actor for ProfilesActor {
                         }
                         Err(error) => Err(error),
                     };
+                #[cfg(feature = "e2e")]
+                tracing::warn!(target: "chimera::e2e_profile", stage = "add_replied", succeeded = result.is_ok(), "Profile source transaction stage");
                 let _ = reply.send(result);
             }
             ProfilesActorMessage::Delete { uid, reply } => {

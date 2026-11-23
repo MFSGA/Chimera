@@ -300,6 +300,18 @@ describe('legacy proxy localization', () => {
     await confirmButton.click();
     console.info('[proxy-localization] after clicking Create Profile');
 
+    // Creating a Config also auto-activates it when none is selected. The
+    // Profiles document can expose the new row before that async mutation
+    // settles; writing its file here races the UI's in-flight activation.
+    // Wait for the visible creation dialog to close, just as a user would,
+    // before starting another Profile mutation. Do not hide a failed create.
+    await nameInput.waitForDisplayed({
+      reverse: true,
+      timeout: 30_000,
+      timeoutMsg: 'Create Profile did not complete and close its dialog.',
+    });
+    console.info('[proxy-localization] create dialog closed');
+
     const profileNameElement = await $(
       `//*[normalize-space()="${profileName}"]`,
     );
@@ -314,8 +326,11 @@ describe('legacy proxy localization', () => {
       'The profile created through the UI was not persisted.',
     );
 
+    console.info('[proxy-localization] before saving Profile fixture');
     await invoke('save_profile_file', { uid: profileUid, fileData: fixture });
+    console.info('[proxy-localization] Profile fixture saved');
     await invoke('activate_profile', { uid: null });
+    console.info('[proxy-localization] Profile selection cleared');
 
     const profileCard = await $(
       `//*[normalize-space()="${profileName}"]/ancestor::div[contains(@class,"cursor-pointer")][1]`,

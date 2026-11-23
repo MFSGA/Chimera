@@ -292,6 +292,29 @@ fn startup_recovery_evidence_changed(
     readiness_changed || owner_evidence_changed
 }
 
+/// A service watch can republish an unchanged daemon observation on each poll.
+/// Every redundant message otherwise enters the sole CoreLifecycle mailbox,
+/// where service follow-up performs async Core/source reads and can starve
+/// Checked admission. Match ref's evidence-driven Service ownership planning:
+/// only changes that can affect a host handoff, generation, or retry are events.
+///
+/// Deliberately compare projected *semantic evidence*, not the raw server DTO
+/// (which can contain volatile reporting fields unrelated to Core ownership).
+fn service_followup_evidence_changed(
+    previous: &ServiceHostStatus,
+    current: &ServiceHostStatus,
+) -> bool {
+    previous.phase != current.phase
+        || previous.ready_generation != current.ready_generation
+        || previous.settled_ready != current.settled_ready
+        || previous.status != current.status
+        || previous.runtime_owned != current.runtime_owned
+        || previous.compat != current.compat
+        || previous.restart_attempts != current.restart_attempts
+        || crate::client::application_workflow::startup::ServiceEvidence::from_status(previous)
+            != crate::client::application_workflow::startup::ServiceEvidence::from_status(current)
+}
+
 #[allow(unused_imports)]
 pub(crate) use adapters::{ActorRunningConfigBridge, LegacyCoreBridge, LegacyServiceBridge};
 #[allow(unused_imports)]
@@ -1568,6 +1591,41 @@ impl ApplicationWorkflowState {
     }
 }
 
+// The Windows desktop regression needs to distinguish a slow Core operation
+// from a synchronous Actor mailbox handler blocking a Checked ACK. This probe
+// is compiled only into the isolated E2E executable; it never changes admission.
+#[cfg(feature = "e2e")]
+struct E2eCoreMailboxProbe {
+    kind: &'static str,
+    started: std::time::Instant,
+}
+
+#[cfg(feature = "e2e")]
+impl E2eCoreMailboxProbe {
+    fn begin(kind: &'static str) -> Self {
+        if matches!(
+            kind,
+            "checked" | "completed" | "service_readiness" | "service_recovery_tick"
+        ) {
+            tracing::warn!(target: "chimera::e2e_core_mailbox", kind, stage = "entered", "CoreLifecycle mailbox stage");
+        }
+        Self {
+            kind,
+            started: std::time::Instant::now(),
+        }
+    }
+}
+
+#[cfg(feature = "e2e")]
+impl Drop for E2eCoreMailboxProbe {
+    fn drop(&mut self) {
+        let elapsed_ms = self.started.elapsed().as_millis();
+        if elapsed_ms >= 100 || matches!(self.kind, "checked" | "completed") {
+            tracing::warn!(target: "chimera::e2e_core_mailbox", kind = self.kind, stage = "finished", elapsed_ms = elapsed_ms as u64, "CoreLifecycle mailbox stage");
+        }
+    }
+}
+
 impl Actor for ApplicationWorkflowActor {
     type Msg = Message;
     type State = ApplicationWorkflowState;
@@ -1624,6 +1682,17 @@ impl Actor for ApplicationWorkflowActor {
         message: Self::Msg,
         state: &mut Self::State,
     ) -> Result<(), ActorProcessingErr> {
+        #[cfg(feature = "e2e")]
+        let _mailbox_probe = E2eCoreMailboxProbe::begin(match &message {
+            Message::Checked { .. } => "checked",
+            Message::Completed { .. } => "completed",
+            Message::ObserveService { .. } => "observe_service",
+            Message::ServiceReadiness => "service_readiness",
+            Message::ServiceProbeFailed => "service_probe_failed",
+            Message::ServiceRecoveryTick => "service_recovery_tick",
+            Message::Request(_) => "request",
+            _ => "other",
+        });
         match message {
             Message::AbortChecked { domain, request } => {
                 let count = if let Some(request) = request.as_deref() {
@@ -1838,6 +1907,8 @@ impl Actor for ApplicationWorkflowActor {
                     } else {
                         None
                     };
+                    #[cfg(feature = "e2e")]
+                    tracing::warn!(target: "chimera::e2e_core_mailbox", stage = "completed_binding_observed", "CoreLifecycle completion stage");
                     let active = state
                         .active
                         .take()
@@ -1851,6 +1922,8 @@ impl Actor for ApplicationWorkflowActor {
                     {
                         std::panic::resume_unwind(panic);
                     }
+                    #[cfg(feature = "e2e")]
+                    tracing::warn!(target: "chimera::e2e_core_mailbox", stage = "completed_worker_joined", "CoreLifecycle completion stage");
                     // A successful command alone is not proof that the Core
                     // reached Running or Stopped. Publish Converged/Inactive
                     // only after sampling the runtime owner.
@@ -1860,6 +1933,8 @@ impl Actor for ApplicationWorkflowActor {
                         } else {
                             None
                         };
+                    #[cfg(feature = "e2e")]
+                    tracing::warn!(target: "chimera::e2e_core_mailbox", stage = "completed_core_status_observed", "CoreLifecycle completion stage");
                     let verified_running = if reconciled && result.is_ok() {
                         if let Some(observed) = observed_core.as_ref() {
                             workflow
@@ -1872,6 +1947,8 @@ impl Actor for ApplicationWorkflowActor {
                     } else {
                         false
                     };
+                    #[cfg(feature = "e2e")]
+                    tracing::warn!(target: "chimera::e2e_core_mailbox", stage = "completed_running_verified", "CoreLifecycle completion stage");
                     let verified_stopped = active.trigger == "Stop"
                         && observed_core.as_ref().is_some_and(|snapshot| {
                             matches!(
@@ -1895,6 +1972,8 @@ impl Actor for ApplicationWorkflowActor {
                             workflow.lifecycle().invalidate_applied_selection();
                         }
                     }
+                    #[cfg(feature = "e2e")]
+                    tracing::warn!(target: "chimera::e2e_core_mailbox", stage = "completed_selection_recovery_finished", "CoreLifecycle completion stage");
                     // Unlike the worker, Completed owns the final observed
                     // source-version fence and Running evidence. The previous
                     // Core's connections may only be interrupted here; a
@@ -1918,6 +1997,8 @@ impl Actor for ApplicationWorkflowActor {
                             .map(|degradation| degradation.message.clone());
                         round_connection_degradation = issue;
                     }
+                    #[cfg(feature = "e2e")]
+                    tracing::warn!(target: "chimera::e2e_core_mailbox", stage = "completed_connection_effect_finished", "CoreLifecycle completion stage");
                     // Legacy SetConfig UI messages describe the outcome of
                     // Core refresh, not source persistence. Checked Clash
                     // follows the same semantics once the Actor settles it.
@@ -2129,6 +2210,8 @@ impl Actor for ApplicationWorkflowActor {
                         }
                     }
 
+                    #[cfg(feature = "e2e")]
+                    tracing::warn!(target: "chimera::e2e_core_mailbox", stage = "completed_retry_settled", "CoreLifecycle completion stage");
                     if (retry_reconcile_on_failure && failed || source_advanced)
                         && !state.uncertain
                         && !state.shutting_down
@@ -3202,8 +3285,12 @@ impl CoreLifecycleClient {
                                     &current,
                                     startup_owner_unproven_signal.load(Ordering::Acquire),
                                 );
+                                let followup_changed =
+                                    service_followup_evidence_changed(&previous, &current);
                                 previous = current;
-                                if service_followup_actor.cast(Message::ServiceReadiness).is_err() {
+                                if followup_changed
+                                    && service_followup_actor.cast(Message::ServiceReadiness).is_err()
+                                {
                                     break;
                                 }
                                 if evidence_changed && recovery_client.startup_recovery_needed() {
@@ -3229,8 +3316,12 @@ impl CoreLifecycleClient {
                                     &current,
                                     startup_owner_unproven_signal.load(Ordering::Acquire),
                                 );
+                                let followup_changed =
+                                    service_followup_evidence_changed(&previous, &current);
                                 previous = current;
-                                if service_followup_actor.cast(Message::ServiceReadiness).is_err() {
+                                if followup_changed
+                                    && service_followup_actor.cast(Message::ServiceReadiness).is_err()
+                                {
                                     break;
                                 }
                                 if evidence_changed && recovery_client.startup_recovery_needed() {
@@ -4783,6 +4874,85 @@ mod tests {
             &unavailable,
             false,
         ));
+    }
+
+    #[test]
+    fn unchanged_service_observations_do_not_flood_core_lifecycle_mailbox() {
+        use chimera_ipc::types::ServiceStatus;
+
+        let mut not_installed = ServiceHostStatus::probing();
+        not_installed.phase = ServicePhase::NotInstalled;
+        not_installed.status = ServiceStatus::NotInstalled;
+
+        for _ in 0..1000 {
+            assert!(!service_followup_evidence_changed(
+                &not_installed,
+                &not_installed.clone(),
+            ));
+        }
+
+        // The ServiceActor's status watch is allowed to publish the same
+        // probe repeatedly; no CoreLifecycle follow-up is owed without new
+        // evidence. This leaves Checked RPC ahead of redundant health polls.
+        let mut stopped = not_installed.clone();
+        stopped.status = ServiceStatus::Stopped;
+        stopped.phase = ServicePhase::DaemonStopped;
+        assert!(service_followup_evidence_changed(&not_installed, &stopped));
+        assert!(!service_followup_evidence_changed(&stopped, &stopped));
+    }
+
+    #[test]
+    fn service_followup_retains_generation_owner_core_and_policy_transitions() {
+        let mut current = ServiceHostStatus::probing();
+        current.phase = ServicePhase::Ready;
+        current.settled_ready = true;
+        current.ready_generation = 4;
+
+        let mut next = current.clone();
+        next.ready_generation += 1;
+        assert!(service_followup_evidence_changed(&current, &next));
+
+        next = current.clone();
+        next.runtime_owned = !current.runtime_owned;
+        assert!(service_followup_evidence_changed(&current, &next));
+
+        next = current.clone();
+        next.restart_attempts += 1;
+        assert!(service_followup_evidence_changed(&current, &next));
+
+        next = current.clone();
+        next.phase = ServicePhase::Restarting;
+        assert!(service_followup_evidence_changed(&current, &next));
+
+        // A Core status change can matter even if the Service's coarse
+        // readiness phase and generation remain unchanged.
+        use chimera_ipc::api::status::{CoreInfos, CoreStateDetail, RuntimeInfos, StatusResBody};
+        use chimera_ipc::types::ServiceStatus;
+        current.status = ServiceStatus::Running;
+        current.server = Some(StatusResBody {
+            version: std::borrow::Cow::Borrowed("test"),
+            core_infos: CoreInfos {
+                instance_id: None,
+                r#type: None,
+                state: chimera_ipc::api::status::CoreState::Stopped(None),
+                state_changed_at: 0,
+                config_path: None,
+                controller: None,
+                health: None,
+                revision: None,
+                detail: Some(CoreStateDetail::Stopped { reason: None }),
+            },
+            runtime_infos: RuntimeInfos {
+                service_data_dir: std::borrow::Cow::Owned(Default::default()),
+                service_config_dir: std::borrow::Cow::Owned(Default::default()),
+                nyanpasu_config_dir: std::borrow::Cow::Owned(Default::default()),
+                nyanpasu_data_dir: std::borrow::Cow::Owned(Default::default()),
+            },
+        });
+        next = current.clone();
+        next.server.as_mut().unwrap().core_infos.detail =
+            Some(CoreStateDetail::Running { epoch: 1, pid: 42 });
+        assert!(service_followup_evidence_changed(&current, &next));
     }
 
     #[tokio::test]

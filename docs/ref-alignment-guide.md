@@ -286,3 +286,33 @@ cargo clippy --manifest-path backend/Cargo.toml --all-targets --all-features
 - SHA：322bee212d993682be37c0ee71d08263fb5f3bad，CI https://github.com/MFSGA/Chimera/actions/runs/45067708384，E2E https://github.com/MFSGA/Chimera/actions/runs/45067708381；上两轮 SHA d73cc59e 和 a59a13e1 也存在同样的 E2E 测试失败（两条独立工作流）。
 - 确认的 CI 缺陷：Windows Lint 的 Test backend workspace 在 migration_child::tests::rejects_unexpected_args_and_child_paths_outside_absolute_roots 失败；测试错误把 Unix `/tmp/config` 当作 Windows 绝对路径。生产代码坚持 PathBuf::is_absolute 的安全约束是正确的。本轮修复该单元测试为 tempfile::tempdir() 的平台本机路径，并断言解析结果；本机 macOS Rust 单测通过，Windows 原生测试仍需新 SHA CI 验证。
 - E2E 观测而非根因结论：Desktop (push) 的 smoke 测试共 4 个文件通过、1 个文件失败，失败 spec 为 proxy-localization.e2e.ts；有失败时刻 PNG/HTML 证据，创建本地 Profile 对话框仍存在，OK 为 loading，侧栏显示正在应用配置。WebDriver execute/sync script timeout 随后触发清理时的第二次超时；后台记录了源版本冲突警告，但尚无证据证明哪一次 backend call 最初卡住。没有放宽断言、延长脚本超时、跳过场景或伪造创建成功。本轮在点击前后/列表显示和读取提交结果的边界增加不含敏感参数的阶段日志，下一次原生 E2E 用于定位。不同于 Rust 单测修复，E2E 失败仍视为未解决。
+
+### CI-20261122-PROFILE-SERIALIZATION：Legacy 创建后文件保存竞态
+
+- 证据：连续三个提交 d73cc59e、a59a13e1、322bee21 的 Windows smoke 都在 proxy-localization.e2e.ts 失败。run 45067708381 的堆栈精确指向第309行的 save_profile_file，而不是点击创建。测试只等 Profile 列表新增 UID，不等 UI 的 create.mutateAsync 完成和对话框关闭，可能导致自动激活与另一次文件写入同时进行。失败截图中的 OK loading 证明 UI 尚未完成，不能推导具体后端根因。
+- ref 对应：ref/backend/nyanpasu-core/src/client/mod.rs 的 create_profile、try_auto_activate_if_none 与 Chimera backend/tauri/src/client/mod.rs 对应入口保持创建 Config 后空选择自动激活协议，不能绕过该业务行为。
+- 本轮范围：只在 tauri-e2e/specs/proxy-localization.e2e.ts 调整测试边界；真正点击 OK 后等待创建对话框名称输入框消失，再调用 get_profiles、save_profile_file、activate_profile，最后通过可见 Profile 卡片切换。保留严格 UI/后端断言、脱敏日志和清理；未动生产 Runtime/持久化/CoreLifecycle。
+- 验证：本地 E2E TS 和格式检查通过。此前 607b6fdf（run 45070826318）新增阶段日志证实点击 OK、配置行显示、get_profiles 返回全部完成，但随后第317行 save_profile_file 超时；该 SHA 尚未包含本轮等待对话框关闭的修复。Windows 原生 smoke 修复版新 SHA 尚未执行，不能视作问题已经修复。若等待对话框关闭超时，需结合该时刻截图与本机后端日志追踪创建自动激活；若保存仍超时，检查 actor commit_with_resources 与 runtime preflight 的交接。
+
+### CI-20261122-PROFILE-CREATE-GATE：Windows 创建未返回的真实阻塞边界
+
+- 证据：Windows E2E https://github.com/MFSGA/Chimera/actions/runs/45072061799（commit baa10cab）按“真正点击 OK、等待对话框内 name input 消失”执行；只出现点击前、点击后两个阶段日志。第 308 行的 waitForDisplayed(reverse) 在 30 秒内未完成，截图仍显示创建配置与 OK loading。原先 607b6fdf 的独立读能发现新 Profile，但保存命令超时，不能据此认为 create_profile mutation 已结束。上一轮所谓“仅测试串行化即可修复”已被反证：**问题不止测试抢跑，创建命令的某个异步阶段本身阻塞**。
+- 当前已核对的真实链路：ProfileDialog.onSubmit → useProfile.create.mutateAsync → IPC create_profile → ChimeraClient.create_profile → ProfilesActor.Add（源文档持久化、物化与 jobs/reconcile）→ try_auto_activate_if_none → ProfilesActor.SetCurrentIfNone → run_state_write → CandidateCheck::validate（捕获、构建、Core -t）→ CoreLifecycleCheckedInbox → 版本条件提交。ref 具有同样创建后自动激活原则，不得绕开/跳过以获得绿色测试。
+- 本轮仅 E2E 构建诊断：backend/tauri/src/state/profiles/actor.rs、client/reconciler/{check,adapters}.rs 加入 cfg(feature = "e2e") 的固定 stage 日志，涵盖 Add、源持久化、source reconcile、自动激活、候选捕获、CoreCheck 和 Checked inbox；不记录 Profile 名称、UID、路径、YAML、代理或凭证。默认生产构建完全不编入这些日志，避免改变核心工作流和耗时。
+- 验证与限制：Tauri cargo check --features e2e、候选检验测试 13/13、Profiles 测试 94/94 通过（原有 warning 存在）。未修改生产业务语义，真实 Windows 新 SHA 尚未重跑；不能宣布 Profile 创建故障修复。下一次 E2E artifact 可用 stage 的最后一条确定阻塞边界；仅在有可复现的源/RuntimeGate 契约测试后再实施小范围正式修复。不得增加测试超时或绕开内核检查。
+
+### CI-20261122-CORE-LIFECYCLE-MAILBOX：Windows Checked 接收延迟的原生证据
+
+- 证据：Windows E2E run 45074585452，commit e7ef4ea7，已解包 tauri-e2e-diagnostics-45074585452 并读取原生 wdio 日志。22:01:37.014Z Profile 文件/文档发布完成，22:01:37.030Z Add Actor 正常回复；22:01:37.035Z SetCurrentIfNone 开始；22:01:37.079Z candidate 生成完成，22:01:37.449Z Local core check 已通过。candidate_checked_admission_start 在 22:01:37.449Z，candidate_checked_admission_finished succeeded=true 在 22:02:45.917Z，等待约 68.5 秒。随后 SetCurrentIfNone 的源提交立即完成。UI 等待创建对话框关闭只给 30 秒，因此重现超时。清理阶段仍有第二批 Checked 请求排队；不能将清理日志当作首因。
+- 排除：不是初次 Add 的本地文件物化/Profiles 发布锁、不是候选配置构建、不是 Mihomo -t 验证，且 Checked 最终得到成功 ACK，并非永久关闭 Actor。只证明 CoreLifecycle Actor 的已校验候选接收/ACK 延迟，尚不能证明是哪个 Message 或哪个异步 I/O 阶段占用了 Actor 处理循环。
+- 共享根因排查范围：backend/tauri/src/client/core_lifecycle/mod.rs 中 ApplicationWorkflowActor::handle 的 Message::Completed 包含 Core 状态/选中版本二次验证等 await；ServiceReadiness/ObserveService/ServiceRecoveryTick 分支也包含 await。Message::Checked 自身仅纳入 CheckedRuntimeInbox 并 ACK，正常应短。此处的 mailbox 串行 await 需要真实计时辨别，不能直接复制第二个 Core owner 或把 ACK 在数据尚未被 owner 保留时发出。
+- 本轮变更：仅 cfg(feature = e2e) 下启用 E2eCoreMailboxProbe，记录相关消息开始、结束、超过 100ms 的 handler 耗时，以及 Completed 内主要异步观察边界，字段仅为固定 kind/stage/elapsed_ms，不含 URL、路径、Profile 文档、凭证。生产构建不编入。已通过 cargo check -p chimera --features e2e --lib 和 CoreLifecycle 159/159 个相关 lib 测试；并非完成根因修复。
+- 后续验收门槛：新 Windows smoke 原生日志应先把约 68 秒定位到一个具体消息处理路径，再为该 I/O/队列引入可复现的 Actor mailbox ACK 并发回归；修复必须保留原子 Checked admission、source-version CAS 和不确定结果的拒绝语义，不得仅延长 WebDriver/IPC 超时或绕开自动激活。完整 Windows E2E 尚未重跑本轮探针提交。
+
+### CI-20261122-SERVICE-WATCH-FLOOD：排除重复就绪事件导致的 Checked ACK 饥饿
+
+- 根因证据：Windows E2E run 45076380623（SHA 69ccb525）上传的 wdio 原生日志记录，创建配置后在 22:20:34.535 UTC 启动 Checked admission，直到 22:21:35.902 UTC 才由 CoreLifecycle Actor 处理 Checked（耗时 0ms）并 ACK，队列等待约 61.4 秒。同一创建故障区间前约 32 秒共处理 **320 次** ServiceReadiness，其中 **138 次** handler 耗时超过 100ms；在整轮原生日志中，共有约 3961 条 ServiceReadiness entered。并非 Core -t、文件锁或 CheckedInbox 本身耗时，属于固定 Service 状态重复投递造成的 mailbox 积压。
+- 原始路径：backend/tauri/src/client/core_lifecycle/mod.rs::spawn_with_profiles_and_content 中两个 Service watch 消费分支，原先每次 .changed() 即 cast ServiceReadiness，无论当前、前次状态是否包含新证据。ref ServiceActor 的 Probe 回答可每次发布 Status watch；重复的 NotInstalled 或不变的 Core owner 不能构成需要再执行 Service handoff 的事件。
+- 修复：新增 service_followup_evidence_changed(previous,current) 对实际可影响 host/retry 的语义状态判定：phase、ready_generation、settled_ready、status、runtime_owned、compat、restart_attempts，以及 ServiceEvidence::from_status 对 Core running/stopped/foreign/identity/revision 的比较。只有其变化时才 cast ServiceReadiness；既有 startup_recovery_evidence_changed 继续独立驱动 Recovery，不被去重错误吞掉。正常状态快照的发布和只读消费不变；单一 CoreLifecycle owner、source CAS、CheckedInbox 接受/拒绝语义不变。
+- 验证：重复 NotInstalled 1000 次不会生成新的服务 follow-up，真正的 daemon phase、ready_generation、ownership、retry、Core status 转换仍产生信号。macOS 本地两项新增单元测试及 E2E feature compile 通过；完整本地 Tauri lib 测试和新的 Windows smoke 仍需核对。验收要求：Windows 原生 E2E 创建必须在现有 30 秒断言内完成，且 ServiceReadiness 同状态洪泛消失；不能仅看编译/模拟测试或增加超时。
+- 风险：ServiceActor 观测中非 ownership/status 的附属元数据变化不再触发 CoreLifecycle follow-up，这些字段本身不影响 host 决策。若后续增加依赖字段，需要同步扩展 service_followup_evidence_changed 和真实状态转换测试。回滚本次改动将重新引入重复就绪事件的排队风险。
