@@ -1,8 +1,8 @@
 import type { ClashProxiesProviderQueryItem } from '@chimera/interface';
 import { Card, CardContent, CardHeader } from '@chimera/ui/card';
 import { LinearProgress } from '@chimera/ui/progress';
-import { filesize } from 'filesize';
 import * as m from '@/paraglide/messages';
+import { formatBytes } from '@/utils/format-bytes';
 import { useProxiesSubscription } from '../../_modules/use-proxies-subscription';
 
 export const SubscriptionCard = ({
@@ -28,8 +28,7 @@ export const SubscriptionCard = ({
           <div className="text-sm font-bold">{progress.toFixed(2)}%</div>
 
           <div className="text-sm font-bold">
-            {filesize(used, { standard: 'iec' })} /
-            {filesize(total, { standard: 'iec' })}
+            {formatBytes(used)} /{formatBytes(total)}
           </div>
         </div>
       </CardContent>

@@ -1,13 +1,3 @@
-/**
- * Providers 主页面
- *
- * 迁移自 ref: `ref/frontend/nyanpasu/src/pages/(main)/main/providers/index.tsx`
- *
- * 显示 Proxy Providers 和 Rules Providers 分组列表
- * 每个 provider 显示名称、类型、更新时间、资源数量
- * 支持单独更新或全部更新
- */
-
 import {
   useClashProxiesProvider,
   useClashRulesProvider,
@@ -18,19 +8,19 @@ import {
 } from '@chimera/interface';
 import { cn } from '@chimera/ui';
 import { Button } from '@chimera/ui/button';
-import { Card, CardContent } from '@chimera/ui/card';
+import { EmptyState } from '@chimera/ui/empty-state';
 import { LinearProgress } from '@chimera/ui/progress';
 import TextMarquee from '@chimera/ui/text-marquee';
 import { createFileRoute, Link } from '@tanstack/react-router';
-import AllInboxRounded from '~icons/material-symbols/all-inbox-outline-rounded';
 import RefreshRounded from '~icons/material-symbols/refresh-rounded';
-import dayjs from 'dayjs';
-import { filesize } from 'filesize';
 import type { ComponentProps, PropsWithChildren } from 'react';
 import { useBlockTask } from '@/components/providers/block-task-provider';
 import { useLockFn } from '@/hooks/use-lock-fn';
 import * as m from '@/paraglide/messages';
+import { getLocale } from '@/paraglide/runtime';
 import { formatError } from '@/utils';
+import { formatRelativeTime } from '@/utils/date';
+import { formatBytes } from '@/utils/format-bytes';
 import { message } from '@/utils/notification';
 import { useProxiesProviderUpdate } from './_modules/use-proxies-provider-update';
 import { useProxiesSubscription } from './_modules/use-proxies-subscription';
@@ -95,18 +85,6 @@ const GroupContent = ({ children }: PropsWithChildren) => {
   );
 };
 
-const Empty = ({ children }: PropsWithChildren) => {
-  return (
-    <Card variant="outline">
-      <CardContent className="min-h-40 items-center justify-center text-sm">
-        <AllInboxRounded className="size-10" />
-
-        {children}
-      </CardContent>
-    </Card>
-  );
-};
-
 const Proxies = ({ data }: { data: ClashProxiesProviderQueryItem }) => {
   const { progress, total, used, hasSubscriptionInfo } =
     useProxiesSubscription(data);
@@ -127,7 +105,7 @@ const Proxies = ({ data }: { data: ClashProxiesProviderQueryItem }) => {
           <TextMarquee className="text-sm font-medium">{data.name}</TextMarquee>
 
           <div className="text-xs text-nowrap text-zinc-700 dark:text-zinc-300">
-            {data.updatedAt ? dayjs(data.updatedAt).fromNow() : '-'}
+            {formatRelativeTime(data.updatedAt, Date.now(), getLocale())}
           </div>
         </div>
 
@@ -145,8 +123,7 @@ const Proxies = ({ data }: { data: ClashProxiesProviderQueryItem }) => {
                   <div>{progress.toFixed(2)}%</div>
 
                   <div>
-                    {filesize(used, { standard: 'iec' })} /{' '}
-                    {filesize(total, { standard: 'iec' })}
+                    {formatBytes(used)} / {formatBytes(total)}
                   </div>
                 </div>
               </TextMarquee>
@@ -165,6 +142,7 @@ const Proxies = ({ data }: { data: ClashProxiesProviderQueryItem }) => {
             className="size-6"
             icon
             loading={blockTask.isPending}
+            aria-label={data.name}
             onClick={(e) => {
               e.preventDefault();
               e.stopPropagation();
@@ -196,7 +174,7 @@ const Rules = ({ data }: { data: ClashRulesProviderQueryItem }) => {
           <TextMarquee className="text-sm font-medium">{data.name}</TextMarquee>
 
           <div className="text-xs text-nowrap text-zinc-700 dark:text-zinc-300">
-            {data.updatedAt ? dayjs(data.updatedAt).fromNow() : '-'}
+            {formatRelativeTime(data.updatedAt, Date.now(), getLocale())}
           </div>
         </div>
 
@@ -215,6 +193,7 @@ const Rules = ({ data }: { data: ClashRulesProviderQueryItem }) => {
             className="size-6"
             icon
             loading={blockTask.isPending}
+            aria-label={data.name}
             onClick={(e) => {
               e.preventDefault();
               e.stopPropagation();
@@ -231,15 +210,12 @@ const Rules = ({ data }: { data: ClashRulesProviderQueryItem }) => {
 
 function RouteComponent() {
   const proxiesProvider = useClashProxiesProvider();
-  const rulesProvider = useClashRulesProvider();
-  const updateProxiesProvider = useUpdateClashProxiesProvider();
-  const updateRulesProvider = useUpdateClashRulesProvider();
 
   const proxies = proxiesProvider.data
     ? Object.entries(proxiesProvider.data)
     : null;
 
-  const rules = rulesProvider.data ? Object.entries(rulesProvider.data) : null;
+  const updateProxies = useUpdateClashProxiesProvider();
 
   const proxiesBlockTask = useBlockTask('update-proxies-provider', async () => {
     if (!proxies) {
@@ -248,7 +224,7 @@ function RouteComponent() {
 
     try {
       await Promise.all(
-        proxies.map(([name]) => updateProxiesProvider.mutateAsync(name)),
+        proxies.map(([_, data]) => updateProxies.mutateAsync(data.name)),
       );
     } catch (error) {
       console.error('Failed to update proxies provider', error);
@@ -261,6 +237,12 @@ function RouteComponent() {
 
   const handleUpdateProxies = useLockFn(proxiesBlockTask.execute);
 
+  const rulesProvider = useClashRulesProvider();
+
+  const rules = rulesProvider.data ? Object.entries(rulesProvider.data) : null;
+
+  const updateRules = useUpdateClashRulesProvider();
+
   const rulesBlockTask = useBlockTask('update-rules-provider', async () => {
     if (!rules) {
       return;
@@ -268,7 +250,7 @@ function RouteComponent() {
 
     try {
       await Promise.all(
-        rules.map(([name]) => updateRulesProvider.mutateAsync(name)),
+        rules.map(([_, data]) => updateRules.mutateAsync(data.name)),
       );
     } catch (error) {
       console.error('Failed to update rules provider', error);
@@ -282,7 +264,10 @@ function RouteComponent() {
   const handleUpdateRules = useLockFn(rulesBlockTask.execute);
 
   return (
-    <div className="flex flex-col gap-4 p-4 pt-0">
+    <div
+      className="flex flex-col gap-4 p-4 pt-0"
+      data-slot="providers-sections"
+    >
       <Group>
         <GroupTitle>
           <span>{m.providers_proxies_title()}</span>
@@ -291,6 +276,8 @@ function RouteComponent() {
             icon
             onClick={handleUpdateProxies}
             loading={proxiesBlockTask.isPending}
+            data-slot="providers-update-all-proxies"
+            aria-label={m.providers_proxies_title()}
           >
             <RefreshRounded />
           </Button>
@@ -303,9 +290,10 @@ function RouteComponent() {
             ))}
           </GroupContent>
         ) : (
-          <Empty>
-            <p>{m.providers_no_proxies_message()}</p>
-          </Empty>
+          <EmptyState
+            className="min-h-40"
+            message={m.providers_no_proxies_message()}
+          />
         )}
       </Group>
 
@@ -317,6 +305,8 @@ function RouteComponent() {
             icon
             onClick={handleUpdateRules}
             loading={rulesBlockTask.isPending}
+            data-slot="providers-update-all-rules"
+            aria-label={m.providers_rules_title()}
           >
             <RefreshRounded />
           </Button>
@@ -329,9 +319,10 @@ function RouteComponent() {
             ))}
           </GroupContent>
         ) : (
-          <Empty>
-            <p>{m.providers_no_rules_message()}</p>
-          </Empty>
+          <EmptyState
+            className="min-h-40"
+            message={m.providers_no_rules_message()}
+          />
         )}
       </Group>
     </div>
