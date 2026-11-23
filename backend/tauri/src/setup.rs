@@ -335,11 +335,14 @@ pub fn setup(
             changelog_http,
             bridges,
             core_v2: core_router,
-            service_v2: service_actor,
+            service_v2: service_actor.clone(),
             core: core_bridge,
-            service: Arc::new(crate::client::core_lifecycle::LegacyServiceBridge::new(
-                core_facade,
-            )),
+            service: Arc::new(
+                crate::client::core_lifecycle::LegacyServiceBridge::with_actor(
+                    core_facade,
+                    service_actor,
+                ),
+            ),
             profile_service,
             system_dns: Arc::new(OsSystemDnsCache::new(Arc::new(
                 crate::adapters::elevation::InteractiveElevationConsent,

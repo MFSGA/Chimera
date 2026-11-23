@@ -6,8 +6,9 @@
 //! facades constructed without the production `LocalRuntimeHost`.
 
 use chimera_core::actor_v2::{
-    routed_endpoint::RoutedEndpoint, router::CoreClient, service_actor::ServiceCommandActor,
-    service_command_port::ServiceCommandPort, service_process::ServiceCommand,
+    routed_endpoint::RoutedEndpoint, router::CoreClient,
+    service_command_actor::ServiceCommandActor, service_command_port::ServiceCommandPort,
+    service_process::ServiceCommand,
 };
 
 use std::{
@@ -16,7 +17,7 @@ use std::{
     panic::AssertUnwindSafe,
     sync::{
         Arc,
-        atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::Duration,
 };
@@ -49,6 +50,7 @@ use crate::{
     utils::task::spawn_tracked_on_tauri_runtime,
 };
 
+#[cfg(test)]
 const SERVICE_RESTART_BUDGET: u8 = 3;
 const LOCAL_OPERATION_WAIT: Duration = Duration::from_secs(60);
 const LOCAL_OPERATION_HISTORY: usize = 64;
@@ -65,11 +67,14 @@ fn unsupported_transparent_proxy_status()
     }
 }
 
-// Service restart decisions now belong to the independent core;
-// this facade keeps only the OS/IPC mutation adapter.
+// Production retry budgets belong exclusively to the ref ServiceActor.
+// Legacy Facade restart behavior is compiled only for injected test clients.
+#[cfg(test)]
 use chimera_core::actor_v2::service_policy::{
     ServiceRestartDecision, ServiceRestartPolicySnapshot, service_restart_decision,
 };
+#[cfg(test)]
+use std::sync::atomic::AtomicU8;
 
 pub(crate) struct CoreFacade {
     manager: Arc<CoreManager>,
@@ -79,7 +84,9 @@ pub(crate) struct CoreFacade {
     api_client: tokio::sync::Mutex<Option<ApiLease>>,
     outcome_uncertain: Arc<AtomicBool>,
     local_operations: Arc<LocalOperationRegistry>,
+    #[cfg(test)]
     service_restart_attempts: Arc<AtomicU8>,
+    #[cfg(test)]
     service_restart_exhausted: Arc<AtomicBool>,
     service_commands: Arc<dyn ServiceCommandPort>,
 }
@@ -100,7 +107,9 @@ impl std::fmt::Debug for CoreFacade {
 pub(crate) struct ServiceTransition {
     _guard: tokio::sync::MutexGuard<'static, ()>,
     outcome_uncertain: Arc<AtomicBool>,
+    #[cfg(test)]
     restart_attempts: Arc<AtomicU8>,
+    #[cfg(test)]
     restart_exhausted: Arc<AtomicBool>,
     service_commands: Arc<dyn ServiceCommandPort>,
 }
@@ -283,7 +292,9 @@ impl CoreFacade {
             api_client: tokio::sync::Mutex::new(None),
             outcome_uncertain: Arc::new(AtomicBool::new(false)),
             local_operations: Arc::new(LocalOperationRegistry::new()),
+            #[cfg(test)]
             service_restart_attempts: Arc::new(AtomicU8::new(0)),
+            #[cfg(test)]
             service_restart_exhausted: Arc::new(AtomicBool::new(false)),
             service_commands: Arc::new(ServiceCommandActor::new(Arc::new(
                 chimera_os::service::OsServiceProcessControl::new(
@@ -324,7 +335,9 @@ impl CoreFacade {
             api_client: tokio::sync::Mutex::new(None),
             outcome_uncertain: Arc::new(AtomicBool::new(false)),
             local_operations: Arc::new(LocalOperationRegistry::new()),
+            #[cfg(test)]
             service_restart_attempts: Arc::new(AtomicU8::new(0)),
+            #[cfg(test)]
             service_restart_exhausted: Arc::new(AtomicBool::new(false)),
             service_commands,
         }
@@ -1423,6 +1436,7 @@ impl CoreFacade {
             .map_err(anyhow::Error::from)
     }
 
+    #[cfg(test)]
     pub(crate) fn service_restart_policy(&self) -> ServiceRestartPolicySnapshot {
         ServiceRestartPolicySnapshot {
             attempts: self.service_restart_attempts.load(Ordering::Acquire),
@@ -1445,7 +1459,9 @@ impl CoreFacade {
         Ok(ServiceTransition {
             _guard: guard,
             outcome_uncertain: self.outcome_uncertain.clone(),
+            #[cfg(test)]
             restart_attempts: self.service_restart_attempts.clone(),
+            #[cfg(test)]
             restart_exhausted: self.service_restart_exhausted.clone(),
             service_commands: self.service_commands.clone(),
         })
@@ -1470,7 +1486,9 @@ impl CoreFacade {
         Ok(ServiceTransition {
             _guard: guard,
             outcome_uncertain: self.outcome_uncertain.clone(),
+            #[cfg(test)]
             restart_attempts: self.service_restart_attempts.clone(),
+            #[cfg(test)]
             restart_exhausted: self.service_restart_exhausted.clone(),
             service_commands: self.service_commands.clone(),
         })
@@ -2192,11 +2210,13 @@ mod tests {
 }
 
 impl ServiceTransition {
+    #[cfg(test)]
     fn rearm_restart_policy(&self) {
         self.restart_attempts.store(0, Ordering::Release);
         self.restart_exhausted.store(false, Ordering::Release);
     }
 
+    #[cfg(test)]
     pub(crate) async fn report_endpoint_down(&mut self) -> anyhow::Result<()> {
         if self.restart_exhausted.load(Ordering::Acquire) {
             return Ok(());
@@ -2243,6 +2263,7 @@ impl ServiceTransition {
     }
 
     pub(crate) async fn install_daemon(&mut self) -> anyhow::Result<()> {
+        #[cfg(test)]
         self.rearm_restart_policy();
         self.service_commands
             .command(ServiceCommand::Install)
@@ -2255,6 +2276,7 @@ impl ServiceTransition {
     }
 
     pub(crate) async fn update_daemon(&mut self) -> anyhow::Result<()> {
+        #[cfg(test)]
         self.rearm_restart_policy();
         self.service_commands
             .command(ServiceCommand::Update)
@@ -2263,6 +2285,7 @@ impl ServiceTransition {
     }
 
     pub(crate) async fn start_daemon(&mut self) -> anyhow::Result<()> {
+        #[cfg(test)]
         self.rearm_restart_policy();
         self.service_commands
             .command(ServiceCommand::Start)
@@ -2271,6 +2294,7 @@ impl ServiceTransition {
     }
 
     pub(crate) async fn restart_daemon(&mut self) -> anyhow::Result<()> {
+        #[cfg(test)]
         self.rearm_restart_policy();
         self.service_commands
             .command(ServiceCommand::Restart)

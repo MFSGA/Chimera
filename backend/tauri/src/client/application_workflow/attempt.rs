@@ -115,7 +115,12 @@ impl LiveAttempt {
     }
 
     pub(crate) fn lifecycle(operation_id: OperationId) -> Self {
-        Self::new(operation_id, AttemptOrigin::Lifecycle)
+        // A lifecycle command has already entered its critical execution leg.
+        // Match ref's write-ahead stage so an interrupted command is not
+        // misreported as an unstarted preparation.
+        let mut attempt = Self::new(operation_id, AttemptOrigin::Lifecycle);
+        attempt.stage = AttemptStage::TryingCritical;
+        attempt
     }
 
     pub(crate) fn target_mut(&mut self) -> Option<&mut DeferredTarget> {
@@ -143,6 +148,14 @@ impl LiveAttempt {
             AttemptOrigin::SourceDecision { .. } | AttemptOrigin::Lifecycle => None,
         }
     }
+}
+
+/// Match ref's positive clearance rule: a successful high-level result does
+/// not settle a lower Core owner whose outcome is still unknown.
+fn clearance_reason(unresolved: Option<String>, lower_outcome_uncertain: bool) -> Option<String> {
+    unresolved.or_else(|| {
+        lower_outcome_uncertain.then(|| "the lower Core owner has an unsettled action".to_owned())
+    })
 }
 
 impl ApplicationWorkflow {
@@ -183,7 +196,8 @@ impl ApplicationWorkflow {
     }
 
     pub(crate) fn conclude_attempt(&mut self, unresolved: Option<String>) -> bool {
-        match unresolved {
+        let lower_outcome_uncertain = self.lower_outcome_uncertain();
+        match clearance_reason(unresolved, lower_outcome_uncertain) {
             None => {
                 if let Some(target) = self.live.take().and_then(LiveAttempt::into_target) {
                     self.deferred = Some(*target);
@@ -192,6 +206,11 @@ impl ApplicationWorkflow {
             }
             Some(reason) => {
                 if let Some(attempt) = &mut self.live {
+                    tracing::error!(
+                        operation_id = %attempt.operation_id,
+                        stage = ?attempt.stage,
+                        "an attempt left the execution domain isolated: {reason}"
+                    );
                     attempt.unresolved = Some(reason);
                 }
                 false
@@ -241,6 +260,28 @@ mod tests {
         async fn confirm_stopped(&mut self) -> anyhow::Result<()> {
             Ok(())
         }
+    }
+
+    /// A stopped or restarted command can return a high-level Ok while its
+    /// Core operation is still unsettled. Ref's pending-action fence must win.
+    #[test]
+    fn lower_owner_uncertainty_prevents_positive_clearance() {
+        assert_eq!(
+            clearance_reason(None, true).as_deref(),
+            Some("the lower Core owner has an unsettled action")
+        );
+        assert_eq!(clearance_reason(None, false), None);
+        assert_eq!(
+            clearance_reason(Some("source decision unknown".into()), true).as_deref(),
+            Some("source decision unknown")
+        );
+    }
+
+    #[test]
+    fn lifecycle_attempt_starts_at_the_critical_stage_like_ref() {
+        let attempt = LiveAttempt::lifecycle(OperationId::generate());
+        assert_eq!(attempt.stage, AttemptStage::TryingCritical);
+        assert!(attempt.unresolved.is_none());
     }
 
     #[test]

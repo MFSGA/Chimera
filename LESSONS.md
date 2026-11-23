@@ -91,6 +91,7 @@
 | LESSON-20261116-003 | 2026-11-16 | Startup recovery / Actor admission | unresolved attempt 拒绝 deferred retry 时必须恢复 deadline；source / lifecycle recovery 需要从正常 reconcile 入口可达，shutdown 不覆盖原 attempt | Mitigated |
 | LESSON-20261116-004 | 2026-11-16 | Startup recovery / committed target | 成功的 Reconcile 已应用当前 Profiles 后，恢复不能再写回旧 baseline；需让实际 actor 回归确认最终运行配置 | Mitigated |
 | LESSON-20261116-005 | 2026-11-16 | Development / test workflow | 新增 actor 回归后才补读测试规范；随后按 T01/T02 复核并明确真实 actor 边界 | Mitigated |
+| LESSON-20261116-008 | 2026-11-16 | Startup / Service readiness | ready 与 unavailable 的 readiness 变化都要触发 owner follow-up；同代探测恢复断言需同步覆盖新语义 | Mitigated |
 
 ### LESSON-20261113-001/002：架构迁移要覆盖原生运行时与稀疏配置
 
@@ -1327,3 +1328,9 @@ backend/Cargo.toml -p chimera --lib core::clash::proxies::tests:: -- --nocapture
 - 证据与根因：Stage 4v 首版在 Profile TCC 的 CoreLifecycle actor 命令内直接停止旧 Service owner；`CoreFacade::retire_service_core` 的调用约定要求持有 `HOST_TRANSITION_LOCK`，但 ProfileMutation 没有预先取得 lease。Service/health transition 可能先持有该锁并排队等待同一 actor，若 TCC 在 actor 内等待锁，会形成环形等待；单纯的 fresh probe 与 owner token 不能代替 host-transition 序列化。该缺口由独立静态复核确认，未有真实并发事故证据。
 - 修正与验证：TCC 改走 `ProfileRuntime::try_release_service_owner`，经 `ServiceLifecyclePort::try_begin_transition` 到 `CoreFacade::try_begin_service_transition` 用 `HOST_TRANSITION_LOCK.try_lock()` 非等待式获取 lease；若 Service helper 已结束，则 `ServiceCommandActor::try_reap_finished` 用 `Mutex::try_lock` 检查并只 join 已完成的 helper，不等待 Service actor 或额外运行 probe；若 helper 仍运行则保留 verdict 并报告可恢复失败。这样后续 TCC retry 无需依赖另一条 Service command 才能清除 stale `outstanding` 标志；启动路径继续使用进入 actor 前已取得的普通 lease。`timed_out_helper_refuses_overlapping_mutation_and_false_stop_proof` **1/1** 证明完成 helper 回收不额外 probe，完整 facade 集合 **12/12** 证明释放 helper 后 try-path 能自行重试成功；完整 `client::` 集合 **396/396**，TCC **13/13**，LocalRuntime replay **1/1**，`cargo check --tests` 和 `cargo clippy --all-targets` 均通过。
 - 防复发：CoreLifecycle actor 执行期间若需跨 Service/Local host transition，必须沿统一 lock/mailbox 顺序传入已有 lease；若无法预先取得，只能使用明确非等待式 try-acquire 并保留可恢复状态，不能在 actor 内等待一个可能由排队 actor 请求持有的 lease。测试应同时证明 lock busy 时快速失败和释放后可取得，不以单独 owner fence 代替 host-transition lease。
+
+### LESSON-20261116-008：Service owner follow-up 必须响应 readiness 的两个方向
+
+- 证据与根因：完整 `client::` 测试首次运行 **397 项通过、1 项失败**。`startup_recovery_evidence_detects_same_generation_probe_recovery` 仍断言同一 `ready_generation` 的 probe failure 恢复不触发 follow-up；但 phase 从 Unknown 变为 Ready 本身已经改变 readiness，即使 generation 没变也必须重新评估 owner。旧断言只覆盖 generation 推进的单向信号。
+- 修正与验证：将 probe recovery 断言改为 readiness 改变会触发 follow-up；增加的 actor 集成用例覆盖 Service 就绪后 Local→Service、Service 失效后 Service→Local 的顺序，以及没有显式 stop intent 的 stopped Local 会跟随 Service readiness。复核后 `cargo test -p chimera --lib client:: -- --test-threads=4` **416/416** 通过，完整 Tauri 单元测试 **983/983** 通过（另 1 项忽略；已配置仓库指定 pnpm）。
+- 防复发：readiness 事件应比较前后 phase/readiness，而不是只观察 `ready_generation` 增长；手动恢复到相同 generation 也要触发 owner 重算。测试至少覆盖 Ready→Unavailable 和 Unavailable→Ready，并验证对应的 Core owner handoff。

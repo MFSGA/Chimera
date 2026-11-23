@@ -11,7 +11,7 @@ use chimera_contracts::service::{ServiceCommand, ServiceCommandError};
 use chimera_ipc::types::StatusInfo;
 
 use super::{
-    service_actor::ServiceCommandActor,
+    service_command_actor::ServiceCommandActor,
     service_router::{ServiceClient, ServicePhase},
 };
 

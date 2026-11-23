@@ -31,23 +31,6 @@ pub(crate) struct PreparedCoreBinary {
     pub(crate) progress: Arc<dyn BinaryInstallProgress>,
 }
 
-#[derive(Debug, Clone)]
-pub(crate) struct ActiveCoreBinding {
-    pub(crate) instance_id: String,
-    pub(crate) info: crate::config::clash::ClashInfo,
-}
-
-fn core_instance_id(status: &CoreStatusSnapshot) -> anyhow::Result<String> {
-    if let Some(instance_id) = status.instance_id.as_ref().filter(|id| !id.is_empty()) {
-        return Ok(instance_id.clone());
-    }
-    anyhow::ensure!(
-        status.state_changed_at > 0,
-        "the running core has no stable instance identity"
-    );
-    Ok(format!("{:?}:{}", status.run_type, status.state_changed_at))
-}
-
 pub(crate) trait BinaryInstallProgress: Send + Sync + 'static {
     fn restarting(&self);
     fn finished(&self, error: Option<&str>);
@@ -74,6 +57,24 @@ pub(crate) trait ServiceTransitionLease: Send {
 #[async_trait]
 pub(crate) trait ServiceLifecyclePort: Send + Sync + 'static {
     async fn probe(&self) -> anyhow::Result<chimera_ipc::types::StatusInfo<'static>>;
+
+    /// Ref ServiceActor is the authoritative readiness-generation source.
+    /// Legacy test ports have no ref actor and return None.
+    fn actor_status(&self) -> Option<chimera_core::actor_v2::service_status::ServiceHostStatus> {
+        None
+    }
+
+    /// The actor's watch is used for production startup-recovery wakeups,
+    /// rather than treating CoreLifecycle's compatibility watch as another
+    /// readiness-generation publisher.
+    fn actor_status_updates(
+        &self,
+    ) -> Option<
+        tokio::sync::watch::Receiver<chimera_core::actor_v2::service_router::ServiceHostStatus>,
+    > {
+        None
+    }
+
     fn runtime_owned(&self, info: &chimera_ipc::types::StatusInfo<'_>) -> bool {
         crate::core::service::is_service_runtime_owned(info)
     }
@@ -365,24 +366,6 @@ pub(crate) trait CoreLifecyclePort: Send + Sync {
     /// endpoint; production bridges override it with an instance-bound client.
     async fn clash_api_client(&self) -> anyhow::Result<crate::core::actor_v2::api::ApiClient> {
         crate::core::actor_v2::api::ApiClient::new(self.active_clash_info().await?)
-    }
-
-    /// Resolves the controller and its process identity from one stable lifecycle observation.
-    async fn active_core_binding(&self) -> anyhow::Result<ActiveCoreBinding> {
-        let before = self.status().await?;
-        anyhow::ensure!(
-            matches!(before.state, chimera_ipc::api::status::CoreState::Running),
-            "the core API is unavailable because the core is not running"
-        );
-        let instance_id = core_instance_id(&before)?;
-        let info = self.active_clash_info().await?;
-        let after = self.status().await?;
-        anyhow::ensure!(
-            matches!(after.state, chimera_ipc::api::status::CoreState::Running)
-                && core_instance_id(&after)? == instance_id,
-            "the core changed while resolving its controller"
-        );
-        Ok(ActiveCoreBinding { instance_id, info })
     }
 
     async fn on_profile_change(&self, break_when: bool);

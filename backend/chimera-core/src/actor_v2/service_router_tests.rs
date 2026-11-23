@@ -25,6 +25,7 @@ struct FakeDaemon {
     starts: AtomicUsize,
     updates: AtomicUsize,
     uninstalls: AtomicUsize,
+    restarts: AtomicUsize,
     /// What `/status` publishes as the core's detail. `None` is a daemon
     /// that answered without one -- the pre-detail wire.
     core_detail: Mutex<Option<CoreStateDetail>>,
@@ -60,6 +61,7 @@ impl FakeDaemon {
             starts: AtomicUsize::new(0),
             updates: AtomicUsize::new(0),
             uninstalls: AtomicUsize::new(0),
+            restarts: AtomicUsize::new(0),
             core_detail: Mutex::new(Some(CoreStateDetail::Stopped { reason: None })),
             probe_blind: AtomicBool::new(false),
             command_failure: Mutex::new(None),
@@ -232,8 +234,14 @@ impl ServiceProcessControl for FakeDaemon {
         Ok(())
     }
     async fn restart_daemon(&self) -> Result<(), chimera_contracts::service::ServiceCommandError> {
-        self.stop_daemon().await?;
-        self.start_daemon().await
+        self.calls.lock().unwrap().push("restart_daemon");
+        self.restarts.fetch_add(1, Ordering::SeqCst);
+        let mut state = self.state.lock().unwrap();
+        if !state.0 {
+            return Err(service_command_error("service not installed"));
+        }
+        state.1 = true;
+        Ok(())
     }
 }
 
@@ -1231,6 +1239,32 @@ async fn only_a_settled_restart_makes_a_new_ready_generation() {
     let restarted = client.probe().await.unwrap();
     assert!(restarted.settled_ready);
     assert_eq!(restarted.ready_generation, first.ready_generation + 1);
+}
+
+/// Chimera's native restart is one serialized OS command, not two independent
+/// stop/start commands that could leave a usable daemon in between.
+#[tokio::test]
+async fn native_restart_preserves_single_service_actor_command_boundary() {
+    let daemon = FakeDaemon::new(true, true, "1.10.1");
+    let client = ServiceClient::spawn(daemon.clone(), daemon.clone(), 2)
+        .await
+        .unwrap();
+    assert_eq!(client.status().phase, ServicePhase::Ready);
+
+    client.restart_daemon().await.unwrap();
+
+    assert_eq!(client.status().phase, ServicePhase::Ready);
+    assert_eq!(daemon.restarts.load(Ordering::SeqCst), 1);
+    assert_eq!(daemon.starts.load(Ordering::SeqCst), 0);
+    let calls = daemon.calls.lock().unwrap();
+    assert_eq!(
+        calls
+            .iter()
+            .filter(|call| **call == "restart_daemon")
+            .count(),
+        1
+    );
+    assert!(!calls.contains(&"stop_daemon"));
 }
 
 /// Only the OS reporting the daemon not running releases a Service owner

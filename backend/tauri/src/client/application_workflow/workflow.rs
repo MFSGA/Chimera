@@ -93,6 +93,14 @@ pub(in crate::client) struct ApplicationWorkflow {
 }
 
 impl ApplicationWorkflow {
+    /// Ref's positive clearance rule consults the lower Core owner before
+    /// releasing an attempt. A pure Workflow test has no lifecycle adapter.
+    pub(super) fn lower_outcome_uncertain(&self) -> bool {
+        self.lifecycle
+            .as_ref()
+            .is_some_and(|lifecycle| lifecycle.outcome_uncertain())
+    }
+
     pub(in crate::client) fn has_unresolved_attempt(&self) -> bool {
         self.live
             .as_ref()
@@ -461,6 +469,10 @@ impl ApplicationWorkflow {
                 let report = self.retry_startup(operation_id, identity, transition).await;
                 startup_report_result(&report)
             }
+            CoreCommand::FollowService {
+                operation_id,
+                transition,
+            } => self.follow_service(operation_id, transition).await,
             CoreCommand::RecoverCore => {
                 let lifecycle = self.lifecycle_handle();
                 #[cfg(test)]
@@ -844,7 +856,7 @@ impl ApplicationWorkflow {
     }
 }
 
-fn startup_report_result(report: &StartupReport) -> anyhow::Result<()> {
+pub(super) fn startup_report_result(report: &StartupReport) -> anyhow::Result<()> {
     match report.outcome.failure_reason() {
         Some(reason) => Err(anyhow::anyhow!(reason.to_owned())),
         None => Ok(()),

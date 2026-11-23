@@ -23,13 +23,10 @@ use ractor::{Actor, ActorProcessingErr, ActorRef, RpcReplyPort, rpc::CallResult}
 use tokio_util::{sync::CancellationToken, task::TaskTracker};
 
 #[cfg(test)]
-use super::application_workflow::startup::StartupWorkflowState;
+use super::application_workflow::startup::{StartupOutcome, StartupWorkflowState};
 use super::{
-    ChimeraClient,
-    application::ApplicationClient,
-    application_workflow::startup::{StartupOutcome, StartupReport},
-    application_workflow::workflow::ApplicationWorkflow,
-    clash_config::ClashConfigClient,
+    ChimeraClient, application::ApplicationClient, application_workflow::startup::StartupReport,
+    application_workflow::workflow::ApplicationWorkflow, clash_config::ClashConfigClient,
     runtime::RuntimePaths,
 };
 pub(in crate::client) use workflow::{Command, CoreLifecycleWorkflow};
@@ -100,12 +97,12 @@ fn startup_recovery_evidence_changed(
     current: &ServiceHostStatus,
     owner_unproven: bool,
 ) -> bool {
-    let readiness_advanced = current.phase.readiness() == Some(true)
-        && current.ready_generation != previous.ready_generation;
+    let readiness_changed = previous.phase.readiness() != current.phase.readiness()
+        || current.ready_generation != previous.ready_generation;
     let owner_evidence_changed = owner_unproven
         && crate::client::application_workflow::startup::ServiceEvidence::from_status(previous)
             != crate::client::application_workflow::startup::ServiceEvidence::from_status(current);
-    readiness_advanced || owner_evidence_changed
+    readiness_changed || owner_evidence_changed
 }
 
 #[allow(unused_imports)]
@@ -146,9 +143,8 @@ enum Message {
     ObserveService {
         info: chimera_ipc::types::StatusInfo<'static>,
     },
+    ServiceReadiness,
     ServiceProbeFailed,
-    #[cfg(not(test))]
-    RefreshServiceStatus,
     RecoverCore,
     RuntimeDirty,
     DirtyTick,
@@ -285,9 +281,18 @@ impl ApplicationWorkflowState {
         self.next_id.fetch_add(1, Ordering::Relaxed)
     }
 
+    /// Ref ServiceActor is the sole production publisher of daemon phase,
+    /// retry attempts, and readiness generation. The legacy watch is updated
+    /// only for injected compatibility ports that have no actor owner.
+    fn publishes_legacy_service_status(&self) -> bool {
+        self.service.actor_status().is_none()
+    }
+
     fn publish_service_status(&self, info: chimera_ipc::types::StatusInfo<'static>) {
-        let runtime_owned = crate::core::service::is_service_runtime_owned(&info);
-        self.service_status.observe_probe(info, runtime_owned, None);
+        if self.publishes_legacy_service_status() {
+            let runtime_owned = crate::core::service::is_service_runtime_owned(&info);
+            self.service_status.observe_probe(info, runtime_owned, None);
+        }
     }
 
     fn publish_service_status_with_policy(
@@ -295,20 +300,30 @@ impl ApplicationWorkflowState {
         info: chimera_ipc::types::StatusInfo<'static>,
         policy: ServiceRestartPolicySnapshot,
     ) {
-        let runtime_owned = crate::core::service::is_service_runtime_owned(&info);
-        self.service_status
-            .observe_probe(info, runtime_owned, Some(policy));
+        if self.publishes_legacy_service_status() {
+            let runtime_owned = crate::core::service::is_service_runtime_owned(&info);
+            self.service_status
+                .observe_probe(info, runtime_owned, Some(policy));
+        }
     }
 
     fn publish_service_phase(&self, phase: ServicePhase) {
-        self.service_status.publish_phase(phase);
+        if self.publishes_legacy_service_status() {
+            self.service_status.publish_phase(phase);
+        }
     }
 
     fn publish_service_probe_failure(&self) {
-        self.service_status.probe_failed();
+        if self.publishes_legacy_service_status() {
+            self.service_status.probe_failed();
+        }
     }
 
+    #[cfg(test)]
     async fn refresh_service_status(&mut self) -> anyhow::Result<ServiceHostStatus> {
+        if let Some(actor) = self.service.actor_status() {
+            return Ok(actor);
+        }
         let workflow = self
             .workflow
             .as_ref()
@@ -382,6 +397,53 @@ impl ApplicationWorkflowState {
         tokio::spawn(async move {
             tokio::time::sleep_until(next_attempt).await;
             let _ = actor.cast(Message::StartupRetryDue { identity });
+        });
+    }
+
+    async fn follow_service(&mut self) {
+        if self.active.is_some()
+            || self.uncertain
+            || self.shutting_down
+            || self.startup_owner_unproven
+            || self.startup_owner_unproven_shared.load(Ordering::Acquire)
+        {
+            return;
+        }
+        let Some(workflow) = self.workflow.as_ref() else {
+            return;
+        };
+        if !workflow.service_host_change_due().await {
+            return;
+        }
+        let transition = match workflow.lifecycle().try_begin_service_transition().await {
+            Ok(transition) => transition,
+            Err(error) => {
+                tracing::debug!(%error, "Service owner follow-up deferred while a transition is active");
+                return;
+            }
+        };
+        if !workflow.service_host_change_due().await {
+            return;
+        }
+        if self.pending.len() >= MAX_PENDING {
+            tracing::warn!("dropping Service owner follow-up because the lifecycle queue is full");
+            return;
+        }
+        let operation_id = self.allocate_operation_id();
+        // Run this post-command owner reconciliation before requests already
+        // queued behind the event that observed the readiness change. The
+        // lease is held across the request, so allowing another queued Core
+        // mutation to run first would invert the reference actor's order.
+        self.pending.push_front(Request {
+            command: Command::FollowService {
+                operation_id,
+                transition,
+            },
+            response: Response {
+                id: operation_id,
+                reply: None,
+            },
+            deferred_retry: None,
         });
     }
 
@@ -634,6 +696,7 @@ impl ApplicationWorkflowState {
             &request.command,
             Command::Reconcile
                 | Command::StartupReconcile { .. }
+                | Command::FollowService { .. }
                 | Command::RecoverStartup { .. }
                 | Command::RetryStartup { .. }
                 | Command::RetryDeferredProfiles { .. }
@@ -649,6 +712,7 @@ impl ApplicationWorkflowState {
             Command::UninstallService(_) => Some(ServicePhase::Uninstalling),
             _ => None,
         };
+        let publish_legacy_service = self.publishes_legacy_service_status();
         let service_mutation = matches!(
             &request.command,
             Command::InstallService(_)
@@ -659,6 +723,7 @@ impl ApplicationWorkflowState {
                 | Command::StopService(_)
                 | Command::ServiceEndpointDown(_)
                 | Command::StartupReconcile { .. }
+                | Command::FollowService { .. }
                 | Command::RecoverStartup { .. }
                 | Command::RetryStartup { .. }
         );
@@ -743,7 +808,11 @@ impl ApplicationWorkflowState {
             let lower_outcome_uncertain = lifecycle.outcome_uncertain();
             let startup_owner_unproven = workflow.startup_owner_unproven();
             let service_restart_policy = lifecycle.service_restart_policy();
-            let service_probe = if service_mutation && !workflow_panicked {
+            // Ref ServiceActor performs its own bounded probe and publishes
+            // its watch after Service commands. Do not issue a second probe
+            // merely to refresh CoreLifecycle's unused compatibility cache.
+            let service_probe = if service_mutation && !workflow_panicked && publish_legacy_service
+            {
                 Some(
                     match AssertUnwindSafe(lifecycle.probe_service())
                         .catch_unwind()
@@ -1104,6 +1173,7 @@ impl Actor for ApplicationWorkflowActor {
                             let _ = actor.cast(Message::RecoverCore);
                         });
                     }
+                    state.follow_service().await;
                 } else {
                     tracing::warn!(id, "ignoring stale core lifecycle completion");
                 }
@@ -1121,15 +1191,12 @@ impl Actor for ApplicationWorkflowActor {
             }
             Message::ObserveService { info } => {
                 state.publish_service_status(info);
+                state.follow_service().await;
             }
+            Message::ServiceReadiness => state.follow_service().await,
             Message::ServiceProbeFailed => {
                 state.publish_service_probe_failure();
-            }
-            #[cfg(not(test))]
-            Message::RefreshServiceStatus => {
-                if let Err(error) = state.refresh_service_status().await {
-                    tracing::debug!(%error, "failed to refresh cached service status");
-                }
+                state.follow_service().await;
             }
             Message::RecoverCore => {
                 if state.uncertain || state.shutting_down {
@@ -1543,6 +1610,10 @@ impl CoreLifecycleClient {
                 }
             });
         }
+        #[cfg(not(test))]
+        let service_actor_updates = service.actor_status_updates();
+        #[cfg(not(test))]
+        let service_followup_actor = actor_ref.clone();
         let client = Self(Arc::new(CoreLifecycleClientInner::Actor {
             actor_ref,
             next_id,
@@ -1560,31 +1631,72 @@ impl CoreLifecycleClient {
             let mut status_updates = service_status_rx.clone();
             let recovery_shutdown = shutdown.child_token();
             tasks.spawn(async move {
-                let mut previous_status = status_updates.borrow().clone();
-                loop {
-                    tokio::select! {
-                        _ = recovery_shutdown.cancelled() => break,
-                        changed = status_updates.changed() => {
-                            if changed.is_err() {
-                                break;
+                if let Some(mut ref_updates) = service_actor_updates {
+                    // Production startup recovery observes the *same* ref
+                    // ServiceActor watch that owns readiness generation and
+                    // probe phase. CoreLifecycle's legacy watch remains only
+                    // for its not-yet-migrated workflow commands.
+                    let mut previous = super::service_status::project_actor_service_status(
+                        &ref_updates.borrow_and_update(),
+                    );
+                    loop {
+                        tokio::select! {
+                            biased;
+                            _ = recovery_shutdown.cancelled() => break,
+                            changed = ref_updates.changed() => {
+                                if changed.is_err() {
+                                    break;
+                                }
+                                let current = super::service_status::project_actor_service_status(
+                                    &ref_updates.borrow_and_update(),
+                                );
+                                let evidence_changed = startup_recovery_evidence_changed(
+                                    &previous,
+                                    &current,
+                                    startup_owner_unproven_signal.load(Ordering::Acquire),
+                                );
+                                previous = current;
+                                if service_followup_actor.cast(Message::ServiceReadiness).is_err() {
+                                    break;
+                                }
+                                if evidence_changed && recovery_client.startup_recovery_needed() {
+                                    recovery_client.request_startup_recovery();
+                                }
                             }
-                            let status = status_updates.borrow().clone();
-                            let recovery_evidence_changed = startup_recovery_evidence_changed(
-                                &previous_status,
-                                &status,
-                                startup_owner_unproven_signal.load(Ordering::Acquire),
-                            );
-                            previous_status = status;
-                            if recovery_evidence_changed && recovery_client.startup_recovery_needed() {
-                                recovery_client.request_startup_recovery();
+                        }
+                    }
+                } else {
+                    // Injected compatibility port without a ref ServiceActor.
+                    let mut previous = status_updates.borrow_and_update().clone();
+                    loop {
+                        tokio::select! {
+                            biased;
+                            _ = recovery_shutdown.cancelled() => break,
+                            changed = status_updates.changed() => {
+                                if changed.is_err() {
+                                    break;
+                                }
+                                let current = status_updates.borrow_and_update().clone();
+                                let evidence_changed = startup_recovery_evidence_changed(
+                                    &previous,
+                                    &current,
+                                    startup_owner_unproven_signal.load(Ordering::Acquire),
+                                );
+                                previous = current;
+                                if service_followup_actor.cast(Message::ServiceReadiness).is_err() {
+                                    break;
+                                }
+                                if evidence_changed && recovery_client.startup_recovery_needed() {
+                                    recovery_client.request_startup_recovery();
+                                }
                             }
                         }
                     }
                 }
             });
         }
-        #[cfg(not(test))]
-        client.request_service_status_refresh();
+        // Ref ServiceActor already published its initial daemon probe during
+        // startup. No second CoreLifecycle probe/cache refresh is needed.
         Ok(client)
     }
 
@@ -2145,16 +2257,23 @@ impl CoreLifecycleClient {
                 startup_owner_unproven,
                 service_failed_generation,
                 service_status,
+                service,
                 core,
                 ..
             } => {
                 !core.outcome_uncertain()
                     && (startup_owner_unproven.load(Ordering::Acquire) || {
                         let failed_generation = service_failed_generation.load(Ordering::Acquire);
-                        let status = service_status.borrow();
+                        // The failed generation was recorded from the ref
+                        // ServiceActor during startup. Compare only with that
+                        // same Actor's generation, not CoreLifecycle's
+                        // independently incremented compatibility watch.
+                        let current = service
+                            .actor_status()
+                            .unwrap_or_else(|| service_status.borrow().clone());
                         failed_generation != 0
-                            && status.ready_generation != failed_generation
-                            && status.phase.readiness() == Some(true)
+                            && current.ready_generation != failed_generation
+                            && current.phase.readiness() == Some(true)
                     })
             }
             #[cfg(test)]
@@ -2297,15 +2416,6 @@ impl CoreLifecycleClient {
         }
     }
 
-    #[cfg(not(test))]
-    pub(super) fn request_service_status_refresh(&self) {
-        if let CoreLifecycleClientInner::Actor { actor_ref, .. } = self.0.as_ref()
-            && actor_ref.cast(Message::RefreshServiceStatus).is_err()
-        {
-            tracing::debug!("failed to enqueue service status refresh");
-        }
-    }
-
     pub(super) fn service_status(&self) -> ServiceHostStatus {
         match self.0.as_ref() {
             CoreLifecycleClientInner::Actor { service_status, .. } => {
@@ -2319,18 +2429,24 @@ impl CoreLifecycleClient {
     }
 
     pub(super) fn observe_service_status(&self, info: chimera_ipc::types::StatusInfo<'static>) {
-        if let CoreLifecycleClientInner::Actor { actor_ref, .. } = self.0.as_ref()
+        if let CoreLifecycleClientInner::Actor {
+            actor_ref, service, ..
+        } = self.0.as_ref()
+            && service.actor_status().is_none()
             && actor_ref.cast(Message::ObserveService { info }).is_err()
         {
-            tracing::debug!("failed to publish service status observation");
+            tracing::debug!("failed to publish legacy service status observation");
         }
     }
 
     pub(super) fn observe_service_probe_failure(&self) {
-        if let CoreLifecycleClientInner::Actor { actor_ref, .. } = self.0.as_ref()
+        if let CoreLifecycleClientInner::Actor {
+            actor_ref, service, ..
+        } = self.0.as_ref()
+            && service.actor_status().is_none()
             && actor_ref.cast(Message::ServiceProbeFailed).is_err()
         {
-            tracing::debug!("failed to publish service probe failure");
+            tracing::debug!("failed to publish legacy service probe failure");
         }
     }
 
@@ -2516,6 +2632,11 @@ impl ChimeraClient {
     }
 
     pub(crate) fn service_status(&self) -> ServiceHostStatus {
+        if let Some(service) = &self.inner.service_actor {
+            return super::service_status::project_actor_service_status(&service.status());
+        }
+        // Injected legacy lifecycle fixtures deliberately omit ServiceActor.
+        // Production always owns the ref ServiceClient from Tauri setup().
         self.inner.core_lifecycle.service_status()
     }
 
@@ -2734,15 +2855,15 @@ mod tests {
             &recovered,
             true
         ));
-        assert!(!startup_recovery_evidence_changed(
+        assert!(startup_recovery_evidence_changed(
             &unavailable,
             &recovered,
-            false
+            false,
         ));
     }
 
     #[test]
-    fn startup_recovery_evidence_detects_ready_generation_change_alone() {
+    fn startup_recovery_evidence_detects_readiness_and_generation_changes() {
         let mut previous = ServiceHostStatus::probing();
         previous.phase = ServicePhase::Ready;
         previous.settled_ready = true;
@@ -2759,6 +2880,178 @@ mod tests {
         assert!(startup_recovery_evidence_changed(
             &previous, &current, false
         ));
+
+        let mut unavailable = previous.clone();
+        unavailable.phase = ServicePhase::DaemonStopped;
+        unavailable.settled_ready = false;
+        assert!(startup_recovery_evidence_changed(
+            &previous,
+            &unavailable,
+            false,
+        ));
+    }
+
+    #[tokio::test]
+    async fn ref_service_actor_generation_drives_startup_recovery_not_legacy_watch() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let mut actor_status = ServiceHostStatus::probing();
+        actor_status.phase = ServicePhase::Ready;
+        actor_status.settled_ready = true;
+        actor_status.ready_generation = 5;
+        let service = Arc::new(ActorEvidenceService {
+            actor_status: Arc::new(Mutex::new(actor_status)),
+            probe_failed: AtomicBool::new(false),
+            probes: AtomicUsize::new(0),
+            events: events.clone(),
+        });
+        let core = Arc::new(ConfirmedStoppedCore {
+            events,
+            run_type: RunType::Normal,
+        });
+        let client = spawn_startup_client(core, service.clone()).await;
+        let CoreLifecycleClientInner::Actor {
+            service_failed_generation,
+            service_status,
+            ..
+        } = client.0.as_ref()
+        else {
+            panic!("startup fixture must use the lifecycle actor")
+        };
+        assert_eq!(
+            service_status.borrow().ready_generation,
+            0,
+            "the legacy watch deliberately has a different generation"
+        );
+        service_failed_generation.store(5, Ordering::Release);
+        assert!(
+            !client.startup_recovery_needed(),
+            "the same ref ServiceActor generation must not retry an already failed startup"
+        );
+
+        service.actor_status.lock().unwrap().ready_generation = 6;
+        assert!(
+            client.startup_recovery_needed(),
+            "a new Ready generation in the ref Actor permits recovery"
+        );
+
+        service.actor_status.lock().unwrap().phase = ServicePhase::Unknown;
+        assert!(
+            !client.startup_recovery_needed(),
+            "a new but unproven generation cannot authorize recovery"
+        );
+    }
+
+    #[tokio::test]
+    async fn startup_service_evidence_keeps_ref_actor_generation_on_probe_error() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let mut actor_status = ServiceHostStatus::probing();
+        actor_status.phase = ServicePhase::DaemonStopped;
+        actor_status.ready_generation = 13;
+        let service = Arc::new(ActorEvidenceService {
+            actor_status: Arc::new(Mutex::new(actor_status.clone())),
+            probe_failed: AtomicBool::new(false),
+            probes: AtomicUsize::new(0),
+            events: events.clone(),
+        });
+        let (legacy_sender, legacy_receiver) =
+            tokio::sync::watch::channel(ServiceHostStatus::probing());
+        legacy_sender.send_modify(|status| {
+            status.ready_generation = 999;
+            status.phase = ServicePhase::Ready;
+        });
+
+        let workflow = CoreLifecycleWorkflow::new(
+            ApplicationClient::legacy().unwrap(),
+            ClashConfigClient::legacy().unwrap(),
+            None,
+            Arc::new(ConfirmedStoppedCore {
+                events,
+                run_type: RunType::Normal,
+            }),
+            Arc::new(chimera_os::core_install::FsBinaryInstaller::new(Arc::new(
+                chimera_os::elevation::RefuseElevation,
+            ))),
+            RuntimePaths::from_config_root(std::path::PathBuf::from("test-runtime-root")),
+            service.clone(),
+        )
+        .with_service_status(legacy_receiver);
+
+        let (evidence, generation) = workflow.service_evidence().await;
+        assert_eq!(generation, 13);
+        assert_eq!(
+            evidence,
+            crate::client::application_workflow::startup::ServiceEvidence::from_status(
+                &actor_status
+            ),
+            "startup ownership must not be derived from the contradictory legacy watch"
+        );
+
+        service.probe_failed.store(true, Ordering::Release);
+        let (unreadable, failed_generation) = workflow.service_evidence().await;
+        assert_eq!(failed_generation, 13);
+        assert!(matches!(
+            unreadable,
+            crate::client::application_workflow::startup::ServiceEvidence::Unreadable {
+                phase: ServicePhase::Unknown
+            }
+        ));
+    }
+
+    #[tokio::test]
+    async fn ref_service_actor_does_not_publish_duplicate_legacy_status_or_probe() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let mut status = ServiceHostStatus::probing();
+        status.phase = ServicePhase::Ready;
+        status.settled_ready = true;
+        status.ready_generation = 23;
+        let service = Arc::new(ActorEvidenceService {
+            actor_status: Arc::new(Mutex::new(status.clone())),
+            probe_failed: AtomicBool::new(false),
+            probes: AtomicUsize::new(0),
+            events: events.clone(),
+        });
+        let client = spawn_startup_client(
+            Arc::new(ConfirmedStoppedCore {
+                events,
+                run_type: RunType::Normal,
+            }),
+            service.clone(),
+        )
+        .await;
+        let CoreLifecycleClientInner::Actor { service_status, .. } = client.0.as_ref() else {
+            panic!("fixture must own the lifecycle actor");
+        };
+        assert_eq!(service_status.borrow().phase, ServicePhase::Probing);
+
+        client.observe_service_status(chimera_ipc::types::StatusInfo {
+            name: "chimera-service".into(),
+            version: "1.10.1".into(),
+            status: chimera_ipc::types::ServiceStatus::Stopped,
+            server: None,
+        });
+        let observed = client.probe_service().await.expect("read the ref actor");
+        assert_eq!(observed.phase, ServicePhase::Ready);
+        assert_eq!(observed.ready_generation, 23);
+        assert_eq!(
+            service.probes.load(AtomicOrdering::Relaxed),
+            0,
+            "a CoreLifecycle read must not trigger a redundant Service probe"
+        );
+        assert_eq!(
+            service_status.borrow().phase,
+            ServicePhase::Probing,
+            "a stale Service IPC observation must not publish a second phase"
+        );
+
+        client.observe_service_probe_failure();
+        let observed = client
+            .probe_service()
+            .await
+            .expect("read after IPC failure");
+        assert_eq!(observed.phase, ServicePhase::Ready);
+        assert_eq!(observed.ready_generation, 23);
+        assert_eq!(service_status.borrow().phase, ServicePhase::Probing);
+        assert_eq!(service.probes.load(AtomicOrdering::Relaxed), 0);
     }
 
     #[tokio::test]
@@ -3218,6 +3511,21 @@ mod tests {
         events: Arc<Mutex<Vec<&'static str>>>,
     }
 
+    /// Explicitly contradictory Actor/legacy generation fixture. This
+    /// catches accidental mixing of two independent readiness counters.
+    struct ActorEvidenceService {
+        actor_status: Arc<Mutex<ServiceHostStatus>>,
+        probe_failed: AtomicBool,
+        probes: AtomicUsize,
+        events: Arc<Mutex<Vec<&'static str>>>,
+    }
+
+    struct ToggleStartupServiceProbe {
+        events: Arc<Mutex<Vec<&'static str>>>,
+        ready: Arc<AtomicBool>,
+        core_running: Arc<AtomicBool>,
+    }
+
     struct TransitionUnavailableService {
         inner: RecordingService,
     }
@@ -3252,6 +3560,7 @@ mod tests {
 
     struct StartupOwnerCore {
         events: Arc<Mutex<Vec<&'static str>>>,
+        reconciles: AtomicUsize,
         selected: Mutex<RunType>,
         local_status: Mutex<(CoreState, i64)>,
         service_running: Arc<AtomicBool>,
@@ -3340,6 +3649,7 @@ mod tests {
     ) -> StartupOwnerCore {
         StartupOwnerCore {
             events,
+            reconciles: AtomicUsize::new(0),
             selected: Mutex::new(RunType::Normal),
             local_status: Mutex::new(local_state),
             service_running,
@@ -3397,6 +3707,15 @@ mod tests {
         )
         .await
         .unwrap()
+    }
+
+    fn signal_service_readiness_change(client: &CoreLifecycleClient) {
+        let CoreLifecycleClientInner::Actor { actor_ref, .. } = client.0.as_ref() else {
+            panic!("Service readiness follow-up requires the lifecycle actor");
+        };
+        actor_ref
+            .cast(Message::ServiceReadiness)
+            .expect("Service readiness change should reach the lifecycle actor");
     }
 
     async fn spawn_startup_client_with_profiles(
@@ -4042,6 +4361,32 @@ mod tests {
     }
 
     #[async_trait]
+    impl ServiceLifecyclePort for ActorEvidenceService {
+        async fn probe(&self) -> anyhow::Result<chimera_ipc::types::StatusInfo<'static>> {
+            self.probes.fetch_add(1, AtomicOrdering::Relaxed);
+            if self.probe_failed.load(Ordering::Acquire) {
+                anyhow::bail!("ref ServiceActor probe did not answer");
+            }
+            Ok(chimera_ipc::types::StatusInfo {
+                name: "chimera-service".into(),
+                version: "1.10.1".into(),
+                status: chimera_ipc::types::ServiceStatus::NotInstalled,
+                server: None,
+            })
+        }
+
+        fn actor_status(&self) -> Option<ServiceHostStatus> {
+            Some(self.actor_status.lock().unwrap().clone())
+        }
+
+        async fn begin_transition(&self) -> anyhow::Result<Box<dyn ServiceTransitionLease>> {
+            Ok(Box::new(RecordingServiceTransition {
+                events: self.events.clone(),
+            }))
+        }
+    }
+
+    #[async_trait]
     impl ServiceLifecyclePort for TransitionUnavailableService {
         async fn probe(&self) -> anyhow::Result<chimera_ipc::types::StatusInfo<'static>> {
             self.inner.probe().await
@@ -4322,6 +4667,7 @@ mod tests {
             _target_core: ClashCore,
             run_type: RunType,
         ) -> anyhow::Result<()> {
+            self.reconciles.fetch_add(1, AtomicOrdering::AcqRel);
             let (host, label) = match run_type {
                 RunType::Normal => {
                     *self.local_status.lock().unwrap() = (CoreState::Running, 3);
@@ -4567,6 +4913,77 @@ mod tests {
         }
 
         async fn begin_transition(&self) -> anyhow::Result<Box<dyn ServiceTransitionLease>> {
+            Ok(Box::new(RecordingServiceTransition {
+                events: self.events.clone(),
+            }))
+        }
+    }
+
+    #[async_trait]
+    impl ServiceLifecyclePort for ToggleStartupServiceProbe {
+        async fn probe(&self) -> anyhow::Result<chimera_ipc::types::StatusInfo<'static>> {
+            self.events.lock().unwrap().push("service-probe");
+            let ready = self.ready.load(AtomicOrdering::Acquire);
+            let core_running = self.core_running.load(AtomicOrdering::Acquire);
+            let state = if core_running {
+                CoreState::Running
+            } else {
+                CoreState::Stopped(None)
+            };
+            let detail = if core_running {
+                chimera_ipc::api::status::CoreStateDetail::Running { epoch: 1, pid: 7 }
+            } else {
+                chimera_ipc::api::status::CoreStateDetail::Stopped { reason: None }
+            };
+            Ok(chimera_ipc::types::StatusInfo {
+                name: std::borrow::Cow::Borrowed("chimera-service"),
+                version: std::borrow::Cow::Borrowed("1.11.1"),
+                status: if ready {
+                    chimera_ipc::types::ServiceStatus::Running
+                } else {
+                    chimera_ipc::types::ServiceStatus::Stopped
+                },
+                server: ready.then(|| chimera_ipc::api::status::StatusResBody {
+                    version: std::borrow::Cow::Borrowed("1.11.1"),
+                    core_infos: chimera_ipc::api::status::CoreInfos {
+                        instance_id: Some("9af54a67-fc31-4dcb-8422-26644c6277c8".into()),
+                        r#type: None,
+                        state,
+                        state_changed_at: if core_running { 1 } else { 2 },
+                        config_path: None,
+                        controller: None,
+                        health: None,
+                        revision: Some(chimera_ipc::api::status::ConfigRevisionInfo {
+                            epoch: 1,
+                            generation: 3,
+                            source_hash: "89abcdef01234567".into(),
+                            effective_hash: "0123456789abcdef".into(),
+                        }),
+                        detail: Some(detail),
+                    },
+                    runtime_infos: chimera_ipc::api::status::RuntimeInfos {
+                        service_data_dir: std::borrow::Cow::Owned(Default::default()),
+                        service_config_dir: std::borrow::Cow::Owned(Default::default()),
+                        nyanpasu_config_dir: std::borrow::Cow::Owned(Default::default()),
+                        nyanpasu_data_dir: std::borrow::Cow::Owned(Default::default()),
+                    },
+                }),
+            })
+        }
+
+        fn runtime_owned(&self, _info: &chimera_ipc::types::StatusInfo<'_>) -> bool {
+            true
+        }
+
+        async fn begin_transition(&self) -> anyhow::Result<Box<dyn ServiceTransitionLease>> {
+            self.events.lock().unwrap().push("service-begin");
+            Ok(Box::new(RecordingServiceTransition {
+                events: self.events.clone(),
+            }))
+        }
+
+        async fn try_begin_transition(&self) -> anyhow::Result<Box<dyn ServiceTransitionLease>> {
+            self.events.lock().unwrap().push("service-try-begin");
             Ok(Box::new(RecordingServiceTransition {
                 events: self.events.clone(),
             }))
@@ -6412,6 +6829,179 @@ mod tests {
         assert!(events.contains(&"service-core-retire"));
         assert!(!events.contains(&"stop-local"));
         assert!(!events.contains(&"rebuild-local"));
+    }
+
+    /// Contract: a running Local Core follows Service readiness changes in
+    /// both directions, with owner handoff completed before the new host runs.
+    /// This actor/port integration uses only mock Core and Service hosts; an
+    /// implementation that ignores readiness changes fails the owner/count
+    /// assertions, and an unsafe handoff fails the recorded event ordering.
+    #[tokio::test]
+    async fn startup_follows_service_readiness_in_both_directions() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let service_ready = Arc::new(AtomicBool::new(false));
+        let service_running = Arc::new(AtomicBool::new(false));
+        let core = Arc::new(startup_owner_core(
+            events.clone(),
+            (CoreState::Running, 1),
+            service_running.clone(),
+        ));
+        let service = Arc::new(ToggleStartupServiceProbe {
+            events: events.clone(),
+            ready: service_ready.clone(),
+            core_running: service_running.clone(),
+        });
+        let app = chimera_config::application::ChimeraAppConfig {
+            enable_service_mode: true,
+            ..Default::default()
+        };
+        let client = spawn_startup_client_with_application(
+            core.clone(),
+            service,
+            ApplicationClient::static_state(app),
+        )
+        .await;
+
+        let initial = client.startup_reconcile().await.unwrap();
+        assert_eq!(initial.report.outcome, StartupOutcome::Ready);
+        assert_eq!(core.reconciles.load(AtomicOrdering::Acquire), 1);
+
+        service_ready.store(true, AtomicOrdering::Release);
+        signal_service_readiness_change(&client);
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                let status = client.core_status().await.unwrap();
+                if core.reconciles.load(AtomicOrdering::Acquire) >= 2
+                    && status.run_type == RunType::Service
+                    && matches!(status.state, CoreState::Running)
+                    && client.status().active.is_none()
+                {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("Service readiness should move the running Core to Service");
+
+        let first_events = events.lock().unwrap().clone();
+        let stop_local = first_events
+            .iter()
+            .position(|event| *event == "stop-local")
+            .expect("Local must be stopped before handing off");
+        let rebuild_service = first_events
+            .iter()
+            .position(|event| *event == "rebuild-service")
+            .expect("the committed runtime should be applied on Service");
+        assert!(stop_local < rebuild_service);
+        assert!(!first_events.contains(&"service-start"));
+        assert!(!first_events.contains(&"service-install"));
+
+        service_running.store(false, AtomicOrdering::Release);
+        service_ready.store(false, AtomicOrdering::Release);
+        signal_service_readiness_change(&client);
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                let status = client.core_status().await.unwrap();
+                if core.reconciles.load(AtomicOrdering::Acquire) >= 3
+                    && status.run_type == RunType::Normal
+                    && matches!(status.state, CoreState::Running)
+                    && client.status().active.is_none()
+                {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("Service becoming unavailable should hand the Core back to Local");
+
+        {
+            let events = events.lock().unwrap();
+            let rebuild_service = events
+                .iter()
+                .position(|event| *event == "rebuild-service")
+                .unwrap();
+            let select_local = events
+                .iter()
+                .rposition(|event| *event == "select-local")
+                .expect("Local should be selected after Service becomes unavailable");
+            let rebuild_local = events
+                .iter()
+                .rposition(|event| *event == "rebuild-local")
+                .expect("the committed runtime should be re-established locally");
+            assert!(rebuild_service < select_local && select_local < rebuild_local);
+        }
+        client.shutdown().await.unwrap();
+    }
+
+    /// Contract: a stopped Local snapshot without explicit stop intent still
+    /// follows Service readiness, as ref does when `stop_requested` is false.
+    /// The fixture mutates only its in-memory status to represent an external
+    /// runtime stop; production has no StopCore command or stop-intent signal.
+    #[tokio::test]
+    async fn service_readiness_follows_after_local_core_stops_without_explicit_intent() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let service_ready = Arc::new(AtomicBool::new(false));
+        let service_running = Arc::new(AtomicBool::new(false));
+        let core = Arc::new(startup_owner_core(
+            events.clone(),
+            (CoreState::Running, 1),
+            service_running.clone(),
+        ));
+        let service = Arc::new(ToggleStartupServiceProbe {
+            events: events.clone(),
+            ready: service_ready.clone(),
+            core_running: service_running,
+        });
+        let app = chimera_config::application::ChimeraAppConfig {
+            enable_service_mode: true,
+            ..Default::default()
+        };
+        let client = spawn_startup_client_with_application(
+            core.clone(),
+            service,
+            ApplicationClient::static_state(app),
+        )
+        .await;
+
+        let initial = client.startup_reconcile().await.unwrap();
+        assert_eq!(initial.report.outcome, StartupOutcome::Ready);
+        let followup_start = events.lock().unwrap().len();
+        *core.local_status.lock().unwrap() = (CoreState::Stopped(None), 2);
+        service_ready.store(true, AtomicOrdering::Release);
+        signal_service_readiness_change(&client);
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                let status = client.core_status().await.unwrap();
+                if core.reconciles.load(AtomicOrdering::Acquire) >= 2
+                    && status.run_type == RunType::Service
+                    && matches!(status.state, CoreState::Running)
+                    && client.status().active.is_none()
+                {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("Service readiness should follow a stopped Local snapshot without stop intent");
+
+        {
+            let events = events.lock().unwrap();
+            let followup_events = &events[followup_start..];
+            let select_service = followup_events
+                .iter()
+                .position(|event| *event == "select-service")
+                .expect("Service should become the selected owner");
+            let rebuild_service = followup_events
+                .iter()
+                .position(|event| *event == "rebuild-service")
+                .expect("the committed runtime should be applied on Service");
+            assert!(select_service < rebuild_service);
+            assert!(!followup_events.contains(&"stop-local"));
+        }
+        client.shutdown().await.unwrap();
     }
 
     /// ST-LIFE-03; isolated lifecycle integration using mock hosts.
@@ -8763,6 +9353,40 @@ mod tests {
                 .contains("previous core lifecycle operation has an uncertain outcome")
         );
         assert_eq!(events.lock().unwrap().as_slice(), ["lower-stop"]);
+    }
+
+    #[test]
+    fn workflow_attempt_cannot_clear_while_the_lower_core_action_is_unsettled() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let core = Arc::new(LowerUncertainCore {
+            events: events.clone(),
+            uncertain: AtomicBool::new(true),
+        });
+        let lifecycle = CoreLifecycleWorkflow::new(
+            ApplicationClient::legacy().unwrap(),
+            ClashConfigClient::legacy().unwrap(),
+            None,
+            core.clone(),
+            Arc::new(RecordingInstaller {
+                events: events.clone(),
+            }),
+            RuntimePaths::from_config_root(std::path::PathBuf::from("test-runtime-root")),
+            Arc::new(RecordingService { events }),
+        );
+        let mut workflow = ApplicationWorkflow::with_lifecycle(lifecycle);
+        workflow.seed_unresolved_lifecycle_attempt_for_tests();
+
+        assert!(!workflow.conclude_attempt(None));
+        assert!(
+            workflow.has_unresolved_attempt(),
+            "a successful outer result must not erase a pending lower action"
+        );
+
+        // The fake lower owner becomes settled. No host writes were used to
+        // produce this transition: it tests only the Workflow clearance fence.
+        core.uncertain.store(false, AtomicOrdering::Release);
+        assert!(workflow.conclude_attempt(None));
+        assert!(!workflow.has_unresolved_attempt());
     }
 
     #[tokio::test]

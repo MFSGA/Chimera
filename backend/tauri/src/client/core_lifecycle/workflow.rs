@@ -58,6 +58,11 @@ pub(in crate::client) enum Command {
     },
     SelectCore(ClashCore),
     RecoverCore,
+    /// Re-evaluate the runtime owner after Service readiness changes.
+    FollowService {
+        operation_id: u64,
+        transition: Box<dyn ServiceTransitionLease>,
+    },
     StartupReconcile {
         operation_id: u64,
         transition: Box<dyn ServiceTransitionLease>,
@@ -510,8 +515,13 @@ impl CoreLifecycleWorkflow {
             #[cfg(not(test))]
             Command::StartupReconcile { .. }
             | Command::RecoverStartup { .. }
-            | Command::RetryStartup { .. } => {
+            | Command::RetryStartup { .. }
+            | Command::FollowService { .. } => {
                 anyhow::bail!("startup commands must be handled by ApplicationWorkflow")
+            }
+            #[cfg(test)]
+            Command::FollowService { .. } => {
+                anyhow::bail!("Service readiness follow-up must run through ApplicationWorkflow")
             }
             Command::CacheStartupUnsettled { .. } => {
                 anyhow::bail!("an unsettled startup report must be cached by ApplicationWorkflow")
@@ -1274,8 +1284,32 @@ impl CoreLifecycleWorkflow {
         self.release_service_owner().await
     }
 
+    pub(in crate::client) async fn try_begin_service_transition(
+        &self,
+    ) -> anyhow::Result<Box<dyn ServiceTransitionLease>> {
+        self.service.try_begin_transition().await
+    }
+
     pub(in crate::client) async fn service_evidence(&self) -> (ServiceEvidence, u64) {
-        let Ok(info) = self.service.probe().await else {
+        let probe = self.service.probe().await;
+        if let Some(status) = self.service.actor_status() {
+            // Production uses ref ServiceActor for both the ownership evidence
+            // and the readiness generation. Do NOT derive another generation
+            // from CoreLifecycle's independent probe cache; it can disagree
+            // across a daemon handoff or failed startup attempt.
+            let generation = status.ready_generation;
+            let evidence = if probe.is_ok() {
+                ServiceEvidence::from_status(&status)
+            } else {
+                // An unanswered ref Actor probe is not a stop or Ready proof,
+                // even if a previous watch snapshot was healthy.
+                ServiceEvidence::Unreadable {
+                    phase: chimera_core::actor_v2::service_policy::ServicePhase::Unknown,
+                }
+            };
+            return (evidence, generation);
+        }
+        let Ok(info) = probe else {
             let generation = self
                 .service_status
                 .as_ref()
@@ -1288,6 +1322,8 @@ impl CoreLifecycleWorkflow {
                 generation,
             );
         };
+        // Legacy-only tests keep their injected probe/watch and restart-policy
+        // semantics. No second read is performed against a production host.
         let runtime_owned = self.service.runtime_owned(&info);
         let previous = self
             .service_status

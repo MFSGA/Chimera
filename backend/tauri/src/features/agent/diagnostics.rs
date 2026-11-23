@@ -1,19 +1,20 @@
 use chimera_core::{
-    actor_v2::{service_policy::ServicePhase, service_status::ServiceHostStatus},
+    actor_v2::{
+        endpoint::ExecutionHost,
+        router::{CoreStatusProjection, EndpointConnectivity},
+        service_policy::ServicePhase,
+        service_status::ServiceHostStatus,
+    },
     clash::ws::ClashConnectionsConnectorState,
 };
 use std::net::{IpAddr, Ipv6Addr};
 
-use chimera_ipc::{api::status::CoreState, types::ServiceStatus};
+use chimera_ipc::{api::status::CoreStateDetail, types::ServiceStatus};
 use sha2::{Digest, Sha256};
 use sysproxy::Sysproxy;
 use tauri::{AppHandle, Manager};
 
-use crate::{
-    client::ChimeraClient,
-    config::core::Config,
-    core::{clash::core::RunType, service},
-};
+use crate::{client::ChimeraClient, config::core::Config, core::service};
 
 use super::{
     core_probe,
@@ -62,7 +63,10 @@ pub(crate) async fn collect_network_snapshot(app: &AppHandle) -> AgentNetworkSna
         .unwrap_or(true);
 
     let service_status = client.service_status();
-    let core_status = client.core_status();
+    // The agent's recovery decisions must not treat an unreadable Service
+    // endpoint as Stopped because LegacyCoreFacade has only two states.
+    // Refresh the authoritative ref CoreActor projection instead.
+    let core_status = client.refreshed_routed_core_status();
     let system_proxy = tokio::task::spawn_blocking(Sysproxy::get_system_proxy);
     let (core_status, system_proxy) = tokio::join!(core_status, system_proxy);
 
@@ -85,10 +89,13 @@ pub(crate) async fn collect_network_snapshot(app: &AppHandle) -> AgentNetworkSna
     };
     let mut core = match core_status {
         Ok(status) => AgentCoreSnapshot {
-            state: map_core_state(&status.state),
-            run_type: map_run_type(status.run_type),
+            state: map_actor_core_state(&status),
+            run_type: map_actor_run_type(status.host),
             selected_core,
-            state_changed_at: status.state_changed_at,
+            state_changed_at: status
+                .snapshot
+                .as_ref()
+                .map_or(0, |snapshot| snapshot.state_changed_at),
             runtime_config_present,
             routing_mode,
             observed_routing_mode: None,
@@ -244,18 +251,28 @@ fn summarize_tun(
     }
 }
 
-fn map_core_state(state: &CoreState) -> AgentCoreState {
-    match state {
-        CoreState::Running => AgentCoreState::Running,
-        CoreState::Stopped(_) => AgentCoreState::Stopped,
+fn map_actor_core_state(status: &CoreStatusProjection) -> AgentCoreState {
+    // A handoff, degraded link, incomplete shutdown, or unknown snapshot is
+    // not a positive stopped proof. The Agent must not run stop/recovery
+    // actions against an owner it cannot identify.
+    if !matches!(status.connectivity, EndpointConnectivity::Connected) {
+        return AgentCoreState::Unknown;
+    }
+    match status
+        .snapshot
+        .as_ref()
+        .and_then(|snapshot| snapshot.state.as_ref())
+    {
+        Some(CoreStateDetail::Running { .. }) => AgentCoreState::Running,
+        Some(CoreStateDetail::Stopped { .. }) => AgentCoreState::Stopped,
+        _ => AgentCoreState::Unknown,
     }
 }
 
-fn map_run_type(run_type: RunType) -> AgentRunType {
-    match run_type {
-        RunType::Normal => AgentRunType::Normal,
-        RunType::Service => AgentRunType::Service,
-        RunType::Elevated => AgentRunType::Elevated,
+fn map_actor_run_type(host: ExecutionHost) -> AgentRunType {
+    match host {
+        ExecutionHost::Local => AgentRunType::Normal,
+        ExecutionHost::Service => AgentRunType::Service,
     }
 }
 
@@ -575,14 +592,79 @@ fn snapshot_revision(
 #[cfg(test)]
 mod tests {
     use super::{
-        host_scope, stale_proxy_recommended_action, summarize_system_proxy, summarize_tun,
-        system_proxy_without_running_core,
+        host_scope, map_actor_core_state, map_actor_run_type, stale_proxy_recommended_action,
+        summarize_system_proxy, summarize_tun, system_proxy_without_running_core,
     };
     use crate::features::agent::model::{
         AgentActionRequest, AgentAppliedState, AgentCoreState, AgentHostScope,
         AgentSystemProxySnapshot,
     };
+    use chimera_core::actor_v2::{
+        endpoint::{CoreStatusSnapshot, ExecutionHost},
+        router::{CoreStatusProjection, EndpointConnectivity},
+    };
+    use chimera_ipc::api::status::CoreStateDetail;
     use sysproxy::Sysproxy;
+
+    fn ref_core_projection() -> CoreStatusProjection {
+        CoreStatusProjection {
+            host: ExecutionHost::Local,
+            generation: 2,
+            connectivity: EndpointConnectivity::Connected,
+            snapshot: Some(CoreStatusSnapshot {
+                instance_id: Some("diagnostics-core".into()),
+                controller: None,
+                state: Some(CoreStateDetail::Running { epoch: 7, pid: 42 }),
+                state_changed_at: 19,
+                revision: None,
+                source_hash: None,
+                healthy: Some(true),
+                applied_kind: None,
+            }),
+        }
+    }
+
+    #[test]
+    fn ref_actor_diagnostics_never_misclassify_a_transition_as_stopped() {
+        use crate::features::agent::model::AgentRunType;
+
+        let running = ref_core_projection();
+        assert_eq!(map_actor_core_state(&running), AgentCoreState::Running);
+        assert_eq!(map_actor_run_type(running.host), AgentRunType::Normal);
+        assert_eq!(
+            map_actor_run_type(ExecutionHost::Service),
+            AgentRunType::Service
+        );
+
+        let mut stopped = running.clone();
+        stopped.snapshot.as_mut().unwrap().state = Some(CoreStateDetail::Stopped { reason: None });
+        assert_eq!(map_actor_core_state(&stopped), AgentCoreState::Stopped);
+
+        let mut switching = running.clone();
+        switching.snapshot.as_mut().unwrap().state = Some(CoreStateDetail::Switching {
+            from: Some(7),
+            to: 8,
+        });
+        assert_eq!(map_actor_core_state(&switching), AgentCoreState::Unknown);
+
+        let mut handing_off = running.clone();
+        handing_off.connectivity = EndpointConnectivity::HandingOff {
+            from: ExecutionHost::Local,
+            to: ExecutionHost::Service,
+        };
+        assert_eq!(map_actor_core_state(&handing_off), AgentCoreState::Unknown);
+
+        let mut degraded = running.clone();
+        degraded.connectivity = EndpointConnectivity::Degraded {
+            desired: ExecutionHost::Service,
+            reason: "service unavailable".into(),
+        };
+        assert_eq!(map_actor_core_state(&degraded), AgentCoreState::Unknown);
+
+        let mut missing = running;
+        missing.snapshot = None;
+        assert_eq!(map_actor_core_state(&missing), AgentCoreState::Unknown);
+    }
 
     #[test]
     fn classifies_only_loopback_hosts_as_loopback() {

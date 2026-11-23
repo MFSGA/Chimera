@@ -79,18 +79,33 @@ pub(crate) fn streams_api_client_source(
 }
 
 impl ChimeraClient {
-    pub(crate) async fn active_core_binding(
+    /// A fresh ref CoreActor projection for diagnostics that must not trust
+    /// the legacy Facade's controller cache. The caller is responsible for
+    /// checking host/generation before and after using a leased API client.
+    pub(crate) async fn refreshed_routed_core_status(
         &self,
-    ) -> Result<crate::client::core_lifecycle::ports::ActiveCoreBinding> {
-        self.inner.core.active_core_binding().await
-    }
-
-    pub(crate) async fn active_clash_info(&self) -> Result<crate::config::clash::ClashInfo> {
-        self.inner.core.active_clash_info().await
+    ) -> Result<chimera_core::actor_v2::router::CoreStatusProjection> {
+        if let Some(facade) = &self.inner.ref_facade {
+            return Ok(facade.refresh_status().await?);
+        }
+        let core = self
+            .inner
+            .core_api
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("the ref Core Actor is unavailable"))?;
+        Ok(core.refresh_status().await?)
     }
 
     pub(crate) async fn clash_api_client(&self) -> Result<ApiClient> {
+        if let Some(facade) = &self.inner.ref_facade {
+            let client = facade.api_client_if_running().await?.ok_or_else(|| {
+                anyhow::anyhow!("the ref Core Facade confirmed the core is stopped")
+            })?;
+            return Ok(ApiClient::from_core_client(client));
+        }
         if let Some(core) = &self.inner.core_api {
+            // Test fixtures can inject CoreActor without a ServiceActor;
+            // production always constructs the shared ref Facade above.
             return Ok(ApiClient::from_core_client(core.api_client().await?));
         }
         // Only test fixtures constructed from injected legacy ports take this
