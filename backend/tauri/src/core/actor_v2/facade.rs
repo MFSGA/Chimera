@@ -462,6 +462,43 @@ impl CoreFacade {
         prepared: crate::client::core_lifecycle::ports::PreparedRuntime,
         core_spec: chimera_core_manager::CoreSpec,
     ) -> anyhow::Result<bool> {
+        self.reconcile_prepared_settlement(prepared, core_spec)
+            .await?
+            .require_published()?
+            .replaced
+            .ok_or_else(|| anyhow::anyhow!("the Core did not provide a replacement verdict"))
+    }
+
+    /// The serialized lower-host registry returns exactly one confirmed Core
+    /// result. The publication verdict is data, not an operation failure:
+    /// losing a post-apply filesystem write must never trigger a new submit.
+    pub(crate) async fn reconcile_prepared_settlement(
+        &self,
+        prepared: crate::client::core_lifecycle::ports::PreparedRuntime,
+        core_spec: chimera_core_manager::CoreSpec,
+    ) -> anyhow::Result<crate::client::core_lifecycle::ports::PreparedCoreSettlement> {
+        use crate::client::core_lifecycle::ports::{PreparedRolledBack, PreparedSubmission};
+        match self
+            .reconcile_prepared_submission(prepared, core_spec)
+            .await?
+        {
+            PreparedSubmission::Applied(applied) => Ok(applied),
+            PreparedSubmission::RolledBack(report) => {
+                let reason = report
+                    .failed_apply
+                    .clone()
+                    .unwrap_or_else(|| "the host returned no rollback detail".into());
+                Err(PreparedRolledBack { report, reason }.into())
+            }
+            PreparedSubmission::Unknown(error) => Err(error.into()),
+        }
+    }
+
+    pub(crate) async fn reconcile_prepared_submission(
+        &self,
+        prepared: crate::client::core_lifecycle::ports::PreparedRuntime,
+        core_spec: chimera_core_manager::CoreSpec,
+    ) -> anyhow::Result<crate::client::core_lifecycle::ports::PreparedSubmission> {
         let local_runtime = self
             .local_runtime
             .as_ref()
@@ -487,25 +524,64 @@ impl CoreFacade {
         // Deliver the confirmed replacement kind through that same operation
         // rather than invoking Core outside the serialized registry.
         let (outcome_tx, outcome_rx) = tokio::sync::oneshot::channel();
+        let report_endpoint = endpoint.clone();
+        let owner = (observed.host, observed.generation);
         let result = self
             .run_local_mutation("checked runtime reconcile", async move {
-                let replaced = local_runtime
-                    .reconcile_prepared_outcome(
-                        &prepared,
-                        core_spec,
-                        endpoint.as_ref(),
-                        (observed.host, observed.generation),
-                    )
+                let verdict = local_runtime
+                    .reconcile_prepared_submission(&prepared, core_spec, endpoint.as_ref(), owner)
                     .await?;
-                let _ = outcome_tx.send(replaced);
+                let _ = outcome_tx.send(verdict);
                 Ok(())
             })
             .await;
         self.refresh_ws_binding().await;
         result?;
-        outcome_rx
-            .await
-            .context("checked Core applied, but its replacement receipt was lost")
+        match outcome_rx.await {
+            Ok(crate::client::core_lifecycle::ports::PreparedSubmission::Applied(
+                mut settlement,
+            )) => {
+                if let (Some(receipt), Some(outcome)) = (&settlement.confirmed, &settlement.outcome)
+                    && let Ok(status) = router.refresh_status().await
+                    && status.host == owner.0
+                    && status.generation == owner.1
+                    && status
+                        .snapshot
+                        .as_ref()
+                        .is_some_and(|observed| receipt.confirms(status.host, observed))
+                {
+                    let effective_config = report_endpoint
+                        .effective_config()
+                        .await
+                        .ok()
+                        .flatten()
+                        .filter(|snapshot| snapshot.revision == outcome.revision);
+                    settlement.report =
+                        Some(Box::new(chimera_core::actor_v2::facade::ReconcileReport {
+                            applied: chimera_core::actor_v2::facade::AppliedConfigBinding {
+                                revision: receipt.applied_revision.clone(),
+                                host: receipt.host,
+                                generation: status.generation,
+                            },
+                            effective_config,
+                            output: chimera_ipc::api::core::v2::OperationOutputInfo::Reconciled(
+                                outcome.clone(),
+                            ),
+                            status,
+                        }));
+                }
+                Ok(crate::client::core_lifecycle::ports::PreparedSubmission::Applied(settlement))
+            }
+            Ok(other) => Ok(other),
+            Err(_) => {
+                // The registry reported success but lost the only real
+                // AppliedCandidate evidence. Isolate until a live receipt
+                // can be recovered; never turn this into a safe retry.
+                self.invalidate_local_ports();
+                self.outcome_uncertain.store(true, Ordering::Release);
+                anyhow::bail!("prepared Core applied, but its settlement receipt was lost")
+            }
+        }
     }
 
     pub(crate) async fn reconcile(
@@ -601,32 +677,34 @@ impl CoreFacade {
             .await
     }
 
-    pub(crate) async fn prepare_profile_runtime(
+    /// Core-owned Profile Try using the canonical PreparedRuntime product.
+    /// Unlike a committed-source Apply, this must preserve a held candidate
+    /// across the source TCC decision, so Confirm/Cancel remain the only
+    /// owners of its promotion or baseline restoration.
+    pub(crate) async fn prepare_profile_runtime_prepared(
         &self,
-        clash: ClashConfig,
-        target_core: ClashCore,
+        prepared: crate::client::core_lifecycle::ports::PreparedRuntime,
+        core_spec: chimera_core_manager::CoreSpec,
         run_type: RunType,
-        profiles: Arc<chimera_config::profile::Profiles>,
-        app: chimera_config::application::ChimeraAppConfig,
-        staged_content: std::collections::BTreeMap<String, String>,
-        target: Option<String>,
         operation_id: OperationId,
     ) -> anyhow::Result<(
         crate::client::application_workflow::mutation::AppliedCandidate,
         crate::client::application_workflow::mutation::CheckRecord,
     )> {
-        let local_runtime = self.local_runtime.as_ref().cloned().context(
-            "the compatibility core manager cannot hold a Profile runtime until source commit",
-        )?;
+        let local_runtime = self
+            .local_runtime
+            .as_ref()
+            .cloned()
+            .context("prepared Profile Try requires the shared Core-owned runtime session")?;
         let previous_run_type = local_runtime.run_type();
         let endpoint = self.endpoint_for_run_type(run_type)?;
-        let core_router = self.core_router.clone();
+        let router = self.core_router.clone();
         let service_endpoint = self.service_endpoint.clone();
         let stop_uncertain = self.outcome_uncertain.clone();
         let candidate_slot = Arc::new(tokio::sync::Mutex::new(None));
         let future_slot = candidate_slot.clone();
-        self.run_local_mutation("Profile runtime prepare", async move {
-            if let Some(router) = core_router {
+        self.run_local_mutation("prepared Profile TCC Try", async move {
+            let expected_owner = if let Some(router) = router {
                 let target: Arc<dyn ControlEndpoint> = match run_type {
                     RunType::Normal => Arc::new(local_runtime.local_endpoint()),
                     RunType::Service => Arc::new(service_endpoint.clone()),
@@ -636,6 +714,12 @@ impl CoreFacade {
                 };
                 router.change_host_from(target, false).await?;
                 local_runtime.select_execution_host(endpoint.host())?;
+                let observed = router.refresh_status().await?;
+                anyhow::ensure!(
+                    observed.host == endpoint.host(),
+                    "prepared Profile Try selected a different Core host"
+                );
+                Some((observed.host, observed.generation))
             } else {
                 match (previous_run_type, run_type) {
                     (RunType::Service, RunType::Normal) => {
@@ -644,19 +728,15 @@ impl CoreFacade {
                     (RunType::Normal, RunType::Service) => local_runtime.stop_core().await?,
                     _ => {}
                 }
-            }
-            // A routed Profile mutation refuses an unselected host at the
-            // CoreActor mailbox; it cannot carry out its own handoff.
+                None
+            };
             let candidate = local_runtime
-                .prepare_profile_runtime(
-                    clash,
-                    target_core,
+                .prepare_profile_runtime_prepared(
+                    prepared,
+                    core_spec,
                     endpoint.as_ref(),
-                    profiles,
-                    app,
-                    staged_content,
-                    target,
                     operation_id,
+                    expected_owner,
                 )
                 .await?;
             *future_slot.lock().await = Some(candidate);
@@ -668,7 +748,7 @@ impl CoreFacade {
             .lock()
             .await
             .take()
-            .context("Profile runtime prepare completed without a candidate")
+            .context("prepared Profile Try completed without a held candidate")
     }
 
     pub(crate) async fn confirm_profile_runtime(
@@ -959,6 +1039,36 @@ impl CoreFacade {
     /// Select a host after startup has completed its S2 handoff. This only
     /// changes which already-proven endpoint the shared Core lifecycle uses;
     /// the caller still owns S3 retirement/receipt verification and S4 apply.
+    /// The caller has already proved via a fresh Service observation and
+    /// transition lease that this instance no longer owns a Service Core.
+    /// Preserve that proof for the router's degraded-source handback rather
+    /// than doing a second unproven Service stop. This only selects Local;
+    /// committed runtime bytes are applied by the *next* Core mutation.
+    pub(crate) async fn select_local_after_confirmed_service_release(&self) -> anyhow::Result<()> {
+        use super::control_endpoint::ExecutionHost;
+
+        let local_runtime = self
+            .local_runtime
+            .as_ref()
+            .cloned()
+            .context("prepared fallback requires the shared CoreControl host")?;
+        let router = self.core_router.clone();
+        self.run_local_mutation("confirmed Service release to Local selection", async move {
+            if let Some(router) = router {
+                let target: Arc<dyn ControlEndpoint> = Arc::new(local_runtime.local_endpoint());
+                router.change_host_from(target, true).await?;
+            } else {
+                // Same compatibility behavior as reconcile_with_profile_source
+                // when a released Service Core no longer owns these ports.
+                local_runtime.invalidate_ports();
+            }
+            local_runtime.select_execution_host(ExecutionHost::Local)
+        })
+        .await?;
+        self.refresh_ws_binding().await;
+        Ok(())
+    }
+
     pub(crate) async fn select_execution_host(
         &self,
         host: super::control_endpoint::ExecutionHost,
@@ -1184,7 +1294,7 @@ impl CoreFacade {
         if accepted.target.as_deref() != Some(target) {
             return Ok(false);
         }
-        if !runtime.republish_pending_runtime_product(&accepted)? {
+        if !runtime.republish_pending_runtime_product(&accepted).await? {
             return Ok(false);
         }
         anyhow::ensure!(

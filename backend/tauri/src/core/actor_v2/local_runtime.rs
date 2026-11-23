@@ -307,6 +307,49 @@ impl LocalRuntimeHost {
         endpoint: &dyn ControlEndpoint,
         expected_owner: (ExecutionHost, u64),
     ) -> anyhow::Result<bool> {
+        let settled = self
+            .reconcile_prepared_settlement(prepared, core_spec, endpoint, expected_owner)
+            .await?
+            .require_published()?;
+        settled
+            .replaced
+            .ok_or_else(|| anyhow::anyhow!("the Core did not provide a replacement verdict"))
+    }
+
+    /// Submit and confirm the Core *once*. A failure to publish the derived
+    /// file or snapshot is not a Core refusal or a reason to resubmit bytes.
+    /// Keep the accepted receipt and product for receipt-fenced repair.
+    pub(crate) async fn reconcile_prepared_settlement(
+        &self,
+        prepared: &crate::client::core_lifecycle::ports::PreparedRuntime,
+        core_spec: chimera_core_manager::CoreSpec,
+        endpoint: &dyn ControlEndpoint,
+        expected_owner: (ExecutionHost, u64),
+    ) -> anyhow::Result<crate::client::core_lifecycle::ports::PreparedCoreSettlement> {
+        use crate::client::core_lifecycle::ports::{PreparedRolledBack, PreparedSubmission};
+        match self
+            .reconcile_prepared_submission(prepared, core_spec, endpoint, expected_owner)
+            .await?
+        {
+            PreparedSubmission::Applied(applied) => Ok(applied),
+            PreparedSubmission::RolledBack(report) => {
+                let reason = report
+                    .failed_apply
+                    .clone()
+                    .unwrap_or_else(|| "the host returned no rollback detail".into());
+                Err(PreparedRolledBack { report, reason }.into())
+            }
+            PreparedSubmission::Unknown(error) => Err(error.into()),
+        }
+    }
+
+    pub(crate) async fn reconcile_prepared_submission(
+        &self,
+        prepared: &crate::client::core_lifecycle::ports::PreparedRuntime,
+        core_spec: chimera_core_manager::CoreSpec,
+        endpoint: &dyn ControlEndpoint,
+        expected_owner: (ExecutionHost, u64),
+    ) -> anyhow::Result<crate::client::core_lifecycle::ports::PreparedSubmission> {
         anyhow::ensure!(
             !self.closed.load(Ordering::Acquire),
             "the local core control plane is shutting down"
@@ -381,12 +424,33 @@ impl LocalRuntimeHost {
             core_type: Some(prepared.intent.core_type.clone()),
         };
         let outcome = match self
-            .submit_and_wait(endpoint, submission, operation_id)
+            .submit_and_wait_terminal(endpoint, submission, operation_id.clone())
             .await
         {
-            Ok(outcome) => outcome,
+            Ok(ObservedReconcile::Applied(outcome)) => outcome,
+            Ok(ObservedReconcile::RolledBack(report)) => {
+                cleanup_candidate(candidate, "prepared Core restored its previous runtime").await;
+                return Ok(
+                    crate::client::core_lifecycle::ports::PreparedSubmission::RolledBack(report),
+                );
+            }
             Err(error) => {
                 cleanup_candidate(candidate, "checked runtime operation failed").await;
+                if self.outcome_uncertain() {
+                    let cause = error
+                        .downcast_ref::<chimera_core_manager::CoreError>()
+                        .cloned()
+                        .unwrap_or(chimera_core_manager::CoreError {
+                            kind: None,
+                            message: format!("{error:#}"),
+                            retryable: false,
+                            operation_id: None,
+                        })
+                        .with_operation(operation_id);
+                    return Ok(
+                        crate::client::core_lifecycle::ports::PreparedSubmission::Unknown(cause),
+                    );
+                }
                 return Err(error);
             }
         };
@@ -438,9 +502,30 @@ impl LocalRuntimeHost {
         // Publish only the verified Core outcome. `publish_profile_candidate`
         // handles exact-file promotion and applied snapshot identity checks.
         self.lifecycle.publish_confirmed(receipt.clone());
-        self.publish_profile_candidate(candidate, receipt, prepared.snapshot.clone())
-            .await?;
-        Ok(reconcile_replaced(&outcome))
+        let publication = match self
+            .publish_profile_candidate(candidate, receipt.clone(), prepared.snapshot.clone())
+            .await
+        {
+            Ok(()) => crate::client::core_lifecycle::ports::PreparedProductPublication::Published,
+            Err(error) => {
+                tracing::warn!(%error, "Core applied the prepared runtime, but product publication needs repair");
+                crate::client::core_lifecycle::ports::PreparedProductPublication::Pending {
+                    reason: format!("{error:#}"),
+                }
+            }
+        };
+        Ok(
+            crate::client::core_lifecycle::ports::PreparedSubmission::Applied(
+                crate::client::core_lifecycle::ports::PreparedCoreSettlement {
+                    report: None,
+                    outcome: Some(outcome.clone()),
+                    replaced: Some(reconcile_replaced(&outcome)),
+                    confirmed: Some(receipt),
+                    product: Some(prepared.snapshot.clone()),
+                    publication,
+                },
+            ),
+        )
     }
 
     pub(crate) async fn reconcile(
@@ -449,9 +534,18 @@ impl LocalRuntimeHost {
         target_core: ClashCore,
         endpoint: &dyn ControlEndpoint,
     ) -> anyhow::Result<()> {
-        self.reconcile_with_profile_source(clash, target_core, endpoint, None, None, None)
-            .await
-            .map(|_| ())
+        self.reconcile_with_profile_source(
+            Some(clash),
+            target_core,
+            endpoint,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .await
+        .map(|_| ())
     }
 
     pub(crate) async fn reconcile_with_profiles(
@@ -465,41 +559,43 @@ impl LocalRuntimeHost {
         target: Option<String>,
     ) -> anyhow::Result<()> {
         self.reconcile_with_profile_source(
-            clash,
+            Some(clash),
             target_core,
             endpoint,
             Some((profiles, app, staged_content)),
             target,
+            None,
+            None,
             None,
         )
         .await
         .map(|_| ())
     }
 
-    pub(crate) async fn prepare_profile_runtime(
+    pub(crate) async fn prepare_profile_runtime_prepared(
         &self,
-        clash: ClashConfig,
-        target_core: ClashCore,
+        prepared: crate::client::core_lifecycle::ports::PreparedRuntime,
+        core_spec: chimera_core_manager::CoreSpec,
         endpoint: &dyn ControlEndpoint,
-        profiles: Arc<chimera_config::profile::Profiles>,
-        app: chimera_config::application::ChimeraAppConfig,
-        staged_content: std::collections::BTreeMap<String, String>,
-        target: Option<String>,
         operation_id: OperationId,
+        expected_owner: Option<(ExecutionHost, u64)>,
     ) -> anyhow::Result<(
         crate::client::application_workflow::mutation::AppliedCandidate,
         crate::client::application_workflow::mutation::CheckRecord,
     )> {
+        let core = prepared.snapshot.target_core;
         self.reconcile_with_profile_source(
-            clash,
-            target_core,
+            None,
+            core,
             endpoint,
-            Some((profiles, app, staged_content)),
-            target,
+            None,
+            prepared.target.clone(),
             Some(operation_id),
+            Some((prepared, core_spec)),
+            expected_owner,
         )
         .await?
-        .context("Profile runtime preparation returned no candidate")
+        .context("prepared Profile TCC Try returned no held candidate")
     }
 
     pub(crate) async fn validate_profile_runtime(
@@ -592,7 +688,7 @@ impl LocalRuntimeHost {
 
     async fn reconcile_with_profile_source(
         &self,
-        clash: ClashConfig,
+        clash: Option<ClashConfig>,
         target_core: ClashCore,
         endpoint: &dyn ControlEndpoint,
         profile_source: Option<(
@@ -602,6 +698,11 @@ impl LocalRuntimeHost {
         )>,
         target: Option<String>,
         profile_operation_id: Option<OperationId>,
+        prepared: Option<(
+            crate::client::core_lifecycle::ports::PreparedRuntime,
+            chimera_core_manager::CoreSpec,
+        )>,
+        expected_owner: Option<(ExecutionHost, u64)>,
     ) -> anyhow::Result<
         Option<(
             crate::client::application_workflow::mutation::AppliedCandidate,
@@ -627,86 +728,144 @@ impl LocalRuntimeHost {
             );
         }
 
-        let candidate_ports = self.ports.resolve_candidate(&clash)?;
-        let revision = self.lifecycle.allocate_revision()?;
-        let mut diagnostic_profiles = None;
-        let generated = match profile_source {
-            Some((profiles, app, staged_content)) => {
-                diagnostic_profiles = Some(profiles.clone());
-                Config::generate_runtime_output_from_profiles(
-                    &clash,
-                    target_core,
-                    app,
-                    profiles,
-                    candidate_ports.bindings().clone(),
-                    staged_content,
-                    true,
-                )
-                .await
-            }
-            None => {
-                Config::generate_runtime_output_with_ports(
-                    &clash,
-                    target_core,
-                    candidate_ports.bindings().clone(),
-                )
-                .await
-            }
-        };
-        let (config, exists_keys, transform_output, inspection) = match generated {
-            Ok(output) => (
-                output.config,
-                output.exists_keys,
-                output.postprocessing_output,
-                output.inspection,
-            ),
-            Err(error) => {
-                if let Some(profiles) = diagnostic_profiles.as_ref() {
-                    publish_transform_failure(&self.lifecycle, &error, profiles, revision);
-                } else if let Some(transform) =
-                    error.downcast_ref::<crate::enhance::TransformFailureError>()
-                {
-                    self.lifecycle
-                        .publish_transform_failure(RuntimeTransformFailure {
-                            attempt_revision: revision,
-                            transform_uid: transform.transform_uid.clone(),
-                            scope_uid: transform.scope_uid.clone(),
-                            script_type: transform.script_type,
-                            message: transform.message(),
-                        });
-                }
-                return Err(error);
-            }
-        };
-        self.lifecycle.clear_transform_failure();
-
-        let config_bytes = Config::render_runtime_bytes(&config)?;
-        let core_spec = local_host::core_spec(&target_core)?;
-        let local_ipc = LocalIpcSettings {
-            policy: chimera_core_manager::LocalIpcPolicy::Disable,
-            keep_http_controller: true,
-        };
-        let config_text: Arc<str> = String::from_utf8(config_bytes.clone())?.into();
-        // Use the ref's pure core-owned intent builder for the actual
-        // reconcile. Its digest and bytes are one immutable candidate.
-        let intent = chimera_core::actor_v2::intent::RuntimeIntentBuilder::build(
-            (&target_core).into(),
-            config_text,
-            local_ipc,
-        );
-        let digest = intent.digest.clone();
-        let config_text = intent.config_text.clone();
-        let snapshot = Arc::new(RuntimeSnapshot::from_data(
+        // Use ref's canonical strict candidate directly for Profile TCC.
+        // No second runtime build, port reservation or revision allocation
+        // can change its exact advisory-checked and Core-submitted bytes.
+        let (
+            candidate_ports,
             revision,
-            target_core,
-            config_bytes.clone().into(),
-            RuntimeSnapshotData {
-                config,
-                exists_keys,
-                postprocessing_output: transform_output,
-                inspection: Arc::new(inspection),
-            },
-        ));
+            config_bytes,
+            core_spec,
+            local_ipc,
+            digest,
+            config_text,
+            snapshot,
+        ) = if let Some((prepared, core_spec)) = prepared {
+            anyhow::ensure!(
+                profile_operation_id.is_some(),
+                "a precommit Profile product requires a TCC operation owner"
+            );
+            anyhow::ensure!(
+                target.is_some() && target == prepared.target,
+                "the precommit Profile target does not match the prepared source"
+            );
+            anyhow::ensure!(
+                target_core == prepared.snapshot.target_core
+                    && prepared.intent.core_type == (&target_core).into(),
+                "prepared Profile candidate uses a different Core type"
+            );
+            anyhow::ensure!(
+                prepared.intent.config_text.as_bytes() == prepared.snapshot.product_bytes()
+                    && chimera_core_manager::payload_digest(prepared.snapshot.product_bytes())
+                        == prepared.intent.digest,
+                "Profile check bytes, snapshot and Core intent disagree"
+            );
+            self.lifecycle.clear_transform_failure();
+            (
+                prepared.ports,
+                prepared.snapshot.revision,
+                prepared.snapshot.product_bytes().to_vec(),
+                core_spec,
+                prepared.intent.local_ipc,
+                prepared.intent.digest.clone(),
+                prepared.intent.config_text.clone(),
+                prepared.snapshot,
+            )
+        } else {
+            // A canonical PreparedRuntime does not supply or require default
+            // Clash values; the legacy generator uses its actual source.
+            let clash = clash.context("legacy Profile build requires its original Clash source")?;
+            let candidate_ports = self.ports.resolve_candidate(&clash)?;
+            let revision = self.lifecycle.allocate_revision()?;
+            let mut diagnostic_profiles = None;
+            let generated = match profile_source {
+                Some((profiles, app, staged_content)) => {
+                    diagnostic_profiles = Some(profiles.clone());
+                    Config::generate_runtime_output_from_profiles(
+                        &clash,
+                        target_core,
+                        app,
+                        profiles,
+                        candidate_ports.bindings().clone(),
+                        staged_content,
+                        true,
+                    )
+                    .await
+                }
+                None => {
+                    Config::generate_runtime_output_with_ports(
+                        &clash,
+                        target_core,
+                        candidate_ports.bindings().clone(),
+                    )
+                    .await
+                }
+            };
+            let (config, exists_keys, transform_output, inspection) = match generated {
+                Ok(output) => (
+                    output.config,
+                    output.exists_keys,
+                    output.postprocessing_output,
+                    output.inspection,
+                ),
+                Err(error) => {
+                    if let Some(profiles) = diagnostic_profiles.as_ref() {
+                        publish_transform_failure(&self.lifecycle, &error, profiles, revision);
+                    } else if let Some(transform) =
+                        error.downcast_ref::<crate::enhance::TransformFailureError>()
+                    {
+                        self.lifecycle
+                            .publish_transform_failure(RuntimeTransformFailure {
+                                attempt_revision: revision,
+                                transform_uid: transform.transform_uid.clone(),
+                                scope_uid: transform.scope_uid.clone(),
+                                script_type: transform.script_type,
+                                message: transform.message(),
+                            });
+                    }
+                    return Err(error);
+                }
+            };
+            self.lifecycle.clear_transform_failure();
+
+            let config_bytes = Config::render_runtime_bytes(&config)?;
+            let core_spec = local_host::core_spec(&target_core)?;
+            let local_ipc = LocalIpcSettings {
+                policy: chimera_core_manager::LocalIpcPolicy::Disable,
+                keep_http_controller: true,
+            };
+            let config_text: Arc<str> = String::from_utf8(config_bytes.clone())?.into();
+            // Use the ref's pure core-owned intent builder for the actual
+            // reconcile. Its digest and bytes are one immutable candidate.
+            let intent = chimera_core::actor_v2::intent::RuntimeIntentBuilder::build(
+                (&target_core).into(),
+                config_text,
+                local_ipc,
+            );
+            let digest = intent.digest.clone();
+            let config_text = intent.config_text.clone();
+            let snapshot = Arc::new(RuntimeSnapshot::from_data(
+                revision,
+                target_core,
+                config_bytes.clone().into(),
+                RuntimeSnapshotData {
+                    config,
+                    exists_keys,
+                    postprocessing_output: transform_output,
+                    inspection: Arc::new(inspection),
+                },
+            ));
+            (
+                candidate_ports,
+                revision,
+                config_bytes,
+                core_spec,
+                local_ipc,
+                digest,
+                config_text,
+                snapshot,
+            )
+        };
         let candidate = self
             .runtime_paths
             .create_candidate(&config_bytes)
@@ -779,7 +938,7 @@ impl LocalRuntimeHost {
 
         let operation_id = OperationId::generate();
         let submission = CoreSubmission {
-            expected_owner: None,
+            expected_owner,
             envelope: CoreCommandEnvelope {
                 operation_id,
                 command: CoreCommand::Reconcile(Box::new(ReconcileRequest {
@@ -891,8 +1050,13 @@ impl LocalRuntimeHost {
             candidate.product.revision == candidate.receipt.revision
                 && candidate.product.target_core == candidate.receipt.target_core
                 && chimera_core_manager::payload_digest(candidate.product.product_bytes())
-                    == candidate.receipt.config_digest,
-            "committed Profile product does not match its confirmed runtime receipt"
+                    == candidate.receipt.config_digest
+                && candidate
+                    .receipt
+                    .artifact
+                    .as_ref()
+                    .is_some_and(|artifact| { Arc::ptr_eq(artifact, &candidate.product) }),
+            "committed Profile product is not the exact candidate accepted by the Core"
         );
         let confirmed = self
             .lifecycle
@@ -922,6 +1086,14 @@ impl LocalRuntimeHost {
                     .await?
             }
         };
+        // Verify the *held* precommit file before touching the publicly
+        // applied runtime product. A stale/misassociated TCC operation must
+        // not overwrite the product even briefly and then report mismatch.
+        let staged_bytes = candidate_file.read_verified().await?;
+        anyhow::ensure!(
+            staged_bytes.as_slice() == candidate.product.product_bytes(),
+            "held Profile TCC candidate differs from the accepted Core product"
+        );
         self.publish_profile_candidate(candidate_file, candidate.receipt, candidate.product)
             .await
     }
@@ -1172,6 +1344,26 @@ impl LocalRuntimeHost {
         submission: CoreSubmission,
         operation_id: OperationId,
     ) -> anyhow::Result<ReconcileOutcomeInfo> {
+        match self
+            .submit_and_wait_terminal(endpoint, submission, operation_id)
+            .await?
+        {
+            ObservedReconcile::Applied(outcome) => Ok(outcome),
+            ObservedReconcile::RolledBack(report) => {
+                accept_reconcile_outcome(&report).map(|_| report)
+            }
+        }
+    }
+
+    /// Keep the original terminal ReconcileOutcomeInfo intact for ref-style
+    /// Applied/RolledBack classification. The compatibility method above
+    /// continues to report rollback as an error to old Profile transactions.
+    async fn submit_and_wait_terminal(
+        &self,
+        endpoint: &dyn ControlEndpoint,
+        submission: CoreSubmission,
+        operation_id: OperationId,
+    ) -> anyhow::Result<ObservedReconcile> {
         let mut operation = match endpoint.submit(submission).await {
             Ok(operation) => operation,
             Err(error) => {
@@ -1224,8 +1416,12 @@ impl LocalRuntimeHost {
 
         match (operation.phase, operation.output) {
             (OperationPhase::Succeeded, Some(OperationOutputInfo::Reconciled(outcome))) => {
-                accept_reconcile_outcome(&outcome)?;
-                Ok(outcome)
+                if outcome.outcome == ReconcileOutcomeKind::RolledBack {
+                    Ok(ObservedReconcile::RolledBack(outcome))
+                } else {
+                    accept_reconcile_outcome(&outcome)?;
+                    Ok(ObservedReconcile::Applied(outcome))
+                }
             }
             (OperationPhase::Failed, _) => bail!(
                 "core reconcile failed: {}",
@@ -1344,17 +1540,48 @@ impl LocalRuntimeHost {
     /// Repair only the derived snapshot publication for a still-active Core
     /// receipt. The caller first checks the selected endpoint's live revision;
     /// this method does not re-submit runtime bytes or touch Profile sources.
-    pub(crate) fn republish_pending_runtime_product(
+    pub(crate) async fn republish_pending_runtime_product(
         &self,
         receipt: &Arc<RuntimeApplyReceipt>,
     ) -> anyhow::Result<bool> {
         if self.closed.load(Ordering::Acquire) || self.outcome_uncertain() {
             return Ok(false);
         }
-        let Some(product) = self.lifecycle.republish_confirmed_product(receipt)? else {
+        let Some((pending_receipt, product)) = self.lifecycle.pending_confirmed_product() else {
             return Ok(false);
         };
-        Config::publish_applied_runtime_legacy(&product.config);
+        if !Arc::ptr_eq(&pending_receipt, receipt) {
+            return Ok(false);
+        }
+        let promoted = self
+            .lifecycle
+            .snapshot()
+            .promoted
+            .as_ref()
+            .is_some_and(|current| Arc::ptr_eq(current, &product));
+        if !promoted {
+            // Core already accepted these exact bytes. Repair only the
+            // derived file; do not call Reconcile/prepare another candidate.
+            crate::client::runtime::restore_product(
+                self.runtime_paths.product(),
+                product.product_bytes(),
+            )
+            .await?;
+            if !self
+                .lifecycle
+                .accepted_confirmed_receipt()
+                .is_some_and(|active| Arc::ptr_eq(&active, receipt))
+            {
+                // A newer Core receipt superseded this file while it was
+                // being promoted; it must never become the Applied snapshot.
+                return Ok(false);
+            }
+            self.lifecycle.publish_promoted(product.clone());
+        }
+        let Some(published) = self.lifecycle.republish_confirmed_product(receipt)? else {
+            return Ok(false);
+        };
+        Config::publish_applied_runtime_legacy(&published.config);
         Ok(true)
     }
 
@@ -1406,6 +1633,12 @@ impl LocalRuntimeHost {
     pub(crate) fn recovery_notify(&self) -> Arc<tokio::sync::Notify> {
         self.recovery_notify.clone()
     }
+}
+
+#[derive(Debug, Clone)]
+enum ObservedReconcile {
+    Applied(ReconcileOutcomeInfo),
+    RolledBack(ReconcileOutcomeInfo),
 }
 
 async fn cleanup_candidate(candidate: crate::client::runtime::CandidateFile, reason: &str) {
@@ -1614,6 +1847,11 @@ mod tests {
         apply_submission: bool,
         /// Check replacement semantics independently from runtime receipt.
         patched: bool,
+        /// A terminal Core rollback is a success for the host operation, but
+        /// a refusal for the candidate source that was not applied.
+        rolled_back: bool,
+        /// A registered command that remains Running after bounded wait.
+        lose_result: bool,
     }
 
     #[async_trait::async_trait]
@@ -1648,7 +1886,7 @@ mod tests {
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .push((bytes, request.options.local_ipc, submission.expected_owner));
 
-            let generation = if self.apply_submission {
+            let generation = if self.apply_submission && !self.rolled_back {
                 let mut status = self
                     .status
                     .lock()
@@ -1682,19 +1920,41 @@ mod tests {
                 source_hash: digest,
                 effective_hash: format!("effective-{generation}"),
             };
+            let rollback_revision = if self.rolled_back {
+                let status = self.status.lock().unwrap();
+                let id = status.revision.as_ref().expect("old Core revision");
+                ConfigRevisionInfo {
+                    epoch: id.epoch,
+                    generation: id.generation,
+                    source_hash: status.source_hash.clone().unwrap_or_default(),
+                    effective_hash: id.effective_hash.clone(),
+                }
+            } else {
+                revision
+            };
             Ok(OperationInfo {
                 id: operation_id.to_string(),
-                phase: OperationPhase::Succeeded,
-                output: Some(OperationOutputInfo::Reconciled(ReconcileOutcomeInfo {
-                    outcome: if self.patched {
-                        ReconcileOutcomeKind::Patched
-                    } else {
-                        ReconcileOutcomeKind::Started
+                phase: if self.lose_result {
+                    OperationPhase::Running
+                } else {
+                    OperationPhase::Succeeded
+                },
+                output: (!self.lose_result).then_some(OperationOutputInfo::Reconciled(
+                    ReconcileOutcomeInfo {
+                        outcome: if self.rolled_back {
+                            ReconcileOutcomeKind::RolledBack
+                        } else if self.patched {
+                            ReconcileOutcomeKind::Patched
+                        } else {
+                            ReconcileOutcomeKind::Started
+                        },
+                        revision: rollback_revision,
+                        warning: None,
+                        failed_apply: self
+                            .rolled_back
+                            .then(|| "candidate rejected; previous runtime restored".into()),
                     },
-                    revision,
-                    warning: None,
-                    failed_apply: None,
-                })),
+                )),
                 error: None,
             })
         }
@@ -1757,6 +2017,8 @@ mod tests {
             submitted: StdMutex::new(Vec::new()),
             apply_submission,
             patched: false,
+            rolled_back: false,
+            lose_result: false,
         }
     }
 
@@ -1821,6 +2083,251 @@ mod tests {
             target: Some("committed-source-42".into()),
         };
         (prepared, receipt.core_spec.clone())
+    }
+
+    #[tokio::test]
+    async fn prepared_profile_tcc_try_holds_exact_checked_bytes_until_confirm() {
+        use chimera_core::actor_v2::intent::RuntimeIntentBuilder;
+
+        let (_root, host, paths) = runtime_host_fixture().await;
+        let session = host.preparation_session();
+        let (mut prepared, spec) =
+            prepared_runtime_fixture(Arc::from("mode: rule\n# exact checked source\n"));
+        let revision = session.revisions.allocate().unwrap();
+        prepared.snapshot = Arc::new(prepared.snapshot.with_revision(revision));
+        prepared.ports = session
+            .ports
+            .resolve_candidate(&ClashConfig::default())
+            .unwrap();
+        // Ref uses the selected source's control-channel policy, not the
+        // legacy Profile path's unconditional local IPC Disable setting.
+        let settings = LocalIpcSettings {
+            policy: LocalIpcPolicy::Prefer,
+            keep_http_controller: false,
+        };
+        prepared.intent = Arc::new(RuntimeIntentBuilder::build(
+            (&prepared.snapshot.target_core).into(),
+            prepared.intent.config_text.clone(),
+            settings,
+        ));
+        let original_snapshot = prepared.snapshot.clone();
+        let exact_bytes = prepared.snapshot.product_bytes().to_vec();
+        let target = prepared.target.clone();
+        let endpoint = recording_endpoint(true);
+        let operation_id = OperationId::generate();
+
+        let (candidate, check) = host
+            .prepare_profile_runtime_prepared(
+                prepared,
+                spec,
+                &endpoint,
+                operation_id.clone(),
+                Some((ExecutionHost::Local, 3)),
+            )
+            .await
+            .expect("TCC Try submits only the canonical strictly prepared candidate");
+        assert_eq!(
+            check,
+            crate::client::application_workflow::mutation::CheckRecord::Passed
+        );
+        assert!(Arc::ptr_eq(&candidate.product, &original_snapshot));
+        assert_eq!(candidate.receipt.revision, revision);
+        assert_eq!(candidate.receipt.target, target);
+        assert_eq!(candidate.receipt.local_ipc, settings);
+        assert!(Arc::ptr_eq(
+            candidate.receipt.artifact.as_ref().unwrap(),
+            &original_snapshot
+        ));
+        assert_eq!(endpoint.submitted.lock().unwrap().len(), 1);
+        {
+            let submitted = endpoint.submitted.lock().unwrap();
+            assert_eq!(
+                submitted[0].0, exact_bytes,
+                "check and Core Try use the same input bytes"
+            );
+            assert_eq!(submitted[0].1, Some(settings));
+            assert_eq!(
+                submitted[0].2,
+                Some((ExecutionHost::Local, 3)),
+                "the Profile Try must fence the current router owner generation"
+            );
+        }
+        assert!(
+            host.pending_profile_candidates
+                .lock()
+                .await
+                .contains_key(&operation_id)
+        );
+        assert!(host.lifecycle.snapshot().promoted.is_none());
+        assert!(host.lifecycle.snapshot().applied.is_none());
+        assert!(
+            !paths.product().exists(),
+            "the Profile source has not committed; no runtime product is public"
+        );
+
+        host.confirm_profile_runtime(&operation_id, candidate.clone())
+            .await
+            .expect("only the source TCC Confirm may promote the exact product");
+        assert_eq!(tokio::fs::read(paths.product()).await.unwrap(), exact_bytes);
+        assert!(Arc::ptr_eq(
+            &host.lifecycle.snapshot().applied.unwrap(),
+            &original_snapshot
+        ));
+        assert!(host.pending_profile_candidates.lock().await.is_empty());
+        assert_eq!(
+            endpoint.submitted.lock().unwrap().len(),
+            1,
+            "Confirm must not reapply Core"
+        );
+
+        // A duplicate Confirm after the candidate file is consumed must
+        // promote identical receipt bytes, still without resubmitting Core.
+        host.confirm_profile_runtime(&operation_id, candidate)
+            .await
+            .unwrap();
+        assert_eq!(endpoint.submitted.lock().unwrap().len(), 1);
+        host.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn profile_tcc_confirm_rejects_wrong_held_file_before_touching_public_product() {
+        let (_root, host, paths) = runtime_host_fixture().await;
+        let (prepared, spec) = prepared_runtime_fixture(Arc::from("mode: rule\n"));
+        let endpoint = recording_endpoint(true);
+        let operation_id = OperationId::generate();
+        let (accepted, _) = host
+            .prepare_profile_runtime_prepared(prepared, spec, &endpoint, operation_id.clone(), None)
+            .await
+            .unwrap();
+        let substituted = paths.create_candidate(b"mode: global\n").await.unwrap();
+        host.pending_profile_candidates
+            .lock()
+            .await
+            .insert(operation_id.clone(), substituted);
+        let error = host
+            .confirm_profile_runtime(&operation_id, accepted.clone())
+            .await
+            .expect_err("a mismatched held file may never overwrite the public product");
+        assert!(
+            error
+                .to_string()
+                .contains("held Profile TCC candidate differs")
+        );
+        assert!(!paths.product().exists());
+        assert!(host.lifecycle.snapshot().applied.is_none());
+        assert_eq!(endpoint.submitted.lock().unwrap().len(), 1);
+
+        // Once the bad file is discarded, the original accepted Core receipt
+        // may reconstruct only its exact bytes; no Core command is replayed.
+        host.confirm_profile_runtime(&operation_id, accepted.clone())
+            .await
+            .unwrap();
+        assert_eq!(
+            tokio::fs::read(paths.product()).await.unwrap(),
+            accepted.product.product_bytes()
+        );
+        assert_eq!(endpoint.submitted.lock().unwrap().len(), 1);
+        assert!(Arc::ptr_eq(
+            &host.lifecycle.snapshot().applied.unwrap(),
+            &accepted.product,
+        ));
+        host.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn profile_tcc_confirm_rejects_forged_product_identity_before_file_promotion() {
+        let (_root, host, paths) = runtime_host_fixture().await;
+        let (prepared, spec) = prepared_runtime_fixture(Arc::from("mode: rule\n"));
+        let endpoint = recording_endpoint(true);
+        let operation_id = OperationId::generate();
+        let (accepted, _) = host
+            .prepare_profile_runtime_prepared(prepared, spec, &endpoint, operation_id.clone(), None)
+            .await
+            .unwrap();
+        let forged = crate::client::application_workflow::mutation::AppliedCandidate {
+            replaced: accepted.replaced,
+            receipt: accepted.receipt.clone(),
+            product: Arc::new((*accepted.product).clone()),
+        };
+        assert!(
+            host.confirm_profile_runtime(&operation_id, forged)
+                .await
+                .is_err(),
+            "copying a product is not the exact accepted TCC artifact"
+        );
+        assert!(!paths.product().exists());
+        assert!(host.lifecycle.snapshot().applied.is_none());
+        assert_eq!(endpoint.submitted.lock().unwrap().len(), 1);
+        assert!(
+            host.pending_profile_candidates
+                .lock()
+                .await
+                .contains_key(&operation_id),
+            "a forged product must not consume the legitimate TCC candidate"
+        );
+        host.discard_profile_runtime(&operation_id).await;
+        host.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn prepared_profile_tcc_cancel_discards_held_file_without_publication() {
+        let (_root, host, paths) = runtime_host_fixture().await;
+        let (prepared, spec) = prepared_runtime_fixture(Arc::from("mode: rule\n"));
+        let endpoint = recording_endpoint(true);
+        let operation_id = OperationId::generate();
+        let (candidate, _) = host
+            .prepare_profile_runtime_prepared(prepared, spec, &endpoint, operation_id.clone(), None)
+            .await
+            .unwrap();
+        assert!(
+            host.pending_profile_candidates
+                .lock()
+                .await
+                .contains_key(&operation_id)
+        );
+        assert!(!paths.product().exists());
+        assert!(host.lifecycle.snapshot().applied.is_none());
+
+        // The higher Profile TCC coordinator restores the prior Core baseline
+        // before calling Discard on an Aborted source. Discard itself must be
+        // strictly a staged-file cleanup and never a publication/reapply.
+        host.discard_profile_runtime(&operation_id).await;
+        assert!(host.pending_profile_candidates.lock().await.is_empty());
+        assert!(!paths.product().exists());
+        assert!(host.lifecycle.snapshot().applied.is_none());
+        assert_eq!(endpoint.submitted.lock().unwrap().len(), 1);
+        assert!(
+            host.accepted_runtime_receipt().is_some(),
+            "Discard does not falsely claim a restored Core; TCC must restore baseline"
+        );
+        drop(candidate);
+        host.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn prepared_profile_tcc_try_rejects_mismatched_source_before_core_submit() {
+        let (_root, host, paths) = runtime_host_fixture().await;
+        let (mut prepared, spec) = prepared_runtime_fixture(Arc::from("mode: rule\n"));
+        let endpoint = recording_endpoint(true);
+        let operation_id = OperationId::generate();
+        prepared.target = Some("source-changed-after-prepare".into());
+        let result = host
+            .reconcile_with_profile_source(
+                None,
+                prepared.snapshot.target_core,
+                &endpoint,
+                None,
+                Some("older-source".into()),
+                Some(operation_id),
+                Some((prepared, spec)),
+                None,
+            )
+            .await;
+        assert!(result.unwrap_err().to_string().contains("target"));
+        assert!(endpoint.submitted.lock().unwrap().is_empty());
+        assert!(host.pending_profile_candidates.lock().await.is_empty());
+        assert!(!paths.product().exists());
+        host.shutdown().await.unwrap();
     }
 
     #[tokio::test]
@@ -1919,6 +2426,157 @@ mod tests {
         assert_eq!(
             tokio::fs::read(paths.product()).await.unwrap(),
             bytes.as_bytes()
+        );
+        host.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn prepared_core_rollback_stays_typed_and_never_publishes_candidate() {
+        use crate::client::core_lifecycle::ports::{PreparedRolledBack, PreparedSubmission};
+
+        let (_root, host, _paths) = runtime_host_fixture().await;
+        let (prepared, spec) = prepared_runtime_fixture(Arc::from("mode: rule\n"));
+        let mut endpoint = recording_endpoint(true);
+        endpoint.rolled_back = true;
+
+        let terminal = host
+            .reconcile_prepared_submission(
+                &prepared,
+                spec.clone(),
+                &endpoint,
+                (ExecutionHost::Local, 3),
+            )
+            .await
+            .expect("rollback is an observed Core terminal, not an uncertain error");
+        let PreparedSubmission::RolledBack(report) = terminal else {
+            panic!("the Core restored its old revision, never accepted the candidate");
+        };
+        assert_eq!(report.outcome, ReconcileOutcomeKind::RolledBack);
+        assert_eq!(
+            report.failed_apply.as_deref(),
+            Some("candidate rejected; previous runtime restored")
+        );
+        assert_eq!(
+            report.revision.generation, 2,
+            "the restored revision remains running"
+        );
+        assert!(host.lifecycle.confirmed_receipt().is_none());
+        assert!(host.lifecycle.snapshot().applied.is_none());
+        assert!(host.pending_runtime_product_target().is_none());
+        assert!(!host.outcome_uncertain());
+        assert_eq!(endpoint.submitted.lock().unwrap().len(), 1);
+
+        let rejected = host
+            .reconcile_prepared_settlement(&prepared, spec, &endpoint, (ExecutionHost::Local, 3))
+            .await
+            .expect_err("the legacy single-result caller must refuse an observed rollback");
+        let typed = rejected.downcast_ref::<PreparedRolledBack>().unwrap();
+        assert_eq!(typed.report.outcome, ReconcileOutcomeKind::RolledBack);
+        assert!(typed.reason.contains("previous runtime restored"));
+        host.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn prepared_core_unknown_retains_operation_identity_and_isolates_owner() {
+        use crate::client::core_lifecycle::ports::PreparedSubmission;
+
+        let (_root, host, _paths) = runtime_host_fixture().await;
+        let (prepared, spec) = prepared_runtime_fixture(Arc::from("mode: rule\n"));
+        let mut endpoint = recording_endpoint(false);
+        endpoint.lose_result = true;
+        let terminal = host
+            .reconcile_prepared_submission(&prepared, spec, &endpoint, (ExecutionHost::Local, 3))
+            .await
+            .expect("the unobserved terminal is represented explicitly");
+        let PreparedSubmission::Unknown(cause) = terminal else {
+            panic!("a Running operation that never returns cannot be a refusal");
+        };
+        assert!(cause.operation_id.is_some());
+        assert!(cause.message.contains("outcome could not be observed"));
+        assert_eq!(endpoint.submitted.lock().unwrap().len(), 1);
+        assert!(host.outcome_uncertain());
+        assert!(host.lifecycle.confirmed_receipt().is_none());
+        assert!(host.pending_runtime_product_target().is_none());
+        host.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn confirmed_prepared_core_survives_product_promotion_failure_and_repairs_without_resubmit()
+     {
+        use crate::client::core_lifecycle::ports::PreparedProductPublication;
+
+        let (_root, host, paths) = runtime_host_fixture().await;
+        let (prepared, spec) = prepared_runtime_fixture("mode: rule\n".into());
+        let expected_product = prepared.snapshot.clone();
+        let endpoint = recording_endpoint(true);
+
+        // A directory in place of the generated YAML product makes atomic
+        // file promotion fail *after* the real Core endpoint accepted it.
+        tokio::fs::create_dir_all(paths.product()).await.unwrap();
+        let settled = host
+            .reconcile_prepared_settlement(&prepared, spec, &endpoint, (ExecutionHost::Local, 3))
+            .await
+            .expect("the Core applied, even though publication failed");
+        assert_eq!(settled.replaced, Some(true));
+        settled.validate_identity("committed-source-42").unwrap();
+        assert!(settled.validate_identity("an-obsolete-source").is_err());
+        let mut forged = settled.clone();
+        forged.product = Some(Arc::new((*expected_product).clone()));
+        assert!(
+            forged.validate_identity("committed-source-42").is_err(),
+            "a copied product is not the exact accepted Core artifact"
+        );
+        assert!(matches!(
+            settled.publication,
+            PreparedProductPublication::Pending { .. }
+        ));
+        let accepted = settled
+            .confirmed
+            .expect("accepted Core receipt is not a publish receipt");
+        assert!(Arc::ptr_eq(
+            &accepted,
+            &host.accepted_runtime_receipt().unwrap()
+        ));
+        assert!(Arc::ptr_eq(
+            settled
+                .product
+                .as_ref()
+                .expect("confirmed bytes are retained"),
+            &expected_product
+        ));
+        assert_eq!(endpoint.submitted.lock().unwrap().len(), 1);
+        assert_eq!(
+            host.pending_runtime_product_target().as_deref(),
+            Some("committed-source-42")
+        );
+        assert!(host.lifecycle.snapshot().applied.is_none());
+        assert!(host.lifecycle.snapshot().promoted.is_none());
+
+        tokio::fs::remove_dir_all(paths.product()).await.unwrap();
+        assert!(
+            host.republish_pending_runtime_product(&accepted)
+                .await
+                .unwrap()
+        );
+        assert_eq!(
+            tokio::fs::read(paths.product()).await.unwrap(),
+            expected_product.product_bytes()
+        );
+        assert_eq!(
+            endpoint.submitted.lock().unwrap().len(),
+            1,
+            "publish recovery must not resubmit Core"
+        );
+        assert!(host.pending_runtime_product_target().is_none());
+        assert!(Arc::ptr_eq(
+            &host.lifecycle.snapshot().applied.unwrap(),
+            &expected_product
+        ));
+        assert!(
+            !host
+                .republish_pending_runtime_product(&accepted)
+                .await
+                .unwrap()
         );
         host.shutdown().await.unwrap();
     }

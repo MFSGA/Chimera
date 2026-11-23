@@ -112,7 +112,18 @@ impl AttemptPolicy {
         result: &anyhow::Result<()>,
         uncertain: bool,
     ) {
-        let outcome = match legacy_apply_verdict(result, uncertain, false) {
+        self.record_prepared(target, host, result, uncertain, None)
+    }
+
+    pub(crate) fn record_prepared(
+        &mut self,
+        target: String,
+        host: ExecutionHost,
+        result: &anyhow::Result<()>,
+        uncertain: bool,
+        prepared: Option<&super::mutation::ApplyOutcome>,
+    ) {
+        let outcome = match observed_apply_verdict(result, uncertain, false, prepared) {
             LegacyApplyVerdict::Applied => AttemptOutcome::Applied,
             LegacyApplyVerdict::Refused(cause) => AttemptOutcome::Refused(cause),
             LegacyApplyVerdict::Unknown(cause) => AttemptOutcome::Unknown(cause),
@@ -155,8 +166,55 @@ pub(crate) fn legacy_error_verdict(
         LegacyApplyVerdict::Unknown(Arc::new(runtime_apply_error(error, true)))
     } else if source_advanced || waiting_dependency(error) {
         LegacyApplyVerdict::Waiting(Arc::new(runtime_apply_error(error, false)))
+    } else if let Some(rolled_back) =
+        error.downcast_ref::<crate::client::core_lifecycle::ports::PreparedRolledBack>()
+    {
+        // The host completed an actual rollback. The requested candidate did
+        // not take effect, while the previous Core revision kept running.
+        LegacyApplyVerdict::Refused(Arc::new(RuntimeError::CoreRolledBack {
+            reason: rolled_back.report.failed_apply.clone(),
+        }))
     } else {
         LegacyApplyVerdict::Refused(Arc::new(runtime_apply_error(error, false)))
+    }
+}
+
+/// Use the actual upstream ApplyOutcome when its command is still this
+/// round's terminal. Never let Applied override an error from a *later*
+/// source fence, or let a stale product override the actor's Unknown gate.
+pub(crate) fn observed_apply_verdict(
+    result: &anyhow::Result<()>,
+    uncertain: bool,
+    source_advanced: bool,
+    prepared: Option<&super::mutation::ApplyOutcome>,
+) -> LegacyApplyVerdict {
+    use super::mutation::ApplyOutcome;
+    if result.as_ref().err().is_some_and(waiting_dependency) && !uncertain {
+        // A Service handoff or newer source may have blocked settlement *after*
+        // the observed Core terminal. The current round is Waiting, not the
+        // earlier candidate refusal. Do not poison future owner retries.
+        return legacy_apply_verdict(result, false, source_advanced);
+    }
+    if uncertain || source_advanced {
+        // Prefer an observed, instance-bound Unknown's exact typed cause
+        // over rebuilding it from a compatibility error string. A newer
+        // source or an uncertain Core must never be marked Applied/Refused.
+        if uncertain
+            && let (Some(super::mutation::ApplyOutcome::Unknown(cause)), Err(_)) =
+                (prepared, result)
+        {
+            return LegacyApplyVerdict::Unknown(cause.clone());
+        }
+        return legacy_apply_verdict(result, uncertain, source_advanced);
+    }
+    match (prepared, result) {
+        (Some(ApplyOutcome::Applied(_)), Ok(())) => LegacyApplyVerdict::Applied,
+        (Some(ApplyOutcome::Refused { cause }), Err(_)) => {
+            LegacyApplyVerdict::Refused(cause.clone())
+        }
+        (Some(ApplyOutcome::Waiting(cause)), Err(_)) => LegacyApplyVerdict::Waiting(cause.clone()),
+        (Some(ApplyOutcome::Unknown(cause)), Err(_)) => LegacyApplyVerdict::Unknown(cause.clone()),
+        _ => legacy_apply_verdict(result, uncertain, source_advanced),
     }
 }
 
@@ -197,6 +255,128 @@ pub(crate) fn waiting_dependency(error: &anyhow::Error) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn prepared_refusal_and_unknown_keep_the_exact_cause_through_attempt_policy() {
+        use super::super::mutation::ApplyOutcome;
+        let rollback = Arc::new(RuntimeError::CoreRolledBack {
+            reason: Some("old core revision restored".into()),
+        });
+        let verdict = ApplyOutcome::Refused {
+            cause: rollback.clone(),
+        };
+        let refused_result = Err(anyhow::anyhow!("old compatibility error lacks Core report"));
+        assert!(matches!(
+            observed_apply_verdict(&refused_result, false, false, Some(&verdict)),
+            LegacyApplyVerdict::Refused(cause) if Arc::ptr_eq(&cause, &rollback)
+        ));
+        let mut policy = AttemptPolicy::default();
+        policy.record_prepared(
+            "committed-profile".into(),
+            ExecutionHost::Local,
+            &refused_result,
+            false,
+            Some(&verdict),
+        );
+        assert!(matches!(
+            policy.snapshot().unwrap().outcome,
+            AttemptOutcome::Refused(cause) if Arc::ptr_eq(&cause, &rollback)
+        ));
+        assert!(
+            policy
+                .allow(
+                    "committed-profile",
+                    ExecutionHost::Local,
+                    Trigger::SourceCommitted
+                )
+                .is_err()
+        );
+
+        let id = chimera_core_manager::OperationId::generate();
+        let unknown = Arc::new(RuntimeError::SubmissionUnobserved {
+            failure: chimera_contracts::runtime_error::CoreFailure {
+                kind: Some(CoreErrorKind::BackendUnavailable),
+                message: "lost terminal".into(),
+                retryable: true,
+                operation_id: Some(id.to_string()),
+            },
+        });
+        let unresolved = ApplyOutcome::Unknown(unknown.clone());
+        assert!(matches!(
+            observed_apply_verdict(&refused_result, true, false, Some(&unresolved)),
+            LegacyApplyVerdict::Unknown(cause) if Arc::ptr_eq(&cause, &unknown)
+        ));
+        policy.record_prepared(
+            "committed-profile".into(),
+            ExecutionHost::Local,
+            &refused_result,
+            true,
+            Some(&unresolved),
+        );
+        assert!(matches!(
+            policy.snapshot().unwrap().outcome,
+            AttemptOutcome::Unknown(cause) if Arc::ptr_eq(&cause, &unknown)
+        ));
+        assert!(
+            policy
+                .allow(
+                    "committed-profile",
+                    ExecutionHost::Local,
+                    Trigger::SourceCommitted
+                )
+                .is_ok(),
+            "Unknown may never poison the target as a permanent refusal"
+        );
+
+        assert!(matches!(
+            observed_apply_verdict(
+                &Err(anyhow::Error::new(OwnershipTransitionPending::waiting(
+                    "Service handoff not yet proved",
+                ))),
+                false,
+                false,
+                Some(&verdict)
+            ),
+            LegacyApplyVerdict::Waiting(_)
+        ));
+        // Completed's advanced-source fence supersedes a terminal refusal.
+        assert!(matches!(
+            observed_apply_verdict(
+                &Err(anyhow::Error::new(CommittedTargetAdvanced)),
+                false,
+                true,
+                Some(&verdict)
+            ),
+            LegacyApplyVerdict::Waiting(_)
+        ));
+        assert!(matches!(
+            observed_apply_verdict(&Ok(()), true, false, Some(&verdict)),
+            LegacyApplyVerdict::Unknown(_)
+        ));
+    }
+
+    #[test]
+    fn rolled_back_core_is_typed_refusal_not_apply_success_or_unknown() {
+        use chimera_ipc::api::core::v2::{ReconcileOutcomeInfo, ReconcileOutcomeKind};
+        let result = Err(crate::client::core_lifecycle::ports::PreparedRolledBack {
+            report: ReconcileOutcomeInfo {
+                outcome: ReconcileOutcomeKind::RolledBack,
+                revision: chimera_ipc::api::status::ConfigRevisionInfo {
+                    epoch: 7,
+                    generation: 3,
+                    source_hash: "restored-original".into(),
+                    effective_hash: "unchanged-original".into(),
+                },
+                warning: None,
+                failed_apply: Some("bad candidate".into()),
+            },
+            reason: "bad candidate".into(),
+        }
+        .into());
+        assert!(matches!(legacy_apply_verdict(&result, false, false),
+            LegacyApplyVerdict::Refused(cause)
+            if matches!(cause.as_ref(), RuntimeError::CoreRolledBack {reason: Some(reason)} if reason == "bad candidate")));
+    }
 
     #[test]
     fn legacy_result_verdict_matches_ref_waiting_refused_and_unknown_semantics() {

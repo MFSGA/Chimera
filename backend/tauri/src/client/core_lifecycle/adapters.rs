@@ -319,6 +319,26 @@ impl CoreLifecyclePort for LegacyCoreBridge {
         })
     }
 
+    async fn reconcile_prepared_settlement(
+        &self,
+        prepared: super::ports::PreparedRuntime,
+        core_spec: chimera_core_manager::CoreSpec,
+    ) -> anyhow::Result<super::ports::PreparedCoreSettlement> {
+        self.facade()
+            .reconcile_prepared_settlement(prepared, core_spec)
+            .await
+    }
+
+    async fn reconcile_prepared_submission(
+        &self,
+        prepared: super::ports::PreparedRuntime,
+        core_spec: chimera_core_manager::CoreSpec,
+    ) -> anyhow::Result<super::ports::PreparedSubmission> {
+        self.facade()
+            .reconcile_prepared_submission(prepared, core_spec)
+            .await
+    }
+
     async fn capture_interruption_source(
         &self,
     ) -> anyhow::Result<Option<crate::core::actor_v2::api::ApiClient>> {
@@ -409,31 +429,18 @@ impl CoreLifecyclePort for LegacyCoreBridge {
             .await
     }
 
-    async fn prepare_profile_runtime(
+    async fn prepare_profile_runtime_prepared(
         &self,
-        clash: chimera_config::clash::config::ClashConfig,
-        target_core: ClashCore,
+        prepared: super::ports::PreparedRuntime,
+        core_spec: chimera_core_manager::CoreSpec,
         run_type: RunType,
-        profiles: Arc<chimera_config::profile::Profiles>,
-        app: chimera_config::application::ChimeraAppConfig,
-        staged_content: std::collections::BTreeMap<String, String>,
-        target: Option<String>,
         operation_id: chimera_core_manager::OperationId,
     ) -> anyhow::Result<(
         crate::client::application_workflow::mutation::AppliedCandidate,
         crate::client::application_workflow::mutation::CheckRecord,
     )> {
         self.facade()
-            .prepare_profile_runtime(
-                clash,
-                target_core,
-                run_type,
-                profiles,
-                app,
-                staged_content,
-                target,
-                operation_id,
-            )
+            .prepare_profile_runtime_prepared(prepared, core_spec, run_type, operation_id)
             .await
     }
 
@@ -493,6 +500,12 @@ impl CoreLifecyclePort for LegacyCoreBridge {
                 .await
                 .map(|_| ()),
         )
+    }
+
+    async fn select_local_after_confirmed_service_release(&self) -> anyhow::Result<()> {
+        self.facade()
+            .select_local_after_confirmed_service_release()
+            .await
     }
 
     async fn select_execution_host(
