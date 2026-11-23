@@ -277,7 +277,7 @@ cargo clippy --manifest-path backend/Cargo.toml --all-targets --all-features
 
 - ref 基线：c4b35e04870a9caa53f21d10af6fcfde4a6f4c01；ref/frontend/nyanpasu/src/pages/(main)/main/settings/clash/network/_modules/mips-congestion-controller-selector.tsx::MipsCongestionControllerSelector，network/index.tsx，及 ref/frontend/nyanpasu/tests/tun-stack-settings.browser.test.tsx。上游仅在所选栈为 MIPS 且 core feature matrix 包含 controller values 时显示；通过 tun_mips.congestion_controller 写入支持值或 null。
 - Chimera：frontend/chimera/src/pages/(main)/main/settings/clash/_modules/mips-congestion-controller-selector.tsx，主 clash/route.tsx 与 network/index.tsx，共享 useClashSetting("tun_mips")、useRuntimeProfile()；5 种已支持语言新增上游对应标签。所有选择仍通过现有单一 Tauri IPC/配置持久化，未创建新的业务 owner。
-- 有意暂存差异：上游使用 useConfigFeatures() RPC，Chimera 当前尚无暴露该能力矩阵的公共 RPC；本轮以已有核心类型区分 Mihomo/MihomoAlpha，而不是伪造新的权限或能力端点。后续把 config_features 暴露到唯一共享 API 后，优先以实际矩阵取代客户端核心类型判断。Legacy UI 当前可选 MIPS 栈，但仅主界面提供 controller 表单，仍需有意识地补全 legacy 表现层。
+- 已收敛（配置能力 RPC）：Chimera 已将 ref 的 get_config_features 接入 Tauri IPC / Specta，并通过 frontend/interface 的 useConfigFeatures、getConfigFeatures Query 与 nyanpasu_config 事件失效。主设置 TunStackSelector 与 MipsCongestionControllerSelector 现都直接使用后端 ConfigFeatures.tun 的 Values 列表；不再按 Core 名称硬编码选项。Chimera Client/Alpha 等自有内核依然由单一后端能力矩阵返回 Ignored 或支持值，不在前端复制第二套能力判断。
 - 验证：前端 typecheck:chimera、typecheck:interface、localization 6/6、E2E harness 44/44 和类型检查、前端 boundary 检查通过；E2E settings 中新增 TUN 关闭时的实际菜单点击、MIPS 选择、BBR 保存、刷新与 null 还原回归（使用测试自身的隔离配置，finally 还原）。该新桌面用例尚未在 Windows 原生 WebDriver 上执行，不能算作 E2E 通过。
 - 风险与回退：L1 UI 层，MIPS 写入可能让正在运行的 Core 重建；正常点击执行原有 mutation / query 的错误提示。回退 UI 选择器和本地化键不改变已存的 MIPS 设置，降低版本前请按 TUN 功能迁移记录验证保存的 stack 字段。
 
@@ -356,3 +356,11 @@ cargo clippy --manifest-path backend/Cargo.toml --all-targets --all-features
 - 类别：部分迁移。页面布局、加载状态、搜索与错误恢复对齐 Core 日志路径；Chimera 目前通过单个 WS snapshot + live event stream 提供 Core logs，没有共享文件、Logbook、应用或 Service 日志查询 API，因此暂不显示来源切换。
 - 验证与边界：见 `docs/tasks/ref-sync-alignment-2026-11-23.md`。重试只重新读取 shared WS snapshot；没有验证文件/Service/Logbook 来源，且不会证明真实 Service 日志权限或系统生命周期。
 - 收敛条件：共享日志源 API 与权限/错误语义可用后，沿 ref 恢复来源切换及对应分页详情能力。
+
+### DIFF-CONFIG-FEATURES-RPC：对齐 ref 配置能力查询和 TUN 设置显示
+
+- ref 基线：c4b35e04870a9caa53f21d10af6fcfde4a6f4c01。来源：nyanpasu-core/src/client/mod.rs::config_features、nyanpasu-rpc/src/commands/system/core.rs::get_config_features、frontend/query/src/ipc/use-config-features.ts，以及两个 TUN 选择器。上游依据后端实时核心能力矩阵判断 stack 和 MIPS congestion-controller 可选值。
+- Chimera 迁移：backend/tauri/src/client/application.rs 直接读取已提交应用配置中的 core.config_features()；ipc.rs 新增只读 get_config_features，specta_export.rs 注册命令，frontend/interface/src/ipc/bindings.ts 对齐对应 Specta 类型与方法，query-bindings/use-config-features.ts 暴露共享查询。MutationProvider 对应用配置变更使能力查询失效；核心切换调用同样失效此查询。
+- 显示语义：TUN Stack 和 MIPS 控制器选择器只遍历 ConfigFeatures.tun 的 FieldSupport.Values；Ignored 不展示选项，尚未获得能力查询时亦不推测。MIPS 仍仅在所选栈为 mips 时显示，保存时沿用现有配置接口和持久化逻辑。核心名称与自有 Chimera Client 特性由 backend/chimera-config/src/clash/features.rs 统一决定。
+- 本轮边界：只迁移读能力、查询失效和界面选项来源；未修改 Core/TUN/DNS 生成、Profile 数据、Service 所有权及 UI 以外的调用方。未运行任何测试或编译验证（按用户要求）；完成了代码格式化与源码差异审阅。TypeScript Specta 绑定按上游结构同步，后续正式 CI 仍应检查生成器一致性和 Windows 原生菜单表现。
+- 收敛：这是此前 MIPS 菜单标注的能力查询缺口，不再需要以 Mihomo/MihomoAlpha 名称检查代替 RPC。剩余特殊 UI/legacy 差异按独立迁移条目处理。
