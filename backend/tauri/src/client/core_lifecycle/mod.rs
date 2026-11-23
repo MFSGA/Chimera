@@ -7412,9 +7412,16 @@ mod tests {
                 false,
             )
             .await;
+        let error = result.unwrap_err();
+        assert!(format!("{error:#}").contains("injected independent runtime candidate rejection"));
         assert!(
-            format!("{:#}", result.unwrap_err())
-                .contains("injected independent runtime candidate rejection")
+            matches!(
+                error
+                    .downcast_ref::<Arc<chimera_contracts::runtime_error::RuntimeError>>()
+                    .map(Arc::as_ref),
+                Some(chimera_contracts::runtime_error::RuntimeError::CheckUnavailable { .. })
+            ),
+            "an untyped validator error has no authoritative Core rejection verdict"
         );
         assert!(application.get_typed().enable_builtin_enhanced);
         assert_eq!(

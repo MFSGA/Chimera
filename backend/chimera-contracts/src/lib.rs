@@ -4,6 +4,7 @@ pub mod bundle_metadata;
 pub mod core_install;
 pub mod core_version;
 pub mod elevation;
+pub mod mutation;
 pub mod net;
 pub mod profiles;
 pub mod runtime;

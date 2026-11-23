@@ -1,14 +1,22 @@
 //! Startup-injected Profiles candidate checks and committed-source notifications.
 
+mod change;
+pub(crate) use change::DomainChange;
+pub(crate) mod impact;
+mod ports;
+pub(crate) use ports::{RuntimeCandidate, RuntimeGate};
 mod profile_content;
 pub(crate) use profile_content::{ProfileContentLock, ProfileContentReader};
 
-use std::{
-    collections::{BTreeMap, HashMap},
-    sync::Arc,
-};
+use std::{collections::HashMap, sync::Arc};
 
+#[cfg(test)]
 use chimera_config::profile::Profiles;
+use chimera_contracts::{
+    mutation::ConfigDomain,
+    runtime_error::{RuntimeCheckUnavailable, RuntimeError},
+};
+use chimera_core::state::Version;
 #[cfg(test)]
 use chimera_core::state::{DecisionHandle, StateParticipant};
 use chimera_core_manager::OperationId;
@@ -28,18 +36,6 @@ use crate::client::{
     },
     runtime::{Degradation, DegradationPhase},
 };
-
-/// Source-owned candidate validation is independent of the Core lifecycle's
-/// mutating mailbox. Its runtime check never applies the candidate.
-pub(crate) struct RuntimeCandidate {
-    pub profiles: Arc<Profiles>,
-    pub staged: BTreeMap<String, String>,
-}
-
-#[async_trait::async_trait]
-pub(crate) trait RuntimeGate: Send + Sync + 'static {
-    async fn check(&self, candidate: RuntimeCandidate) -> anyhow::Result<()>;
-}
 
 #[derive(Clone)]
 enum Connection {
@@ -126,20 +122,26 @@ impl MutationCoordinator {
         Ok(())
     }
 
-    pub(crate) fn runtime_gate(&self) -> anyhow::Result<Arc<dyn RuntimeGate>> {
+    pub(crate) fn runtime_gate(&self) -> Result<Arc<dyn RuntimeGate>, Arc<RuntimeError>> {
         match self.connection.borrow().clone() {
-            Connection::Pending => anyhow::bail!("Profiles RuntimeGate is not ready"),
+            Connection::Pending => Err(Arc::new(RuntimeError::CheckUnavailable {
+                reason: RuntimeCheckUnavailable::NotChecked {
+                    reason: "Profiles RuntimeGate is not ready".into(),
+                },
+            })),
             #[cfg(test)]
             Connection::Isolated => Ok(self
                 .runtime_gate
                 .get()
                 .cloned()
                 .unwrap_or_else(|| Arc::new(IsolatedRuntimeGate))),
-            Connection::Ready(_) => self
-                .runtime_gate
-                .get()
-                .cloned()
-                .ok_or_else(|| anyhow::anyhow!("Profiles RuntimeGate is unavailable")),
+            Connection::Ready(_) => self.runtime_gate.get().cloned().ok_or_else(|| {
+                Arc::new(RuntimeError::CheckUnavailable {
+                    reason: RuntimeCheckUnavailable::NotChecked {
+                        reason: "Profiles RuntimeGate is unavailable".into(),
+                    },
+                })
+            }),
         }
     }
 
@@ -195,13 +197,23 @@ impl MutationCoordinator {
         match self.connection.borrow().clone() {
             Connection::Ready(workflow) => {
                 if reaches_runtime {
-                    workflow.profiles_runtime_committed(source_version);
+                    // Ref RuntimeGate::committed observes the durable version.
+                    // Legacy test composition roots may connect without a gate.
+                    if let Some(gate) = self.runtime_gate.get() {
+                        gate.committed(ConfigDomain::Profiles, Version::new(source_version));
+                    } else {
+                        workflow.profiles_runtime_committed(source_version);
+                    }
                 } else {
                     workflow.profiles_source_committed(source_version);
                 }
             }
             #[cfg(test)]
-            Connection::Isolated => {}
+            Connection::Isolated => {
+                if reaches_runtime && let Some(gate) = self.runtime_gate.get() {
+                    gate.committed(ConfigDomain::Profiles, Version::new(source_version));
+                }
+            }
             Connection::Pending => {
                 tracing::error!("Profiles source committed before mutation readiness");
             }
@@ -291,9 +303,11 @@ struct IsolatedRuntimeGate;
 #[cfg(test)]
 #[async_trait::async_trait]
 impl RuntimeGate for IsolatedRuntimeGate {
-    async fn check(&self, _: RuntimeCandidate) -> anyhow::Result<()> {
+    async fn check(&self, _: RuntimeCandidate) -> Result<(), Arc<RuntimeError>> {
         Ok(())
     }
+
+    fn committed(&self, _: ConfigDomain, _: Version) {}
 }
 
 #[cfg(test)]
@@ -320,6 +334,56 @@ impl<T: Clone + Send + Sync + 'static> chimera_core::state::StateAckSubscriber<T
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex as StdMutex;
+
+    #[derive(Default)]
+    struct RecordingRuntimeGate {
+        checked: StdMutex<usize>,
+        committed: StdMutex<Vec<(ConfigDomain, Version)>>,
+    }
+
+    #[async_trait::async_trait]
+    impl RuntimeGate for RecordingRuntimeGate {
+        async fn check(&self, candidate: RuntimeCandidate) -> Result<(), Arc<RuntimeError>> {
+            assert!(matches!(candidate.change, DomainChange::Profiles { .. }));
+            *self.checked.lock().unwrap() += 1;
+            Ok(())
+        }
+
+        fn committed(&self, domain: ConfigDomain, version: Version) {
+            self.committed.lock().unwrap().push((domain, version));
+        }
+    }
+
+    #[tokio::test]
+    async fn runtime_gate_observes_only_runtime_affecting_committed_profiles_version() {
+        let coordinator = MutationCoordinator::isolated();
+        let gate = Arc::new(RecordingRuntimeGate::default());
+        coordinator.install_test_runtime_gate(gate.clone());
+
+        coordinator
+            .runtime_gate()
+            .unwrap()
+            .check(RuntimeCandidate {
+                change: DomainChange::Profiles {
+                    candidate: Arc::new(chimera_config::profile::Profiles::default()),
+                },
+                staged: Default::default(),
+            })
+            .await
+            .unwrap();
+        assert_eq!(*gate.checked.lock().unwrap(), 1);
+        assert!(gate.committed.lock().unwrap().is_empty());
+
+        coordinator.source_committed(3, false, None, Vec::new());
+        assert!(gate.committed.lock().unwrap().is_empty());
+
+        coordinator.source_committed(4, true, None, Vec::new());
+        assert_eq!(
+            *gate.committed.lock().unwrap(),
+            vec![(ConfigDomain::Profiles, Version::new(4))]
+        );
+    }
 
     #[tokio::test]
     async fn latched_profile_recovery_is_reported_without_an_operation_outcome_entry() {

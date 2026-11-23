@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  proxyShortcutPreviewStatus,
   proxyShortcutSelectionSummary,
   toggleProxyShortcutSelection,
   visibleProxyShortcutButtons,
@@ -122,4 +123,36 @@ test('checking already selected shortcuts is idempotent', () => {
     ['tun'],
   );
   assert.deepEqual(selected, ['system', 'tun']);
+});
+
+test('proxy widget drag preview shows only supported controls on this host', () => {
+  assert.equal(proxyShortcutPreviewStatus([]), 'disabled');
+  assert.equal(
+    proxyShortcutPreviewStatus(
+      visibleProxyShortcutButtons(['transparent'], 'system-first', false),
+    ),
+    'disabled',
+  );
+  assert.equal(
+    proxyShortcutPreviewStatus(
+      visibleProxyShortcutButtons(
+        ['transparent', 'tun'],
+        'system-first',
+        false,
+      ),
+    ),
+    'tun',
+  );
+  assert.equal(
+    proxyShortcutPreviewStatus(
+      visibleProxyShortcutButtons(['transparent'], 'system-first', true),
+    ),
+    'transparent',
+  );
+  assert.equal(
+    proxyShortcutPreviewStatus(
+      visibleProxyShortcutButtons(['tun', 'system'], 'tun-first', false),
+    ),
+    'system',
+  );
 });

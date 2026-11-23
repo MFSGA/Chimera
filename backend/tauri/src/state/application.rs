@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use anyhow::Context as _;
 use chimera_config::application::{ChimeraAppConfig, ChimeraAppConfigPatch, ReleaseChannel};
+use chimera_core_manager::OperationId;
 use chimera_state_engine::{PersistentStateManager, ReplaceIfVersionResult, Version};
 use ractor::{Actor, ActorProcessingErr, ActorRef, RpcReplyPort};
 use struct_patch::Patch;
@@ -9,12 +10,16 @@ use struct_patch::Patch;
 use super::{
     ConditionalReplaceResult,
     mirror::{PreparedTypedReplace, VergeLegacyBridge},
+    mutation::impact,
 };
 
 #[derive(Debug, Clone)]
 pub struct ApplicationSnapshot {
     pub state: ChimeraAppConfig,
     pub version: u64,
+    /// Whether the committed document changes inputs consumed by the runtime.
+    pub reaches_runtime: bool,
+    pub(crate) operation_id: Option<OperationId>,
 }
 
 pub struct ApplicationActorArgs {
@@ -60,6 +65,8 @@ impl ApplicationActor {
         ApplicationSnapshot {
             state: snapshot.state.clone(),
             version: *snapshot.version.as_ref(),
+            reaches_runtime: false,
+            operation_id: None,
         }
     }
 
@@ -103,13 +110,29 @@ impl ApplicationActor {
         next: ChimeraAppConfig,
     ) -> anyhow::Result<ApplicationSnapshot> {
         let (next, mirror) = Self::prepare_replace(state, next)?.into_parts();
-        state
+        let current = state.manager.snapshot_handle().load();
+        let reaches_runtime = impact::reaches_runtime(&current.state, &next, &[]);
+        let version = current.version;
+        drop(current);
+        match state
             .manager
-            .upsert(next)
+            .replace_if_version(version, next)
             .await
-            .context("failed to persist application config")?;
-        mirror.apply();
-        Ok(Self::snapshot(state))
+            .context("failed to persist application config")?
+        {
+            ReplaceIfVersionResult::Replaced => {
+                mirror.apply();
+                let mut snapshot = Self::snapshot(state);
+                snapshot.reaches_runtime = reaches_runtime;
+                snapshot.operation_id = reaches_runtime.then(OperationId::generate);
+                Ok(snapshot)
+            }
+            ReplaceIfVersionResult::Conflict { actual_version } => anyhow::bail!(
+                "application config version conflict: expected {}, actual {}",
+                *version.as_ref(),
+                *actual_version.as_ref()
+            ),
+        }
     }
 
     async fn replace_prepared_if_version(
@@ -118,6 +141,9 @@ impl ApplicationActor {
         prepared: PreparedTypedReplace<ChimeraAppConfig>,
     ) -> anyhow::Result<ConditionalReplaceResult<ApplicationSnapshot>> {
         let (next, mirror) = prepared.into_parts();
+        let current = state.manager.snapshot_handle().load();
+        let reaches_runtime = impact::reaches_runtime(&current.state, &next, &[]);
+        drop(current);
         match state
             .manager
             .replace_if_version(Version::new(expected_version), next)
@@ -126,7 +152,10 @@ impl ApplicationActor {
         {
             ReplaceIfVersionResult::Replaced => {
                 mirror.apply();
-                Ok(ConditionalReplaceResult::Replaced(Self::snapshot(state)))
+                let mut snapshot = Self::snapshot(state);
+                snapshot.reaches_runtime = reaches_runtime;
+                snapshot.operation_id = reaches_runtime.then(OperationId::generate);
+                Ok(ConditionalReplaceResult::Replaced(snapshot))
             }
             ReplaceIfVersionResult::Conflict { actual_version } => {
                 Ok(ConditionalReplaceResult::Conflict {
@@ -268,6 +297,69 @@ mod tests {
             CallResult::SenderError => anyhow::bail!("application actor reply dropped"),
             CallResult::Timeout => anyhow::bail!("application actor call timed out"),
         }
+    }
+
+    #[tokio::test]
+    async fn actor_commit_reports_runtime_impact_only_after_durable_source_publish() {
+        let (actor, dir) = spawn_actor(Arc::new(NoopVergeMirror), ReleaseChannel::Stable).await;
+        let before = get_snapshot(&actor).await.unwrap();
+        assert!(!before.reaches_runtime);
+        assert!(before.operation_id.is_none());
+
+        let mut ui_patch = ChimeraAppConfig::new_empty_patch();
+        ui_patch.language = Some(chimera_config::application::I18nLanguage::Japanese);
+        let ui = match actor
+            .call(
+                |reply| ApplicationActorMessage::Patch {
+                    patch: ui_patch,
+                    reply,
+                },
+                None,
+            )
+            .await
+            .unwrap()
+        {
+            CallResult::Success(Ok(snapshot)) => snapshot,
+            other => panic!("UI config mutation must commit: {other:?}"),
+        };
+        assert!(!ui.reaches_runtime);
+        assert!(ui.operation_id.is_none());
+        assert!(ui.version > before.version);
+
+        let mut runtime_patch = ChimeraAppConfig::new_empty_patch();
+        runtime_patch.enable_builtin_enhanced = Some(!ui.state.enable_builtin_enhanced);
+        let runtime = match actor
+            .call(
+                |reply| ApplicationActorMessage::Patch {
+                    patch: runtime_patch,
+                    reply,
+                },
+                None,
+            )
+            .await
+            .unwrap()
+        {
+            CallResult::Success(Ok(snapshot)) => snapshot,
+            other => panic!("runtime input source mutation must commit: {other:?}"),
+        };
+        assert!(runtime.reaches_runtime);
+        assert!(runtime.operation_id.is_some());
+        assert!(runtime.version > ui.version);
+        let persisted: ChimeraAppConfig = serde_yaml_ng::from_slice(
+            &std::fs::read(dir.path().join("config/application.yaml")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            persisted.enable_builtin_enhanced,
+            runtime.state.enable_builtin_enhanced
+        );
+        let reread = get_snapshot(&actor).await.unwrap();
+        assert_eq!(reread.version, runtime.version);
+        assert!(
+            !reread.reaches_runtime,
+            "read-only snapshots do not claim a new commit"
+        );
+        assert!(reread.operation_id.is_none());
     }
 
     #[tokio::test]

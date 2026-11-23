@@ -658,6 +658,15 @@ function ConfigFieldRows({
   }
 }
 
+/** Keep the nested launcher group layout from ref inside the scroll viewport. */
+function ConfigFields(props: Parameters<typeof ConfigFieldRows>[0]) {
+  return (
+    <LauncherMenu data-slot="widget-config-fields">
+      <ConfigFieldRows {...props} />
+    </LauncherMenu>
+  );
+}
+
 export function WidgetConfigSaveStatus() {
   const { saveStatus, configLoading, configReadError, retryConfig } =
     useDashboardContext();
@@ -783,13 +792,11 @@ export default function WidgetConfigMenu({
             className="max-h-[min(24rem,65vh)] min-h-0 flex-auto rounded-3xl"
             data-slot="widget-config-scroll-area"
           >
-            <div data-slot="widget-config-fields">
-              <ConfigFieldRows
-                config={config}
-                disabled={disabled}
-                onChange={(next) => saveConfig(id, next)}
-              />
-            </div>
+            <ConfigFields
+              config={config}
+              disabled={disabled}
+              onChange={(next) => saveConfig(id, next)}
+            />
           </ScrollArea>
           {(configLoading ||
             configReadError ||

@@ -33,8 +33,8 @@ use std::sync::Arc;
 use anyhow::{Context as _, anyhow};
 use chimera_config::application::ReleaseChannel;
 use chimera_config::profile::{
-    FolderId, ProfileDefinition, ProfileId, ProfileLayout, ProfileMetadata, ProfileMetadataPatch,
-    ProfileSource, Profiles, RemoteProfileOptions, RemoteProfileOptionsPatch,
+    FolderId, NewProfileRequest, ProfileDefinition, ProfileId, ProfileLayout, ProfileMetadata,
+    ProfileMetadataPatch, ProfileSource, Profiles, RemoteProfileOptions, RemoteProfileOptionsPatch,
 };
 use chimera_contracts::{
     bundle_metadata::BundleMetadata, net::ChangelogHttp, system_dns::SystemDnsCache,
@@ -72,7 +72,7 @@ use crate::{
     service::profile_file::ProfileFileService,
     state::mirror::{ClashLegacyBridge, VergeLegacyBridge, WindowLegacyBridge},
     state::mutation::MutationCoordinator,
-    state::profiles::{CommitReport, NewProfileRequest, ProfilesError, ReorderOp},
+    state::profiles::{CommitReport, ProfilesError, ReorderOp},
     utils::path::PathResolver,
 };
 
@@ -330,6 +330,8 @@ impl ChimeraClient {
             typed.application.clone(),
             typed.clash_config.clone(),
             typed_profiles.content_reader(),
+            typed_profiles.snapshot_handle(),
+            core_lifecycle.clone(),
         ));
         tauri::async_runtime::block_on(
             mutations.connect_with_runtime_gate(core_lifecycle.clone(), profile_gate),
@@ -779,6 +781,14 @@ impl ChimeraClient {
 
     pub(crate) fn get_profiles(&self) -> anyhow::Result<Arc<Profiles>> {
         Ok(self.profiles_client()?.snapshot())
+    }
+
+    /// The secret-free profile listing for read-only consumers. The full
+    /// source document remains available through `get_profiles` for editors.
+    pub(crate) fn get_profiles_listing(
+        &self,
+    ) -> anyhow::Result<chimera_config::profile::ProfilesListing> {
+        Ok((&*self.profiles_client()?.snapshot()).into())
     }
 
     pub(crate) async fn get_transparent_proxy_status(

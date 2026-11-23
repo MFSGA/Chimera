@@ -158,7 +158,7 @@ fn repairs_invalid_layout_metadata_without_rewriting_runtime_group_names() {
 }
 
 #[test]
-fn deleting_profile_removes_only_its_proxy_group_layout() {
+fn removing_item_leaves_proxy_group_cleanup_to_the_source_owner() {
     let mut doc = Profiles::default();
     for uid in ["a", "b"] {
         assert!(doc.append_item(config(uid)));
@@ -171,7 +171,10 @@ fn deleting_profile_removes_only_its_proxy_group_layout() {
         );
     }
     assert!(doc.remove_item_unchecked(&id("a")).is_some());
-    assert!(!doc.proxy_group_layouts.contains_key(&id("a")));
+    assert!(doc.proxy_group_layouts.contains_key(&id("a")));
     assert!(doc.proxy_group_layouts.contains_key(&id("b")));
-    assert!(doc.validate().is_ok());
+    assert!(doc.validate().unwrap_err().iter().any(|error| matches!(
+        error,
+        ProfileValidationError::ProxyGroupLayoutProfileNotConfig { profile } if profile == &id("a")
+    )));
 }

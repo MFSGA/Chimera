@@ -48,10 +48,43 @@ pub enum MaterializationOperation {
     Reconcile,
 }
 
+/// Why the source transaction failed before a confirmed document commit.
+/// `WriteConfig` and `RecoverAfterWriteFailure` are the pinned ref's
+/// CommitAborted classes. The others distinguish Chimera's actual local
+/// write, preflight ACK, and post-write recovery ownership boundaries.
+/// The original ReplaceIfVersionError remains the #[source] in ProfilesActor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, serde::Deserialize, specta::Type)]
+#[serde(rename_all = "snake_case")]
+pub enum CommitFailureReason {
+    WriteConfig,
+    RecoverAfterWriteFailure,
+    LocalWrite,
+    PrepareAck,
+    StateValidation,
+    StateRecovery,
+    /// The Core actually validated and rejected the candidate before commit.
+    RuntimeRefused,
+    /// Candidate validation did not return an authoritative verdict.
+    RuntimeFailed,
+}
+
 #[derive(Debug, Clone, Serialize, specta::Type)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ProfileFailure {
     ProfileNotFound {
+        uid: ProfileId,
+    },
+    ProfileInUse {
+        uid: ProfileId,
+        referrers: Vec<ProfileId>,
+        current: bool,
+        global_transforms: bool,
+    },
+    ReorderListSizeMismatch {
+        expected: usize,
+        got: usize,
+    },
+    ReorderListDuplicate {
         uid: ProfileId,
     },
     ValidationFailed {
@@ -65,6 +98,11 @@ pub enum ProfileFailure {
         cleanup: Option<String>,
     },
     RevisionOverflow,
+    /// Only returned when an actual conditional-write error supplied a
+    /// concrete source category; no source or cleanup object is fabricated.
+    Commit {
+        reason: CommitFailureReason,
+    },
     ProfileHasNoFile,
     NotARemoteProfile,
 }
@@ -92,6 +130,24 @@ mod tests {
     }
 
     #[test]
+    fn commit_failure_reason_serializes_as_a_concrete_source_class() {
+        let error = ProfileFailure::Commit {
+            reason: CommitFailureReason::RecoverAfterWriteFailure,
+        };
+        assert_eq!(
+            serde_json::to_value(error).unwrap(),
+            serde_json::json!({
+                "kind": "commit",
+                "reason": "recover_after_write_failure"
+            })
+        );
+        assert_eq!(
+            serde_json::to_value(CommitFailureReason::LocalWrite).unwrap(),
+            "local_write"
+        );
+    }
+
+    #[test]
     fn version_conflict_retains_both_versions_and_cleanup_evidence() {
         let error = ProfileFailure::VersionConflict {
             expected: 7,
@@ -103,6 +159,45 @@ mod tests {
         assert_eq!(wire["expected"], 7);
         assert_eq!(wire["actual"], 8);
         assert_eq!(wire["cleanup"], "staging cleanup fenced");
+    }
+
+    #[test]
+    fn denied_deletion_preserves_profile_identity_and_referrers() {
+        let error = ProfileFailure::ProfileInUse {
+            uid: ProfileId("selected".into()),
+            referrers: vec![ProfileId("child".into())],
+            current: true,
+            global_transforms: false,
+        };
+        assert_eq!(
+            serde_json::to_value(error).unwrap(),
+            serde_json::json!({
+                "kind": "profile_in_use",
+                "uid": "selected",
+                "referrers": ["child"],
+                "current": true,
+                "global_transforms": false,
+            })
+        );
+    }
+
+    #[test]
+    fn reorder_failure_distinguishes_size_and_duplicate() {
+        assert_eq!(
+            serde_json::to_value(ProfileFailure::ReorderListSizeMismatch {
+                expected: 3,
+                got: 2
+            })
+            .unwrap(),
+            serde_json::json!({"kind": "reorder_list_size_mismatch", "expected": 3, "got": 2}),
+        );
+        assert_eq!(
+            serde_json::to_value(ProfileFailure::ReorderListDuplicate {
+                uid: ProfileId("same".into())
+            })
+            .unwrap(),
+            serde_json::json!({"kind": "reorder_list_duplicate", "uid": "same"}),
+        );
     }
 
     #[test]

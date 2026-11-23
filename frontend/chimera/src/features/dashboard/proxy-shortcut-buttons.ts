@@ -60,3 +60,12 @@ export function toggleProxyShortcutSelection(
   }
   return selected.filter((item) => item !== button);
 }
+
+/** The preview title describes only controls that can be rendered on the
+ * current host, not hidden Linux-only entries still saved in the config. */
+export function proxyShortcutPreviewStatus(
+  visible: readonly ProxyShortcutButtonId[],
+): ProxyShortcutButtonId | 'disabled' {
+  if (visible.length === 0) return 'disabled';
+  return visible.length === 1 ? visible[0]! : 'system';
+}

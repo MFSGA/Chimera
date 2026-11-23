@@ -1286,7 +1286,7 @@ pub async fn save_profile_file(
 #[specta::specta]
 pub async fn create_profile(
     client: State<'_, ChimeraClient>,
-    request: crate::state::profiles::NewProfileRequest,
+    request: chimera_config::profile::NewProfileRequest,
     file_data: Option<String>,
 ) -> Result<MutationOutcome<chimera_config::profile::ProfileId>> {
     Ok(client.create_profile(request, file_data).await?)
