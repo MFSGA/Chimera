@@ -76,6 +76,7 @@ function RouteComponent() {
       onLocateRule={onLocateRule}
       onViewRuleUsage={onViewRuleUsage}
       entryFocus={entryFocus}
+      referenceLayout
     />
   );
 }

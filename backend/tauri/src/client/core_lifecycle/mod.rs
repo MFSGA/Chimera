@@ -1902,7 +1902,14 @@ impl Actor for ApplicationWorkflowActor {
                 }
             }
             Message::StartupRetryDue { identity } => {
-                if !state.uncertain && !state.shutting_down {
+                // A timer armed before explicit StopCore must not take a
+                // Service transition lease after RunIntent becomes Stopped.
+                // The serialized RetryStartup command has its own stop gate,
+                // but that alone cannot undo an already acquired lease.
+                if state.run_intent == RunIntent::Running
+                    && !state.uncertain
+                    && !state.shutting_down
+                {
                     if state.workflow.is_none() {
                         state.schedule_startup_retry(
                             &myself,
@@ -9795,7 +9802,7 @@ mod tests {
                 outcome_uncertain: false,
                 stop_gate: Some((stop_started.clone(), release_stop.clone())),
             }),
-            service,
+            service.clone(),
         )
         .await;
 
@@ -9847,6 +9854,17 @@ mod tests {
             .expect("the completed actor operation should restore and reschedule the retry");
         assert_eq!(rescheduled_identity, identity);
         assert!(rescheduled_at > tokio::time::Instant::now());
+
+        // The stopped-intent command filter prevents a late RetryStartup
+        // from reapplying Core, but the earlier retry TIMER must not even
+        // acquire a fresh Service lease after explicit StopCore.
+        let prior_lease_attempts = service.transition_attempts.load(AtomicOrdering::Acquire);
+        tokio::time::sleep_until(rescheduled_at + Duration::from_millis(120)).await;
+        assert_eq!(
+            service.transition_attempts.load(AtomicOrdering::Acquire),
+            prior_lease_attempts,
+            "late Startup retry timer must not acquire a Service lease while stopped"
+        );
         client.shutdown().await.unwrap();
     }
 

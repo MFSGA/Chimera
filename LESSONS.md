@@ -99,6 +99,8 @@
 | LESSON-20261120-001 | 2026-11-20 | Proxies / Delay UI | Native Core 已解析实时测试参数；UI 漏捕获延迟请求失败，沿 ref 五语文案补可见反馈并由真实 WebKitGTK 验证 | Verified |
 | LESSON-20261120-002 | 2026-11-20 | Providers / E2E / Task | 实测 Core SAFE_PATHS 拒绝 config 目录下的 Provider；改用隔离 data，Native 更新失败必须让 Task 保持 rejected | Verified |
 | LESSON-20261120-003 | 2026-11-20 | Providers / HTTP E2E / Dialog | 列表批量更新吞错误成功；真实 loopback HTTP 验证 1→2→3、503 时 Task error，X11 原生弹窗必须先聚焦 | Verified |
+| LESSON-20261120-004 | 2026-11-20 | Connections / Main UI / Legacy E2E | ref DataPage 底部 dock 与虚拟表格留白；Legacy 分离；控件 data-slot、X11 子像素边界按真实 UI 验证 | Verified |
+| LESSON-20261120-005 | 2026-11-20 | Connections / Core / Virtualization E2E | ref 44px + 物理 spacer；48 条真实 Core 长流；Guard 有效 mixed-port 与 WebKit 双击驱动限制 | Verified |
 
 ### LESSON-20261113-001/002：架构迁移要覆盖原生运行时与稀疏配置
 
@@ -1395,3 +1397,18 @@ backend/Cargo.toml -p chimera --lib core::clash::proxies::tests:: -- --nocapture
 - **负向 E2E 与工具限制**：HTTP 503 被真实 Native mutation 拒绝，用户看到 OS 原生错误对话框；必须正确使其关闭才能观察 `useBlockTask` 最终 error。隔离 Xvfb 没有窗口管理器，直接 `xdotool key --window ID Return` 虽然命令退出 0，但实际未关闭对话框，属于测试驱动假操作。改为先查询正确标题的已显示窗口、`windowfocus` 后发 Return，真实业务 Task 随后进入 error，Core 保留上一成功版本。Linux/X11 E2E **5/5**；Native Dialog 关闭测试在非 Linux/X11/无 xdotool 环境显式跳过，未提供跨平台 Dialog 覆盖。切忌把缺少测试驱动能力当作产品拒绝失败或强行模拟成功。
 
 - **2026-11-20 最新 `885fb90b` 复验**：CoreLifecycle 新提交到来后，仅安全 FF Remote Runtime 而不修改业务；完整重新构建 Tauri E2E native binary，真实 HTTP Provider 详情/单项/批量及 HTTP 503 两条失败路径 **5/5** 均通过。旧 SHA 下相邻详情 2/2、空态 2/2 不能冒充新 Runtime 的测试。更新错误 task 状态和缓存回读必须以真实回包/权威 Core 查询/本地 HTTP 请求联合证明。
+
+### LESSON-20261120-004：Main Connections 对齐 ref DataPage 时保留 Legacy 行为
+
+- **组件复用边界**：ref Connections Main 用 DataPage、DataPageSurface、底部浮动 dock 和 SearchField(glass)；Chimera 的 ConnectionsContent 还供 Legacy 使用。为 Main 显式启用 referenceLayout，Legacy 默认保留原有 ConnectionsToolbar 和布局；虚拟表格追加 ref useDataPageBottomInset，Legacy 无 DataPage Provider 时仍为零，避免一次 UI 迁移改变旧版行为。
+- **定位和真实画面**：DataPageSurface 和 GlassControlGroup 的显式 data-slot 会覆盖组件默认 data-slot；应保留必要的默认 ref slot、为 Main 容器另设定位。Linux WebKitGTK 在请求外层 1240px 窗口时实际内容区只有 1189px；原测试固定要求 >=1200 属于无效环境假设，而 dock 实际 y=560、page bottom=612，正确位于底部。用页面相对几何而非屏幕硬编码判断浮动位置。Legacy 相邻 header.bottom/viewport.top 的小数像素误差约为 0.00001px，使用 1px 容差而不放宽高度和工具栏遮挡等其它条件。
+- **发布验证**：Main 4/4、Legacy 3/3、Native detail 1/1 的真实隔离 WebKitGTK E2E 全部通过，Connections model 9/9、全仓 TS、Lint、生产构建通过。Chimera 尚无 ref 的 proxy:write 前端 capability hook，本轮不伪造授权或扩大现有关闭连接操作，另案适配。
+
+- **2026-11-20 最新 fd507823 基线验证**：Runtime 队列提交安全快进后，完整重建 Native E2E 可执行程序，真实 Linux WebKitGTK Main Connections 4/4、Legacy Connections 3/3、Native Detail 1/1，合计 8/8，通过且退出码 0。不能将旧 SHA 的证据冒充最新启动协调版本；不将 Main 浮动 dock 的 UI 合规扩展成 proxy:write 权限契约已经完成的结论。
+
+### LESSON-20261120-005：Connections 真实虚拟表格、有效 Core 监听端口和 WebKit 输入边界
+
+- 仅迁移 DataPageBottomInset 不代表 ref 的 Connections 虚拟表格已全面对齐：上游为 44px 真实物理 tr、上下 spacer 和 40px 表头，本地原为 36px 加每行 CSS translateY。已按 ref 迁移，并在真实 Linux WebKitGTK 下用 48 条实际代理长流滚动、检查 DOM 可见子集和 top spacer；最后通过 Close All UI 真实关闭全部流，保留 Legacy 共用表格兼容。
+- 受管理 Clash Guard mixed_port.fixed 会覆盖 Profile 字面 mixed-port；Core Running 时测试直连 Profile 申请的 27897 报 ECONNREFUSED，实际生效端口是 7890。正确做法是经 Native clash_api_get_configs 查询真实监听端口，等待有效监听，然后连接，禁止为测试放宽 Guard。
+- WebKitGTK WebDriver doubleClick 返回后没有实际派发 DOM dblclick，不可认定产品行双击已坏，也不可通过 dispatchEvent 合成事件假装真人点击。改用 ref 的真实右键菜单入口，确认详情 UI、关闭单条 Native 连接与关闭全部连接都实际终止了 HTTP 流；双击需要有合适驱动时另测。
+- 本轮原生非空 4/4、Main 4/4、Legacy 3/3、Native Detail 1/1 合计 12/12 通过，单元 9/9、Harness 44/44，全仓 TS、Lint、构建通过。不得扩大为跨平台权限、性能或长期网络验收结论。

@@ -6,6 +6,7 @@ import {
 import { ContextMenuItem } from '@chimera/ui/context-menu';
 import { Modal } from '@chimera/ui/modal';
 import { ScrollArea } from '@chimera/ui/scroll-area';
+import { cn } from '@chimera/utils';
 import CloseRounded from '~icons/material-symbols/close-rounded';
 import { useCallback, useDeferredValue, useMemo, type ReactNode } from 'react';
 import {
@@ -15,12 +16,14 @@ import {
 } from '@/components/providers/context-menu-provider';
 import { useLockFn } from '@/hooks/use-lock-fn';
 import * as m from '@/paraglide/messages';
+import { DataPage, DataPageSurface } from '../../_modules/data-page';
 import type { SearchFilter } from '../../_modules/traffic-filters';
 import { useSearchTerm } from '../../_modules/use-search-term';
 import ActiveViewer from './active-viewer';
 import AllViewer from './all-viewer';
 import ClosedViewer from './closed-viewer';
 import ConnectionsToolbar from './connections-toolbar';
+import ConnectionsToolbarRef from './connections-toolbar-ref';
 import ConnectionsStatusTabs from './status-tabs';
 import type { ConnectionDetail } from './table-row';
 import { useTabFocus, type ConnectionsSelection } from './use-connection-rows';
@@ -42,6 +45,7 @@ export default function ConnectionsContent({
   onViewRuleUsage,
   entryFocus,
   openDetailsOnClick = false,
+  referenceLayout = false,
 }: {
   value: ConnectionsViewState;
   onChange: (patch: Partial<ConnectionsViewState>) => void;
@@ -51,6 +55,8 @@ export default function ConnectionsContent({
   entryFocus?: string;
   /** Legacy presentation can open the shared detail modal with one click. */
   openDetailsOnClick?: boolean;
+  /** Ref DataPage bottom dock only for the main route. */
+  referenceLayout?: boolean;
 }) {
   const { proxy, scope, range, filters, q } = value;
   const selection = useMemo<ConnectionsSelection>(
@@ -73,7 +79,12 @@ export default function ConnectionsContent({
   const scrollArea = (
     <ScrollArea
       key={scope}
-      className="min-h-0 flex-1 [&>[data-slot=scroll-area-scrollbar][data-orientation=vertical]]:top-9! [&>[data-slot=scroll-area-scrollbar][data-orientation=vertical]]:h-auto"
+      className={cn(
+        'min-h-0 flex-1 [&>[data-slot=scroll-area-scrollbar][data-orientation=vertical]]:h-auto',
+        referenceLayout
+          ? '[&>[data-slot=scroll-area-scrollbar][data-orientation=vertical]]:top-10!'
+          : '[&>[data-slot=scroll-area-scrollbar][data-orientation=vertical]]:top-9!',
+      )}
       scrollbars="both"
       type="hover"
       data-slot="connections-scroll-wrapper"
@@ -113,46 +124,59 @@ export default function ConnectionsContent({
     </ScrollArea>
   );
 
+  const connectionList =
+    scope === 'closed' ? (
+      scrollArea
+    ) : (
+      <RegisterContextMenu>
+        <RegisterContextMenuTrigger asChild>
+          {scrollArea}
+        </RegisterContextMenuTrigger>
+        <RegisterContextMenuContent>
+          <ContextMenuItem onSelect={() => handleCloseAllConnections()}>
+            <CloseRounded className="size-4" />
+            <span>{m.connections_close_all_connections()}</span>
+          </ContextMenuItem>
+        </RegisterContextMenuContent>
+      </RegisterContextMenu>
+    );
+
+  const toolbarProps = {
+    start,
+    tabs: (
+      <ConnectionsStatusTabs
+        value={scope}
+        onValueChange={(next) => onChange({ scope: next })}
+        selection={selection}
+      />
+    ),
+    selection,
+    onSelectionChange: (next: ConnectionsSelection) => onChange(next),
+    search,
+    onSearchChange: setSearch,
+    onCloseAll: scope === 'closed' ? undefined : handleCloseAllConnections,
+  };
+
   return (
     <Modal>
-      <div
-        className="divide-outline-variant flex min-h-0 flex-1 flex-col divide-y overflow-hidden"
-        data-slot="connections-container"
-      >
-        {scope === 'closed' ? (
-          scrollArea
-        ) : (
-          <RegisterContextMenu>
-            <RegisterContextMenuTrigger asChild>
-              {scrollArea}
-            </RegisterContextMenuTrigger>
-            <RegisterContextMenuContent>
-              <ContextMenuItem onSelect={() => handleCloseAllConnections()}>
-                <CloseRounded className="size-4" />
-                <span>{m.connections_close_all_connections()}</span>
-              </ContextMenuItem>
-            </RegisterContextMenuContent>
-          </RegisterContextMenu>
-        )}
-
-        <ConnectionsToolbar
-          start={start}
-          tabs={
-            <ConnectionsStatusTabs
-              value={scope}
-              onValueChange={(next) => onChange({ scope: next })}
-              selection={selection}
-            />
-          }
-          selection={selection}
-          onSelectionChange={(next) => onChange(next)}
-          search={search}
-          onSearchChange={setSearch}
-          onCloseAll={
-            scope === 'closed' ? undefined : handleCloseAllConnections
-          }
-        />
-      </div>
+      {referenceLayout ? (
+        <DataPage
+          title={m.navbar_label_connections()}
+          toolbar={<ConnectionsToolbarRef {...toolbarProps} />}
+        >
+          <DataPageSurface data-connections-container="true">
+            {connectionList}
+          </DataPageSurface>
+        </DataPage>
+      ) : (
+        <div
+          className="divide-outline-variant flex min-h-0 flex-1 flex-col divide-y overflow-hidden"
+          data-slot="connections-container"
+        >
+          {connectionList}
+          <ConnectionsToolbar {...toolbarProps} />
+        </div>
+      )}
     </Modal>
   );
 }
