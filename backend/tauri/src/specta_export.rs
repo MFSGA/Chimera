@@ -70,6 +70,7 @@ macro_rules! build_builder {
                 crate::ipc::patch_app_config,
                 crate::ipc::get_clash_config,
                 crate::ipc::get_dns_features,
+                crate::ipc::get_config_features,
                 crate::ipc::get_hotkey_functions,
                 crate::ipc::patch_verge_config,
                 crate::ipc::patch_runtime_overrides,

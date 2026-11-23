@@ -509,6 +509,15 @@ pub fn get_dns_features(
     Ok(client.get_app_config()?.core.dns_features())
 }
 
+/// Mirror ref's read-only system.core query over the runtime capability matrix.
+#[tauri::command]
+#[specta::specta]
+pub fn get_config_features(
+    client: State<'_, ChimeraClient>,
+) -> Result<chimera_config::clash::features::ConfigFeatures> {
+    Ok(client.config_features())
+}
+
 #[tauri::command]
 #[specta::specta]
 pub async fn patch_clash_config(

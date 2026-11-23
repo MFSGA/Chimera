@@ -286,6 +286,9 @@ export const commands = {
    */
   getDnsFeatures: () =>
     typedError<DnsFeatures, string>(__TAURI_INVOKE('get_dns_features')),
+  /**  Mirror ref's read-only system.core query over the runtime capability matrix. */
+  getConfigFeatures: () =>
+    typedError<ConfigFeatures, string>(__TAURI_INVOKE('get_config_features')),
   getHotkeyFunctions: () => __TAURI_INVOKE<string[]>('get_hotkey_functions'),
   patchVergeConfig: (payload: IVerge_Deserialize) =>
     typedError<null, string>(__TAURI_INVOKE('patch_verge_config', { payload })),
@@ -1854,6 +1857,11 @@ export type ConfigExecutionRole =
         contributor_index: number;
       };
     };
+
+/**  What the selected core reads, by config domain. */
+export type ConfigFeatures = {
+  tun: TunFeatures;
+};
 
 export type ConfigRevisionInfo = {
   epoch: number;
@@ -4246,6 +4254,13 @@ export type TrayMenuMode = 'native' | 'webview';
 
 /**  mihomo `tun.congestion-controller`, read only by the mips stack. */
 export type TunCongestionController = 'cubic' | 'reno' | 'bbr' | 'bbr3';
+
+/**  What the selected core reads under `tun`. */
+export type TunFeatures = {
+  stack: FieldSupport<TunStack>;
+  /**  Read only while the stack is mips. */
+  congestion_controller: FieldSupport<TunCongestionController>;
+};
 
 /**
  *  The `tun` keys Chimera may manage while TUN mode is on. The TUN switch and

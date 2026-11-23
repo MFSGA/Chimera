@@ -430,6 +430,12 @@ impl ChimeraClient {
         Ok(self.inner.application.get_typed())
     }
 
+    /// Which runtime keys the committed core selection actually supports.
+    /// The same matrix is used by the config builder and the settings UI.
+    pub(crate) fn config_features(&self) -> chimera_config::clash::features::ConfigFeatures {
+        self.inner.application.get_typed().core.config_features()
+    }
+
     fn app_updater(&self) -> anyhow::Result<&chimera_core::client::app_update::AppUpdateClient> {
         self.inner
             .app_updater
