@@ -2153,7 +2153,7 @@ impl CoreLifecycleWorkflow {
         // Share the exact REF-style DomainChange admission path with the
         // production Profiles/Clash gate. The CoreLifecycle mailbox still
         // serializes source persistence and the subsequent runtime apply.
-        crate::client::reconciler::check::check_domain_candidate(
+        crate::client::reconciler::legacy_check::check_domain_candidate(
             self.core.as_ref(),
             self.application.get_typed(),
             self.clash.get()?,
@@ -2507,7 +2507,7 @@ impl ProfileRuntime for CoreLifecycleWorkflow {
         &self,
         inputs: crate::client::application_workflow::inputs::RuntimeInputs,
     ) -> anyhow::Result<crate::client::application_workflow::mutation::CheckRecord> {
-        crate::client::reconciler::check::check_candidate(
+        crate::client::reconciler::legacy_check::check_candidate(
             self.core.as_ref(),
             inputs,
             crate::core::service::ipc::get_ipc_state().is_connected(),

@@ -773,9 +773,10 @@ impl Actor for CoreActor {
             }
         }
         if let Some(handoff) = state.handoff.take() {
-            // Unlike a status pump, this task already owns stop-and-prove.
-            // Do not abort a partially admitted Core stop at actor exit:
-            // retain its endpoint/operation ownership until it finishes.
+            // Match pinned ref actor teardown: a handoff leg is strictly
+            // bounded by the router mailbox's lifetime. A late handoff
+            // completion must not mutate or outlive a stopped owner.
+            handoff.abort();
             if let Err(error) = handoff.await {
                 match error.try_into_panic() {
                     Ok(panic) if first_panic.is_none() => first_panic = Some(panic),
@@ -784,7 +785,8 @@ impl Actor for CoreActor {
                 }
             }
         }
-        // An API monitor panic must not detach the previously admitted Core Stop.
+        // Keep the API lease shutdown independently owned after aborting the
+        // in-flight handoff, retaining the Chimera-only monitor cleanup.
         if let Some(lease) = retired_api
             && let Err(error) = lease.stop().await
         {

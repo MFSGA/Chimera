@@ -16,6 +16,8 @@ pub(crate) mod event_sink;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub(crate) mod hotkey;
 pub(crate) mod jobs;
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+pub(crate) mod network_automation;
 pub(crate) mod ports;
 pub(crate) mod profiles;
 pub(crate) mod reconciler;
@@ -326,7 +328,7 @@ impl ChimeraClient {
                 shutdown.clone(),
                 &tasks,
             ))?;
-        let profile_gate = Arc::new(reconciler::check::CandidateCheck::new(
+        let profile_gate = Arc::new(reconciler::legacy_check::CandidateCheck::new(
             core.clone(),
             typed.application.clone(),
             typed.clash_config.clone(),
@@ -1296,7 +1298,7 @@ mod tests {
         }
     }
 
-    async fn recording_client(
+    pub(super) async fn recording_client(
         fail_rebuild: bool,
     ) -> (ChimeraClient, Arc<Mutex<Vec<&'static str>>>) {
         let events = Arc::new(Mutex::new(Vec::new()));

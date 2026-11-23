@@ -36,6 +36,7 @@ const APPLICATION_READ_TIMEOUT: Duration = Duration::from_secs(5);
 #[derive(Clone)]
 pub(crate) struct ApplicationClient {
     inner: Arc<ApplicationClientInner>,
+    settings_changes: tokio::sync::watch::Receiver<ChimeraAppConfig>,
 }
 
 enum ApplicationClientInner {
@@ -48,6 +49,7 @@ enum ApplicationClientInner {
         // Keep the test document and its version under the same lock so the
         // compatibility backend exercises the real source actor's CAS fence.
         state: parking_lot::RwLock<(ChimeraAppConfig, u64)>,
+        settings_changes: tokio::sync::watch::Sender<ChimeraAppConfig>,
     },
 }
 
@@ -59,10 +61,13 @@ impl ApplicationClient {
 
     #[cfg(test)]
     pub(crate) fn static_state(state: ChimeraAppConfig) -> Self {
+        let (settings_changes, receiver) = tokio::sync::watch::channel(state.clone());
         Self {
             inner: Arc::new(ApplicationClientInner::Static {
                 state: parking_lot::RwLock::new((state, 0)),
+                settings_changes,
             }),
+            settings_changes: receiver,
         }
     }
 
@@ -124,6 +129,10 @@ impl ApplicationClient {
                 .context("failed to normalize installed release channel")?;
         }
         let snapshot = manager.snapshot_handle();
+        crate::state::application::validate_network_automation_policy(&snapshot.load().state)
+            .context("invalid persisted network automation policy")?;
+        let (settings_changes, receiver) =
+            tokio::sync::watch::channel(snapshot.load().state.clone());
 
         let (actor_ref, _handle) = Actor::spawn(
             None,
@@ -132,6 +141,7 @@ impl ApplicationClient {
                 manager,
                 bridge: bridge.clone(),
                 build_channel,
+                settings_changes,
             },
         )
         .await
@@ -142,6 +152,7 @@ impl ApplicationClient {
                 actor_ref,
                 snapshot,
             }),
+            settings_changes: receiver,
         };
 
         let loaded = client.get().await?.state;
@@ -164,8 +175,17 @@ impl ApplicationClient {
         match self.inner.as_ref() {
             ApplicationClientInner::Actor { snapshot, .. } => snapshot.load().state.clone(),
             #[cfg(test)]
-            ApplicationClientInner::Static { state } => state.read().0.clone(),
+            ApplicationClientInner::Static { state, .. } => state.read().0.clone(),
         }
+    }
+
+    /// Every successful typed application source commit publishes a complete
+    /// snapshot. Rejected, conflicting or failed persistence never emits.
+    #[allow(dead_code)]
+    pub(crate) fn subscribe_settings_changes(
+        &self,
+    ) -> tokio::sync::watch::Receiver<ChimeraAppConfig> {
+        self.settings_changes.clone()
     }
 
     /// Legacy test adapter for the retired direct core selection command.
@@ -192,7 +212,7 @@ impl ApplicationClient {
                     .await
             }
             #[cfg(test)]
-            ApplicationClientInner::Static { state } => {
+            ApplicationClientInner::Static { state, .. } => {
                 let source = state.read();
                 Ok(ApplicationSnapshot {
                     state: source.0.clone(),
@@ -217,23 +237,32 @@ impl ApplicationClient {
                 .await
             }
             #[cfg(test)]
-            ApplicationClientInner::Static { state } => {
+            ApplicationClientInner::Static {
+                state,
+                settings_changes,
+            } => {
                 let mut source = state.write();
                 let next_version = source
                     .1
                     .checked_add(1)
                     .context("test application version overflow")?;
                 let before = source.0.clone();
-                source.0.apply(patch);
+                let mut candidate = before.clone();
+                candidate.apply(patch);
+                crate::state::application::validate_network_automation_policy(&candidate)?;
                 let reaches_runtime =
-                    crate::state::mutation::impact::reaches_runtime(&before, &source.0, &[]);
+                    crate::state::mutation::impact::reaches_runtime(&before, &candidate, &[]);
+                source.0 = candidate.clone();
                 source.1 = next_version;
-                Ok(ApplicationSnapshot {
-                    state: source.0.clone(),
+                let snapshot = ApplicationSnapshot {
+                    state: candidate,
                     version: source.1,
                     reaches_runtime,
                     operation_id: reaches_runtime.then(chimera_core_manager::OperationId::generate),
-                })
+                };
+                drop(source);
+                settings_changes.send_replace(snapshot.state.clone());
+                Ok(snapshot)
             }
         }
     }
@@ -257,10 +286,13 @@ impl ApplicationClient {
                 }
             }
             #[cfg(test)]
-            ApplicationClientInner::Static { .. } => Ok(PreparedTypedReplace::new(
-                state,
-                Box::new(crate::state::mirror::NoopPreparedLegacyMirror),
-            )),
+            ApplicationClientInner::Static { .. } => {
+                crate::state::application::validate_network_automation_policy(&state)?;
+                Ok(PreparedTypedReplace::new(
+                    state,
+                    Box::new(crate::state::mirror::NoopPreparedLegacyMirror),
+                ))
+            }
         }
     }
 
@@ -288,7 +320,10 @@ impl ApplicationClient {
                 }
             }
             #[cfg(test)]
-            ApplicationClientInner::Static { state } => {
+            ApplicationClientInner::Static {
+                state,
+                settings_changes,
+            } => {
                 let mut source = state.write();
                 if source.1 != expected_version {
                     return Ok(ConditionalReplaceResult::Conflict {
@@ -300,6 +335,7 @@ impl ApplicationClient {
                     .checked_add(1)
                     .context("test application version overflow")?;
                 let (next, mirror) = prepared.into_parts();
+                crate::state::application::validate_network_automation_policy(&next)?;
                 let reaches_runtime =
                     crate::state::mutation::impact::reaches_runtime(&source.0, &next, &[]);
                 source.0 = next.clone();
@@ -307,6 +343,7 @@ impl ApplicationClient {
                 let version = source.1;
                 drop(source);
                 mirror.apply();
+                settings_changes.send_replace(next.clone());
                 Ok(ConditionalReplaceResult::Replaced(ApplicationSnapshot {
                     state: next,
                     version,
@@ -609,6 +646,7 @@ impl ChimeraClient {
     ) -> anyhow::Result<super::MutationOutcome<()>> {
         let mut candidate = self.get_app_config()?;
         candidate.apply(patch.clone());
+        crate::state::application::validate_network_automation_policy(&candidate)?;
         chimera_config::application::validate_public_ip_probe_sources(
             &candidate.stun_servers,
             &candidate.ip_lookup_providers,

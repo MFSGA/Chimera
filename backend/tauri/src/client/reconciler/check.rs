@@ -1,542 +1,430 @@
-//! Read-only runtime candidate gate shared by typed Clash, Application and
-//! Profiles checks while the source actors are migrated to ref RuntimeGate.
-//!
-//! This module never applies a runtime, publishes a source document, or takes
-//! CoreLifecycle's mutating command lease. Source owners must still commit
-//! their prepared documents before asking the lifecycle to reconcile.
+//! Independent candidate validation; only successful checks and commits reach the workflow.
+use std::sync::Arc;
 
-use anyhow::Result;
-use chimera_config::{
-    application::ChimeraAppConfig, clash::config::ClashConfig, profile::Profiles,
-};
+use chimera_config::{application::ChimeraAppConfig, clash::config::ClashConfig};
 use chimera_contracts::{
     mutation::ConfigDomain,
     runtime_error::{RuntimeCheckUnavailable, RuntimeError},
 };
 use chimera_core::state::{StateSnapshot, Version};
 
+use super::{
+    ports::{RuntimeBuildPort, RuntimeCheckOutcome, RuntimeCheckRequest, RuntimeValidatorPort},
+    preparation::RuntimePreparation,
+};
 use crate::{
     client::{
-        application_workflow::{
-            mutation::{CheckRecord, RuntimeCheckFailure},
-            ports::{RuntimeCheckOutcome, RuntimeCheckUnavailable as GateUnavailable},
-        },
-        core_lifecycle::{CoreLifecycleClient, ports::CoreLifecyclePort},
-        reconciler::{inputs::RuntimeInputs, legacy_preparation::RuntimePreparation},
+        core_lifecycle::ports::{PreparedRuntime, RuntimePreparationPort},
+        ports::SessionPortResolver,
+        runtime::RuntimeRevisionAllocator,
     },
-    state::mutation::{DomainChange, ProfileContentReader, RuntimeCandidate},
+    state::mutation::{DomainChange, RuntimeCandidate, RuntimeGate},
 };
 
-/// Freeze the full candidate input *before* invoking the independent Core
-/// validator. An unavailable backend and an invalid candidate are both
-/// failures, never implicit approval.
-pub(crate) async fn check_candidate(
-    core: &dyn CoreLifecyclePort,
-    inputs: RuntimeInputs,
-    service_connected: bool,
-) -> Result<CheckRecord> {
-    let (app, clash, profiles, content) = inputs.into_parts().map_err(|error| {
-        anyhow::Error::new(RuntimeCheckFailure::candidate_unavailable(
-            error.to_string(),
-        ))
-    })?;
-    let run_type = crate::core::RunType::classify(
-        app.enable_service_mode,
-        if service_connected {
-            crate::core::service::ipc::IpcState::Connected
-        } else {
-            crate::core::service::ipc::IpcState::Disconnected
-        },
-    );
-    core.validate_profile_runtime(clash, app.core, run_type, profiles, app, content)
-        .await
+/// The checked-candidate inbox that the single runtime owner must implement.
+/// This contract intentionally does NOT provide a no-op implementation. The
+/// source commit may proceed only if that owner has retained the exact checked
+/// product and can later pair it with a committed source version.
+pub(in crate::client) trait CheckedCandidatePort: Send + Sync + 'static {
+    fn checked(&self, candidate: PreparedRuntime) -> Result<(), Arc<RuntimeError>>;
+    fn source_committed(&self, domain: ConfigDomain, version: Version);
 }
 
-/// Source-facing candidate verdict with its original error chain. An
-/// explicitly rejected Core candidate and an unavailable/unknown result
-/// cannot be collapsed into the same textual `anyhow` error.
-#[derive(Debug, thiserror::Error)]
-#[error("independent {domain} runtime candidate check did not pass: {record:?}")]
-pub(crate) struct RuntimeGateVerdict {
-    pub(crate) domain: String,
-    pub(crate) record: CheckRecord,
-    #[source]
-    pub(crate) source: Option<anyhow::Error>,
+pub(in crate::client) struct CandidateCheck {
+    application: StateSnapshot<ChimeraAppConfig>,
+    clash: StateSnapshot<ClashConfig>,
+    preparation: RuntimePreparation,
+    validator: Arc<dyn RuntimeValidatorPort>,
+    workflow: Arc<dyn CheckedCandidatePort>,
 }
 
-impl RuntimeGateVerdict {
-    /// Preserve a typed CoreCheck failure if the backend supplied one;
-    /// otherwise lack of a check verdict remains unserviceable, never a
-    /// deterministic rejection inferred from arbitrary error text.
-    fn from_error(domain: &str, error: anyhow::Error) -> Self {
-        let record = error
-            .downcast_ref::<RuntimeCheckFailure>()
-            .map(RuntimeCheckFailure::record)
-            .unwrap_or_else(|| CheckRecord::Unserviceable(error.to_string()));
-        Self {
-            domain: domain.into(),
-            record,
-            source: Some(error),
-        }
-    }
-
-    /// Convert one source verdict into the ref's typed RuntimeGate failure.
-    fn runtime_error(&self) -> RuntimeError {
-        let detailed = self
-            .source
-            .as_ref()
-            .and_then(|error| error.downcast_ref::<RuntimeCheckFailure>());
-        let rejected = matches!(&self.record, CheckRecord::Rejected(_))
-            || detailed.is_some_and(|failure| {
-                matches!(failure.outcome, RuntimeCheckOutcome::Rejected { .. })
-            });
-        if rejected {
-            let (core_kind, message) = match detailed.map(|failure| &failure.outcome) {
-                Some(RuntimeCheckOutcome::Rejected { kind, message }) => (*kind, message.clone()),
-                _ => (
-                    None,
-                    match &self.record {
-                        CheckRecord::Rejected(message) => message.clone(),
-                        _ => self.to_string(),
-                    },
-                ),
-            };
-            RuntimeError::CoreRejectedConfig { core_kind, message }
-        } else {
-            let reason = match detailed.map(|failure| &failure.outcome) {
-                Some(RuntimeCheckOutcome::Unavailable(GateUnavailable::Backend {
-                    kind,
-                    message,
-                    retryable,
-                })) => RuntimeCheckUnavailable::Backend {
-                    kind: *kind,
-                    message: message.clone(),
-                    retryable: *retryable,
-                },
-                Some(RuntimeCheckOutcome::Unavailable(GateUnavailable::CandidateUnavailable {
-                    reason,
-                })) => RuntimeCheckUnavailable::CandidateUnavailable {
-                    reason: reason.clone(),
-                },
-                Some(RuntimeCheckOutcome::Unavailable(GateUnavailable::NoEndpoint { reason })) => {
-                    RuntimeCheckUnavailable::NoEndpoint {
-                        reason: reason.clone(),
-                    }
-                }
-                Some(RuntimeCheckOutcome::Unavailable(GateUnavailable::HostUnsupported {
-                    host,
-                    reason,
-                })) => RuntimeCheckUnavailable::HostUnsupported {
-                    host: format!("{host:?}"),
-                    reason: reason.clone(),
-                },
-                _ => match &self.record {
-                    CheckRecord::Skipped(reason) | CheckRecord::Unserviceable(reason) => {
-                        RuntimeCheckUnavailable::NotChecked {
-                            reason: reason.clone(),
-                        }
-                    }
-                    CheckRecord::NotOwed => RuntimeCheckUnavailable::NotChecked {
-                        reason: "candidate check not owed".into(),
-                    },
-                    _ => RuntimeCheckUnavailable::Other {
-                        reason: self.to_string(),
-                    },
-                },
-            };
-            RuntimeError::CheckUnavailable { reason }
-        }
-    }
-}
-
-pub(crate) fn typed_gate_error(domain: &str, error: anyhow::Error) -> std::sync::Arc<RuntimeError> {
-    std::sync::Arc::new(RuntimeGateVerdict::from_error(domain, error).runtime_error())
-}
-
-fn typed_gate_record(domain: &str, record: CheckRecord) -> std::sync::Arc<RuntimeError> {
-    std::sync::Arc::new(
-        RuntimeGateVerdict {
-            domain: domain.into(),
-            record,
-            source: None,
-        }
-        .runtime_error(),
-    )
-}
-
-/// A source may commit a runtime-affecting candidate only after a real pass.
-/// In particular, NotOwed/Skipped are not interchangeable with Passed here.
-pub(crate) fn require_passed(record: CheckRecord, domain: &str) -> Result<()> {
-    match record {
-        CheckRecord::Passed => Ok(()),
-        other => Err(anyhow::Error::new(RuntimeGateVerdict {
-            domain: domain.into(),
-            record: other,
-            source: None,
-        })),
-    }
-}
-
-/// The one ref-style read-only admission path for all three candidate
-/// documents. Source owners supply their proposed domain document; the other
-/// two domains use their committed versions. For Application/Clash, the
-/// Profiles document and file bytes are captured under the same content fence.
-/// This function never persists a source or applies a running Core.
-fn domain_name(change: &DomainChange) -> &'static str {
-    match change {
-        DomainChange::Application { .. } => "application",
-        DomainChange::Clash { .. } => "clash",
-        DomainChange::Profiles { .. } => "profiles",
-    }
-}
-
-pub(crate) async fn check_domain_candidate(
-    core: &dyn CoreLifecyclePort,
-    committed_app: ChimeraAppConfig,
-    committed_clash: ClashConfig,
-    profiles: &StateSnapshot<Profiles>,
-    profile_content: Option<&ProfileContentReader>,
-    candidate: RuntimeCandidate,
-    service_connected: bool,
-) -> Result<(), std::sync::Arc<RuntimeError>> {
-    let domain = domain_name(&candidate.change);
-    let app = match &candidate.change {
-        DomainChange::Application { candidate } => candidate.as_ref().clone(),
-        _ => committed_app,
-    };
-    let clash = match &candidate.change {
-        DomainChange::Clash { candidate } => candidate.as_ref().clone(),
-        _ => committed_clash,
-    };
-    let profiles_dir =
-        crate::utils::dirs::app_profiles_dir().map_err(|error| typed_gate_error(domain, error))?;
-    let source = crate::enhance::FsProfileContentSource::new(profiles_dir);
-    let preparation = RuntimePreparation::new(profile_content, Some(profiles), &source);
-    let inputs = match &candidate.change {
-        DomainChange::Profiles {
-            candidate: proposed,
-        } => {
-            preparation
-                .capture_inputs(app, clash, proposed.clone(), candidate.staged)
-                .await
-        }
-        _ => preparation
-            .capture_committed_inputs(app, clash)
-            .await
-            .map(|mut inputs| {
-                for (path, content) in candidate.staged {
-                    inputs.content.0.insert(path, Ok(content));
-                }
-                inputs
-            }),
-    }
-    .map_err(|error| typed_gate_error(domain, error))?;
-    let checked = check_candidate(core, inputs, service_connected)
-        .await
-        .map_err(|error| typed_gate_error(domain, error))?;
-    match checked {
-        CheckRecord::Passed => Ok(()),
-        other => Err(typed_gate_record(domain, other)),
-    }
-}
-
-/// Ref CandidateCheck boundary adapted to Chimera's typed source clients.
-pub(crate) struct CandidateCheck {
-    core: std::sync::Arc<dyn CoreLifecyclePort>,
-    application: super::super::application::ApplicationClient,
-    clash: super::super::clash_config::ClashConfigClient,
-    profile_content: crate::state::mutation::ProfileContentReader,
-    profiles: StateSnapshot<Profiles>,
-    lifecycle: CoreLifecycleClient,
+pub(in crate::client) struct Args {
+    pub application: StateSnapshot<ChimeraAppConfig>,
+    pub clash: StateSnapshot<ClashConfig>,
+    pub profile_content: crate::state::mutation::ProfileContentReader,
+    pub builder: Arc<dyn RuntimeBuildPort>,
+    pub ports: Arc<SessionPortResolver>,
+    pub revisions: RuntimeRevisionAllocator,
+    pub validator: Arc<dyn RuntimeValidatorPort>,
+    pub workflow: Arc<dyn CheckedCandidatePort>,
 }
 
 impl CandidateCheck {
-    pub(crate) fn new(
-        core: std::sync::Arc<dyn CoreLifecyclePort>,
-        application: super::super::application::ApplicationClient,
-        clash: super::super::clash_config::ClashConfigClient,
-        profile_content: crate::state::mutation::ProfileContentReader,
-        profiles: StateSnapshot<Profiles>,
-        lifecycle: CoreLifecycleClient,
-    ) -> Self {
-        Self {
-            core,
+    pub(in crate::client) fn new(args: Args) -> Self {
+        let Args {
             application,
             clash,
             profile_content,
-            profiles,
-            lifecycle,
+            builder,
+            ports,
+            revisions,
+            validator,
+            workflow,
+        } = args;
+        let preparation =
+            RuntimePreparation::new(profile_content, builder, ports).with_revisions(revisions);
+        Self {
+            application,
+            clash,
+            preparation,
+            validator,
+            workflow,
         }
     }
 }
 
 #[async_trait::async_trait]
-impl crate::state::mutation::RuntimeGate for CandidateCheck {
-    async fn check(
-        &self,
-        candidate: crate::state::mutation::RuntimeCandidate,
-    ) -> Result<(), std::sync::Arc<RuntimeError>> {
-        let domain = domain_name(&candidate.change);
+impl RuntimeGate for CandidateCheck {
+    async fn check(&self, candidate: RuntimeCandidate) -> Result<(), Arc<RuntimeError>> {
+        let app = match &candidate.change {
+            DomainChange::Application { candidate } => candidate.as_ref().clone(),
+            _ => self.application.load().state.clone(),
+        };
         let clash = match &candidate.change {
             DomainChange::Clash { candidate } => candidate.as_ref().clone(),
-            _ => self
-                .clash
-                .get()
-                .map_err(|error| typed_gate_error(domain, error))?,
+            _ => self.clash.load().state.clone(),
         };
-        check_domain_candidate(
-            self.core.as_ref(),
-            self.application.get_typed(),
-            clash,
-            &self.profiles,
-            Some(&self.profile_content),
-            candidate,
-            crate::core::service::ipc::get_ipc_state().is_connected(),
-        )
-        .await
+        let mut inputs = match &candidate.change {
+            DomainChange::Profiles { candidate } => {
+                self.preparation
+                    .capture_inputs(app, clash, candidate.clone())
+                    .await
+            }
+            _ => {
+                self.preparation
+                    .capture_committed_inputs(app, clash)
+                    .await
+                    .1
+            }
+        };
+        for (path, content) in candidate.staged {
+            inputs.content.0.insert(path, Ok(content));
+        }
+        let prepared = self
+            .preparation
+            .prepare_candidate_inputs(inputs)
+            .await
+            .map_err(|error| {
+                Arc::new(RuntimeError::CheckUnavailable {
+                    reason: RuntimeCheckUnavailable::CandidateUnavailable {
+                        reason: error.to_string(),
+                    },
+                })
+            })?;
+        let core_spec = self
+            .preparation
+            .core_spec(&prepared.snapshot.target_core)
+            .map_err(|source| Arc::new(RuntimeError::ResolveCoreBinary { source }))?;
+        match self
+            .validator
+            .check(RuntimeCheckRequest {
+                core_spec,
+                intent: &prepared.intent,
+            })
+            .await
+        {
+            RuntimeCheckOutcome::Passed => self.workflow.checked(prepared)?,
+            RuntimeCheckOutcome::Rejected { kind, message } => {
+                return Err(Arc::new(RuntimeError::CoreRejectedConfig {
+                    core_kind: kind,
+                    message,
+                }));
+            }
+            RuntimeCheckOutcome::Unavailable(reason) => {
+                return Err(Arc::new(RuntimeError::CheckUnavailable { reason }));
+            }
+        }
+        Ok(())
     }
 
     fn committed(&self, domain: ConfigDomain, version: Version) {
-        use crate::client::reconciler::committed::SourceDomain;
-        let source = match domain {
-            ConfigDomain::Application => SourceDomain::Application,
-            ConfigDomain::Clash => SourceDomain::Clash,
-            ConfigDomain::Profiles => SourceDomain::Profiles,
-        };
-        // Only a durable, published source commit reaches this path. The
-        // existing lifecycle mailbox still owns runtime application/retry.
-        self.lifecycle
-            .source_committed(source, *version.as_ref(), true);
+        self.workflow.source_committed(domain, version);
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use std::{
         collections::BTreeMap,
         sync::{
             Arc, Mutex,
-            atomic::{AtomicUsize, Ordering},
+            atomic::{AtomicBool, Ordering},
         },
     };
 
     use chimera_config::{
-        application::{ChimeraAppConfig, ClashCore},
-        clash::config::ClashConfig,
-        profile::Profiles,
+        application::ClashCore, profile::Profiles, runtime::executor::ResolvedPortBindings,
+    };
+    use chimera_contracts::runtime_error::RuntimeCheckUnavailable;
+    use chimera_core::{
+        client::{core_spec::CoreSpecError, runtime_build::RuntimeBuildError},
+        state::PersistentStateManagerSetup,
+    };
+    use chimera_core_manager::{CoreErrorKind, CoreKind, CoreSpec};
+
+    use crate::{
+        client::{
+            reconciler::inputs::{FrozenProfileContent, RuntimeInputs},
+            runtime::{RuntimeLifecycle, RuntimeSnapshot},
+        },
+        state::mutation::{ProfileContentLock, ProfileContentReader},
     };
 
-    use super::*;
-    use crate::{client::reconciler::inputs::FrozenProfileContent, core::RunType};
-
     #[derive(Default)]
-    struct RecordingChecker {
-        runs: Mutex<Vec<RunType>>,
-        calls: AtomicUsize,
-        reject: bool,
+    struct StubBuilder {
+        prepared: Mutex<Vec<(bool, String)>>,
+        reject_core_spec: AtomicBool,
     }
 
     #[async_trait::async_trait]
-    impl CoreLifecyclePort for RecordingChecker {
-        async fn reconcile(&self, _: ClashConfig, _: ClashCore, _: RunType) -> Result<()> {
-            panic!("candidate checking must not reconcile");
+    impl RuntimeBuildPort for StubBuilder {
+        async fn capture_content(&self, _: &Profiles) -> FrozenProfileContent {
+            FrozenProfileContent::default()
         }
 
-        async fn stop(&self) -> Result<()> {
-            panic!("candidate checking must not stop the core");
+        fn core_spec(&self, core: &ClashCore) -> Result<CoreSpec, CoreSpecError> {
+            if self.reject_core_spec.load(Ordering::Relaxed) {
+                return Err(CoreSpecError::FindCoreBinary {
+                    core: *core,
+                    source: std::io::Error::new(std::io::ErrorKind::NotFound, "core unavailable"),
+                });
+            }
+            Ok(CoreSpec {
+                kind: CoreKind::Mihomo,
+                binary_path: camino::Utf8PathBuf::from("/tmp/ref-test-mihomo"),
+                version: None,
+                features: Vec::new(),
+            })
         }
 
-        async fn change_core(&self, _: ClashCore) -> Result<()> {
-            panic!("candidate checking must not switch binaries");
-        }
-
-        async fn status(&self) -> Result<crate::client::core_lifecycle::ports::CoreStatusSnapshot> {
-            panic!("candidate checking must not probe the mutable lifecycle");
-        }
-
-        fn recovery_notify(&self) -> Option<Arc<tokio::sync::Notify>> {
-            None
-        }
-
-        async fn on_profile_change(&self, _: bool) {
-            panic!("candidate checking must not interrupt connections");
-        }
-
-        async fn validate_profile_runtime(
+        async fn build(
             &self,
-            _: ClashConfig,
-            _: ClashCore,
-            run_type: RunType,
-            _: Arc<Profiles>,
-            app: ChimeraAppConfig,
-            _: BTreeMap<String, String>,
-        ) -> Result<CheckRecord> {
-            assert!(app.enable_service_mode);
-            self.calls.fetch_add(1, Ordering::SeqCst);
-            self.runs.lock().unwrap().push(run_type);
-            if self.reject {
-                Ok(CheckRecord::Rejected("invalid candidate".into()))
-            } else {
-                Ok(CheckRecord::Passed)
-            }
-        }
-    }
-
-    fn inputs() -> RuntimeInputs {
-        RuntimeInputs {
-            app: ChimeraAppConfig {
-                enable_service_mode: true,
-                ..Default::default()
-            },
-            clash: ClashConfig::default(),
-            profiles: Arc::new(Profiles::default()),
-            content: FrozenProfileContent::default(),
-        }
-    }
-
-    #[tokio::test]
-    async fn independent_gate_uses_requested_host_without_mutating_core() {
-        let checker = RecordingChecker::default();
-        let checked = check_candidate(&checker, inputs(), true).await.unwrap();
-        require_passed(checked, "application").unwrap();
-        assert_eq!(checker.calls.load(Ordering::SeqCst), 1);
-        assert_eq!(*checker.runs.lock().unwrap(), [RunType::Service]);
-
-        let checked = check_candidate(&checker, inputs(), false).await.unwrap();
-        require_passed(checked, "clash").unwrap();
-        assert_eq!(
-            *checker.runs.lock().unwrap(),
-            [RunType::Service, RunType::Normal]
-        );
-    }
-
-    #[tokio::test]
-    async fn rejected_core_and_unreadable_frozen_content_fail_closed() {
-        let checker = RecordingChecker {
-            reject: true,
-            ..Default::default()
-        };
-        let result = check_candidate(&checker, inputs(), true).await.unwrap();
-        assert!(
-            require_passed(result, "clash")
-                .unwrap_err()
-                .to_string()
-                .contains("invalid candidate")
-        );
-
-        let mut unreadable = inputs();
-        unreadable
-            .content
-            .0
-            .insert("active.yaml".into(), Err("content read failed".into()));
-        let error = check_candidate(&checker, unreadable, true)
-            .await
-            .unwrap_err();
-        assert!(error.to_string().contains("content read failed"));
-        assert_eq!(
-            checker.calls.load(Ordering::SeqCst),
-            1,
-            "the lower checker must never receive incomplete content"
-        );
-    }
-
-    #[test]
-    fn typed_core_rejection_keeps_a_rejection_and_unavailable_checks_do_not() {
-        use chimera_core_manager::{CoreError, CoreErrorKind};
-
-        let rejected = RuntimeGateVerdict::from_error(
-            "profiles",
-            anyhow::Error::new(RuntimeCheckFailure::from_core_error(CoreError::new(
-                CoreErrorKind::ConfigCheckFailed,
-                "invalid profile target",
-                false,
-            ))),
-        );
-        assert_eq!(
-            rejected.record,
-            CheckRecord::Rejected("invalid profile target".into())
-        );
-        let unavailable = RuntimeGateVerdict::from_error(
-            "profiles",
-            anyhow::Error::new(RuntimeCheckFailure::from_core_error(CoreError::new(
-                CoreErrorKind::BackendUnavailable,
-                "validator unreachable",
-                true,
-            ))),
-        );
-        assert_eq!(
-            unavailable.record,
-            CheckRecord::Unserviceable("validator unreachable".into())
-        );
-        assert!(unavailable.source.is_some());
-        let opaque = RuntimeGateVerdict::from_error(
-            "profiles",
-            anyhow::anyhow!("unknown validation RPC failure"),
-        );
-        assert!(matches!(opaque.record, CheckRecord::Unserviceable(_)));
-        assert!(opaque.source.is_some());
-    }
-
-    #[test]
-    fn shared_domain_gate_preserves_rejection_vs_unchecked_evidence() {
-        use chimera_core_manager::{CoreError, CoreErrorKind};
-
-        let rejected = typed_gate_error(
-            "application",
-            anyhow::Error::new(RuntimeCheckFailure::from_core_error(CoreError::new(
-                CoreErrorKind::ConfigCheckFailed,
-                "invalid proposed application",
-                false,
-            ))),
-        );
-        assert!(matches!(
-            rejected.as_ref(),
-            RuntimeError::CoreRejectedConfig {
-                core_kind: Some(CoreErrorKind::ConfigCheckFailed),
-                ..
-            }
-        ));
-        let unavailable = typed_gate_error(
-            "clash",
-            anyhow::Error::new(RuntimeCheckFailure::from_core_error(CoreError::new(
-                CoreErrorKind::BackendUnavailable,
-                "validator disconnected",
-                true,
-            ))),
-        );
-        assert!(matches!(
-            unavailable.as_ref(),
-            RuntimeError::CheckUnavailable {
-                reason: RuntimeCheckUnavailable::Backend {
-                    retryable: true,
-                    kind: Some(CoreErrorKind::BackendUnavailable),
-                    ..
-                }
-            }
-        ));
-        for skipped in [
-            CheckRecord::NotOwed,
-            CheckRecord::Skipped("not supported".into()),
-            CheckRecord::Unserviceable("no verdict".into()),
-        ] {
-            assert!(matches!(
-                typed_gate_record("profiles", skipped).as_ref(),
-                RuntimeError::CheckUnavailable { .. }
+            revision: crate::client::runtime::RuntimeRevision,
+            inputs: RuntimeInputs,
+            _: ResolvedPortBindings,
+            strict_transforms: bool,
+        ) -> Result<Arc<RuntimeSnapshot>, RuntimeBuildError> {
+            self.prepared.lock().unwrap().push((
+                strict_transforms,
+                inputs.target_key().expect("fixture has a target"),
             ));
+            Ok(Arc::new(RuntimeSnapshot::new(
+                revision,
+                inputs.app.core,
+                b"mode: rule\n".to_vec(),
+                serde_yaml::Mapping::new(),
+            )))
+        }
+
+        async fn publish(
+            &self,
+            _: &RuntimeSnapshot,
+        ) -> Result<(), chimera_contracts::publish::PublishRuntimeError> {
+            panic!("the source precommit gate must never publish a product");
         }
     }
 
-    #[test]
-    fn a_source_requires_a_positive_runtime_check() {
-        assert!(require_passed(CheckRecord::Passed, "clash").is_ok());
-        for outcome in [
-            CheckRecord::NotOwed,
-            CheckRecord::Skipped("not checked".into()),
-            CheckRecord::Unserviceable("backend unavailable".into()),
-            CheckRecord::Rejected("core rejected candidate".into()),
-        ] {
-            let error = require_passed(outcome, "application").unwrap_err();
-            assert!(error.to_string().contains("did not pass"));
+    struct StubValidator {
+        outcome: RuntimeCheckOutcome,
+        checked: Mutex<Vec<(String, String)>>,
+    }
+
+    #[async_trait::async_trait]
+    impl RuntimeValidatorPort for StubValidator {
+        async fn check(&self, request: RuntimeCheckRequest<'_>) -> RuntimeCheckOutcome {
+            self.checked.lock().unwrap().push((
+                request.intent.digest.clone(),
+                request.intent.config_text.to_string(),
+            ));
+            self.outcome.clone()
         }
+    }
+
+    #[derive(Default)]
+    struct RecordingInbox {
+        checked: Mutex<Vec<PreparedRuntime>>,
+        committed: Mutex<Vec<(ConfigDomain, Version)>>,
+        reject: bool,
+    }
+
+    impl CheckedCandidatePort for RecordingInbox {
+        fn checked(&self, candidate: PreparedRuntime) -> Result<(), Arc<RuntimeError>> {
+            if self.reject {
+                return Err(Arc::new(RuntimeError::ShuttingDown));
+            }
+            self.checked.lock().unwrap().push(candidate);
+            Ok(())
+        }
+
+        fn source_committed(&self, domain: ConfigDomain, version: Version) {
+            self.committed.lock().unwrap().push((domain, version));
+        }
+    }
+
+    async fn gate(
+        outcome: RuntimeCheckOutcome,
+        reject_owner: bool,
+    ) -> (
+        CandidateCheck,
+        Arc<StubBuilder>,
+        Arc<StubValidator>,
+        Arc<RecordingInbox>,
+    ) {
+        let temp = tempfile::tempdir().unwrap();
+        let path = |name: &str| camino::Utf8PathBuf::from_path_buf(temp.path().join(name)).unwrap();
+        let app = PersistentStateManagerSetup::<ChimeraAppConfig>::builder()
+            .config_path(path("app.yaml"))
+            .assemble()
+            .from_state(ChimeraAppConfig::default())
+            .await
+            .unwrap();
+        let clash = PersistentStateManagerSetup::<ClashConfig>::builder()
+            .config_path(path("clash.yaml"))
+            .assemble()
+            .from_state(ClashConfig::default())
+            .await
+            .unwrap();
+        let profiles = PersistentStateManagerSetup::<Profiles>::builder()
+            .config_path(path("profiles.yaml"))
+            .assemble()
+            .from_state(Profiles::default())
+            .await
+            .unwrap();
+        let builder = Arc::new(StubBuilder::default());
+        let validator = Arc::new(StubValidator {
+            outcome,
+            checked: Mutex::new(Vec::new()),
+        });
+        let inbox = Arc::new(RecordingInbox {
+            reject: reject_owner,
+            ..Default::default()
+        });
+        let checker = CandidateCheck::new(Args {
+            application: app.snapshot_handle(),
+            clash: clash.snapshot_handle(),
+            profile_content: ProfileContentReader::new(
+                profiles.snapshot_handle(),
+                ProfileContentLock::default(),
+            ),
+            builder: builder.clone(),
+            ports: Arc::new(SessionPortResolver::new(Arc::new(
+                RuntimeLifecycle::default(),
+            ))),
+            revisions: RuntimeRevisionAllocator::default(),
+            validator: validator.clone(),
+            workflow: inbox.clone(),
+        });
+        (checker, builder, validator, inbox)
+    }
+
+    fn candidate() -> RuntimeCandidate {
+        RuntimeCandidate {
+            change: DomainChange::Application {
+                candidate: Arc::new(ChimeraAppConfig::default()),
+            },
+            staged: BTreeMap::new(),
+        }
+    }
+
+    #[tokio::test]
+    async fn passed_validation_hands_exact_prepared_bytes_to_owner_before_commit() {
+        let (gate, builder, validator, inbox) = gate(RuntimeCheckOutcome::Passed, false).await;
+        gate.check(candidate()).await.unwrap();
+        let prepared = inbox.checked.lock().unwrap();
+        assert_eq!(prepared.len(), 1);
+        let build = &prepared[0];
+        let validation = validator.checked.lock().unwrap();
+        assert_eq!(
+            validation.as_slice(),
+            &[(
+                build.intent.digest.clone(),
+                String::from_utf8(build.snapshot.product_bytes().to_vec()).unwrap(),
+            )]
+        );
+        assert_eq!(
+            build.intent.config_text.as_bytes(),
+            build.snapshot.product_bytes()
+        );
+        assert_eq!(builder.prepared.lock().unwrap().len(), 1);
+        assert!(
+            builder.prepared.lock().unwrap()[0].0,
+            "candidates must use strict transform validation"
+        );
+        assert!(inbox.committed.lock().unwrap().is_empty());
+        drop(validation);
+        drop(prepared);
+        gate.committed(ConfigDomain::Application, Version::new(7));
+        assert_eq!(
+            inbox.committed.lock().unwrap().as_slice(),
+            &[(ConfigDomain::Application, Version::new(7))]
+        );
+    }
+
+    #[tokio::test]
+    async fn core_rejection_and_unavailable_verdict_never_queue_checked_candidate() {
+        for outcome in [
+            RuntimeCheckOutcome::Rejected {
+                kind: Some(CoreErrorKind::ConfigCheckFailed),
+                message: "invalid candidate".into(),
+            },
+            RuntimeCheckOutcome::Unavailable(RuntimeCheckUnavailable::Backend {
+                kind: Some(CoreErrorKind::BackendUnavailable),
+                message: "no endpoint".into(),
+                retryable: true,
+            }),
+        ] {
+            let (gate, _, _, inbox) = gate(outcome.clone(), false).await;
+            let error = gate.check(candidate()).await.unwrap_err();
+            assert!(inbox.checked.lock().unwrap().is_empty());
+            assert!(inbox.committed.lock().unwrap().is_empty());
+            match outcome {
+                RuntimeCheckOutcome::Rejected { .. } => assert!(matches!(
+                    error.as_ref(),
+                    RuntimeError::CoreRejectedConfig {
+                        core_kind: Some(CoreErrorKind::ConfigCheckFailed),
+                        ..
+                    }
+                )),
+                RuntimeCheckOutcome::Unavailable(_) => assert!(matches!(
+                    error.as_ref(),
+                    RuntimeError::CheckUnavailable {
+                        reason: RuntimeCheckUnavailable::Backend {
+                            retryable: true,
+                            ..
+                        }
+                    }
+                )),
+                RuntimeCheckOutcome::Passed => unreachable!(),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn missing_core_binary_preserves_typed_source_and_never_validates_or_commits() {
+        let (gate, builder, validator, inbox) = gate(RuntimeCheckOutcome::Passed, false).await;
+        builder.reject_core_spec.store(true, Ordering::Relaxed);
+        let error = gate.check(candidate()).await.unwrap_err();
+        assert!(matches!(
+            error.as_ref(),
+            RuntimeError::ResolveCoreBinary { .. }
+        ));
+        assert_eq!(error.core_kind(), Some(CoreErrorKind::BinaryNotFound));
+        assert_eq!(validator.checked.lock().unwrap().len(), 0);
+        assert!(inbox.checked.lock().unwrap().is_empty());
+        assert!(inbox.committed.lock().unwrap().is_empty());
+        let wire = serde_json::to_value(error).unwrap();
+        assert_eq!(wire["kind"], "resolve_core_binary");
+        assert_eq!(wire["source"]["kind"], "find_core_binary");
+    }
+
+    #[tokio::test]
+    async fn a_closed_owner_refuses_precommit_even_after_core_check_passes() {
+        let (gate, _, validator, inbox) = gate(RuntimeCheckOutcome::Passed, true).await;
+        let error = gate.check(candidate()).await.unwrap_err();
+        assert!(matches!(error.as_ref(), RuntimeError::ShuttingDown));
+        assert_eq!(validator.checked.lock().unwrap().len(), 1);
+        assert!(inbox.checked.lock().unwrap().is_empty());
+        assert!(inbox.committed.lock().unwrap().is_empty());
     }
 }

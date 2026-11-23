@@ -5,6 +5,7 @@
 //! lower host ownership is delegated to `core::actor_v2::CoreFacade`.
 
 pub(crate) mod adapters;
+pub(in crate::client) mod apply;
 pub(crate) mod ports;
 mod workflow;
 
@@ -20,8 +21,8 @@ use std::{
 
 use super::reconciler::{
     committed::{SourceDomain, SourceVersions},
+    legacy_status::ReconcilerStatus,
     release::{ReleaseObservation, ServiceReleaseDebt},
-    status::ReconcilerStatus,
 };
 use chimera_core::client::reconciler::plan::RunIntent;
 use ractor::{Actor, ActorProcessingErr, ActorRef, RpcReplyPort, rpc::CallResult};

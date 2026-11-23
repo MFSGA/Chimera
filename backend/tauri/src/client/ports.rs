@@ -6,7 +6,7 @@
 
 use std::{net::TcpListener, sync::Arc};
 
-use anyhow::{Context as _, Result, anyhow, bail};
+use anyhow::{Result, anyhow, bail};
 use chimera_config::{
     clash::config::{
         ClashConfig,
@@ -14,6 +14,7 @@ use chimera_config::{
     },
     runtime::executor::ResolvedPortBindings,
 };
+use chimera_contracts::ports::{PortField, PortResolveError};
 
 use crate::{
     client::ChimeraClient,
@@ -85,7 +86,10 @@ impl SessionPortResolver {
         Self { lifecycle }
     }
 
-    pub(crate) fn resolve_candidate(&self, clash: &ClashConfig) -> Result<CandidatePortBindings> {
+    pub(crate) fn resolve_candidate(
+        &self,
+        clash: &ClashConfig,
+    ) -> std::result::Result<CandidatePortBindings, PortResolveError> {
         let fingerprint = PortsFingerprint::of(clash);
         let previous = self.lifecycle.accepted_confirmed_receipt().map(|receipt| {
             (
@@ -115,11 +119,11 @@ impl SessionPortResolver {
                 .is_some_and(|(prev, _)| prev.mixed == fingerprint.mixed),
         ) {
             Some(ports) => ports.mixed_port,
-            None => *clash.mixed_port.pick_and_try_port().with_context(|| {
-                format!(
-                    "failed to resolve mixed port (strategy: {:?}, start port: {})",
-                    clash.mixed_port.kind, clash.mixed_port.start_port
-                )
+            None => *clash.mixed_port.pick_and_try_port().map_err(|source| {
+                PortResolveError::ResolvePort {
+                    field: PortField::Mixed,
+                    source,
+                }
             })?,
         };
         let port = match unchanged(
@@ -133,7 +137,10 @@ impl SessionPortResolver {
                 .as_ref()
                 .map(|strategy| strategy.pick_and_try_port())
                 .transpose()
-                .context("failed to resolve http port")?
+                .map_err(|source| PortResolveError::ResolvePort {
+                    field: PortField::Http,
+                    source,
+                })?
                 .map(|picked| *picked),
         };
         let socks_port = match unchanged(
@@ -147,7 +154,10 @@ impl SessionPortResolver {
                 .as_ref()
                 .map(|strategy| strategy.pick_and_try_port())
                 .transpose()
-                .context("failed to resolve socks port")?
+                .map_err(|source| PortResolveError::ResolvePort {
+                    field: PortField::Socks,
+                    source,
+                })?
                 .map(|picked| *picked),
         };
 
@@ -162,7 +172,10 @@ impl SessionPortResolver {
                 .as_ref()
                 .map(|strategy| strategy.pick_and_try_port())
                 .transpose()
-                .context("failed to resolve redir port")?
+                .map_err(|source| PortResolveError::ResolvePort {
+                    field: PortField::Redir,
+                    source,
+                })?
                 .map(|picked| *picked),
         };
         let tproxy_port = match unchanged(
@@ -176,7 +189,10 @@ impl SessionPortResolver {
                 .as_ref()
                 .map(PortStrategy::pick_and_try_tcp_udp_port)
                 .transpose()
-                .context("failed to resolve tproxy port")?
+                .map_err(|source| PortResolveError::ResolvePort {
+                    field: PortField::Tproxy,
+                    source,
+                })?
                 .map(|picked| *picked),
         };
 
@@ -200,7 +216,10 @@ impl SessionPortResolver {
                 .external_controller
                 .port
                 .pick_and_try_port()
-                .context("failed to resolve external-controller port")?,
+                .map_err(|source| PortResolveError::ResolvePort {
+                    field: PortField::ExternalController,
+                    source,
+                })?,
         };
         let external_controller = Some(format!(
             "{}:{}",
@@ -213,16 +232,20 @@ impl SessionPortResolver {
             .and_then(|address| address.rsplit(':').next())
             .and_then(|raw| raw.parse::<u16>().ok());
         for (field, port) in [
-            ("mixed", Some(mixed_port)),
-            ("http", port),
-            ("socks", socks_port),
-            ("redir", redir_port),
-            ("tproxy", tproxy_port),
-            ("external controller", external_controller_port),
+            (PortField::Mixed, Some(mixed_port)),
+            (PortField::Http, port),
+            (PortField::Socks, socks_port),
+            (PortField::Redir, redir_port),
+            (PortField::Tproxy, tproxy_port),
+            (PortField::ExternalController, external_controller_port),
         ] {
             let Some(port) = port else { continue };
             if let Some(first) = used.insert(port, field) {
-                anyhow::bail!("the {first} and {field} listeners both use port {port}");
+                return Err(PortResolveError::PortConflict {
+                    first,
+                    second: field,
+                    port,
+                });
             }
         }
 
@@ -447,6 +470,43 @@ mod tests {
         assert_eq!(resolver.confirmed(), None);
         resolver.confirm(&candidate);
         assert_eq!(resolver.confirmed(), Some(ports.clone()));
+    }
+
+    #[test]
+    fn duplicate_managed_listener_ports_return_ref_typed_conflict() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        drop(listener);
+        let clash = ClashConfig {
+            mixed_port: fixed(port),
+            redir_port: Some(fixed(port)),
+            ..Default::default()
+        };
+        assert!(matches!(
+            SessionPortResolver::default().resolve_candidate(&clash),
+            Err(PortResolveError::PortConflict {
+                first: PortField::Mixed,
+                second: PortField::Redir,
+                port: conflict,
+            }) if conflict == port
+        ));
+    }
+
+    #[test]
+    fn unavailable_fixed_listener_preserves_field_and_pick_error() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let clash = ClashConfig {
+            mixed_port: fixed(port),
+            ..Default::default()
+        };
+        assert!(matches!(
+            SessionPortResolver::default().resolve_candidate(&clash),
+            Err(PortResolveError::ResolvePort {
+                field: PortField::Mixed,
+                source: chimera_config::clash::config::clash_strategy::port::PickPortError::PortNotAvailable {port: occupied},
+            }) if occupied == port
+        ));
     }
 
     #[test]

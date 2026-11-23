@@ -362,7 +362,7 @@ impl ApiClient {
         }
     }
 
-    pub async fn get_connections(&self) -> Result<ConnectionsRes> {
+    pub async fn get_connections(&self) -> ApiResult<ConnectionsRes> {
         let snapshot = self
             .execute(DEFAULT_API_TIMEOUT, self.client.connections())
             .await?;

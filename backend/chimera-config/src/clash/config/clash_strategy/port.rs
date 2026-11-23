@@ -81,7 +81,8 @@ impl PartialEq for PortStrategy {
     }
 }
 
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, thiserror::Error, Serialize, Deserialize, Type)]
+#[serde(tag = "kind", rename_all = "snake_case")]
 pub enum PickPortError {
     #[error("Port {port} is not available")]
     PortNotAvailable { port: u16 },

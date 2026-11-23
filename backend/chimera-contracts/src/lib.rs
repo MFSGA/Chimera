@@ -2,10 +2,15 @@
 
 pub mod bundle_metadata;
 pub mod core_install;
+pub mod core_spec;
 pub mod core_version;
 pub mod elevation;
+pub mod execution_host;
 pub mod mutation;
 pub mod net;
+pub mod network_automation;
+pub mod network_environment;
+pub mod ports;
 pub mod profiles;
 pub mod publish;
 pub mod runtime;

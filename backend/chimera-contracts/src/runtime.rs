@@ -156,6 +156,10 @@ pub enum DegradationReason {
         cause: InterruptFailure,
     },
     ProxyCacheRefreshFailed,
+    /// A durable source commit whose runtime has not converged.
+    RuntimeDeferred {
+        cause: std::sync::Arc<crate::runtime_error::RuntimeError>,
+    },
     JournalInvalid,
     JobsJournalUnavailable,
     MaterializationDeferred,
@@ -180,6 +184,7 @@ impl DegradationReason {
             Self::ProfileInterruptionFailed { .. } => "profile_interruption_failed",
             Self::ProxyInterruptionFailed { .. } => "proxy_interruption_failed",
             Self::ProxyCacheRefreshFailed => "proxy_cache_refresh_failed",
+            Self::RuntimeDeferred { .. } => "runtime_deferred",
             Self::JournalInvalid => "journal_invalid",
             Self::JobsJournalUnavailable => "jobs_journal_unavailable",
             Self::MaterializationDeferred => "materialization_deferred",

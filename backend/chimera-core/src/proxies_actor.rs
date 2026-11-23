@@ -35,13 +35,12 @@ pub type ProxyMutationOutcome = MutationOutcome<()>;
 
 /// Preserve the typed cause of a source-instance interruption instead of
 /// reducing every controller failure to the same string code.
-fn interrupt_failure(error: &anyhow::Error) -> InterruptFailure {
-    match error.downcast_ref::<ApiError>() {
-        Some(ApiError::Stale) => InterruptFailure::Stale,
-        Some(ApiError::Timeout) => InterruptFailure::Timeout,
-        Some(ApiError::Unavailable(_)) => InterruptFailure::Unavailable,
-        Some(ApiError::Protocol(_)) => InterruptFailure::Protocol,
-        None => InterruptFailure::Unavailable,
+fn interrupt_failure(error: &ApiError) -> InterruptFailure {
+    match error {
+        ApiError::Stale => InterruptFailure::Stale,
+        ApiError::Timeout => InterruptFailure::Timeout,
+        ApiError::Unavailable(_) => InterruptFailure::Unavailable,
+        ApiError::Protocol(_) => InterruptFailure::Protocol,
     }
 }
 
@@ -416,18 +415,9 @@ impl State {
         self.reread_after_rejection(actor, api.clone(), applied)
             .await?;
         // Keep every follow-up on the change's revocable source capability.
-        let interruption = match strategy {
-            ProxyChangeBreakMode::Off => Ok(()),
-            ProxyChangeBreakMode::ProxyGroup => {
-                interrupt_connections(
-                    &api,
-                    &ConnectionScope::ProxyGroup {
-                        name: group.clone(),
-                    },
-                )
-                .await
-            }
-            ProxyChangeBreakMode::All => interrupt_connections(&api, &ConnectionScope::All).await,
+        let interruption = match ConnectionScope::for_proxy_change(strategy, group.clone()) {
+            Some(scope) => interrupt_connections(&api, &scope).await,
+            None => Ok(()),
         };
         // Interruption can suspend during a Host handoff; even when the
         // controller closed connections, the old owner cannot claim success.
@@ -640,11 +630,11 @@ impl Actor for ProxiesActor {
         _actor: ActorRef<Message>,
         state: &mut State,
     ) -> Result<(), ActorProcessingErr> {
-        // These are read-only, cancellable tasks. Wait for both owners and
-        // clear the published snapshot before resuming any fatal task panic.
+        // Match ref post_stop: cancel read-only owners but do not publish
+        // an artificial cache change while closing. Dropping the actor's
+        // watch senders notifies subscribers that the stream has ended.
         let timer_panic = cancel_owned_task(&mut state.timer, "proxy refresh timer").await;
         let monitor_panic = cancel_owned_task(&mut state.monitor, "proxy API monitor").await;
-        state.invalidate_cache();
         resume_monitor_panic(timer_panic.or(monitor_panic));
         Ok(())
     }

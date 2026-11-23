@@ -464,7 +464,21 @@ pub async fn probe_direct_egress(
 pub async fn get_app_config(
     client: State<'_, ChimeraClient>,
 ) -> Result<chimera_config::application::ChimeraAppConfig> {
-    Ok(client.get_app_config()?)
+    // The generic IPC is not scoped to sensitive_read. SSIDs, gateway MACs,
+    // rule IDs and policy actions require a dedicated authorized read.
+    Ok(client.get_app_config()?.unprivileged_settings_view())
+}
+
+/// Ordinary preference edits cannot overwrite network rules. A dedicated
+/// system:write RPC is required even to edit disabled network conditions.
+fn ensure_general_settings_patch_scope(
+    patch: &chimera_config::application::ChimeraAppConfigPatch,
+) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        patch.network_automation.is_none(),
+        "network automation policy edits require the dedicated authorized settings command"
+    );
+    Ok(())
 }
 
 #[tauri::command]
@@ -473,6 +487,7 @@ pub async fn patch_app_config(
     client: State<'_, ChimeraClient>,
     patch: chimera_config::application::ChimeraAppConfigPatch,
 ) -> Result<MutationOutcome<()>> {
+    ensure_general_settings_patch_scope(&patch)?;
     Ok(client.patch_app_config(patch).await?)
 }
 
@@ -1849,10 +1864,37 @@ mod tests {
     use std::sync::{Arc, Barrier};
 
     use super::{
-        IpcError, PendingDeepLink, clear_frontend_storage, ensure_viewable_profile_file,
-        frontend_storage_entries, get_web_storage_item, remove_web_storage_item,
+        IpcError, PendingDeepLink, clear_frontend_storage, ensure_general_settings_patch_scope,
+        ensure_viewable_profile_file, frontend_storage_entries, get_web_storage_item,
+        remove_web_storage_item,
     };
     use crate::core::storage::{Storage, StorageOperationError, StorageRevision, WebStorage};
+
+    #[test]
+    fn generic_settings_patch_cannot_edit_sensitive_network_automation_policy() {
+        use chimera_config::application::ChimeraAppConfigPatch;
+        let blocked: ChimeraAppConfigPatch = serde_json::from_value(serde_json::json!({
+            "network_automation": {
+                "enabled": false,
+                "rules": [{
+                    "id": "home",
+                    "name": "Home",
+                    "conditions": { "wifi_ssid": "Home" }
+                }]
+            }
+        }))
+        .unwrap();
+        let err = ensure_general_settings_patch_scope(&blocked)
+            .expect_err("generic settings cannot write network policy");
+        assert!(
+            err.to_string()
+                .contains("dedicated authorized settings command")
+        );
+
+        let ordinary: ChimeraAppConfigPatch =
+            serde_json::from_value(serde_json::json!({"enable_system_proxy": true})).unwrap();
+        ensure_general_settings_patch_scope(&ordinary).unwrap();
+    }
 
     #[test]
     fn storage_revision_conflicts_keep_a_stable_ipc_marker() {

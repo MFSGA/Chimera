@@ -1069,6 +1069,6 @@ fn proxy_interruption_causes_keep_the_upstream_classification() {
             InterruptFailure::Unavailable,
         ),
     ] {
-        assert_eq!(interrupt_failure(&anyhow::Error::new(error)), expected);
+        assert_eq!(interrupt_failure(&error), expected);
     }
 }

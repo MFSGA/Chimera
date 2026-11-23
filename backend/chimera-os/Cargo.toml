@@ -7,6 +7,17 @@ license.workspace = true
 authors.workspace = true
 
 [features]
+# Ref host observation remains opt-in until the network automation owner is
+# connected to validated, permission-scoped system mutations.
+network-environment = [
+  'dep:netdev',
+  'dep:zbus',
+  'dep:dispatch2',
+  'dep:objc2',
+  'dep:objc2-core-location',
+  'dep:objc2-core-wlan',
+  'dep:objc2-foundation'
+]
 verge-dev = []
 
 [dependencies]
@@ -18,6 +29,7 @@ async-trait = '0.1'
 auto-launch = { git = 'https://github.com/libnyanpasu/auto-launch.git', version = '0.5' }
 camino = '1.1.9'
 dunce = '1.0.4'
+netdev = { version = '0.47', default-features = false, features = ['gateway'], optional = true }
 reqwest = { workspace = true }
 sysproxy = { git = 'https://github.com/libnyanpasu/sysproxy-rs.git', version = '0.3' }
 tokio = { workspace = true }
@@ -30,9 +42,32 @@ whoami = '2.0.0'
 chimera-paths = { path = '../chimera-paths' }
 chimera-config = { path = '../chimera-config', default-features = false, features = ['nesting'] }
 
+[target.'cfg(target_os = "linux")'.dependencies]
+zbus = { version = '5', optional = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+dispatch2 = { version = '0.3', default-features = false, features = ['std'], optional = true }
+objc2 = { version = '0.6', optional = true }
+objc2-core-location = { version = '0.3', default-features = false, features = [
+  'std',
+  'CLLocationManager'
+], optional = true }
+objc2-core-wlan = { version = '0.3', default-features = false, features = [
+  'CWInterface',
+  'CWWiFiClient'
+], optional = true }
+objc2-foundation = { version = '0.3', default-features = false, features = [
+  'std',
+  'NSString'
+], optional = true }
+
 [target.'cfg(windows)'.dependencies]
 chimera-utils = { workspace = true, default-features = false, features = ['os'] }
-windows-sys = { version = '0.61', features = ['Win32_UI_WindowsAndMessaging'] }
+windows-sys = { version = '0.61', features = [
+  'Win32_Foundation',
+  'Win32_NetworkManagement_WiFi',
+  'Win32_UI_WindowsAndMessaging'
+] }
 
 [dev-dependencies]
 futures = '0.3'
