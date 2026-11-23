@@ -141,6 +141,20 @@ impl Clock for SystemClock {
 }
 
 impl ChimeraClient {
+    /// Uses the same published country index as traffic; no network geolocation
+    /// request is made and a missing core database remains explicitly unknown.
+    pub(crate) fn geo_country(&self, ip: std::net::IpAddr) -> Option<String> {
+        let geo = self.inner.geo_index.read().clone()?;
+        let published = geo.subscribe();
+        let current = published.borrow();
+        let snapshot = current.as_ref()?;
+        snapshot
+            .index
+            .lookup(ip)?
+            .country()
+            .map(str::to_ascii_uppercase)
+    }
+
     pub(crate) fn start_traffic(
         &self,
         frames: tokio::sync::watch::Receiver<Option<Arc<ClashConnectionsFrame>>>,

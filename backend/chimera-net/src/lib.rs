@@ -6,3 +6,5 @@ pub mod key_value;
 pub mod policy;
 pub mod subscription;
 pub mod subscription_http;
+
+pub mod direct_egress;

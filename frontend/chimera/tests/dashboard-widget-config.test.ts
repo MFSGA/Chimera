@@ -86,6 +86,126 @@ test('normalizes persisted widget settings and rejects invalid values', () => {
   assert.equal('unknown-0' in normalized.byInstance, false);
 });
 
+test('traffic report widgets persist range, profile filters, directions, and rankings', () => {
+  const stored = normalizeWidgetConfigStorage({
+    version: 1,
+    byInstance: {
+      recent: {
+        type: WidgetId.RecentTraffic,
+        range: 'last7_days',
+        profileUid: 'profile-1',
+        showDirections: false,
+      },
+      origin: {
+        type: WidgetId.OriginTraffic,
+        range: 'all',
+        profileUid: null,
+        topN: 50,
+        showDirections: false,
+        hideNames: true,
+      },
+      invalid: {
+        type: WidgetId.TargetTraffic,
+        range: 'tomorrow',
+        profileUid: '',
+        topN: 1.5,
+        showDirections: 'no',
+        hideNames: 'no',
+      },
+      minimum: { type: WidgetId.ExitTraffic, topN: 0 },
+    },
+  });
+  assert.deepEqual(getWidgetConfig(stored, 'recent', WidgetId.RecentTraffic), {
+    type: WidgetId.RecentTraffic,
+    range: 'last7_days',
+    profileUid: 'profile-1',
+    showDirections: false,
+  });
+  assert.deepEqual(getWidgetConfig(stored, 'origin', WidgetId.OriginTraffic), {
+    type: WidgetId.OriginTraffic,
+    range: 'all',
+    profileUid: null,
+    showDirections: false,
+    topN: 20,
+    hideNames: true,
+  });
+  assert.deepEqual(
+    getWidgetConfig(stored, 'invalid', WidgetId.TargetTraffic),
+    DEFAULT_WIDGET_CONFIGS[WidgetId.TargetTraffic],
+  );
+  assert.deepEqual(getWidgetConfig(stored, 'minimum', WidgetId.ExitTraffic), {
+    ...DEFAULT_WIDGET_CONFIGS[WidgetId.ExitTraffic],
+    topN: 1,
+  });
+});
+
+test('Active Connections retains its ref sorting controls and bounds visible rows', () => {
+  const storage = normalizeWidgetConfigStorage({
+    version: 1,
+    byInstance: {
+      selected: {
+        type: WidgetId.ActiveConnections,
+        sort: 'upload',
+        topN: 200,
+        showProcess: false,
+        hideTargets: true,
+      },
+      invalid: {
+        type: WidgetId.ActiveConnections,
+        sort: 'unknown',
+        topN: 2.5,
+        showProcess: 'no',
+        hideTargets: null,
+      },
+      minimum: {
+        type: WidgetId.ActiveConnections,
+        sort: 'total',
+        topN: 0,
+      },
+    },
+  });
+  assert.deepEqual(
+    getWidgetConfig(storage, 'selected', WidgetId.ActiveConnections),
+    {
+      type: WidgetId.ActiveConnections,
+      sort: 'upload',
+      topN: 20,
+      showProcess: false,
+      hideTargets: true,
+    },
+  );
+  assert.deepEqual(
+    getWidgetConfig(storage, 'invalid', WidgetId.ActiveConnections),
+    DEFAULT_WIDGET_CONFIGS[WidgetId.ActiveConnections],
+  );
+  assert.deepEqual(
+    getWidgetConfig(storage, 'minimum', WidgetId.ActiveConnections),
+    {
+      ...DEFAULT_WIDGET_CONFIGS[WidgetId.ActiveConnections],
+      sort: 'total',
+      topN: 1,
+    },
+  );
+});
+
+test('Network Info address visibility persists and rejects non-booleans', () => {
+  const saved = normalizeWidgetConfigStorage({
+    version: 1,
+    byInstance: {
+      hidden: { type: WidgetId.NetworkInfo, hideAddresses: true },
+      invalid: { type: WidgetId.NetworkInfo, hideAddresses: 'yes' },
+    },
+  });
+  assert.deepEqual(getWidgetConfig(saved, 'hidden', WidgetId.NetworkInfo), {
+    type: WidgetId.NetworkInfo,
+    hideAddresses: true,
+  });
+  assert.deepEqual(
+    getWidgetConfig(saved, 'invalid', WidgetId.NetworkInfo),
+    DEFAULT_WIDGET_CONFIGS[WidgetId.NetworkInfo],
+  );
+});
+
 test('Provider Updates keeps pinned resources and constrains invalid saved options', () => {
   const saved = normalizeWidgetConfigStorage({
     version: 1,

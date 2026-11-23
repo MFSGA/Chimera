@@ -59,6 +59,12 @@ pub struct Ctx {
     hotkey_store_opener: Arc<dyn HotkeyStoreOpener>,
 }
 
+impl AsRef<Ctx> for Ctx {
+    fn as_ref(&self) -> &Ctx {
+        self
+    }
+}
+
 impl Ctx {
     pub fn new(paths: MigrationPaths, hotkey_store_opener: Arc<dyn HotkeyStoreOpener>) -> Self {
         Self {

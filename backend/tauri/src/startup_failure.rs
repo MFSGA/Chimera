@@ -78,6 +78,23 @@ pub(crate) enum RevisionFailure {
         read: u64,
         supported: u64,
     },
+    DocumentBehindState {
+        path: PathBuf,
+        state_path: PathBuf,
+        module: String,
+        read: u64,
+        applied: u64,
+    },
+    MissingDocumentStamp {
+        path: PathBuf,
+        state_path: PathBuf,
+    },
+    FilesBehindState {
+        state_path: PathBuf,
+        module: String,
+        applied: u64,
+        reason: String,
+    },
 }
 
 impl RevisionFailure {
@@ -86,12 +103,20 @@ impl RevisionFailure {
             Self::NewerStoreSchema { path, .. }
             | Self::OlderStoreSchema { path, .. }
             | Self::NewerDocument { path, .. }
-            | Self::NewerAppliedModule { path, .. } => path,
+            | Self::NewerAppliedModule { path, .. }
+            | Self::DocumentBehindState { path, .. }
+            | Self::MissingDocumentStamp { path, .. } => path,
+            Self::FilesBehindState { state_path, .. } => state_path,
         }
     }
 
     fn is_newer(&self) -> bool {
-        !matches!(self, Self::OlderStoreSchema { .. })
+        matches!(
+            self,
+            Self::NewerStoreSchema { .. }
+                | Self::NewerDocument { .. }
+                | Self::NewerAppliedModule { .. }
+        )
     }
 }
 
@@ -171,6 +196,36 @@ impl StartupFailure {
                         module: module.clone(),
                         read: *read,
                         supported: *supported,
+                    },
+                    RevisionError::DocumentBehindState {
+                        path,
+                        state_path,
+                        module,
+                        read,
+                        applied,
+                    } => RevisionFailure::DocumentBehindState {
+                        path: path.clone(),
+                        state_path: state_path.clone(),
+                        module: module.clone(),
+                        read: *read,
+                        applied: *applied,
+                    },
+                    RevisionError::MissingDocumentStamp { path, state_path } => {
+                        RevisionFailure::MissingDocumentStamp {
+                            path: path.clone(),
+                            state_path: state_path.clone(),
+                        }
+                    }
+                    RevisionError::FilesBehindState {
+                        state_path,
+                        module,
+                        applied,
+                        reason,
+                    } => RevisionFailure::FilesBehindState {
+                        state_path: state_path.clone(),
+                        module: module.clone(),
+                        applied: *applied,
+                        reason: reason.clone(),
                     },
                 });
             }
@@ -512,6 +567,63 @@ mod tests {
             assert_eq!(report.failure.path, Some(path));
             assert!(report.failure.revision.is_some());
             assert!(report.backups_dir.is_none());
+        }
+    }
+
+    #[test]
+    fn migration_consistency_errors_report_structured_paths_without_claiming_newer_version() {
+        let (_temp, paths) = fixture();
+        let document = paths.profiles_path();
+        let state = paths.app_config_dir().join("migration-state.yaml");
+        let cases = [
+            (
+                RevisionError::DocumentBehindState {
+                    path: document.clone(),
+                    state_path: state.clone(),
+                    module: "profiles".into(),
+                    read: 2,
+                    applied: 4,
+                },
+                document.clone(),
+                "document_behind_state",
+            ),
+            (
+                RevisionError::MissingDocumentStamp {
+                    path: document.clone(),
+                    state_path: state.clone(),
+                },
+                document.clone(),
+                "missing_document_stamp",
+            ),
+            (
+                RevisionError::FilesBehindState {
+                    state_path: state.clone(),
+                    module: "profiles".into(),
+                    applied: 4,
+                    reason: "profiles missing expected field".into(),
+                },
+                state.clone(),
+                "files_behind_state",
+            ),
+        ];
+        for (error, expected_path, expected_kind) in cases {
+            // Keep the source reachable when Tauri decorates the error at setup.
+            let wrapped = anyhow::Error::new(error).context("migration startup boundary");
+            let report = Report::from_error(wrapped.as_ref(), StartupStage::MigrationRun, &paths);
+            assert_eq!(report.failure.kind, FailureKind::MigrationFailed);
+            assert_eq!(report.failure.path, Some(expected_path));
+            let revision = report
+                .failure
+                .revision
+                .as_ref()
+                .expect("typed revision mismatch");
+            let json = serde_json::to_value(revision).unwrap();
+            assert_eq!(json["kind"], expected_kind);
+            assert_eq!(
+                serde_json::from_value::<Report>(serde_json::to_value(&report).unwrap()).unwrap(),
+                report
+            );
+            assert_eq!(report.backups_dir, None);
         }
     }
 

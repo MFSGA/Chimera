@@ -18,7 +18,9 @@
 
 import type { DndGridItemType } from '@chimera/ui/dnd-grid';
 import type { ReactNode } from 'react';
+import { ActiveConnectionsWidget } from './widget-active-connections';
 import { WidgetId } from './widget-config';
+import { NetworkInfoWidget } from './widget-network-info';
 import { ProviderUpdatesWidget } from './widget-provider-updates';
 import { ProxyModeWidget } from './widget-proxy-mode';
 import { CoreShortcutsWidget, ProxyShortcutsWidget } from './widget-shortcut';
@@ -30,6 +32,13 @@ import {
 } from './widget-sparkline';
 import { SubscriptionQuotaWidget } from './widget-subscription-quota';
 import { SubscriptionScheduleWidget } from './widget-subscription-schedule';
+import {
+  ExitTrafficWidget,
+  OriginTrafficWidget,
+  RecentTrafficWidget,
+  RuleTrafficWidget,
+  TargetTrafficWidget,
+} from './widget-traffic-report';
 
 export { WidgetId } from './widget-config';
 
@@ -60,6 +69,13 @@ export const RENDER_MAP: Record<
   [WidgetId.SubscriptionSchedule]: SubscriptionScheduleWidget,
   [WidgetId.SubscriptionQuota]: SubscriptionQuotaWidget,
   [WidgetId.ProviderUpdates]: ProviderUpdatesWidget,
+  [WidgetId.RecentTraffic]: RecentTrafficWidget,
+  [WidgetId.OriginTraffic]: OriginTrafficWidget,
+  [WidgetId.ExitTraffic]: ExitTrafficWidget,
+  [WidgetId.TargetTraffic]: TargetTrafficWidget,
+  [WidgetId.RuleTraffic]: RuleTrafficWidget,
+  [WidgetId.NetworkInfo]: NetworkInfoWidget,
+  [WidgetId.ActiveConnections]: ActiveConnectionsWidget,
 };
 
 /**
@@ -135,6 +151,13 @@ export const WIDGET_MIN_SIZE_MAP: Record<
   [WidgetId.SubscriptionSchedule]: { minW: 3, minH: 2 },
   [WidgetId.SubscriptionQuota]: { minW: 3, minH: 2 },
   [WidgetId.ProviderUpdates]: { minW: 3, minH: 2 },
+  [WidgetId.RecentTraffic]: { minW: 3, minH: 2 },
+  [WidgetId.OriginTraffic]: { minW: 3, minH: 2 },
+  [WidgetId.ExitTraffic]: { minW: 3, minH: 2 },
+  [WidgetId.TargetTraffic]: { minW: 3, minH: 2 },
+  [WidgetId.RuleTraffic]: { minW: 3, minH: 2 },
+  [WidgetId.NetworkInfo]: { minW: 3, minH: 2 },
+  [WidgetId.ActiveConnections]: { minW: 4, minH: 2 },
 };
 
 /** 持久化存储的布局数据结构 */

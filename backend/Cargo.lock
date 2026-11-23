@@ -1406,15 +1406,19 @@ name = "chimera-migration"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "chimera-config",
  "chimera-contracts",
  "chimera-paths",
  "chimera-persistence",
  "chrono",
+ "pretty_assertions",
  "semver 1.0.28",
  "serde",
+ "serde_yaml",
  "serde_yaml_ng",
  "tempfile",
  "thiserror 2.0.21",
+ "tracing",
 ]
 
 [[package]]
@@ -1428,6 +1432,7 @@ dependencies = [
  "base64 0.23.1",
  "chimera-config",
  "chimera-contracts",
+ "getrandom 0.4.3",
  "percent-encoding",
  "reqwest",
  "serde",
@@ -1435,6 +1440,7 @@ dependencies = [
  "snafu",
  "time",
  "tokio",
+ "tracing",
  "url",
 ]
 

@@ -8,8 +8,11 @@ import BreakWhenProxyChangeSwitch from './_modules/break-when-proxy-change-switc
 import EnableBuiltinEnhancedSwitch from './_modules/enable-builtin-enhanced-switch';
 import HotkeyManager from './_modules/hotket-manager';
 import LightenAnimationEffectsSwitch from './_modules/lighten-animation-effects-switch';
+import LocalIpProbeSwitch from './_modules/local-ip-probe-switch';
 import LogFileConfig from './_modules/log-file-config';
 import LogLevelSelector from './_modules/log-level-selector';
+import IpLookupProviderList from './_modules/public-ip/ip-lookup-provider-list';
+import StunServerList from './_modules/public-ip/stun-server-list';
 import TrafficRetentionSelector from './_modules/traffic-retention-selector';
 import TrayProxiesSelector from './_modules/tray-proxies-selector';
 import WindowCloseBehaviorCards from './_modules/window-close-behavior';
@@ -43,6 +46,21 @@ const TrafficSettings = () => {
     </div>
   );
 };
+
+const PublicIpSettings = () => (
+  <div
+    className="space-y-4"
+    data-slot="public-ip-settings"
+    id="public-ip-settings"
+  >
+    <SettingsLabel>{m.settings_label_public_ip()}</SettingsLabel>
+    <SettingsGroup>
+      <LocalIpProbeSwitch />
+    </SettingsGroup>
+    <StunServerList />
+    <IpLookupProviderList />
+  </div>
+);
 
 const EnhanceSettings = () => {
   return (
@@ -112,6 +130,8 @@ function RouteComponent() {
         <LogSettings />
 
         <TrafficSettings />
+
+        <PublicIpSettings />
 
         <EnhanceSettings />
 

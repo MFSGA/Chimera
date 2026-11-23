@@ -1,4 +1,6 @@
 /** Dashboard widget configuration contracts, defaults, and storage migration. */
+import type { TrafficRange } from '@chimera/interface';
+
 export enum WidgetId {
   TrafficDown = 'traffic-down',
   TrafficUp = 'traffic-up',
@@ -10,6 +12,13 @@ export enum WidgetId {
   SubscriptionSchedule = 'subscription-schedule',
   SubscriptionQuota = 'subscription-quota',
   ProviderUpdates = 'provider-updates',
+  NetworkInfo = 'network-info',
+  RecentTraffic = 'recent-traffic',
+  OriginTraffic = 'origin-traffic',
+  ExitTraffic = 'exit-traffic',
+  TargetTraffic = 'target-traffic',
+  RuleTraffic = 'rule-traffic',
+  ActiveConnections = 'active-connections',
 }
 
 type TrafficConfig = {
@@ -19,6 +28,25 @@ type TrafficConfig = {
 };
 
 type HistoryConfig = { showChart: boolean; samples: number };
+
+export type ReportWidgetConfig = {
+  range: TrafficRange;
+  profileUid: string | null;
+  showDirections: boolean;
+};
+
+type RankingConfig = ReportWidgetConfig & { topN: number; hideNames: boolean };
+
+const reportDefaults: ReportWidgetConfig = {
+  range: 'last24_hours',
+  profileUid: null,
+  showDirections: true,
+};
+const rankingDefaults: RankingConfig = {
+  ...reportDefaults,
+  topN: 3,
+  hideNames: false,
+};
 
 /** Reference targets for upcoming subscription/report dashboard widgets. */
 export type SubscriptionTarget =
@@ -67,6 +95,24 @@ export type WidgetConfigs = {
     kinds: 'both' | 'proxy' | 'rule';
     resources: ProviderReference[];
     maxItems: number;
+  };
+  [WidgetId.RecentTraffic]: ReportWidgetConfig & {
+    type: WidgetId.RecentTraffic;
+  };
+  [WidgetId.OriginTraffic]: RankingConfig & { type: WidgetId.OriginTraffic };
+  [WidgetId.ExitTraffic]: RankingConfig & { type: WidgetId.ExitTraffic };
+  [WidgetId.TargetTraffic]: RankingConfig & { type: WidgetId.TargetTraffic };
+  [WidgetId.RuleTraffic]: RankingConfig & { type: WidgetId.RuleTraffic };
+  [WidgetId.NetworkInfo]: {
+    type: WidgetId.NetworkInfo;
+    hideAddresses: boolean;
+  };
+  [WidgetId.ActiveConnections]: {
+    type: WidgetId.ActiveConnections;
+    sort: 'download' | 'upload' | 'total';
+    topN: number;
+    showProcess: boolean;
+    hideTargets: boolean;
   };
 };
 
@@ -130,6 +176,28 @@ export const DEFAULT_WIDGET_CONFIGS: WidgetConfigs = {
     resources: [],
     maxItems: 3,
   },
+  [WidgetId.RecentTraffic]: { ...reportDefaults, type: WidgetId.RecentTraffic },
+  [WidgetId.OriginTraffic]: {
+    ...rankingDefaults,
+    type: WidgetId.OriginTraffic,
+  },
+  [WidgetId.ExitTraffic]: { ...rankingDefaults, type: WidgetId.ExitTraffic },
+  [WidgetId.TargetTraffic]: {
+    ...rankingDefaults,
+    type: WidgetId.TargetTraffic,
+  },
+  [WidgetId.RuleTraffic]: { ...rankingDefaults, type: WidgetId.RuleTraffic },
+  [WidgetId.NetworkInfo]: {
+    type: WidgetId.NetworkInfo,
+    hideAddresses: false,
+  },
+  [WidgetId.ActiveConnections]: {
+    type: WidgetId.ActiveConnections,
+    sort: 'download',
+    topN: 3,
+    showProcess: true,
+    hideTargets: false,
+  },
 };
 
 export type WidgetConfigStorage = {
@@ -147,6 +215,7 @@ export const WIDGET_CONFIG_NUMBER_RANGES = {
   expiryWarningDays: [1, 365],
   quotaWarningPercent: [1, 100],
   maxItems: [1, 20],
+  topN: [1, 20],
 } as const;
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -191,6 +260,12 @@ export function normalizeWidgetConfigStorage(
               ? { kind: 'current' }
               : { kind: 'fixed', profileUid: candidate.profileUid },
         });
+      } else if (
+        key === 'profileUid' &&
+        (candidate === null ||
+          (typeof candidate === 'string' && candidate.trim().length > 0))
+      ) {
+        Object.assign(config, { profileUid: candidate });
       } else if (key === 'resources' && Array.isArray(candidate)) {
         const resources: ProviderReference[] = [];
         const seen = new Set<string>();
@@ -213,7 +288,8 @@ export function normalizeWidgetConfigStorage(
         (key === 'samples' ||
           key === 'expiryWarningDays' ||
           key === 'quotaWarningPercent' ||
-          key === 'maxItems') &&
+          key === 'maxItems' ||
+          key === 'topN') &&
         typeof candidate === 'number' &&
         Number.isInteger(candidate)
       ) {
@@ -222,9 +298,20 @@ export function normalizeWidgetConfigStorage(
           [key]: Math.min(max, Math.max(min, candidate)),
         });
       } else if (
+        (key === 'range' &&
+          (candidate === 'last_hour' ||
+            candidate === 'last6_hours' ||
+            candidate === 'last24_hours' ||
+            candidate === 'last7_days' ||
+            candidate === 'last30_days' ||
+            candidate === 'all')) ||
         (key === 'unit' && (candidate === 'bytes' || candidate === 'bits')) ||
         (key === 'waveStyle' &&
           (candidate === 'filled' || candidate === 'outline')) ||
+        (key === 'sort' &&
+          (candidate === 'download' ||
+            candidate === 'upload' ||
+            candidate === 'total')) ||
         (key === 'kinds' &&
           (candidate === 'both' ||
             candidate === 'proxy' ||

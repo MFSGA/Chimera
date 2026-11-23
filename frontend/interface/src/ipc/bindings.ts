@@ -111,6 +111,18 @@ export const commands = {
     typedError<NetworkProbeResult, string>(
       __TAURI_INVOKE('probe_network', { request }),
     ),
+  probeDirectEgress: () =>
+    typedError<DirectEgress, string>(__TAURI_INVOKE('probe_direct_egress')),
+  /**
+   *  An explicitly opted-in STUN probe of the OS direct route. Never uses an
+   *  HTTP proxy, and refuses to probe while TUN or local capture is active.
+   */
+  getIpLookupProviders: () =>
+    __TAURI_INVOKE<IpLookupProviderInfo[]>('get_ip_lookup_providers'),
+  testStunServer: (host: string, port: number) =>
+    typedError<StunServerTest, string>(
+      __TAURI_INVOKE('test_stun_server', { host, port }),
+    ),
   /**  later: check in the frontend */
   getPendingDeepLinks: () =>
     typedError<PendingDeepLinkEntry[], string>(
@@ -1128,6 +1140,9 @@ export type ChimeraAppConfigPatch_Deserialize = {
   app_log_level?: LoggingLevel_Deserialize | null;
   language?: I18nLanguage_Deserialize | null;
   theme_mode?: ThemeMode | null;
+  enable_local_ip_probe?: boolean | null;
+  stun_servers?: StunServer[] | null;
+  ip_lookup_providers?: IpLookupProvider[] | null;
   traffic_graph?: boolean | null;
   enable_memory_usage?: boolean | null;
   lighten_animation_effects?: boolean | null;
@@ -1168,6 +1183,9 @@ export type ChimeraAppConfigPatch_Serialize = {
   app_log_level?: LoggingLevel_Serialize | null;
   language?: I18nLanguage_Serialize | null;
   theme_mode?: ThemeMode | null;
+  enable_local_ip_probe?: boolean | null;
+  stun_servers?: StunServer[] | null;
+  ip_lookup_providers?: IpLookupProvider[] | null;
   traffic_graph?: boolean | null;
   enable_memory_usage?: boolean | null;
   lighten_animation_effects?: boolean | null;
@@ -1215,6 +1233,12 @@ export type ChimeraAppConfig_Deserialize = {
   app_log_level?: LoggingLevel_Deserialize;
   language?: I18nLanguage_Deserialize;
   theme_mode?: ThemeMode;
+  /**  Public-IP discovery requires explicit opt-in (ref defaults to false). */
+  enable_local_ip_probe?: boolean;
+  /**  STUN destinations, with no HTTP fallback unless separately consented to. */
+  stun_servers?: StunServer[];
+  /**  HTTP lookup providers are never used until individually consented to. */
+  ip_lookup_providers?: IpLookupProvider[];
   /**  enable traffic graph */
   traffic_graph?: boolean;
   /**  show memory info (only for Clash Meta) */
@@ -1273,6 +1297,12 @@ export type ChimeraAppConfig_Serialize = {
   app_log_level: LoggingLevel_Serialize;
   language: I18nLanguage_Serialize;
   theme_mode: ThemeMode;
+  /**  Public-IP discovery requires explicit opt-in (ref defaults to false). */
+  enable_local_ip_probe: boolean;
+  /**  STUN destinations, with no HTTP fallback unless separately consented to. */
+  stun_servers: StunServer[];
+  /**  HTTP lookup providers are never used until individually consented to. */
+  ip_lookup_providers: IpLookupProvider[];
   /**  enable traffic graph */
   traffic_graph: boolean;
   /**  show memory info (only for Clash Meta) */
@@ -2133,6 +2163,12 @@ export type Dimensions = {
   destination_basis?: GeoBasis | null;
 };
 
+export type DirectEgress =
+  | { kind: 'disabled' }
+  | { kind: 'tun_enabled' }
+  | { kind: 'transparent_proxy_enabled' }
+  | { kind: 'probed'; ipv4: EgressAddress | null; ipv6: EgressAddress | null };
+
 export type DnsMode = 'normal' | 'fake-ip' | 'redir-host' | 'hosts' | 'Unknown';
 
 /**  A snapshot of a download session's progress, polled by IPC. */
@@ -2148,6 +2184,16 @@ export type DownloaderState =
   'idle' | 'downloading' | { failed: string } | 'finished';
 
 export type EditorWindowType = 'profile' | 'css-editor';
+
+export type EgressAddress = {
+  address: string;
+  country: string | null;
+  source: EgressSource;
+};
+
+export type EgressSource =
+  | { kind: 'stun'; host: string; port: number; transport: StunTransport }
+  | { kind: 'lookup'; provider: IpLookupProvider };
 
 export type EndpointConnectivity =
   | { kind: 'connected' }
@@ -2442,6 +2488,20 @@ export type IVerge_Serialize = {
    *  Legacy: opens legacy window
    */
   window_type: WindowType | null;
+};
+
+/**
+ *  HTTP services that answer with the caller's address. Each one receives
+ *  the address and ordinary request metadata, so none is used until the user
+ *  accepts its privacy notice.
+ */
+export type IpLookupProvider = 'dnspod' | 'ip_sb' | 'ipify' | 'ident_me';
+
+/**  A provider and the endpoints it is asked at, for its privacy notice. */
+export type IpLookupProviderInfo = {
+  provider: IpLookupProvider;
+  ipv4_url: string;
+  ipv6_url: string;
 };
 
 export type IpsbResponse = {
@@ -3649,6 +3709,50 @@ export type StorageValueChangedEvent = {
   value: string | null;
   revision: StorageRevision;
 };
+
+export type StunAttempt =
+  | { kind: 'answered'; address: string; latency_ms: number }
+  | { kind: 'no_address' }
+  | { kind: 'no_answer' };
+
+/**  Which address families a transport answered over. */
+export type StunFamilies = {
+  ipv4: boolean;
+  ipv6: boolean;
+};
+
+/**
+ *  A STUN server the probe may ask. The built-in ones are ordinary entries of
+ *  the list, so the user can turn them off or reorder them like their own.
+ */
+export type StunServer = {
+  host: string;
+  port: number;
+  enabled: boolean;
+  /**
+   *  What the operator documents for a built-in server, or what the test
+   *  found when the user added it.
+   */
+  capabilities?: StunServerCapabilities;
+  /**  Shipped with the app rather than added by the user. */
+  builtin?: boolean;
+};
+
+/**  Which transports and families a STUN server answers Binding requests over. */
+export type StunServerCapabilities = {
+  udp: StunFamilies;
+  tcp: StunFamilies;
+};
+
+export type StunServerTest = {
+  udp_ipv4: StunAttempt;
+  udp_ipv6: StunAttempt;
+  tcp_ipv4: StunAttempt;
+  tcp_ipv6: StunAttempt;
+  capabilities: StunServerCapabilities;
+};
+
+export type StunTransport = 'udp' | 'tcp';
 
 export type SubscriptionInfo =
   SubscriptionInfo_Serialize | SubscriptionInfo_Deserialize;

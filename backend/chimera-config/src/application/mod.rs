@@ -6,6 +6,7 @@ use struct_patch::Patch;
 mod clash_core;
 mod i18n;
 mod logging;
+mod public_ip_probe;
 mod traffic;
 mod update;
 mod widget;
@@ -14,6 +15,7 @@ mod window_close;
 pub use clash_core::*;
 pub use i18n::*;
 pub use logging::*;
+pub use public_ip_probe::*;
 pub use traffic::*;
 pub use update::*;
 pub use widget::*;
@@ -111,6 +113,18 @@ pub struct ChimeraAppConfig {
     pub language: I18nLanguage,
     #[patch(attribute(specta(optional)))]
     pub theme_mode: ThemeMode,
+    /// Public-IP discovery requires explicit opt-in (ref defaults to false).
+    #[serde(default)]
+    #[patch(attribute(specta(optional)))]
+    pub enable_local_ip_probe: bool,
+    /// STUN destinations, with no HTTP fallback unless separately consented to.
+    #[serde(default = "default_stun_servers")]
+    #[patch(attribute(specta(optional)))]
+    pub stun_servers: Vec<StunServer>,
+    /// HTTP lookup providers are never used until individually consented to.
+    #[serde(default)]
+    #[patch(attribute(specta(optional)))]
+    pub ip_lookup_providers: Vec<IpLookupProvider>,
     /// enable traffic graph
     #[patch(attribute(specta(optional)))]
     pub traffic_graph: bool,
@@ -213,6 +227,9 @@ impl Default for ChimeraAppConfig {
             app_log_level: LoggingLevel::default(),
             language: default_i18n_language(),
             theme_mode: ThemeMode::System,
+            enable_local_ip_probe: false,
+            stun_servers: default_stun_servers(),
+            ip_lookup_providers: Vec::new(),
             traffic_graph: true,
             enable_memory_usage: true,
             lighten_animation_effects: false,
@@ -254,6 +271,18 @@ impl Default for ChimeraAppConfig {
 mod tests {
     use super::*;
     use struct_patch::Status;
+
+    #[test]
+    fn local_ip_probe_is_opt_in_and_can_be_patched() {
+        let mut config: ChimeraAppConfig =
+            serde_yaml_ng::from_str("enable_system_proxy: true\n").unwrap();
+        assert!(!config.enable_local_ip_probe);
+        assert_eq!(config.stun_servers, default_stun_servers());
+        let patch: ChimeraAppConfigPatch =
+            serde_yaml_ng::from_str("enable_local_ip_probe: true\n").unwrap();
+        config.apply(patch);
+        assert!(config.enable_local_ip_probe);
+    }
 
     #[test]
     fn patch_honours_legacy_aliases() {

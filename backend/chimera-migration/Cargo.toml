@@ -14,12 +14,16 @@ test-support = []
 anyhow = "1"
 chimera-persistence = { path = "../chimera-persistence" }
 chimera-contracts = { path = "../chimera-contracts" }
+chimera-config = { path = "../chimera-config" }
+serde_yaml = "0.9"
 chimera-paths = { path = "../chimera-paths" }
 chrono = "0.4"
 semver = { version = "1", features = ["serde"] }
 serde.workspace = true
 serde_yaml_ng.workspace = true
 thiserror.workspace = true
+tracing.workspace = true
 
 [dev-dependencies]
 tempfile = "3"
+pretty_assertions = "1.4.0"

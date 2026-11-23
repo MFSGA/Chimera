@@ -39,7 +39,7 @@ impl core_runner::BackupPort for TauriBackupPort<'_> {
         ctx: &chimera_migration::context::Ctx,
     ) -> anyhow::Result<BackupInfo> {
         let storage_path = ctx.storage_path();
-        backup::create_backup(&BackupRequest {
+        let snapshot = backup::create_backup(&BackupRequest {
             paths: self.paths,
             storage: StorageSource::File(&storage_path),
             kind: BackupKind::Migration {
@@ -48,7 +48,9 @@ impl core_runner::BackupPort for TauriBackupPort<'_> {
             },
             now: OffsetDateTime::now_utc(),
         })
-        .context("failed to back up the config before migrating")
+        .context("failed to back up the config before migrating")?;
+        tracing::info!(path = %snapshot.path.display(), "migration backup created before config rewrite");
+        Ok(snapshot)
     }
 }
 
@@ -110,38 +112,54 @@ impl Runner {
     }
 
     pub fn run_migration(&mut self, step: &dyn MigrationStep<Ctx>) -> anyhow::Result<()> {
-        println!("Running migration: {} ({})", step.id(), step.name());
-        self.ensure_known_revisions()?;
-        let advice = self.advice_step(step);
-        println!("Advice: {advice:?}");
-        if matches!(advice, MigrationAdvice::Ignored | MigrationAdvice::Done) {
-            return Ok(());
-        }
-        self.ensure_backup()?;
-        self.run_step(step)
+        let modules = self.modules();
+        // Snapshot metadata is borrowed independently of the mutable Context
+        // and Store passed to the shared Runner for the entire transaction.
+        let paths = self.ctx.paths().clone();
+        let from = self.store.app.last_succeeded.clone();
+        let mut backup_port = TauriBackupPort {
+            paths: &paths,
+            from: from.as_ref(),
+            target: &self.target,
+        };
+        core_runner::run_selected_migration(
+            step,
+            &modules,
+            &registry::MODULES,
+            &mut self.ctx,
+            &mut self.store,
+            &mut self.backup,
+            &mut backup_port,
+            &self.target,
+            self.force,
+            self.profile_migrations_enabled || step.module() != "profiles",
+        )
     }
 
     pub fn run_pending(&mut self) -> anyhow::Result<()> {
         println!("Running migrations up to version: {}", self.target);
-        self.ensure_known_revisions()?;
         let modules = self.modules();
-        if core_runner::has_pending_steps(&modules, &self.store, &self.target, self.force) {
-            self.ensure_backup()?;
-        }
-        let state_path = self.ctx.state_path();
-        core_runner::execute_pending_steps(
+        // Snapshot metadata is borrowed independently of the mutable Context
+        // and Store passed to the shared Runner for the entire transaction.
+        let paths = self.ctx.paths().clone();
+        let from = self.store.app.last_succeeded.clone();
+        let mut backup_port = TauriBackupPort {
+            paths: &paths,
+            from: from.as_ref(),
+            target: &self.target,
+        };
+        core_runner::run_pending(
             &modules,
+            &registry::MODULES,
             &mut self.ctx,
             &mut self.store,
-            &state_path,
-            &registry::MODULES,
+            &mut self.backup,
+            &mut backup_port,
             &self.target,
             self.force,
         )?;
-        self.verify_applied_revisions()?;
-        self.stamp_adopted_documents()?;
-
-        core_runner::commit_successful_run(&mut self.store, &self.target, &self.ctx.state_path())?;
+        // Only the host can prune platform backups, and only after the shared
+        // Runner has durably committed the successful migration version.
         if let Err(error) = backup::prune_backups(
             &self.ctx.paths().backups_dir(),
             MIGRATION_PREFIX,
@@ -156,24 +174,6 @@ impl Runner {
     /// create_backup has successfully renamed its completed directory.
     pub(crate) fn backup_info(&self) -> Option<&BackupInfo> {
         self.backup.as_ref()
-    }
-
-    /// Shared Runner decides whether existing data needs a snapshot; Tauri
-    /// supplies the verified filesystem backup implementation via a port.
-    fn ensure_backup(&mut self) -> anyhow::Result<()> {
-        let mut backup_port = TauriBackupPort {
-            paths: self.ctx.paths(),
-            from: self.store.app.last_succeeded.as_ref(),
-            target: &self.target,
-        };
-        if core_runner::ensure_backup(&self.ctx, &mut self.backup, &mut backup_port)? {
-            let info = self
-                .backup
-                .as_ref()
-                .expect("shared runner recorded a created backup");
-            tracing::info!(path = %info.path.display(), "migration backup created before config rewrite");
-        }
-        Ok(())
     }
 
     fn with_context(target: Version, force: bool, ctx: Ctx) -> anyhow::Result<Self> {
@@ -211,42 +211,6 @@ impl Runner {
             self.modules(),
             &self.ctx,
             &mut self.store,
-            &self.ctx.state_path(),
-        )
-    }
-
-    /// Shared Runner owns stamp adoption; Tauri injects the verified backup.
-    fn stamp_adopted_documents(&mut self) -> anyhow::Result<()> {
-        let from = self.store.app.last_succeeded.clone();
-        let mut backup_port = TauriBackupPort {
-            paths: self.ctx.paths(),
-            from: from.as_ref(),
-            target: &self.target,
-        };
-        let backup_was_missing = self.backup.is_none();
-        core_runner::stamp_adopted_documents(
-            self.modules(),
-            &self.ctx,
-            &self.ctx,
-            &mut self.store,
-            &mut self.backup,
-            &mut backup_port,
-        )?;
-        if backup_was_missing && let Some(info) = &self.backup {
-            tracing::info!(path = %info.path.display(), "migration backup created before config rewrite");
-        }
-        Ok(())
-    }
-
-    fn ensure_known_revisions(&self) -> anyhow::Result<()> {
-        core_runner::ensure_known_revisions(self.modules(), &self.store, &self.ctx.state_path())
-    }
-
-    fn verify_applied_revisions(&self) -> anyhow::Result<()> {
-        core_runner::verify_applied_revisions(
-            self.modules(),
-            &self.ctx,
-            &self.store,
             &self.ctx.state_path(),
         )
     }
@@ -437,7 +401,11 @@ mod tests {
         let case = DocumentCase::new(Some(profiles_at(4, true)), CLEAN_PROFILES);
         let state = case.state();
 
-        let error = format!("{:#}", case.runner().unwrap_err());
+        let cause = case.runner().unwrap_err();
+        assert!(matches!(cause.downcast_ref::<RevisionError>(),
+            Some(RevisionError::MissingDocumentStamp { path, state_path })
+                if *path == case.ctx.profiles_path() && *state_path == case.ctx.state_path()));
+        let error = format!("{cause:#}");
 
         assert!(error.contains("lost the `_nyanpasu` stamp"), "{error}");
         assert!(error.contains(STORE_FILE_NAME), "{error}");
@@ -451,7 +419,11 @@ mod tests {
         let case = DocumentCase::new(Some(profiles_at(4, true)), &profiles);
         let state = case.state();
 
-        let error = format!("{:#}", case.runner().unwrap_err());
+        let cause = case.runner().unwrap_err();
+        assert!(matches!(cause.downcast_ref::<RevisionError>(),
+            Some(RevisionError::DocumentBehindState { path, state_path, module, read: 2, applied: 4 })
+                if *path == case.ctx.profiles_path() && *state_path == case.ctx.state_path() && module == "profiles"));
+        let error = format!("{cause:#}");
 
         assert!(error.contains("stamped at revision 2"), "{error}");
         assert!(error.contains("revision 4"), "{error}");

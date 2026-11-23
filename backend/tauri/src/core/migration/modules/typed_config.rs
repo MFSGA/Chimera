@@ -1,317 +1,53 @@
-use super::super::{Ctx, MigrationStep, ModuleMigrator};
+//! Chimera-specific legacy Verge and runtime Clash conversion for shared TypedConfigMigrator.
+//! The shared crate owns migration steps and typed-file state selection.
+
+use super::super::Ctx;
 use crate::{
     bridge::typed_config_from_legacy_parts,
     config::{chimera::IVerge, clash::IClashTemp},
     utils::help,
 };
-use anyhow::{Context as _, bail};
-use chimera_config::{
-    application::ChimeraAppConfig, clash::config::ClashConfig, state::PersistentState,
-};
-use once_cell::sync::Lazy;
-use semver::Version;
+use anyhow::Context as _;
+use chimera_config::state::PersistentState;
+use chimera_migration::modules::typed_config::TypedConfigHost;
 use serde::{Serialize, de::DeserializeOwned};
 use serde_yaml::{Mapping, Value};
 use std::path::Path;
 
-pub static MIGRATOR: TypedConfigMigrator = TypedConfigMigrator;
+pub use chimera_migration::modules::typed_config::{
+    MIGRATOR, REPAIR_CLASH_CONFIG, RepairClashConfig, SPLIT_LEGACY_CONFIG, SharedClashFileState,
+    SplitLegacyConfig, TypedConfigMigrator, TypedFileState, classify_shared_clash_file,
+    typed_file_state, typed_path_exists,
+};
 
-static VERSION_0_23_0: Lazy<Version> = Lazy::new(|| Version::parse("0.23.0").unwrap());
-static SPLIT_LEGACY_CONFIG: SplitLegacyConfig = SplitLegacyConfig;
-static REPAIR_CLASH_CONFIG: RepairClashConfig = RepairClashConfig;
-static STEPS: [&dyn MigrationStep<Ctx>; 2] = [&SPLIT_LEGACY_CONFIG, &REPAIR_CLASH_CONFIG];
-
-pub struct TypedConfigMigrator;
-
-impl ModuleMigrator<Ctx> for TypedConfigMigrator {
-    fn module(&self) -> &'static str {
-        "typed_config"
+impl TypedConfigHost for Ctx {
+    fn session_state_exists(&self) -> anyhow::Result<bool> {
+        Ok(read_session_state(self)?.is_some())
     }
 
-    fn detect_baseline(&self, ctx: &Ctx) -> anyhow::Result<u64> {
-        match typed_file_state(ctx)? {
-            TypedFileState::All => Ok(current_revision()),
-            TypedFileState::None => Ok(0),
-            TypedFileState::NeedsClashRepair => Ok(1),
-        }
+    fn convert_legacy_yaml(&self) -> anyhow::Result<(String, String, String)> {
+        let legacy = read_legacy_verge(&self.chimera_config_path())?;
+        let legacy_clash = read_legacy_clash_inputs(self)?;
+        let (application, session, clash) = typed_config_from_legacy_parts(&legacy, &legacy_clash)?;
+        Ok((
+            serialize_yaml(&application)
+                .context("failed to serialize migrated application config")?,
+            serialize_yaml(&session).context("failed to serialize migrated session state")?,
+            serialize_yaml(&clash).context("failed to serialize migrated clash config")?,
+        ))
     }
 
-    fn steps(&self) -> &'static [&'static dyn MigrationStep<Ctx>] {
-        &STEPS
+    fn repair_legacy_clash_yaml(&self) -> anyhow::Result<String> {
+        let legacy = read_legacy_verge(&self.chimera_config_path())?;
+        let legacy_clash = read_legacy_clash_inputs(self)?;
+        let (_, _, clash) = typed_config_from_legacy_parts(&legacy, &legacy_clash)?;
+        serialize_yaml(&clash).context("failed to serialize repaired clash config")
     }
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct SplitLegacyConfig;
-
-impl MigrationStep<Ctx> for SplitLegacyConfig {
-    fn id(&self) -> &'static str {
-        "typed_config/split_legacy_config"
-    }
-
-    fn module(&self) -> &'static str {
-        "typed_config"
-    }
-
-    fn revision(&self) -> u64 {
-        1
-    }
-
-    fn introduced_in(&self) -> &'static Version {
-        &VERSION_0_23_0
-    }
-
-    fn name(&self) -> &'static str {
-        "SplitLegacyConfig"
-    }
-
-    fn run(&self, ctx: &mut Ctx) -> anyhow::Result<()> {
-        match typed_file_state(ctx)? {
-            TypedFileState::All => return Ok(()),
-            TypedFileState::None => {}
-            TypedFileState::NeedsClashRepair => return Ok(()),
-        }
-
-        let legacy = read_legacy_verge(&ctx.chimera_config_path())?;
-        let legacy_clash = read_legacy_clash_inputs(ctx)?;
-        let (application, session_state, clash_config) =
-            typed_config_from_legacy_parts(&legacy, &legacy_clash)?;
-
-        let application_yaml = serialize_yaml(&application)
-            .context("failed to serialize migrated application config")?;
-        let session_yaml =
-            serialize_yaml(&session_state).context("failed to serialize migrated session state")?;
-        let clash_yaml =
-            serialize_yaml(&clash_config).context("failed to serialize migrated clash config")?;
-
-        write_typed_files(ctx, &application_yaml, &session_yaml, &clash_yaml)
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct RepairClashConfig;
-
-impl MigrationStep<Ctx> for RepairClashConfig {
-    fn id(&self) -> &'static str {
-        "typed_config/repair_clash_config"
-    }
-
-    fn module(&self) -> &'static str {
-        "typed_config"
-    }
-
-    fn revision(&self) -> u64 {
-        2
-    }
-
-    fn introduced_in(&self) -> &'static Version {
-        &VERSION_0_23_0
-    }
-
-    fn name(&self) -> &'static str {
-        "RepairClashConfig"
-    }
-
-    fn run(&self, ctx: &mut Ctx) -> anyhow::Result<()> {
-        match typed_file_state(ctx)? {
-            TypedFileState::All => return Ok(()),
-            TypedFileState::None => {
-                bail!("cannot repair typed clash config before split_legacy_config has completed")
-            }
-            TypedFileState::NeedsClashRepair => {}
-        }
-
-        let legacy = read_legacy_verge(&ctx.chimera_config_path())?;
-        let legacy_clash = read_legacy_clash_inputs(ctx)?;
-        let (_, _, clash_config) = typed_config_from_legacy_parts(&legacy, &legacy_clash)?;
-        let clash_yaml =
-            serialize_yaml(&clash_config).context("failed to serialize repaired clash config")?;
-        crate::core::migration::fs::atomic_write(&ctx.clash_config_path(), clash_yaml.as_bytes())
-            .context("failed to write repaired clash config")
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum TypedFileState {
-    All,
-    None,
-    NeedsClashRepair,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum SharedClashFileState {
-    Missing,
-    Typed,
-    LegacyRuntime,
-    Unrecognized,
-}
-
-fn typed_file_state(ctx: &Ctx) -> anyhow::Result<TypedFileState> {
-    let application_exists = typed_path_exists(&ctx.application_config_path())?;
-    // Ref: recover session state before partial-file classification so bad
-    // window data is preserved even when other config files are absent.
-    let session_exists = read_session_state(ctx)?.is_some();
-    let clash_state = classify_shared_clash_file(ctx)?;
-
-    if !application_exists && !session_exists {
-        return match clash_state {
-            SharedClashFileState::Missing | SharedClashFileState::LegacyRuntime => {
-                Ok(TypedFileState::None)
-            }
-            SharedClashFileState::Typed => partial_typed_file_state(
-                vec!["clash-config.yaml"],
-                vec!["application.yaml", "session-state.yaml"],
-            ),
-            SharedClashFileState::Unrecognized => bail!(
-                "unrecognized typed config migration state: existing {} is neither a valid typed clash config nor a recognized legacy runtime config; restore or remove it before retrying",
-                ctx.clash_config_path().display()
-            ),
-        };
-    }
-
-    if application_exists && session_exists {
-        match clash_state {
-            SharedClashFileState::Typed => {
-                validate_existing_typed_files(ctx)?;
-                return Ok(TypedFileState::All);
-            }
-            SharedClashFileState::Missing | SharedClashFileState::LegacyRuntime => {
-                validate_existing_application_and_session(ctx)?;
-                return Ok(TypedFileState::NeedsClashRepair);
-            }
-            SharedClashFileState::Unrecognized => {}
-        }
-    }
-
-    if clash_state == SharedClashFileState::Unrecognized {
-        bail!(
-            "unrecognized typed config migration state: existing {} is neither a valid typed clash config nor a recognized legacy runtime config; restore or remove it before retrying",
-            ctx.clash_config_path().display()
-        );
-    }
-
-    let mut existing = Vec::new();
-    let mut missing = Vec::new();
-    push_file_state(
-        &mut existing,
-        &mut missing,
-        application_exists,
-        "application.yaml",
-    );
-    push_file_state(
-        &mut existing,
-        &mut missing,
-        session_exists,
-        "session-state.yaml",
-    );
-    match clash_state {
-        SharedClashFileState::Typed => existing.push("clash-config.yaml"),
-        SharedClashFileState::Missing | SharedClashFileState::LegacyRuntime => {
-            missing.push("clash-config.yaml")
-        }
-        SharedClashFileState::Unrecognized => unreachable!("handled above"),
-    }
-
-    partial_typed_file_state(existing, missing)
-}
-
-fn push_file_state(
-    existing: &mut Vec<&'static str>,
-    missing: &mut Vec<&'static str>,
-    exists: bool,
-    name: &'static str,
-) {
-    if exists {
-        existing.push(name);
-    } else {
-        missing.push(name);
-    }
-}
-
-fn partial_typed_file_state(
-    existing: Vec<&'static str>,
-    missing: Vec<&'static str>,
-) -> anyhow::Result<TypedFileState> {
-    bail!(
-        "partial typed config migration state: existing [{}], missing [{}]; restore or remove the typed config files before retrying",
-        existing.join(", "),
-        missing.join(", ")
-    );
-}
-
-fn typed_path_exists(path: &Path) -> anyhow::Result<bool> {
-    crate::core::corrupt::config_node_exists(path)
-        .with_context(|| format!("failed to inspect typed config file {}", path.display()))
-}
-
-fn classify_shared_clash_file(ctx: &Ctx) -> anyhow::Result<SharedClashFileState> {
-    let path = ctx.clash_config_path();
-    if !typed_path_exists(&path)? {
-        return Ok(SharedClashFileState::Missing);
-    }
-
-    if read_yaml::<ClashConfig>(&path).is_ok() {
-        return Ok(SharedClashFileState::Typed);
-    }
-
-    let raw = std::fs::read_to_string(&path)
-        .with_context(|| format!("failed to read {}", path.display()))?;
-    let value: Value = serde_yaml::from_str(&raw)
-        .with_context(|| format!("failed to parse {}", path.display()))?;
-
-    if looks_like_legacy_runtime_clash_mapping(&value) {
-        return Ok(SharedClashFileState::LegacyRuntime);
-    }
-
-    Ok(SharedClashFileState::Unrecognized)
-}
-
-fn looks_like_legacy_runtime_clash_mapping(value: &Value) -> bool {
-    let Some(map) = value.as_mapping() else {
-        return false;
-    };
-
-    [
-        "mixed-port",
-        "port",
-        "socks-port",
-        "redir-port",
-        "tproxy-port",
-        "external-controller",
-        "allow-lan",
-        "log-level",
-        "mode",
-        "ipv6",
-        "dns",
-        "tun",
-        "listeners",
-        "proxies",
-        "proxy-groups",
-        "rules",
-        "proxy-providers",
-        "rule-providers",
-    ]
-    .iter()
-    .any(|key| map.contains_key(Value::String((*key).to_string())))
 }
 
 fn read_session_state(ctx: &Ctx) -> anyhow::Result<Option<PersistentState>> {
     crate::core::session_state::read(&ctx.session_state_path())
         .context("failed to read or recover existing session state")
-}
-
-fn validate_existing_typed_files(ctx: &Ctx) -> anyhow::Result<()> {
-    validate_existing_application_and_session(ctx)?;
-    read_yaml::<ClashConfig>(&ctx.clash_config_path())
-        .context("failed to validate existing clash config")?;
-    Ok(())
-}
-
-fn validate_existing_application_and_session(ctx: &Ctx) -> anyhow::Result<()> {
-    read_yaml::<ChimeraAppConfig>(&ctx.application_config_path())
-        .context("failed to validate existing application config")?;
-    read_session_state(ctx)?;
-    Ok(())
 }
 
 fn read_legacy_verge(path: &Path) -> anyhow::Result<IVerge> {
@@ -362,55 +98,19 @@ fn serialize_yaml<T: Serialize>(value: &T) -> anyhow::Result<String> {
     serde_yaml::to_string(value).map_err(Into::into)
 }
 
-fn write_typed_files(
-    ctx: &Ctx,
-    application_yaml: &str,
-    session_yaml: &str,
-    clash_yaml: &str,
-) -> anyhow::Result<()> {
-    let outputs = [
-        (
-            "application config",
-            ctx.application_config_path(),
-            application_yaml.as_bytes(),
-        ),
-        (
-            "session state",
-            ctx.session_state_path(),
-            session_yaml.as_bytes(),
-        ),
-        (
-            "clash config",
-            ctx.clash_config_path(),
-            clash_yaml.as_bytes(),
-        ),
-    ];
-    let mut created = Vec::new();
-
-    for (name, path, contents) in outputs {
-        let existed = path.exists();
-        if let Err(error) = crate::core::migration::fs::atomic_write(&path, contents) {
-            for created_path in created.iter().rev() {
-                let _ = std::fs::remove_file(created_path);
-            }
-            return Err(error).with_context(|| format!("failed to write migrated {name}"));
-        }
-        if !existed {
-            created.push(path);
-        }
-    }
-
-    Ok(())
-}
-
-fn current_revision() -> u64 {
-    STEPS.last().map(|step| step.revision()).unwrap_or_default()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::migration::{MigrationStep, ModuleMigrator};
+    use chimera_config::application::ChimeraAppConfig;
+
     use chimera_config::clash::config::ClashConfig;
+
+    fn current_revision() -> u64 {
+        <TypedConfigMigrator as ModuleMigrator<Ctx>>::steps(&MIGRATOR)
+            .last()
+            .map_or(0, |step| step.revision())
+    }
 
     fn test_ctx() -> (Ctx, tempfile::TempDir) {
         let temp = tempfile::tempdir().unwrap();
