@@ -1,35 +1,5 @@
-/**
- * Dashboard 主页（Widget 网格系统）
- *
- * 迁移自 ref: `src/pages/(main)/main/dashboard/index.tsx`
- *
- * 职责：
- * - 展示可拖拽、可调整大小的 Dashboard DnD widget 网格
- * - 支持编辑模式：添加 widget、调整大小、删除 widget、拖拽重排
- * - 布局持久化：通过 useKvStorage 保存用户自定义布局
- * - 响应式自适应：当窗口尺寸变化时，自动切换最匹配的预设布局
- * - 提供 WidgetSheet（底部抽屉）让用户添加新的 widget
- * - 支持从 WidgetSheet 拖拽 widget 到主网格
- *
- * 核心组件：
- * - WidgetRender：管理 DndGrid 布局状态，处理尺寸变化、布局持久化、widget 添加
- * - DashboardDragOverlay：拖拽时的 DragOverlay 预览
- * - EditAction：编辑模式浮动操作栏
- * - WidgetSheet：底部抽屉，显示所有可用 widget
- *
- * 布局自适应流程：
- * 1. 窗口尺寸变化 → DndGrid onSizeChange
- * 2. findBestLayout 查找最匹配的预设布局
- * 3. 如果无匹配 → findClosestStoredLayout + adaptLayout 自适应
- * 4. 用户拖拽/调整后 → handleLayoutChange 持久化到 KvStorage
- *
- * 适配说明：
- * - 使用 @dnd-kit/core 的 DragOverlay 替代 ref 中的嵌套（已统一到 DndGridRoot）
- * - 使用 useKvStorage 持久化布局（与 Chimera 的 KV 存储兼容）
- * - 使用与 ref 一致的 context-menu 进入编辑和添加组件状态
- */
-
 import { useKvStorage } from '@chimera/interface';
+import { Card, CardContent } from '@chimera/ui/card';
 import { ContextMenuItem } from '@chimera/ui/context-menu';
 import {
   DndGrid,
@@ -37,7 +7,6 @@ import {
   DndGridRoot,
   useDndGridRoot,
   type DndGridItemType,
-  type GridItemConstraints,
   type GridPosition,
   type GridSize,
 } from '@chimera/ui/dnd-grid';
@@ -53,58 +22,46 @@ import {
 } from '@/components/providers/context-menu-provider';
 import {
   DashboardItem,
-  DEFAULT_ITEMS,
   DEFAULT_LAYOUTS,
-  LayoutStorage,
   RENDER_MAP,
   WIDGET_MIN_SIZE_MAP,
+  WIDGET_RECOMMENDED_SIZE_MAP,
   WidgetId,
 } from '@/components/widgets/consts';
 import { useDashboardContext } from '@/components/widgets/provider';
 import { WidgetDataCalibration } from '@/components/widgets/widget-data-calibration';
+import WidgetItem from '@/components/widgets/widget-item';
+import { normalizeDashboardItems } from '@/components/widgets/widget-layout';
 import { DashboardTrafficProvider } from '@/components/widgets/widget-traffic-provider';
 import * as m from '@/paraglide/messages';
 import EditAction from './_modules/edit-action';
+import { adaptLayout } from './_modules/layout-adapt';
 import {
-  adaptLayout,
-  findBestLayout,
-  findClosestStoredLayout,
-  sizeKey,
-} from './_modules/layout-adapt';
-import { placeWidget } from './_modules/widget-placement';
+  normalizeLayoutStorage,
+  saveLayout,
+  selectLayoutEntry,
+  type DashboardLayoutStorage,
+} from './_modules/layout-storage';
+import { canEditDashboard, placeWidget } from './_modules/widget-placement';
 import { WidgetSheet } from './_modules/widget-sheet';
 
-const SETTLED_RESIZE_MS = 200;
-
-/**
- * 注册 TanStack Router 文件路由
- * 路径: `/main/dashboard/`（index 子路由）
- * 匹配 ref: `createFileRoute('/(main)/main/dashboard/')`
- */
 export const Route = createFileRoute('/(main)/main/dashboard/')({
   component: RouteComponent,
 });
 
-/**
- * 标准化网格项：确保每个项都有 type 属性
- * 从存储中恢复的项可能缺少 type 字段（旧格式兼容）
- */
-function normalizeItems(items: DndGridItemType<string>[]): DashboardItem[] {
-  return items.map((item) => ({
-    ...item,
-    type: (item as DashboardItem).type ?? (item.id as WidgetId),
-  }));
-}
+// The layout picked for the grid's size stays while the window is being
+// resized, so widgets that a smaller grid hides come back as it grows again.
+// Once the size has settled this long, the layout is picked again for the
+// new size, as it is when the page opens.
+const SETTLED_RESIZE_MS = 200;
 
-/**
- * DashboardDragOverlay — 拖拽时的浮动预览
- *
- * 在 DndGridRoot 上下文中读取 activeDrag 信息，
- * 渲染被拖拽 widget 的预览（包裹在 WidgetComponent 中）。
- *
- * 使用 DndGridProvider 子上下文确保 overlay 内的 WidgetComponent
- * 能正确获取 isOverlay=true 状态（跳过定位逻辑）。
- */
+// Widgets declare these minimum sizes; they are known before any widget has
+// rendered.
+const constraintsFor = (items: DashboardItem[]) =>
+  Object.fromEntries(
+    items.map((item) => [item.id, WIDGET_MIN_SIZE_MAP[item.type]]),
+  );
+
 function DashboardDragOverlay({
   displayItems,
 }: {
@@ -136,7 +93,11 @@ function DashboardDragOverlay({
             >
               <DndGridProvider
                 value={{
-                  displayItems: [],
+                  displayItems: activeDrag.dragIdPrefix
+                    ? []
+                    : displayItems.filter(
+                        (item) => item.id === activeDrag.itemId,
+                      ),
                   getItemRect: () => ({
                     left: 0,
                     top: 0,
@@ -148,7 +109,7 @@ function DashboardDragOverlay({
                   resizingItemId: null,
                   disabled: true,
                   sourceOnly: true,
-                  dragIdPrefix: '',
+                  dragIdPrefix: activeDrag.dragIdPrefix,
                   isOverlay: true,
                   constraintsMapRef: { current: {} },
                   onResizeStart: () => {},
@@ -165,175 +126,181 @@ function DashboardDragOverlay({
   );
 }
 
-/**
- * WidgetRender — 核心 widget 网格渲染器
- *
- * 管理 DndGrid 的布局状态，包括：
- * - 网格尺寸变化时的布局自适应（findBestLayout → adaptLayout）
- * - 用户拖拽/调整大小后的布局持久化（useKvStorage）
- * - 从 WidgetSheet 添加新 widget（addWidgetFromSheet）
- *
- * 使用 ref 跟踪最新状态，避免闭包过期问题。
- */
 const WidgetRender = () => {
-  const { isEditing } = useDashboardContext();
+  const { isEditing, configLoading, configReadError } = useDashboardContext();
 
-  // 持久化布局存储（从 KvStorage 读取/写入）
-  const [layoutStorage, setLayoutStorage] = useKvStorage<LayoutStorage>(
+  const [
+    layoutStorage,
+    setLayoutStorage,
+    { isLoading: layoutLoading, readError: layoutReadError },
+  ] = useKvStorage<DashboardLayoutStorage>(
     'dashboard-widgets',
-    DEFAULT_LAYOUTS,
+    normalizeLayoutStorage(DEFAULT_LAYOUTS, DEFAULT_LAYOUTS),
+    { migrate: (value) => normalizeLayoutStorage(value, DEFAULT_LAYOUTS) },
   );
 
-  // 当前显示的 widget 项列表
-  const [displayItems, setDisplayItems] =
-    useState<DashboardItem[]>(DEFAULT_ITEMS);
+  const editable = canEditDashboard({
+    isEditing,
+    layoutLoading,
+    layoutReadError: Boolean(layoutReadError),
+    configLoading,
+    configReadError,
+  });
+
+  const [gridSize, setGridSize] = useState<GridSize | null>(null);
+  const [activeLayoutId, setActiveLayoutId] = useState<string | null>(null);
+  const gridSizeRef = useRef<GridSize | null>(null);
+
+  const layoutStorageRef = useRef(layoutStorage);
+  layoutStorageRef.current = layoutStorage;
+
+  const activeLayoutIdRef = useRef(activeLayoutId);
+  activeLayoutIdRef.current = activeLayoutId;
+
+  useEffect(() => {
+    const gridSize = gridSizeRef.current;
+    const nextId =
+      layoutStorage.preferredId ??
+      (gridSize ? selectLayoutEntry(layoutStorage, gridSize)?.id : null) ??
+      null;
+
+    activeLayoutIdRef.current = nextId;
+    setActiveLayoutId(nextId);
+  }, [layoutStorage]);
+
+  const sourceLayout = useMemo(() => {
+    if (!gridSize) return null;
+
+    return (
+      layoutStorage.entries.find(({ id }) => id === activeLayoutId) ??
+      selectLayoutEntry(layoutStorage, gridSize)
+    );
+  }, [layoutStorage, activeLayoutId, gridSize]);
+
+  // Adapt from the pinned source each time; never persist this projection.
+  const displayItems = useMemo(() => {
+    if (!gridSize || !sourceLayout) return [];
+
+    const items = normalizeDashboardItems(sourceLayout.items);
+    return adaptLayout(items, gridSize, constraintsFor(items));
+  }, [gridSize, sourceLayout]);
+
+  const displayItemsRef = useRef(displayItems);
+  displayItemsRef.current = displayItems;
+
   const placedTypes = useMemo(
     () => new Set(displayItems.map(({ type }) => type)),
     [displayItems],
   );
 
-  // 使用 ref 避免闭包过期
-  const layoutStorageRef = useRef(layoutStorage);
-  layoutStorageRef.current = layoutStorage;
-
-  const root = useDndGridRoot();
-  const rootRef = useRef(root);
-  rootRef.current = root;
-
-  const displayItemsRef = useRef(displayItems);
-  displayItemsRef.current = displayItems;
-
-  const gridSizeRef = useRef<GridSize>({ cols: 1, rows: 1 });
-  const activeLayoutRef = useRef<DashboardItem[] | null>(null);
-  const settledTimerRef = useRef<number | undefined>(undefined);
-  const pendingResizeRef = useRef<{
-    size: GridSize;
-    constraintsMap: Record<string, GridItemConstraints>;
-  } | null>(null);
-  const [isGridInteractionActive, setIsGridInteractionActive] = useState(false);
-  const isGridInteractionActiveRef = useRef(false);
-
-  const handleGridInteractionChange = useCallback((active: boolean) => {
-    isGridInteractionActiveRef.current = active;
-    setIsGridInteractionActive(active);
+  const selectForSize = useCallback((size: GridSize) => {
+    const id = selectLayoutEntry(layoutStorageRef.current, size)?.id ?? null;
+    activeLayoutIdRef.current = id;
+    setActiveLayoutId(id);
   }, []);
 
+  const settledTimerRef = useRef<number | undefined>(undefined);
   useEffect(() => () => window.clearTimeout(settledTimerRef.current), []);
 
-  /**
-   * 网格尺寸变化处理
-   *
-   * 逻辑：
-   * 1. 先在预设布局存储中查找完全匹配的布局
-   * 2. 如果有，直接使用
-   * 3. 如果没有，查找最接近的预设布局 + adaptLayout 自适应
-   */
-  const selectForSize = useCallback(
-    (
-      newSize: GridSize,
-      constraintsMap: Record<string, GridItemConstraints>,
-    ) => {
-      pendingResizeRef.current = null;
-      // 尝试找到完全匹配的预设布局
-      const bestLayout = findBestLayout(layoutStorageRef.current, newSize);
-      const base =
-        bestLayout ??
-        findClosestStoredLayout(layoutStorageRef.current, newSize) ??
-        DEFAULT_ITEMS;
-      const normalizedBase = normalizeItems(base);
-      activeLayoutRef.current = normalizedBase;
-
-      if (bestLayout) {
-        displayItemsRef.current = normalizedBase;
-        setDisplayItems(normalizedBase);
-        return;
-      }
-
-      // 无完全匹配 → 找最接近的 + 自适应
-      const nextItems = normalizeItems(
-        adaptLayout(normalizedBase, newSize, constraintsMap),
-      );
-      displayItemsRef.current = nextItems;
-      setDisplayItems(nextItems);
-    },
-    [],
-  );
-
-  useEffect(() => {
-    if (isGridInteractionActive || root?.activeDrag) return;
-
-    const pendingResize = pendingResizeRef.current;
-    if (!pendingResize || settledTimerRef.current !== undefined) return;
-
-    pendingResizeRef.current = null;
-    selectForSize(pendingResize.size, pendingResize.constraintsMap);
-  }, [isGridInteractionActive, root?.activeDrag, selectForSize]);
-
   const handleSizeChange = useCallback(
-    (
-      newSize: GridSize,
-      constraintsMap: Record<string, GridItemConstraints>,
-    ) => {
+    (newSize: GridSize) => {
       gridSizeRef.current = newSize;
-      pendingResizeRef.current = { size: newSize, constraintsMap };
+      setGridSize(newSize);
 
       window.clearTimeout(settledTimerRef.current);
-      if (activeLayoutRef.current === null) {
-        selectForSize(newSize, constraintsMap);
-        return;
+      if (activeLayoutIdRef.current === null) {
+        selectForSize(newSize);
+      } else {
+        settledTimerRef.current = window.setTimeout(
+          () => selectForSize(newSize),
+          SETTLED_RESIZE_MS,
+        );
       }
-
-      // Keep adapting the current layout during a resize; select a new source
-      // layout only after the window size has settled.
-      const currentItems = normalizeItems(
-        adaptLayout(activeLayoutRef.current, newSize, constraintsMap),
-      );
-      displayItemsRef.current = currentItems;
-      setDisplayItems(currentItems);
-      settledTimerRef.current = window.setTimeout(() => {
-        settledTimerRef.current = undefined;
-        if (isGridInteractionActiveRef.current || rootRef.current?.activeDrag) {
-          return;
-        }
-
-        const pendingResize = pendingResizeRef.current;
-        if (!pendingResize) return;
-
-        pendingResizeRef.current = null;
-        selectForSize(pendingResize.size, pendingResize.constraintsMap);
-      }, SETTLED_RESIZE_MS);
     },
     [selectForSize],
   );
 
-  /**
-   * 布局变化处理（拖拽/调整大小后）
-   * 更新当前显示状态并持久化到 KvStorage
-   */
   const handleLayoutChange = useCallback(
     (newItems: DashboardItem[]) => {
-      const key = sizeKey(gridSizeRef.current);
-      displayItemsRef.current = newItems;
-      setDisplayItems(newItems);
-      activeLayoutRef.current = newItems;
+      if (!editable) return;
 
-      // 更新并持久化布局
-      layoutStorageRef.current = {
-        ...layoutStorageRef.current,
-        [key]: newItems,
-      };
+      const gridSize = gridSizeRef.current;
+      const source =
+        layoutStorageRef.current.entries.find(
+          ({ id }) => id === activeLayoutIdRef.current,
+        ) ??
+        (gridSize
+          ? selectLayoutEntry(layoutStorageRef.current, gridSize)
+          : null);
+      if (!source) return;
+
+      const visibleIds = new Set(displayItemsRef.current.map(({ id }) => id));
+      const hiddenSourceItems = source.items.filter(
+        ({ id }) => !visibleIds.has(id),
+      );
+      displayItemsRef.current = newItems;
+      layoutStorageRef.current = saveLayout(
+        layoutStorageRef.current,
+        source.id,
+        [...newItems, ...hiddenSourceItems],
+      );
+      activeLayoutIdRef.current = source.id;
+      setActiveLayoutId(source.id);
       setLayoutStorage(layoutStorageRef.current);
     },
-    [setLayoutStorage],
+    [editable, setLayoutStorage],
   );
 
-  /**
-   * Add a widget from the library, preferring the cell under the pointer.
-   */
+  const handleCloseClick = useCallback(
+    (id: string) =>
+      handleLayoutChange(displayItemsRef.current.filter((i) => i.id !== id)),
+    [handleLayoutChange],
+  );
+
+  const handleGridLayoutChange = useCallback(
+    (newItems: DndGridItemType<string>[]) =>
+      handleLayoutChange(normalizeDashboardItems(newItems)),
+    [handleLayoutChange],
+  );
+
+  const renderWidget = useCallback(
+    (item: DndGridItemType<string>) => {
+      const type = (item as DashboardItem).type;
+      const WidgetComponent = RENDER_MAP[type];
+
+      if (configLoading || configReadError) {
+        return (
+          <WidgetItem
+            id={item.id}
+            widgetType={type}
+            {...WIDGET_MIN_SIZE_MAP[type]}
+            onCloseClick={handleCloseClick}
+          >
+            <Card className="size-full">
+              <CardContent
+                className="size-full justify-center text-sm"
+                role="status"
+              >
+                {configReadError
+                  ? m.dashboard_widget_config_load_failed()
+                  : m.dashboard_widget_config_loading()}
+              </CardContent>
+            </Card>
+          </WidgetItem>
+        );
+      }
+
+      return <WidgetComponent id={item.id} onCloseClick={handleCloseClick} />;
+    },
+    [handleCloseClick, configLoading, configReadError],
+  );
+
   const addWidgetFromSheet = useCallback(
-    (widgetId: WidgetId, position?: GridPosition) => {
+    (widgetId: WidgetId, position?: GridPosition): boolean => {
+      if (!editable) return false;
+
       const gridSize = gridSizeRef.current;
-      if (!gridSize) return;
+      if (!gridSize) return false;
 
       const { cols, rows } = gridSize;
       const current = displayItemsRef.current;
@@ -345,12 +312,17 @@ const WidgetRender = () => {
         cols,
         rows,
         minimum: WIDGET_MIN_SIZE_MAP[widgetId],
+        recommended: WIDGET_RECOMMENDED_SIZE_MAP[widgetId],
         position,
       });
 
-      if (placement) handleLayoutChange([...current, placement]);
+      if (placement) {
+        handleLayoutChange([...current, placement]);
+        return true;
+      }
+      return false;
     },
-    [handleLayoutChange],
+    [handleLayoutChange, editable],
   );
 
   return (
@@ -361,61 +333,36 @@ const WidgetRender = () => {
       >
         <DashboardTrafficProvider items={displayItems}>
           <WidgetDataCalibration items={displayItems} />
-          {/* DnD Widget 网格 */}
+
           <DndGrid
             gridId="main"
             className="min-h-0 flex-1"
             items={displayItems}
-            onLayoutChange={(newItems) =>
-              handleLayoutChange(normalizeItems(newItems))
-            }
+            onLayoutChange={handleGridLayoutChange}
             onExternalDrop={(id, position) =>
               addWidgetFromSheet(id as WidgetId, position)
             }
             minCellSize={64}
             onSizeChange={handleSizeChange}
-            onInteractionChange={handleGridInteractionChange}
             gap={16}
-            disabled={!isEditing}
+            disabled={!editable}
           >
-            {(item) => {
-              const WidgetComponent = RENDER_MAP[(item as DashboardItem).type];
-
-              return (
-                <WidgetComponent
-                  id={item.id}
-                  onCloseClick={() =>
-                    handleLayoutChange(
-                      displayItemsRef.current.filter((i) => i.id !== item.id),
-                    )
-                  }
-                />
-              );
-            }}
+            {renderWidget}
           </DndGrid>
         </DashboardTrafficProvider>
       </div>
 
-      {/* 拖拽浮动预览 */}
-      <DashboardDragOverlay displayItems={displayItemsRef.current} />
+      <DashboardDragOverlay displayItems={displayItems} />
 
-      {/* Widget 添加面板 */}
-      <WidgetSheet placedTypes={placedTypes} onAdd={addWidgetFromSheet} />
+      <WidgetSheet
+        placedTypes={placedTypes}
+        onAdd={addWidgetFromSheet}
+        disabled={!editable}
+      />
     </DndGridRoot>
   );
 };
 
-/**
- * Dashboard 页面主组件
- *
- * 布局结构（匹配 ref）：
- * - 编辑按钮（右上角）
- * - WidgetRender（DndGrid 网格系统）
- * - EditAction（编辑模式浮动栏）
- *
- * 使用 DndGridRoot 管理多网格拖拽事件路由，
- * EditAction 在编辑模式时显示浮动操作栏。
- */
 function RouteComponent() {
   const { setIsEditing, setOpenSheet } = useDashboardContext();
 

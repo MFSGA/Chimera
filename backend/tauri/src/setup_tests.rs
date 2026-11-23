@@ -152,3 +152,130 @@ fn partial_core_owner_shuts_down_after_tracked_tasks_drain() {
         ExecutorExit::Clean
     );
 }
+
+#[test]
+fn startup_migrates_a_fresh_install_before_creating_stamped_profile_defaults() {
+    use crate::utils::path::PathResolver;
+    let temp = tempfile::tempdir().unwrap();
+    let config = temp.path().join("config");
+    let data = temp.path().join("data");
+    std::fs::create_dir_all(&config).unwrap();
+    std::fs::create_dir_all(&data).unwrap();
+    let paths = PathResolver::with_base_dirs(config, data);
+    let capture = parking_lot::Mutex::new(None);
+    assert!(!paths.chimera_config_path().exists());
+    assert!(!paths.profiles_path().exists());
+
+    let runner = super::migrate_before_legacy_defaults(&paths, &capture).unwrap();
+    assert!(
+        runner.backup_info().is_none(),
+        "no fake pre-step snapshot for a fresh install"
+    );
+    assert!(capture.lock().is_none());
+    assert!(
+        paths.chimera_config_path().is_file(),
+        "legacy compatibility default is created afterward"
+    );
+    assert!(paths.clash_guard_overrides_path().is_file());
+    let profiles = chimera_migration::document::read_document(&paths.profiles_path(), "profiles")
+        .unwrap()
+        .expect("post-migration profiles default exists");
+    assert_eq!(profiles.schema_revision, Some(4));
+    let parsed: chimera_config::profile::Profiles =
+        serde_yaml_ng::from_value(serde_yaml_ng::Value::Mapping(profiles.payload)).unwrap();
+    assert!(parsed.items.is_empty());
+    let first = std::fs::read(paths.profiles_path()).unwrap();
+    let first_app = std::fs::read(paths.application_config_path()).unwrap();
+
+    // A later startup must accept the stamped default and leave content unchanged.
+    let restarted = super::migrate_before_legacy_defaults(&paths, &capture).unwrap();
+    assert!(restarted.backup_info().is_none());
+    assert_eq!(std::fs::read(paths.profiles_path()).unwrap(), first);
+    assert_eq!(
+        std::fs::read(paths.application_config_path()).unwrap(),
+        first_app
+    );
+}
+
+#[test]
+fn migration_failure_does_not_generate_missing_legacy_defaults_or_touch_typed_input() {
+    use crate::{startup_failure::StartupStage, utils::path::PathResolver};
+    let temp = tempfile::tempdir().unwrap();
+    let config = temp.path().join("config");
+    let data = temp.path().join("data");
+    std::fs::create_dir_all(&config).unwrap();
+    std::fs::create_dir_all(&data).unwrap();
+    let paths = PathResolver::with_base_dirs(config, data);
+    let original = b"language: en\n";
+    std::fs::write(paths.application_config_path(), original).unwrap();
+    let capture = parking_lot::Mutex::new(None);
+    let error = super::migrate_before_legacy_defaults(&paths, &capture)
+        .expect_err("partial typed files must fail migration before defaults are emitted");
+    assert!(
+        format!("{error:#}").contains("partial typed config"),
+        "{error:#}"
+    );
+    let report = capture
+        .lock()
+        .clone()
+        .expect("migration preparation failure is reported");
+    assert_eq!(report.failure.stage, StartupStage::MigrationPrepare);
+    assert!(report.backups_dir.is_none());
+    assert_eq!(
+        std::fs::read(paths.application_config_path()).unwrap(),
+        original
+    );
+    for absent in [
+        paths.chimera_config_path(),
+        paths.profiles_path(),
+        paths.clash_guard_overrides_path(),
+    ] {
+        assert!(
+            !absent.exists(),
+            "startup did not generate default {} before migration",
+            absent.display()
+        );
+    }
+}
+
+#[test]
+fn migration_run_failure_retains_verified_backup_and_never_initializes_defaults() {
+    use crate::{startup_failure::StartupStage, utils::path::PathResolver};
+    let temp = tempfile::tempdir().unwrap();
+    let config = temp.path().join("config");
+    let data = temp.path().join("data");
+    std::fs::create_dir_all(&config).unwrap();
+    std::fs::create_dir_all(&data).unwrap();
+    let paths = PathResolver::with_base_dirs(config, data);
+    let invalid = b"enable_system_proxy: [invalid yaml";
+    std::fs::write(paths.chimera_config_path(), invalid).unwrap();
+    let capture = parking_lot::Mutex::new(None);
+
+    let error = super::migrate_before_legacy_defaults(&paths, &capture)
+        .expect_err("invalid legacy YAML must stop client startup");
+    assert!(format!("{error:#}").contains("failed to read legacy config"));
+    let report = capture
+        .lock()
+        .clone()
+        .expect("migration error report must be captured");
+    assert_eq!(report.failure.stage, StartupStage::MigrationRun);
+    assert_eq!(report.backups_dir, Some(paths.backups_dir()));
+    assert_eq!(std::fs::read(paths.chimera_config_path()).unwrap(), invalid);
+    assert!(!paths.clash_guard_overrides_path().exists());
+    assert!(!paths.profiles_path().exists());
+    assert!(!paths.application_config_path().exists());
+    assert!(!paths.session_state_path().exists());
+    assert!(!paths.clash_config_path().exists());
+    let snapshots = std::fs::read_dir(paths.backups_dir())
+        .unwrap()
+        .collect::<std::io::Result<Vec<_>>>()
+        .unwrap();
+    assert_eq!(snapshots.len(), 1);
+    let snapshot = snapshots[0].path();
+    assert_eq!(
+        std::fs::read(snapshot.join("config/chimera-config.yaml")).unwrap(),
+        invalid
+    );
+    assert!(!snapshot.join("config/clash-guard-overrides.yaml").exists());
+    assert!(!snapshot.join("config/profiles.yaml").exists());
+}

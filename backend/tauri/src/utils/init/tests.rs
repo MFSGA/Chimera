@@ -1,4 +1,5 @@
 use super::*;
+use crate::config::profile::profiles::Profiles;
 
 #[test]
 fn default_config_initialization_uses_only_injected_config_root() {

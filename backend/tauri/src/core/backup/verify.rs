@@ -324,6 +324,12 @@ pub(super) fn verify_backup(backup: &BackupInfo) -> Result<(), VerificationError
         path: backup.path.clone(),
     })?;
     directory(parent)?;
+    // A link in the data-root parent can redirect both the committed backup
+    // and subsequent recovery reads to a different tree. The host uses a
+    // dedicated `<data>/backups` root, so check the data root too.
+    if let Some(data_root) = parent.parent() {
+        directory(data_root)?;
+    }
     if backup.path.file_name() != Some(backup.name.as_ref()) {
         return Err(VerificationError::Mismatch {
             reason: "snapshot name and directory differ",

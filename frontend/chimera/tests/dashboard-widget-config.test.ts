@@ -6,6 +6,7 @@ import {
   getWidgetConfig,
   normalizeWidgetConfigStorage,
   WidgetId,
+  withWidgetConfig,
 } from '../src/components/widgets/widget-config.ts';
 
 test('normalizes persisted widget settings and rejects invalid values', () => {
@@ -76,14 +77,131 @@ test('normalizes persisted widget settings and rejects invalid values', () => {
   assert.deepEqual(normalized.byInstance['proxy-shortcuts-0'], {
     type: WidgetId.ProxyShortcuts,
     layout: 'flex',
-    buttons: 'system',
+    buttons: ['system'],
     order: 'tun-first',
   });
   assert.deepEqual(normalized.byInstance['core-shortcuts-0'], {
     type: WidgetId.CoreShortcuts,
     showVersion: false,
+    showChannel: true,
   });
   assert.equal('unknown-0' in normalized.byInstance, false);
+});
+
+test('patching a single Widget preserves newer settings from other instances', () => {
+  const initial = withWidgetConfig(EMPTY_WIDGET_CONFIG_STORAGE, 'down', {
+    ...DEFAULT_WIDGET_CONFIGS[WidgetId.TrafficDown],
+    unit: 'bits',
+  });
+  const concurrentlySaved = withWidgetConfig(initial, 'memory', {
+    ...DEFAULT_WIDGET_CONFIGS[WidgetId.Memory],
+    samples: 12,
+  });
+  // Simulate retry after a stale whole-map write was rejected by the KV
+  // revision guard: apply only the intended instance to the new snapshot.
+  const retried = withWidgetConfig(concurrentlySaved, 'down', {
+    ...DEFAULT_WIDGET_CONFIGS[WidgetId.TrafficDown],
+    showChart: false,
+  });
+  assert.equal(
+    getWidgetConfig(retried, 'down', WidgetId.TrafficDown).showChart,
+    false,
+  );
+  assert.equal(getWidgetConfig(retried, 'memory', WidgetId.Memory).samples, 12);
+  assert.equal(
+    getWidgetConfig(initial, 'down', WidgetId.TrafficDown).unit,
+    'bits',
+  );
+});
+
+test('rapid edits on different instances use latest shared draft without replacing siblings', () => {
+  const changedA = withWidgetConfig(EMPTY_WIDGET_CONFIG_STORAGE, 'instance-a', {
+    ...DEFAULT_WIDGET_CONFIGS[WidgetId.TrafficUp],
+    showTotal: false,
+  });
+  const changedB = withWidgetConfig(changedA, 'instance-b', {
+    ...DEFAULT_WIDGET_CONFIGS[WidgetId.NetworkInfo],
+    hideAddresses: true,
+  });
+  assert.deepEqual(Object.keys(changedB.byInstance).sort(), [
+    'instance-a',
+    'instance-b',
+  ]);
+  assert.equal(
+    getWidgetConfig(changedB, 'instance-a', WidgetId.TrafficUp).showTotal,
+    false,
+  );
+  assert.equal(
+    getWidgetConfig(changedB, 'instance-b', WidgetId.NetworkInfo).hideAddresses,
+    true,
+  );
+  assert.deepEqual(EMPTY_WIDGET_CONFIG_STORAGE.byInstance, {});
+});
+
+test('Proxy Shortcuts migrates legacy buttons and validates multiselect arrays', () => {
+  const persisted = normalizeWidgetConfigStorage({
+    version: 1,
+    byInstance: {
+      legacyBoth: { type: WidgetId.ProxyShortcuts, buttons: 'both' },
+      legacySystem: { type: WidgetId.ProxyShortcuts, buttons: 'system' },
+      legacyTun: { type: WidgetId.ProxyShortcuts, buttons: 'tun' },
+      transparentOnly: {
+        type: WidgetId.ProxyShortcuts,
+        buttons: 'transparent',
+      },
+      custom: {
+        type: WidgetId.ProxyShortcuts,
+        buttons: ['transparent', 'system', 'transparent'],
+      },
+      invalid: {
+        type: WidgetId.ProxyShortcuts,
+        buttons: ['system', 'invalid'],
+      },
+      empty: { type: WidgetId.ProxyShortcuts, buttons: [] },
+    },
+  });
+  const buttonsFor = (id: string) =>
+    getWidgetConfig(persisted, id, WidgetId.ProxyShortcuts).buttons;
+  assert.deepEqual(buttonsFor('legacyBoth'), ['system', 'tun', 'transparent']);
+  assert.deepEqual(buttonsFor('legacySystem'), ['system']);
+  assert.deepEqual(buttonsFor('legacyTun'), ['tun']);
+  assert.deepEqual(buttonsFor('transparentOnly'), ['transparent']);
+  assert.deepEqual(buttonsFor('custom'), ['transparent', 'system']);
+  assert.deepEqual(
+    buttonsFor('invalid'),
+    DEFAULT_WIDGET_CONFIGS[WidgetId.ProxyShortcuts].buttons,
+  );
+  assert.deepEqual(
+    buttonsFor('empty'),
+    DEFAULT_WIDGET_CONFIGS[WidgetId.ProxyShortcuts].buttons,
+  );
+});
+
+test('Core Shortcuts retains the channel toggle and rejects invalid saved values', () => {
+  const stored = normalizeWidgetConfigStorage({
+    version: 1,
+    byInstance: {
+      hidden: {
+        type: WidgetId.CoreShortcuts,
+        showVersion: true,
+        showChannel: false,
+      },
+      invalid: {
+        type: WidgetId.CoreShortcuts,
+        showVersion: 'false',
+        showChannel: 'yes',
+      },
+    },
+  });
+  assert.deepEqual(getWidgetConfig(stored, 'hidden', WidgetId.CoreShortcuts), {
+    type: WidgetId.CoreShortcuts,
+    showVersion: true,
+    showChannel: false,
+  });
+  assert.deepEqual(
+    getWidgetConfig(stored, 'invalid', WidgetId.CoreShortcuts),
+    DEFAULT_WIDGET_CONFIGS[WidgetId.CoreShortcuts],
+  );
 });
 
 test('traffic report widgets persist range, profile filters, directions, and rankings', () => {

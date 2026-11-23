@@ -187,7 +187,7 @@ impl Runner {
         profile_migrations_enabled: bool,
     ) -> anyhow::Result<Self> {
         let state_path = ctx.state_path();
-        let store = MigrationStore::load(&state_path)?;
+        let store = core_runner::load_state(&state_path)?;
         let mut runner = Self {
             target,
             force,
@@ -454,7 +454,13 @@ mod tests {
         ] {
             let case = DocumentCase::new(None, &profiles);
 
-            let error = format!("{:#}", case.runner().unwrap_err());
+            let source = case.runner().unwrap_err();
+            assert!(
+                matches!(source.downcast_ref::<core_runner::ExecutionError>(),
+                Some(core_runner::ExecutionError::InspectDocument { module, .. })
+                    if module == "profiles")
+            );
+            let error = format!("{source:#}");
 
             assert!(
                 error.contains("failed to inspect the profiles files"),
@@ -493,7 +499,13 @@ mod tests {
         };
         let mut runner = case.runner().unwrap();
 
-        let error = format!("{:#}", runner.run_step(&step).unwrap_err());
+        let cause = runner.run_step(&step).unwrap_err();
+        assert!(
+            matches!(cause.downcast_ref::<core_runner::ExecutionError>(),
+            Some(core_runner::ExecutionError::VerifyDocumentStamp { step })
+                if step == "profiles/example")
+        );
+        let error = format!("{cause:#}");
 
         assert!(
             error.contains("without leaving its document stamped"),
@@ -716,6 +728,11 @@ mod tests {
         let error = runner
             .run_pending()
             .expect_err("unsafe backup destination must block migration");
+        assert!(
+            matches!(error.downcast_ref::<core_runner::ExecutionError>(),
+            Some(core_runner::ExecutionError::CreateBackup { source })
+                if format!("{source:#}").contains("failed to back up the config"))
+        );
         assert!(format!("{error:#}").contains("failed to back up the config"));
         assert_eq!(
             std::fs::read_to_string(paths.chimera_config_path()).unwrap(),

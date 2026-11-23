@@ -1,8 +1,16 @@
 import { Button } from '@chimera/ui/button';
 import { DndGridSource } from '@chimera/ui/dnd-grid';
+import {
+  Drawer,
+  DrawerClose,
+  DrawerContent,
+  DrawerHandle,
+  DrawerTitle,
+} from '@chimera/ui/drawer';
+import { EmptyState } from '@chimera/ui/empty-state';
 import { ScrollArea } from '@chimera/ui/scroll-area';
 import { SearchField } from '@chimera/ui/search-field';
-import { cn } from '@chimera/utils';
+import TextMarquee from '@chimera/ui/text-marquee';
 import AddRounded from '~icons/material-symbols/add-rounded';
 import AppsRounded from '~icons/material-symbols/apps-rounded';
 import ArrowDownwardRounded from '~icons/material-symbols/arrow-downward-rounded';
@@ -22,14 +30,15 @@ import RuleFolderRounded from '~icons/material-symbols/rule-folder-rounded';
 import SettingsEthernetRounded from '~icons/material-symbols/settings-ethernet-rounded';
 import { cva } from 'class-variance-authority';
 import { useState, type ComponentType } from 'react';
-import { Drawer } from 'vaul';
 import {
   RENDER_MAP,
   WIDGET_MIN_SIZE_MAP,
+  WIDGET_RECOMMENDED_SIZE_MAP,
   WidgetId,
 } from '@/components/widgets/consts';
 import { useDashboardContext } from '@/components/widgets/provider';
 import * as m from '@/paraglide/messages';
+import { widgetSourceSize } from './widget-placement';
 
 const WIDGET_TITLE_MAP: Record<WidgetId, () => string> = {
   [WidgetId.TrafficDown]: m.dashboard_widget_traffic_download,
@@ -38,20 +47,21 @@ const WIDGET_TITLE_MAP: Record<WidgetId, () => string> = {
   [WidgetId.Memory]: m.dashboard_widget_memory,
   [WidgetId.ProxyShortcuts]: m.dashboard_widget_proxy_status,
   [WidgetId.CoreShortcuts]: m.dashboard_widget_core_status,
-  [WidgetId.ProxyMode]: m.dashboard_widget_proxy_mode_title,
+  [WidgetId.SubscriptionQuota]: m.dashboard_widget_subscription_quota_title,
   [WidgetId.SubscriptionSchedule]:
     m.dashboard_widget_subscription_schedule_title,
-  [WidgetId.SubscriptionQuota]: m.dashboard_widget_subscription_quota_title,
-  [WidgetId.ProviderUpdates]: m.dashboard_widget_provider_updates_title,
+  [WidgetId.ProxyMode]: m.dashboard_widget_proxy_mode_title,
   [WidgetId.RecentTraffic]: m.dashboard_widget_recent_traffic_title,
   [WidgetId.OriginTraffic]: m.dashboard_widget_origin_traffic_title,
   [WidgetId.ExitTraffic]: m.dashboard_widget_exit_traffic_title,
   [WidgetId.TargetTraffic]: m.dashboard_widget_target_traffic_title,
   [WidgetId.RuleTraffic]: m.dashboard_widget_rule_traffic_title,
-  [WidgetId.NetworkInfo]: m.dashboard_widget_network_info_title,
   [WidgetId.ActiveConnections]: m.dashboard_widget_active_connections_title,
+  [WidgetId.ProviderUpdates]: m.dashboard_widget_provider_updates_title,
+  [WidgetId.NetworkInfo]: m.dashboard_widget_network_info_title,
 };
 
+// The icon each widget shows beside its own title.
 const WIDGET_ICON_MAP: Record<
   WidgetId,
   ComponentType<{ className?: string }>
@@ -62,17 +72,17 @@ const WIDGET_ICON_MAP: Record<
   [WidgetId.Memory]: MemoryOutlineRounded,
   [WidgetId.ProxyShortcuts]: SettingsEthernetRounded,
   [WidgetId.CoreShortcuts]: MemoryOutlineRounded,
-  [WidgetId.ProxyMode]: RouteRounded,
-  [WidgetId.SubscriptionSchedule]: EventRepeatRounded,
   [WidgetId.SubscriptionQuota]: DataUsageRounded,
-  [WidgetId.ProviderUpdates]: CloudSyncRounded,
+  [WidgetId.SubscriptionSchedule]: EventRepeatRounded,
+  [WidgetId.ProxyMode]: RouteRounded,
   [WidgetId.RecentTraffic]: DataUsageRounded,
   [WidgetId.OriginTraffic]: AppsRounded,
   [WidgetId.ExitTraffic]: CallSplitRounded,
   [WidgetId.TargetTraffic]: DnsRounded,
   [WidgetId.RuleTraffic]: RuleFolderRounded,
-  [WidgetId.NetworkInfo]: PublicRounded,
   [WidgetId.ActiveConnections]: NetworkCheckRounded,
+  [WidgetId.ProviderUpdates]: CloudSyncRounded,
+  [WidgetId.NetworkInfo]: PublicRounded,
 };
 
 const widgetEntryAddVariants = cva('size-9 shrink-0 shadow-none', {
@@ -84,20 +94,30 @@ const widgetEntryAddVariants = cva('size-9 shrink-0 shadow-none', {
   },
 });
 
+// The size a widget takes when it is added, as placeWidget prefers it.
+function widgetSize(id: WidgetId) {
+  return widgetSourceSize(
+    WIDGET_MIN_SIZE_MAP[id],
+    WIDGET_RECOMMENDED_SIZE_MAP[id],
+  );
+}
+
 function WidgetEntry({
   id,
   placed,
   onAdd,
   onDragStart,
+  disabled,
 }: {
   id: WidgetId;
   placed: boolean;
   onAdd: (id: WidgetId) => void;
   onDragStart: () => void;
+  disabled: boolean;
 }) {
   const title = WIDGET_TITLE_MAP[id]();
   const Icon = WIDGET_ICON_MAP[id];
-  const { minW: w, minH: h } = WIDGET_MIN_SIZE_MAP[id];
+  const { w, h } = widgetSize(id);
 
   return (
     <DndGridSource
@@ -106,6 +126,7 @@ function WidgetEntry({
       w={w}
       h={h}
       onSourceDragStart={onDragStart}
+      disabled={disabled}
       className="bg-surface-variant/40 flex min-w-0 items-center gap-3 rounded-2xl py-2 pr-2 pl-4"
       data-slot="widget-sheet-entry"
       data-widget-id={id}
@@ -113,7 +134,7 @@ function WidgetEntry({
     >
       <Icon className="text-on-surface-variant size-5 shrink-0" />
 
-      <span className="min-w-0 flex-1 truncate text-sm">{title}</span>
+      <TextMarquee className="min-w-0 flex-1 text-sm">{title}</TextMarquee>
 
       <span className="text-on-surface-variant text-xs tabular-nums">
         {w}×{h}
@@ -126,6 +147,7 @@ function WidgetEntry({
         aria-label={m.dashboard_widget_library_add_entry({ name: title })}
         data-slot="widget-library-add"
         data-widget-id={id}
+        disabled={disabled}
         onPointerDown={(event) => event.stopPropagation()}
         onTouchStart={(event) => event.stopPropagation()}
         onClick={() => onAdd(id)}
@@ -143,11 +165,14 @@ function WidgetEntry({
 export function WidgetSheet({
   placedTypes,
   onAdd,
+  disabled = false,
 }: {
   placedTypes: ReadonlySet<WidgetId>;
-  onAdd: (id: WidgetId) => void;
+  onAdd: (id: WidgetId) => boolean;
+  disabled?: boolean;
 }) {
   const { openSheet, setOpenSheet } = useDashboardContext();
+
   const [search, setSearch] = useState('');
 
   const query = search.trim().toLocaleLowerCase();
@@ -156,79 +181,73 @@ export function WidgetSheet({
       !query || WIDGET_TITLE_MAP[id]().toLocaleLowerCase().includes(query),
   );
 
+  // Close the library so the new widget appears on the dashboard in view.
   const handleAdd = (id: WidgetId) => {
-    onAdd(id);
-    setOpenSheet(false);
+    if (!disabled && onAdd(id)) setOpenSheet(false);
   };
 
   return (
-    <Drawer.Root open={openSheet} onOpenChange={setOpenSheet}>
-      <Drawer.Portal>
-        <Drawer.Overlay className="fixed inset-0 bg-black/30" />
+    <Drawer open={openSheet} onOpenChange={setOpenSheet}>
+      <DrawerContent
+        className="max-h-[85dvh] min-h-0 w-[calc(100%-1rem)] max-w-[960px]"
+        aria-describedby={undefined}
+      >
+        <DrawerHandle />
 
-        <Drawer.Content
-          className={cn(
-            'fixed inset-x-0 bottom-0 z-50 mx-auto w-[calc(100%-1rem)] max-w-[960px]',
-            'dark:bg-surface/30 bg-surface-variant/30 backdrop-blur-3xl',
-            'flex max-h-[85dvh] min-h-0 flex-col rounded-t-2xl',
-            'dark:border-surface-variant/50 border-surface/50 border',
-          )}
-          aria-describedby={undefined}
-        >
-          <div className="shrink-0 px-4 pt-2 pb-3">
-            <div className="flex items-center justify-between gap-4">
-              <Drawer.Title className="text-lg font-semibold">
-                {m.dashboard_add_widget()}
-              </Drawer.Title>
+        <div className="shrink-0 px-4 pt-2 pb-3">
+          <div className="flex items-center justify-between gap-4">
+            <DrawerTitle className="text-lg font-semibold">
+              {m.dashboard_add_widget()}
+            </DrawerTitle>
 
-              <Drawer.Close asChild>
-                <Button
-                  variant="raised"
-                  className="size-8"
-                  icon
-                  aria-label={m.dashboard_widget_config_close_library()}
-                >
-                  <CloseRounded className="size-4" />
-                </Button>
-              </Drawer.Close>
-            </div>
-
-            <SearchField
-              className="mt-3"
-              value={search}
-              onValueChange={setSearch}
-              placeholder={m.dashboard_widget_library_search()}
-              clearLabel={m.dashboard_widget_library_search_clear()}
-            />
+            <DrawerClose asChild>
+              <Button
+                variant="raised"
+                className="size-8"
+                icon
+                aria-label={m.dashboard_widget_config_close_library()}
+              >
+                <CloseRounded className="size-4" />
+              </Button>
+            </DrawerClose>
           </div>
 
-          <ScrollArea className="min-h-0 flex-1">
-            <div
-              className="grid grid-cols-[repeat(auto-fill,minmax(13rem,1fr))] gap-2 px-4 pb-4"
-              data-slot="widget-sheet-library"
-            >
-              {filteredIds.map((id) => (
-                <WidgetEntry
-                  key={id}
-                  id={id}
-                  placed={placedTypes.has(id)}
-                  onAdd={handleAdd}
-                  onDragStart={() => setOpenSheet(false)}
-                />
-              ))}
+          <SearchField
+            className="mt-3"
+            value={search}
+            onValueChange={setSearch}
+            placeholder={m.dashboard_widget_library_search()}
+            clearLabel={m.dashboard_widget_library_search_clear()}
+          />
+        </div>
 
-              {filteredIds.length === 0 && (
-                <p
-                  className="text-on-surface-variant col-span-full py-4 text-center text-sm"
-                  data-slot="widget-library-empty"
-                >
-                  {m.dashboard_widget_library_no_results()}
-                </p>
-              )}
-            </div>
-          </ScrollArea>
-        </Drawer.Content>
-      </Drawer.Portal>
-    </Drawer.Root>
+        <ScrollArea className="min-h-0 flex-1">
+          <div
+            className="grid grid-cols-[repeat(auto-fill,minmax(13rem,1fr))] gap-2 px-4 pb-4"
+            data-slot="widget-sheet-library"
+          >
+            {filteredIds.map((id) => (
+              <WidgetEntry
+                key={id}
+                id={id}
+                placed={placedTypes.has(id)}
+                onAdd={handleAdd}
+                onDragStart={() => setOpenSheet(false)}
+                disabled={disabled}
+              />
+            ))}
+
+            {filteredIds.length === 0 && (
+              <EmptyState
+                tone="normal"
+                className="col-span-full"
+                data-slot="widget-library-empty"
+                message={m.dashboard_widget_library_no_results()}
+              />
+            )}
+          </div>
+        </ScrollArea>
+      </DrawerContent>
+    </Drawer>
   );
 }

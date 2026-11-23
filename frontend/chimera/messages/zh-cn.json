@@ -1453,5 +1453,8 @@
   "dashboard_widget_config_range_30days": "近 30 天",
   "dashboard_widget_config_range_all": "全部可用记录",
   "dashboard_widget_config_directions": "显示上行与下行",
-  "dashboard_widget_config_hide_names": "隐藏名称"
+  "dashboard_widget_config_hide_names": "隐藏名称",
+  "dashboard_widget_core_shortcuts_config_channel": "显示控制通道",
+  "settings_clash_control_channel_label": "控制通道",
+  "error_transparent_proxy_tun_conflict": "透明代理接管不能与 TUN 同时启用"
 }

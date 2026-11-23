@@ -1,7 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { WidgetId } from '../src/components/widgets/consts';
-import { placeWidget } from '../src/pages/(main)/main/dashboard/_modules/widget-placement';
+import {
+  canEditDashboard,
+  placeWidget,
+  widgetSourceSize,
+} from '../src/pages/(main)/main/dashboard/_modules/widget-placement';
 
 /*
  * Contract: direct additions choose an available cell; external drops honor
@@ -12,6 +16,88 @@ const minimum = { minW: 2, minH: 2 };
 const memory = 'memory' as WidgetId;
 const trafficDown = 'traffic-down' as WidgetId;
 const occupied = [{ id: 'existing', type: memory, x: 0, y: 0, w: 2, h: 2 }];
+
+test('editing, dropping and library dragging share strict loaded-state gates', () => {
+  const ready = {
+    isEditing: true,
+    layoutLoading: false,
+    layoutReadError: false,
+    configLoading: false,
+    configReadError: false,
+  };
+  assert.equal(canEditDashboard(ready), true);
+  for (const patch of [
+    { isEditing: false },
+    { layoutLoading: true },
+    { layoutReadError: true },
+    { configLoading: true },
+    { configReadError: true },
+  ]) {
+    assert.equal(canEditDashboard({ ...ready, ...patch }), false);
+  }
+});
+
+test('library drag preview uses the same recommended size as a direct add', () => {
+  const recommended = { w: 4, h: 3 };
+  const preview = widgetSourceSize(minimum, recommended);
+  assert.deepEqual(preview, recommended);
+  const placed = placeWidget({
+    id: 'report-instance',
+    type: trafficDown,
+    items: [],
+    cols: 8,
+    rows: 6,
+    minimum,
+    recommended,
+  });
+  assert.equal(placed?.w, preview.w);
+  assert.equal(placed?.h, preview.h);
+  assert.deepEqual(widgetSourceSize(minimum), { w: 2, h: 2 });
+});
+
+test('uses upstream recommended widget dimensions when they fit', () => {
+  assert.deepEqual(
+    placeWidget({
+      id: 'report-instance',
+      type: trafficDown,
+      items: [],
+      cols: 8,
+      rows: 6,
+      minimum,
+      recommended: { w: 4, h: 3 },
+    }),
+    {
+      id: 'report-instance',
+      type: trafficDown,
+      x: 0,
+      y: 0,
+      w: 4,
+      h: 3,
+    },
+  );
+});
+
+test('falls back to minimum sizes when the preferred widget size does not fit', () => {
+  assert.deepEqual(
+    placeWidget({
+      id: 'report-instance',
+      type: trafficDown,
+      items: [],
+      cols: 3,
+      rows: 2,
+      minimum,
+      recommended: { w: 4, h: 3 },
+    }),
+    {
+      id: 'report-instance',
+      type: trafficDown,
+      x: 0,
+      y: 0,
+      w: 2,
+      h: 2,
+    },
+  );
+});
 
 test('places a library add in the first free cell', () => {
   assert.deepEqual(

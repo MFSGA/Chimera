@@ -1486,5 +1486,8 @@
   "dashboard_widget_config_range_30days": "Последние 30 дней",
   "dashboard_widget_config_range_all": "Все доступные записи",
   "dashboard_widget_config_directions": "Показывать загрузку и отдачу",
-  "dashboard_widget_config_hide_names": "Скрыть названия"
+  "dashboard_widget_config_hide_names": "Скрыть названия",
+  "dashboard_widget_core_shortcuts_config_channel": "Показывать канал управления",
+  "settings_clash_control_channel_label": "Канал управления",
+  "error_transparent_proxy_tun_conflict": "Перехват прозрачного прокси нельзя использовать вместе с TUN"
 }

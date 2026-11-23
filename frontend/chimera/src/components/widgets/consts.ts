@@ -17,7 +17,7 @@
  */
 
 import type { DndGridItemType } from '@chimera/ui/dnd-grid';
-import type { ReactNode } from 'react';
+import { memo, type ReactNode } from 'react';
 import { ActiveConnectionsWidget } from './widget-active-connections';
 import { WidgetId } from './widget-config';
 import { NetworkInfoWidget } from './widget-network-info';
@@ -59,23 +59,23 @@ export const RENDER_MAP: Record<
   WidgetId,
   (props: WidgetComponentProps) => ReactNode
 > = {
-  [WidgetId.TrafficDown]: TrafficDownWidget,
-  [WidgetId.TrafficUp]: TrafficUpWidget,
-  [WidgetId.Connections]: ConnectionsWidget,
-  [WidgetId.Memory]: MemoryWidget,
-  [WidgetId.ProxyShortcuts]: ProxyShortcutsWidget,
-  [WidgetId.CoreShortcuts]: CoreShortcutsWidget,
-  [WidgetId.ProxyMode]: ProxyModeWidget,
-  [WidgetId.SubscriptionSchedule]: SubscriptionScheduleWidget,
-  [WidgetId.SubscriptionQuota]: SubscriptionQuotaWidget,
-  [WidgetId.ProviderUpdates]: ProviderUpdatesWidget,
-  [WidgetId.RecentTraffic]: RecentTrafficWidget,
-  [WidgetId.OriginTraffic]: OriginTrafficWidget,
-  [WidgetId.ExitTraffic]: ExitTrafficWidget,
-  [WidgetId.TargetTraffic]: TargetTrafficWidget,
-  [WidgetId.RuleTraffic]: RuleTrafficWidget,
-  [WidgetId.NetworkInfo]: NetworkInfoWidget,
-  [WidgetId.ActiveConnections]: ActiveConnectionsWidget,
+  [WidgetId.TrafficDown]: memo(TrafficDownWidget),
+  [WidgetId.TrafficUp]: memo(TrafficUpWidget),
+  [WidgetId.Connections]: memo(ConnectionsWidget),
+  [WidgetId.Memory]: memo(MemoryWidget),
+  [WidgetId.ProxyShortcuts]: memo(ProxyShortcutsWidget),
+  [WidgetId.CoreShortcuts]: memo(CoreShortcutsWidget),
+  [WidgetId.ProxyMode]: memo(ProxyModeWidget),
+  [WidgetId.SubscriptionSchedule]: memo(SubscriptionScheduleWidget),
+  [WidgetId.SubscriptionQuota]: memo(SubscriptionQuotaWidget),
+  [WidgetId.ProviderUpdates]: memo(ProviderUpdatesWidget),
+  [WidgetId.RecentTraffic]: memo(RecentTrafficWidget),
+  [WidgetId.OriginTraffic]: memo(OriginTrafficWidget),
+  [WidgetId.ExitTraffic]: memo(ExitTrafficWidget),
+  [WidgetId.TargetTraffic]: memo(TargetTrafficWidget),
+  [WidgetId.RuleTraffic]: memo(RuleTrafficWidget),
+  [WidgetId.NetworkInfo]: memo(NetworkInfoWidget),
+  [WidgetId.ActiveConnections]: memo(ActiveConnectionsWidget),
 };
 
 /**
@@ -160,7 +160,24 @@ export const WIDGET_MIN_SIZE_MAP: Record<
   [WidgetId.ActiveConnections]: { minW: 4, minH: 2 },
 };
 
-/** 持久化存储的布局数据结构 */
+/** 参考上游默认尺寸：新增组件时优先尝试，空间不足则退回最小尺寸。 */
+export const WIDGET_RECOMMENDED_SIZE_MAP: Partial<
+  Record<WidgetId, { w: number; h: number }>
+> = {
+  [WidgetId.SubscriptionQuota]: { w: 4, h: 3 },
+  [WidgetId.SubscriptionSchedule]: { w: 4, h: 3 },
+  [WidgetId.ProxyMode]: { w: 4, h: 2 },
+  [WidgetId.RecentTraffic]: { w: 4, h: 2 },
+  [WidgetId.OriginTraffic]: { w: 4, h: 4 },
+  [WidgetId.ExitTraffic]: { w: 4, h: 4 },
+  [WidgetId.TargetTraffic]: { w: 4, h: 4 },
+  [WidgetId.RuleTraffic]: { w: 4, h: 4 },
+  [WidgetId.ActiveConnections]: { w: 6, h: 3 },
+  [WidgetId.ProviderUpdates]: { w: 4, h: 3 },
+  [WidgetId.NetworkInfo]: { w: 4, h: 2 },
+};
+
+/** 仅用于迁移的旧版尺寸键值布局；当前持久化使用 DashboardLayoutStorage v2。 */
 export type LayoutStorage = Record<string, DashboardItem[]>;
 
 /**
