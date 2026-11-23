@@ -1,17 +1,13 @@
 use crate::client::runtime;
 
-/// Map crate-internal profile materialization degradations onto the public
-/// wire. Actor-internal Cleanup/Reconcile phases collapse to
-/// `ProfileMaterialization`; retryability stays code-derived.
+/// Legacy desktop wire bridge; the domain mapping now follows the copied
+/// ref/client/reconciler/profiles.rs implementation.
 pub(in crate::client) fn map_profile_degradation(
     degradation: &crate::state::profiles::ports::ProfileDegradation,
 ) -> runtime::Degradation {
-    runtime::Degradation::from_shared(chimera_contracts::runtime::Degradation {
-        phase: runtime::DegradationPhase::ProfileMaterialization,
-        reason: degradation.code.into(),
-        message: degradation.message.clone(),
-        retryable: degradation.code.retryable(),
-    })
+    runtime::Degradation::from_shared(
+        crate::client::reconciler::profiles::map_profile_degradation(degradation),
+    )
 }
 
 #[cfg(test)]

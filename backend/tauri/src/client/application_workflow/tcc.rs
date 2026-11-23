@@ -568,15 +568,13 @@ impl ApplicationWorkflow {
 
         let inputs = inputs.expect("captured for applied runtime");
         let target_digest = match inputs.target_key() {
-            Ok(digest) => digest,
-            Err(error) => {
+            Some(digest) => digest,
+            None => {
                 return RuntimePrepareOutcome::Rejected {
                     cause: ApplyFailure {
                         stage: MutationStage::Preparing,
                         cause: RefusalCause::Try(TryCauseKind::Deterministic),
-                        message: format!(
-                            "Profile runtime target identity could not be captured: {error}"
-                        ),
+                        message: format!("Profile runtime target identity could not be serialized"),
                     },
                     restored: baseline.clone(),
                 };

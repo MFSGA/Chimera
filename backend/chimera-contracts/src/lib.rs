@@ -7,6 +7,7 @@ pub mod elevation;
 pub mod mutation;
 pub mod net;
 pub mod profiles;
+pub mod publish;
 pub mod runtime;
 pub mod runtime_error;
 pub mod service;

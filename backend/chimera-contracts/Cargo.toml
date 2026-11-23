@@ -17,6 +17,7 @@ chimera-paths = { path = '../chimera-paths' }
 chimera-core-metadata = { package = 'chimera-service-core-metadata', path = '../chimera-runtime/crates/chimera-core-metadata' }
 
 anyhow = '1'
+atomicwrites = '0.4.4'
 bytes = '1'
 serde_json = '1'
 async-trait = '0.1'

@@ -26,6 +26,15 @@ use super::{
 
 #[derive(Debug, thiserror::Error)]
 pub enum RuntimeBuildError {
+    // Pinned ref runtime_builder typed failures, mapped to Chimera's crate ownership.
+    #[error("could not start the script runner: {0}")]
+    StartScriptRunner(#[source] chimera_config::runtime::executor::PortError),
+    #[error("runtime build task did not complete: {0}")]
+    BuildWorker(#[source] tokio::task::JoinError),
+    #[error("could not project the runtime artifact: {0}")]
+    ProjectArtifact(#[source] anyhow::Error),
+    #[error("could not serialize the final runtime document: {0}")]
+    SerializeFinalConfig(#[source] serde_yaml::Error),
     #[error("profiles snapshot failed validation: {0:?}")]
     Validation(Vec<chimera_config::profile::ProfileValidationError>),
     #[error("transparent proxy settings are invalid: {0}")]

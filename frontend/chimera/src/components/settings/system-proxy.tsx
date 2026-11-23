@@ -18,7 +18,7 @@ const reportProxyActionError = (error: unknown) => {
   void message(formatError(error), { title: m.common_error(), kind: 'error' });
 };
 
-const ProxyButton = ({
+export const ProxyButton = ({
   className,
   isActive,
   loading,

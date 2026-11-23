@@ -188,10 +188,19 @@ impl RuntimeRebuildGate {
     }
 }
 
-#[derive(Debug, Default)]
-pub struct RuntimeRevisionAllocator(AtomicU64);
+// Ref's shared session allocator: cloned preparation/build owners consume one
+// revision sequence, never independent counter copies. Chimera still returns
+// an explicit error on overflow until its RuntimeError port is migrated.
+#[derive(Debug, Clone, Default)]
+pub struct RuntimeRevisionAllocator(Arc<AtomicU64>);
 
 impl RuntimeRevisionAllocator {
+    /// Ref's constructor; Chimera retains a fallible allocation result until
+    /// the RuntimeRevisionAllocator representation migrates with its owner.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
     pub fn allocate(&self) -> Result<RuntimeRevision> {
         let previous = self
             .0
@@ -793,6 +802,38 @@ where
         .map_err(CheckedPromotionError::Promote)
 }
 
+/// Upstream's typed atomic publication boundary. Reconciler invokes this
+/// only after Core confirms an apply; building a candidate never publishes.
+pub async fn write_product(
+    product: &Path,
+    bytes: Vec<u8>,
+) -> std::result::Result<(), chimera_contracts::publish::PublishRuntimeError> {
+    use chimera_contracts::{profiles::error::ErrorPath, publish::PublishRuntimeError};
+    if let Some(parent) = product.parent() {
+        tokio::fs::create_dir_all(parent).await.map_err(|source| {
+            PublishRuntimeError::CreateRuntimeDirectory {
+                path: ErrorPath::from(parent),
+                source,
+            }
+        })?;
+    }
+    let path = product.to_path_buf();
+    let written = tokio::task::spawn_blocking(move || {
+        AtomicFile::new(&path, OverwriteBehavior::AllowOverwrite)
+            .write(|file| file.write_all(&bytes))
+    })
+    .await;
+    let written = written.unwrap_or_else(|error| {
+        // The worker failed before reporting its own typed atomic-write error.
+        // Preserve the source and do not claim publication succeeded.
+        Err(atomicwrites::Error::Internal(std::io::Error::other(error)))
+    });
+    written.map_err(|source| PublishRuntimeError::WriteRuntimeConfig {
+        path: ErrorPath::from(product),
+        source,
+    })
+}
+
 pub async fn restore_product(product: impl AsRef<Path>, bytes: &[u8]) -> Result<()> {
     let product = product.as_ref().to_path_buf();
     let bytes = bytes.to_vec();
@@ -945,6 +986,9 @@ mod tests {
         assert_eq!(allocator.allocate().unwrap().get(), 1);
         assert_eq!(allocator.allocate().unwrap().get(), 2);
         assert_eq!(allocator.allocate().unwrap().get(), 3);
+        let same_session = allocator.clone();
+        assert_eq!(same_session.allocate().unwrap().get(), 4);
+        assert_eq!(allocator.allocate().unwrap().get(), 5);
     }
 
     #[test]

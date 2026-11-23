@@ -1,4 +1,4 @@
-import { createFileRoute } from '@tanstack/react-router';
+import { createFileRoute, Outlet, useMatchRoute } from '@tanstack/react-router';
 import * as m from '@/paraglide/messages';
 import { SettingsGroup, SettingsLabel } from '../_modules/settings-card';
 import { SettingsTitle } from '../_modules/settings-title';
@@ -122,6 +122,13 @@ const HotkeySettings = () => {
 };
 
 function RouteComponent() {
+  const matchRoute = useMatchRoute();
+
+  // The prior all-in-one route stays available to existing UI and E2E links.
+  if (!matchRoute({ to: '/main/settings/chimera', fuzzy: false })) {
+    return <Outlet />;
+  }
+
   return (
     <>
       <SettingsTitle>{m.settings_label_chimera()}</SettingsTitle>
