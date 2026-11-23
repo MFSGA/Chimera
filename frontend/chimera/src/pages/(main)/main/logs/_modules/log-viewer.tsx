@@ -40,17 +40,19 @@ export function LogSearch({
   placeholder: string;
 }) {
   return (
-    <SearchField
-      variant="glass"
-      className="min-w-32 flex-1"
-      data-slot="logs-search"
-      aria-label={placeholder}
-      placeholder={placeholder}
-      value={value}
-      maxLength={256}
-      onValueChange={onChange}
-      clearLabel={m.common_clear()}
-    />
+    <div className="min-w-32 flex-1" data-slot="logs-search">
+      <SearchField
+        variant="glass"
+        className="w-full"
+        data-slot="logs-search-input-field"
+        aria-label={placeholder}
+        placeholder={placeholder}
+        value={value}
+        maxLength={256}
+        onValueChange={onChange}
+        clearLabel={m.common_clear()}
+      />
+    </div>
   );
 }
 
@@ -220,7 +222,7 @@ export const LogRecord = memo(function LogRecord({
   incompleteTitle?: string;
   loadRaw?: () => Promise<unknown>;
   expanded?: boolean;
-  onInspect: () => void;
+  onInspect?: () => void;
 }) {
   const [showJson, setShowJson] = useState(false);
   const showing = expanded ?? showJson;
@@ -330,7 +332,7 @@ export const LogRecord = memo(function LogRecord({
             className={rowActionVariants()}
             onClick={() => {
               if (expanded !== undefined || !showing) {
-                onInspect();
+                onInspect?.();
               }
               if (expanded === undefined) {
                 setShowJson(!showJson);

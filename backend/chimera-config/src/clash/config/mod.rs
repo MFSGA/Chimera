@@ -1,4 +1,5 @@
 pub mod clash_strategy;
+pub mod dns;
 pub mod overrides;
 pub mod tun_stack;
 
@@ -7,6 +8,8 @@ use specta::Type;
 use struct_patch::Patch;
 
 use clash_strategy::*;
+use dns::{ControlSource, DnsSettings, OneOrMany};
+use indexmap::IndexMap;
 use overrides::*;
 use tun_stack::*;
 
@@ -128,6 +131,21 @@ pub struct ClashConfig {
     #[patch(attribute(serde(default)))]
     #[patch(attribute(specta(optional)))]
     pub tun_mips: MipsConfig,
+
+    /// Profile-controlled by default: do not replace the user's DNS table
+    /// unless takeover is explicitly requested.
+    #[serde(default)]
+    #[patch(attribute(specta(optional)))]
+    pub dns_control: ControlSource,
+    #[serde(default)]
+    #[patch(attribute(specta(optional)))]
+    pub dns: DnsSettings,
+    #[serde(default)]
+    #[patch(attribute(specta(optional)))]
+    pub hosts_control: ControlSource,
+    #[serde(default)]
+    #[patch(attribute(specta(optional)))]
+    pub hosts: IndexMap<String, OneOrMany>,
 }
 
 impl ClashConfig {
@@ -139,6 +157,18 @@ impl ClashConfig {
             TunStack::Mixed => SelectedTunStack::Mixed,
             TunStack::Mips => SelectedTunStack::Mips(&self.tun_mips),
         }
+    }
+}
+
+impl ClashConfig {
+    /// DNS is still stored while the profile controls it, but only a takeover
+    /// may replace the profile's runtime DNS table.
+    pub fn managed_dns(&self) -> Option<&DnsSettings> {
+        (self.dns_control == ControlSource::Chimera).then_some(&self.dns)
+    }
+
+    pub fn managed_hosts(&self) -> Option<&IndexMap<String, OneOrMany>> {
+        (self.hosts_control == ControlSource::Chimera).then_some(&self.hosts)
     }
 }
 
@@ -167,6 +197,10 @@ impl Default for ClashConfig {
             break_connection: BreakConnectionStrategy::default(),
             tun_stack: TunStack::default(),
             tun_mips: MipsConfig::default(),
+            dns_control: ControlSource::default(),
+            dns: DnsSettings::default(),
+            hosts_control: ControlSource::default(),
+            hosts: IndexMap::new(),
         }
     }
 }

@@ -12,7 +12,7 @@ use crate::{
     profile::{Profiles, ScriptRuntime},
     runtime::{
         executor::{
-            BuiltinTransform, ExecutionTarget, GuardInputs, ResolvedPortBindings,
+            BuiltinTransform, DnsParams, ExecutionTarget, GuardInputs, ResolvedPortBindings,
             RuntimePipelineError, RuntimePipelineInputs, ScriptExecutionError, ScriptOperation,
             StepLogLevel, TunFlavor, TunParams, TunStackWrite, execute,
         },
@@ -52,6 +52,7 @@ pub fn base_inputs<'a>(
             },
             windows_fake_ip_filter: false,
         },
+        dns: DnsParams::default(),
         expand_include_all: true,
         builtin_transforms,
     }
@@ -856,6 +857,69 @@ fn unset_mips_controller_removes_profile_value_and_keeps_selected_mips_stack() {
         .final_config
         .to_json();
     assert_eq!(configured["tun"]["congestion-controller"], "reno");
+}
+
+#[test]
+fn managed_dns_and_hosts_replace_profile_tables_in_shared_settings_step() {
+    let profiles = profiles_with(
+        Some("sub-a"),
+        &[],
+        &[],
+        vec![config_file_item("sub-a", "sub-a.yaml", &[])],
+    );
+    let content = MapContentSource::from_pairs(&[(
+        "sub-a.yaml",
+        "dns:\n  enable: false\n  nameserver-policy:\n    geosite:cn: https://profile.example/dns-query\nhosts:\n  old.test: 192.0.2.1\n",
+    )]);
+    let ov = overrides();
+    let mut inputs = base_inputs(&profiles, ExecutionTarget::Selected(pid("sub-a")), &ov, &[]);
+    inputs.whitelist_enabled = false;
+    inputs.dns = DnsParams {
+        dns: Some(crate::runtime::value::ConfigValue::from_json_value(json!({
+            "enable": false,
+            "nameserver": ["https://1.1.1.1/dns-query"],
+        }))),
+        hosts: Some(crate::runtime::value::ConfigValue::from_json_value(json!({
+            "new.test": "192.0.2.2",
+        }))),
+        warnings: vec!["selected core omits dns.prefer-h3".to_owned()],
+    };
+
+    let artifact = execute(&inputs, &content, &FakeScriptRunner::default()).unwrap();
+    let graph = artifact.graph.materialize().unwrap();
+    let managed = graph
+        .nodes
+        .iter()
+        .find(|node| {
+            matches!(
+                node.tag,
+                OperatorTag::BuiltinStep {
+                    step: BuiltinStepKind::ManagedSettings,
+                    ..
+                }
+            )
+        })
+        .unwrap();
+    let config = &managed.snapshot.config;
+    assert_eq!(config["dns"]["enable"], json!(false));
+    assert_eq!(
+        config["dns"]["nameserver"],
+        json!(["https://1.1.1.1/dns-query"])
+    );
+    assert!(config["dns"].get("nameserver-policy").is_none());
+    assert_eq!(config["hosts"], json!({"new.test": "192.0.2.2"}));
+
+    let logs = artifact
+        .step_logs
+        .iter()
+        .find(|logs| logs.key == managed.key)
+        .unwrap();
+    assert!(logs.entries.iter().any(|entry| {
+        entry.level == StepLogLevel::Warn && entry.message.contains("dns.prefer-h3")
+    }));
+    assert!(logs.entries.iter().any(|entry| {
+        entry.level == StepLogLevel::Warn && entry.message.contains("nameserver-policy")
+    }));
 }
 
 #[test]

@@ -32,6 +32,7 @@ const ClashWSContext = createContext<{
   connectorState: ClashConnectionsConnectorState;
   error: unknown;
   clearHistory: (kind: ClashWsKind) => Promise<void>;
+  retrySnapshot: () => Promise<void>;
 } | null>(null);
 
 export const useClashWSContext = () => {
@@ -79,12 +80,14 @@ export const ClashWSProvider = ({ children }: PropsWithChildren) => {
     useState<ClashConnectionsConnectorState>('disconnected');
   const [error, setError] = useState<unknown>(null);
 
-  useEffect(() => {
-    commands.getClashWsSnapshot().then((result) => {
+  const loadSnapshot = useCallback(async () => {
+    setIsLoading(true);
+    setError(null);
+    try {
+      const result = await commands.getClashWsSnapshot();
       if (result.status === 'error') {
         console.error('Failed to load clash websocket snapshot', result.error);
         setError(result.error);
-        setIsLoading(false);
         return;
       }
 
@@ -102,9 +105,17 @@ export const ClashWSProvider = ({ children }: PropsWithChildren) => {
       setLogs(snapshot.logs as ClashLog[]);
       setTraffic(snapshot.traffic as ClashTraffic[]);
       setMemory(snapshot.memory as ClashMemory[]);
+    } catch (cause) {
+      console.error('Failed to load clash websocket snapshot', cause);
+      setError(cause);
+    } finally {
       setIsLoading(false);
-    });
+    }
   }, []);
+
+  useEffect(() => {
+    void loadSnapshot();
+  }, [loadSnapshot]);
 
   useEffect(() => {
     const unlistenPromise = events.clashWsEvent.listen((event) => {
@@ -218,6 +229,7 @@ export const ClashWSProvider = ({ children }: PropsWithChildren) => {
         connectorState,
         error,
         clearHistory,
+        retrySnapshot: loadSnapshot,
       }}
     >
       {children}

@@ -6,6 +6,8 @@ import {
   type ChimeraAppConfigPatch_Serialize,
   type ClashConfig,
   type ClashConfigPatch_Serialize,
+  type DnsFeatures,
+  type DnsKey,
 } from './bindings';
 import { CHIMERA_SETTING_QUERY_KEY, CLASH_SETTINGS_QUERY_KEY } from './consts';
 
@@ -90,6 +92,19 @@ export const useClashSettings = () =>
 
 type ClearableClashField =
   'socks_port' | 'http_port' | 'redir_port' | 'tproxy_port';
+
+/** Capabilities of the currently selected core, from the same Rust matrix
+ * used when rendering the runtime DNS table.
+ */
+export const useDnsFeatures = (core: string | null | undefined) =>
+  useQuery({
+    queryKey: ['dns-features', core],
+    queryFn: async () => unwrapResult(await commands.getDnsFeatures()),
+    enabled: Boolean(core),
+  });
+
+export const dnsKeySupported = (features: DnsFeatures, key: DnsKey) =>
+  features.keys.kind === 'values' && features.keys.value.includes(key);
 
 /** Read or patch one persistent typed Clash setting. */
 export const useClashSetting = <

@@ -1458,3 +1458,15 @@ backend/Cargo.toml -p chimera --lib core::clash::proxies::tests:: -- --nocapture
 - Windows E2E run 45076380623 的 Actor 耗时探针定位出同一种 NotInstalled Service 状态的重复 watch 更新导致 CoreLifecycle 每次都排队 ServiceReadiness。首次 Profile Checked admission 等待约 61.4s，但 CheckedInbox 处理本身为 0ms，根因是邮箱中数百条重复服务状态后续工作，而非配置校验或 Profile 发布慢。
 - 修复策略：独立计算 Service 语义证据是否改变，只在 phase、ready generation、ownership、compat、Core state/identity/revision、retry policy 等真实变更时 cast follow-up，不能直接丢掉所有 ServiceReadiness，也不能将 Checked ACK 移交第二 owner。启动恢复的证据函数仍保留原有单独判定。
 - 防回归：测试重复上千次相同 Service 状态不触发 follow-up；检查真实状态变化仍触发。保持 Windows 原生 UI 30 秒行为断言不变，并用失败 artifact 内 E2E mailbox stage 的数量和 Checked admission 时延验收，而不是把超时改为 90 秒。
+
+### LESSON-20261123-001：多窗口 E2E 先选定目标窗口再修改视口
+
+- **证据与根因**：首次运行 `settings-page-navigation.e2e.ts` 时，测试 harness 初始连接的是 `legacy` 窗口；该 spec 在 `before` 中先读取并调整尺寸、语言，再由 `openMainRoute` 切换到 `main`。失败截图因此仍显示主窗口默认约 800×600 视口，桌面返回按钮断言失败；返回 Hub 后立刻点击也没有等待路由转场稳定。
+- **修正与验证**：在 `before`/`after` 先调用 `ensureMainWindow()`，确保尺寸和语言快照均属于同一个主窗口；返回 Hub 后用 `openMainRoute(settingsHub)` 等待当前路由稳定，再执行真实侧栏点击。修正后的独立 WDIO spec **3/3** 通过；失败时截图和 HTML 保存在忽略目录 `tauri-e2e/.tmp/artifacts/ref-sync-2026-11-23/`。
+- **防复发**：主窗口 E2E 在读写 viewport 或 localStorage 前必须先选中目标窗口；真实点击后的页面还需等待 route/outlet settle。测试应同时断言当前窗口的实际 viewport、可见路径和真实控件操作，不能把外层窗口 resize 成功当成主窗口 viewport 已变化。
+
+### LESSON-20261123-002：真实路由到达后仍需验证侧栏选中态
+
+- **证据**：Windows/Edge 157 的 settings layout spec 通过 WebDriver 点击侧栏链接后，目标路径和页面内容已到达，但活动链接仍没有 `data-active="true"` / `aria-current="page"`。这是用例运行时的可见断言结果；清理后采集的截图没有用于归因。
+- **修正**：`SettingsNavigationItem` 保留 ref 的 `useLinkProps` 处理目标和点击，用 `useMatchRoute` 按 `activeOptions.exact` 计算 `data-active` 与 `aria-current`。这是一条 Chimera 当前运行时适配，不宣称为 ref 缺陷。ref checkout 的 `node_modules` 为 Router 1.170.18，而 ref 与 Chimera 锁文件均固定 1.170.46，因此需要同版本 ref 环境复核后再决定是否移除。
+- **验证与防复发**：在最新 `04c668a` worktree 的构建二进制上，现有 settings layout spec **6/6** 通过。后续改动应保留真实可见链接点击、目标路由及活动属性断言；移除适配前先用相同锁定依赖和点击路径验证 ref 行为。

@@ -277,7 +277,18 @@ export const commands = {
       __TAURI_INVOKE('patch_app_config', { patch }),
     ),
   getClashConfig: () =>
-    typedError<ClashConfig, string>(__TAURI_INVOKE('get_clash_config')),
+    typedError<ClashConfig_Serialize, string>(
+      __TAURI_INVOKE('get_clash_config'),
+    ),
+  /**
+   *  DNS key and value support for the currently selected core. The renderer
+   *  uses this same matrix, so the editor never guesses capabilities by name.
+   */
+  getDnsFeatures: () =>
+    typedError<DnsFeatures, string>(__TAURI_INVOKE('get_dns_features')),
+  /**  Mirror ref's read-only system.core query over the runtime capability matrix. */
+  getConfigFeatures: () =>
+    typedError<ConfigFeatures, string>(__TAURI_INVOKE('get_config_features')),
   getHotkeyFunctions: () => __TAURI_INVOKE<string[]>('get_hotkey_functions'),
   patchVergeConfig: (payload: IVerge_Deserialize) =>
     typedError<null, string>(__TAURI_INVOKE('patch_verge_config', { payload })),
@@ -374,6 +385,14 @@ export const commands = {
     typedError<ClashApiConfig, string>(__TAURI_INVOKE('clash_api_get_configs')),
   clashApiGetVersion: () =>
     typedError<ClashVersion, string>(__TAURI_INVOKE('clash_api_get_version')),
+  clashApiQueryDns: (name: string, recordType: string) =>
+    typedError<DnsResponse, string>(
+      __TAURI_INVOKE('clash_api_query_dns', { name, recordType }),
+    ),
+  clashApiFlushDnsCache: () =>
+    typedError<null, string>(__TAURI_INVOKE('clash_api_flush_dns_cache')),
+  clashApiFlushFakeIpCache: () =>
+    typedError<null, string>(__TAURI_INVOKE('clash_api_flush_fake_ip_cache')),
   clashApiGetRules: () =>
     typedError<RulesRes, string>(__TAURI_INVOKE('clash_api_get_rules')),
   clashApiGetProvidersRules: () =>
@@ -1384,7 +1403,63 @@ export type ClashApiConfig = {
 };
 
 /**  Clash Related Config */
-export type ClashConfig = {
+export type ClashConfig = ClashConfig_Serialize | ClashConfig_Deserialize;
+
+export type ClashConfigPatch =
+  ClashConfigPatch_Serialize | ClashConfigPatch_Deserialize;
+
+export type ClashConfigPatch_Deserialize = {
+  overrides?: ClashGuardOverridesPatch_Deserialize;
+  enable_tun_mode?: boolean | null;
+  tun?: TunOverridesPatch_Deserialize;
+  web_ui_list?: string[] | null;
+  enable_clash_fields?: boolean | null;
+  expand_include_all?: boolean | null;
+  external_controller?: ExternalControllerStrategyPatch_Deserialize;
+  clash_control_channel?: ClashControlChannel | null;
+  clash_ipc_disable_http_controller?: boolean | null;
+  mixed_port?: PortStrategyPatch_Deserialize;
+  socks_port?: PortStrategy | null;
+  http_port?: PortStrategy | null;
+  redir_port?: PortStrategy | null;
+  tproxy_port?: PortStrategy | null;
+  transparent_proxy?: TransparentProxyConfigPatch;
+  break_connection?: BreakConnectionStrategyPatch_Deserialize;
+  tun_stack?: TunStack | null;
+  tun_mips?: MipsConfigPatch_Deserialize;
+  dns_control?: ControlSource_Deserialize | null;
+  dns?: DnsSettings | null;
+  hosts_control?: ControlSource_Deserialize | null;
+  hosts?: { [key in string]: OneOrMany } | null;
+};
+
+export type ClashConfigPatch_Serialize = {
+  overrides?: ClashGuardOverridesPatch_Serialize;
+  enable_tun_mode?: boolean | null;
+  tun?: TunOverridesPatch_Serialize;
+  web_ui_list?: string[] | null;
+  enable_clash_fields?: boolean | null;
+  expand_include_all?: boolean | null;
+  external_controller?: ExternalControllerStrategyPatch_Serialize;
+  clash_control_channel?: ClashControlChannel | null;
+  clash_ipc_disable_http_controller?: boolean | null;
+  mixed_port?: PortStrategyPatch_Serialize;
+  socks_port?: PortStrategy | null;
+  http_port?: PortStrategy | null;
+  redir_port?: PortStrategy | null;
+  tproxy_port?: PortStrategy | null;
+  transparent_proxy?: TransparentProxyConfigPatch;
+  break_connection?: BreakConnectionStrategyPatch_Serialize;
+  tun_stack?: TunStack | null;
+  tun_mips?: MipsConfigPatch_Serialize;
+  dns_control?: ControlSource_Serialize | null;
+  dns?: DnsSettings | null;
+  hosts_control?: ControlSource_Serialize | null;
+  hosts?: { [key in string]: OneOrMany } | null;
+};
+
+/**  Clash Related Config */
+export type ClashConfig_Deserialize = {
   /**  Clash Overrides config, used to patch clash config directly */
   overrides: ClashGuardOverrides;
   /**  clash tun mode */
@@ -1424,51 +1499,65 @@ export type ClashConfig = {
    *  Default is required to read existing Chimera config documents.
    */
   tun_mips?: MipsConfig;
+  /**
+   *  Profile-controlled by default: do not replace the user's DNS table
+   *  unless takeover is explicitly requested.
+   */
+  dns_control?: ControlSource_Deserialize;
+  dns?: DnsSettings;
+  hosts_control?: ControlSource_Deserialize;
+  hosts?: { [key in string]: OneOrMany };
 };
 
-export type ClashConfigPatch =
-  ClashConfigPatch_Serialize | ClashConfigPatch_Deserialize;
-
-export type ClashConfigPatch_Deserialize = {
-  overrides?: ClashGuardOverridesPatch_Deserialize;
-  enable_tun_mode?: boolean | null;
-  tun?: TunOverridesPatch_Deserialize;
-  web_ui_list?: string[] | null;
-  enable_clash_fields?: boolean | null;
-  expand_include_all?: boolean | null;
-  external_controller?: ExternalControllerStrategyPatch_Deserialize;
-  clash_control_channel?: ClashControlChannel | null;
-  clash_ipc_disable_http_controller?: boolean | null;
-  mixed_port?: PortStrategyPatch_Deserialize;
-  socks_port?: PortStrategy | null;
-  http_port?: PortStrategy | null;
-  redir_port?: PortStrategy | null;
-  tproxy_port?: PortStrategy | null;
-  transparent_proxy?: TransparentProxyConfigPatch;
-  break_connection?: BreakConnectionStrategyPatch_Deserialize;
-  tun_stack?: TunStack | null;
-  tun_mips?: MipsConfigPatch_Deserialize;
-};
-
-export type ClashConfigPatch_Serialize = {
-  overrides?: ClashGuardOverridesPatch_Serialize;
-  enable_tun_mode?: boolean | null;
-  tun?: TunOverridesPatch_Serialize;
-  web_ui_list?: string[] | null;
-  enable_clash_fields?: boolean | null;
-  expand_include_all?: boolean | null;
-  external_controller?: ExternalControllerStrategyPatch_Serialize;
-  clash_control_channel?: ClashControlChannel | null;
-  clash_ipc_disable_http_controller?: boolean | null;
-  mixed_port?: PortStrategyPatch_Serialize;
-  socks_port?: PortStrategy | null;
-  http_port?: PortStrategy | null;
-  redir_port?: PortStrategy | null;
-  tproxy_port?: PortStrategy | null;
-  transparent_proxy?: TransparentProxyConfigPatch;
-  break_connection?: BreakConnectionStrategyPatch_Serialize;
-  tun_stack?: TunStack | null;
-  tun_mips?: MipsConfigPatch_Serialize;
+/**  Clash Related Config */
+export type ClashConfig_Serialize = {
+  /**  Clash Overrides config, used to patch clash config directly */
+  overrides: ClashGuardOverrides;
+  /**  clash tun mode */
+  enable_tun_mode: boolean;
+  /**  The `tun` keys Chimera manages while TUN mode is on. */
+  tun: TunOverrides;
+  /**  web ui list */
+  web_ui_list: string[];
+  /**  支持关闭字段过滤，避免meta的新字段都被过滤掉，默认为真 */
+  enable_clash_fields: boolean;
+  /**
+   *  Expand `include-all*` proxy-group fields locally using Mihomo semantics;
+   *  when disabled, pass the fields unchanged to the selected Core.
+   */
+  expand_include_all: boolean;
+  /**  外部控制器端口策略 */
+  external_controller: ExternalControllerStrategy;
+  clash_control_channel: ClashControlChannel;
+  clash_ipc_disable_http_controller: boolean;
+  /**  Mixed Proxy(Socks5, HTTP) Port Strategy */
+  mixed_port: PortStrategy;
+  /**  Socks5 Proxy Port */
+  socks_port: PortStrategy | null;
+  /**  HTTP Proxy Port */
+  http_port: PortStrategy | null;
+  /**  Transparent proxy listener ports. `None` leaves profile-provided ports intact. */
+  redir_port: PortStrategy | null;
+  tproxy_port: PortStrategy | null;
+  /**  Capture policy applied by the platform network service. */
+  transparent_proxy: TransparentProxyConfig;
+  /**  断开连接策略 */
+  break_connection: BreakConnectionStrategy;
+  /**  Tun 堆栈选择 */
+  tun_stack: TunStack;
+  /**
+   *  Preserved even while another stack is selected, exactly as in ref.
+   *  Default is required to read existing Chimera config documents.
+   */
+  tun_mips: MipsConfig;
+  /**
+   *  Profile-controlled by default: do not replace the user's DNS table
+   *  unless takeover is explicitly requested.
+   */
+  dns_control: ControlSource_Serialize;
+  dns: DnsSettings;
+  hosts_control: ControlSource_Serialize;
+  hosts: { [key in string]: OneOrMany };
 };
 
 /**  One core connection plus its derived rates, as in ref's detail contract. */
@@ -1769,6 +1858,11 @@ export type ConfigExecutionRole =
       };
     };
 
+/**  What the selected core reads, by config domain. */
+export type ConfigFeatures = {
+  tun: TunFeatures;
+};
+
 export type ConfigRevisionInfo = {
   epoch: number;
   generation: number;
@@ -1966,6 +2060,12 @@ export type Connection_Serialize = {
    */
   _extra: { [key in string]: JsonValue | null };
 };
+
+export type ControlSource = ControlSource_Serialize | ControlSource_Deserialize;
+
+export type ControlSource_Deserialize = 'profile' | 'chimera' | 'nyanpasu';
+
+export type ControlSource_Serialize = 'profile' | 'chimera';
 
 /**  The active core's controller endpoint without its private credential. */
 export type CoreControllerInfo =
@@ -2195,7 +2295,95 @@ export type DirectEgress =
   | { kind: 'transparent_proxy_enabled' }
   | { kind: 'probed'; ipv4: EgressAddress | null; ipv6: EgressAddress | null };
 
+/**  DNS keys and value forms understood by the selected core. */
+export type DnsFeatures = {
+  keys: FieldSupport<DnsKey>;
+  enhanced_mode: FieldSupport<EnhancedMode>;
+  fake_ip_filter_mode: FieldSupport<FakeIpFilterMode>;
+  /**  Clash-rs accepts only a single target under policy/hosts. */
+  list_values: boolean;
+  fallback_filter_geosite: boolean;
+};
+
+/**  The typed keys of [`DnsSettings`], spelled as in the runtime config. */
+export type DnsKey =
+  | 'enable'
+  | 'listen'
+  | 'ipv6'
+  | 'enhanced-mode'
+  | 'fake-ip-range'
+  | 'fake-ip-range6'
+  | 'fake-ip-filter-mode'
+  | 'fake-ip-filter'
+  | 'use-hosts'
+  | 'use-system-hosts'
+  | 'respect-rules'
+  | 'prefer-h3'
+  | 'default-nameserver'
+  | 'nameserver'
+  | 'fallback'
+  | 'proxy-server-nameserver'
+  | 'direct-nameserver'
+  | 'direct-nameserver-follow-policy'
+  | 'nameserver-policy'
+  | 'fallback-filter';
+
 export type DnsMode = 'normal' | 'fake-ip' | 'redir-host' | 'hosts' | 'Unknown';
+
+export type DnsQuestion = {
+  Name: string;
+  Qtype: number;
+  Qclass: number;
+};
+
+export type DnsRecord = {
+  name: string;
+  type: number;
+  TTL: number;
+  data: string;
+};
+
+export type DnsResponse = {
+  Status: number;
+  Question: DnsQuestion[];
+  TC: boolean;
+  RD: boolean;
+  RA: boolean;
+  AD: boolean;
+  CD: boolean;
+  Answer?: DnsRecord[] | null;
+  Authority?: DnsRecord[] | null;
+  Additional?: DnsRecord[] | null;
+};
+
+/**
+ *  Saved DNS values: the user keeps editing these even while the selected
+ *  profile owns the runtime DNS table.
+ */
+export type DnsSettings = {
+  enable?: boolean;
+  listen?: string | null;
+  ipv6?: boolean;
+  'enhanced-mode'?: EnhancedMode;
+  'fake-ip-range'?: string | null;
+  'fake-ip-range6'?: string | null;
+  'fake-ip-filter-mode'?: FakeIpFilterMode;
+  'fake-ip-filter'?: string[];
+  'use-hosts'?: boolean;
+  'use-system-hosts'?: boolean;
+  'respect-rules'?: boolean;
+  'prefer-h3'?: boolean;
+  'default-nameserver'?: string[];
+  nameserver?: string[];
+  fallback?: string[];
+  'proxy-server-nameserver'?: string[];
+  'direct-nameserver'?: string[];
+  'direct-nameserver-follow-policy'?: boolean;
+  'nameserver-policy'?: { [key in string]: OneOrMany };
+  'fallback-filter'?: FallbackFilter;
+  /**  Untyped additional core DNS keys are preserved for future support. */
+  extra?: { [key in string]: any };
+};
 
 /**  A snapshot of a download session's progress, polled by IPC. */
 export type DownloadStatus = {
@@ -2230,6 +2418,8 @@ export type EndpointConnectivity =
    *  router never falls back on its own.
    */
   | { kind: 'degraded'; desired: ExecutionHost; reason: string };
+
+export type EnhancedMode = 'normal' | 'fake-ip' | 'redir-host';
 
 export type EnvInfo = {
   os: string;
@@ -2272,6 +2462,23 @@ export type ExternalMode = 'symlink' | 'mirror';
 
 /**  An absolute path outside the managed profile directory. */
 export type ExternalProfilePath = string;
+
+export type FakeIpFilterMode = 'blacklist' | 'whitelist' | 'rule';
+
+export type FallbackFilter = {
+  geoip?: boolean;
+  'geoip-code'?: string;
+  ipcidr?: string[];
+  domain?: string[];
+  geosite?: string[];
+};
+
+/**  Whether a core reads one config key, and which values it accepts there. */
+export type FieldSupport<T> =
+  /**  The core does not read the key: Chimera writes none and checks none. */
+  | { kind: 'ignored' }
+  /**  The core reads the key and fails on any value outside this list. */
+  | { kind: 'values'; value: T[] };
 
 /**
  *  Stable identifier of a profile folder. It is minted by the profiles actor and
@@ -2815,6 +3022,8 @@ export type NewProfileRequest_Serialize = {
   /**  Folder the new Config profile joins in the same commit. */
   folder?: FolderId | null;
 };
+
+export type OneOrMany = string | string[];
 
 /**  The pipeline operator that produced a snapshot node. */
 export type OperatorTag =
@@ -4045,6 +4254,13 @@ export type TrayMenuMode = 'native' | 'webview';
 
 /**  mihomo `tun.congestion-controller`, read only by the mips stack. */
 export type TunCongestionController = 'cubic' | 'reno' | 'bbr' | 'bbr3';
+
+/**  What the selected core reads under `tun`. */
+export type TunFeatures = {
+  stack: FieldSupport<TunStack>;
+  /**  Read only while the stack is mips. */
+  congestion_controller: FieldSupport<TunCongestionController>;
+};
 
 /**
  *  The `tun` keys Chimera may manage while TUN mode is on. The TUN switch and

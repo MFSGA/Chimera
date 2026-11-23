@@ -35,6 +35,7 @@ type StateChanged =
 /** Both graph representations must move together until the legacy UI retires. */
 export const mutationKeys: Record<StateChanged['kind'], QueryKey[]> = {
   nyanpasu_config: [
+    queries.getConfigFeatures().queryKey,
     queries.inspectRuntime().queryKey,
     queries.inspectAppliedRuntime().queryKey,
     [CHIMERA_SETTING_QUERY_KEY],

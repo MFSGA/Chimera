@@ -53,6 +53,8 @@ pub struct RuntimePipelineInputs<'a> {
     /// Whether the selected core accepts Chimera Client's top-level `mmdb` extension.
     pub core_supports_mmdb: bool,
     pub tun: TunParams,
+    /// Core-rendered DNS/Hosts tables; `None` keeps them profile-owned.
+    pub dns: DnsParams,
     /// Match the reference: pre-expand `include-all*` groups when enabled.
     /// Disabled: pass the original keys through to the selected Core.
     pub expand_include_all: bool,
@@ -86,6 +88,17 @@ pub struct ResolvedPortBindings {
     pub tproxy_port: Option<u16>,
     /// `host:port`; absent when `None`.
     pub external_controller: Option<String>,
+}
+
+/// The DNS and Hosts tables this product controls for the selected core.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct DnsParams {
+    /// Written whole over the profile's `dns`; `None` leaves it to the profile.
+    pub dns: Option<ConfigValue>,
+    /// Written whole over the profile's `hosts`, removing it when empty.
+    pub hosts: Option<ConfigValue>,
+    /// Core-specific omissions and downgrades are visible in the build log.
+    pub warnings: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -328,7 +341,7 @@ pub fn execute(
         selected_profile_id: selected.clone(),
         step,
     };
-    let ownership = plan::ownership(&inputs.guard, &inputs.tun);
+    let ownership = plan::ownership(&inputs.guard, &inputs.tun, &inputs.dns);
     if inputs.whitelist_enabled {
         let stage1 =
             builtin::stage1_fields_for_core(&inputs.profiles.valid, inputs.core_supports_mmdb);
@@ -344,13 +357,13 @@ pub fn execute(
         builder.push_delta(step(BuiltinStepKind::KeepUnmanaged), working.clone(), patch)?;
     }
 
-    let (next, patch) = apply_settings(&working, &ownership);
-    working = Arc::new(next);
     let managed_settings = step(BuiltinStepKind::ManagedSettings);
     logs.extend(
         managed_settings.node_key(),
-        plan::managed_settings_logs(&inputs.tun),
+        plan::managed_settings_logs(&inputs.tun, &inputs.dns, &working),
     );
+    let (next, patch) = apply_settings(&working, &ownership);
+    working = Arc::new(next);
     builder.push_delta(managed_settings, working.clone(), patch)?;
 
     let (next, patch) = apply_defaults(&working, &ownership);

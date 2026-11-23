@@ -131,6 +131,9 @@ export const useClashCores = () => {
         queryKey: [CHIMERA_SETTING_QUERY_KEY],
       });
       void queryClient.invalidateQueries({
+        queryKey: ['getConfigFeatures'],
+      });
+      void queryClient.invalidateQueries({
         queryKey: [CLASH_VERSION_QUERY_KEY],
       });
     },

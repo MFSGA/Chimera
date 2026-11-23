@@ -1,6 +1,7 @@
 import { useSetting } from '@chimera/interface';
 import { createFileRoute } from '@tanstack/react-router';
 import { AnimatePresence } from 'motion/react';
+import { PageTitle } from '@/components/page-title';
 import {
   SystemProxyButton,
   TunModeButton,
@@ -18,12 +19,17 @@ import {
   SettingsGroup,
   SettingsLabel,
 } from '../../_modules/settings-card';
-import { SettingsTitle } from '../../_modules/settings-title';
 import ProxyBypassConfig from './_modules/proxy-bypass-config';
 import TransparentProxyButton from './_modules/transparent-proxy-button';
 
 export const Route = createFileRoute('/(main)/main/settings/system/proxy/')({
   component: RouteComponent,
+  staticData: {
+    crumb: {
+      title: () => m.settings_label_proxy(),
+      parent: () => ({ to: '/main/settings' }),
+    },
+  },
 });
 
 const ProxyMode = () => {
@@ -102,7 +108,7 @@ const CurrentProxy = () => {
 function RouteComponent() {
   return (
     <>
-      <SettingsTitle>{m.settings_label_proxy()}</SettingsTitle>
+      <PageTitle legacySlot="settings-title" />
 
       <div className="space-y-4 px-4 pb-4">
         <ProxyMode />

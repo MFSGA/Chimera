@@ -70,10 +70,10 @@ function RouteComponent() {
 const LogLevelsSidebar = memo(function LogLevelsSidebar() {
   return (
     <SidebarProvider defaultOpen={false}>
-      <NavigationSidebar aria-label={m.navbar_label_logs()}>
+      <NavigationSidebar aria-label={m.logs_level_sidebar()}>
         <ScrollArea className="min-h-0 w-full flex-1 [&>div>div]:block!">
           <NavigationSidebarContent className="pb-16">
-            <LogLevelButton>All</LogLevelButton>
+            <LogLevelButton>{m.logs_all_levels()}</LogLevelButton>
             {Object.values(LogLevel).map((item) => (
               <LogLevelButton key={item} level={item}>
                 {item}

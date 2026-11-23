@@ -197,7 +197,9 @@ impl RequestedRuntimeFields {
                 || patch.external_controller.port.kind.is_some()
                 || patch.external_controller.port.start_port.is_some()
                 || patch.clash_control_channel.is_some()
-                || patch.clash_ipc_disable_http_controller.is_some(),
+                || patch.clash_ipc_disable_http_controller.is_some()
+                || patch.dns_control.is_some()
+                || patch.hosts_control.is_some(),
         }
     }
 

@@ -499,6 +499,25 @@ pub async fn get_clash_config(
     Ok(client.get_clash_config()?)
 }
 
+/// DNS key and value support for the currently selected core. The renderer
+/// uses this same matrix, so the editor never guesses capabilities by name.
+#[tauri::command]
+#[specta::specta]
+pub fn get_dns_features(
+    client: State<'_, ChimeraClient>,
+) -> Result<chimera_config::clash::features::DnsFeatures> {
+    Ok(client.get_app_config()?.core.dns_features())
+}
+
+/// Mirror ref's read-only system.core query over the runtime capability matrix.
+#[tauri::command]
+#[specta::specta]
+pub fn get_config_features(
+    client: State<'_, ChimeraClient>,
+) -> Result<chimera_config::clash::features::ConfigFeatures> {
+    Ok(client.config_features())
+}
+
 #[tauri::command]
 #[specta::specta]
 pub async fn patch_clash_config(
@@ -1626,6 +1645,28 @@ pub async fn clash_api_get_version(
     client: State<'_, ChimeraClient>,
 ) -> Result<clash::api::ClashVersion> {
     Ok(client.clash_version().await?)
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn clash_api_query_dns(
+    name: String,
+    record_type: String,
+    client: State<'_, ChimeraClient>,
+) -> Result<clash_api::DnsResponse> {
+    Ok(client.clash_api_query_dns(name, record_type).await?)
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn clash_api_flush_dns_cache(client: State<'_, ChimeraClient>) -> Result {
+    Ok(client.clash_api_flush_dns_cache().await?)
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn clash_api_flush_fake_ip_cache(client: State<'_, ChimeraClient>) -> Result {
+    Ok(client.clash_api_flush_fake_ip_cache().await?)
 }
 
 #[tauri::command]

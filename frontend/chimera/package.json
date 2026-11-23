@@ -10,6 +10,8 @@
     "test:profile-sync-history": "tsx --test tests/profile-sync-history.test.ts",
     "test:profile-card-quota": "tsx --test tests/dashboard-daily-utils.test.ts",
     "test:profile-content-summary": "tsx --test tests/profile-content-summary.test.ts",
+    "test:route-crumbs": "tsx --test tests/route-crumbs.test.ts",
+    "test:dns-yaml": "tsx --test tests/dns-yaml.test.ts",
     "test:profile-card-gradient": "tsx --test tests/mesh-gradient.test.ts",
     "test:profile-layout": "tsx --test tests/profile-layout.test.ts tests/resolve-profile-drop.test.ts",
     "test:subscription-url": "tsx --test tests/subscription-url-schema.test.ts",

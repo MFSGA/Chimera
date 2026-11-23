@@ -19,6 +19,11 @@ import {
  * only, so keep typed query metadata outside generated bindings.
  */
 export const queries = {
+  getConfigFeatures: () =>
+    queryOptions({
+      queryKey: ['getConfigFeatures'],
+      queryFn: async () => unwrapResult(await commands.getConfigFeatures()),
+    }),
   getTransparentProxyStatus: () =>
     queryOptions({
       queryKey: [TRANSPARENT_PROXY_STATUS_QUERY_KEY],

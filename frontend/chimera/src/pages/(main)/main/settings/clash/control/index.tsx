@@ -1,7 +1,7 @@
 import { createFileRoute } from '@tanstack/react-router';
+import { PageTitle } from '@/components/page-title';
 import * as m from '@/paraglide/messages';
 import { SettingsGroup, SettingsLabel } from '../../_modules/settings-card';
-import { SettingsTitle } from '../../_modules/settings-title';
 import CoreSecretConfig from '../../web-ui/_modules/core-secret-config';
 import ExternalControllerConfig from '../../web-ui/_modules/external-controller-config';
 import PortStrategySelector from '../../web-ui/_modules/port-strategy-selector';
@@ -9,6 +9,12 @@ import WebUI from '../../web-ui/_modules/web-ui';
 
 export const Route = createFileRoute('/(main)/main/settings/clash/control/')({
   component: RouteComponent,
+  staticData: {
+    crumb: {
+      title: () => m.settings_label_control(),
+      parent: () => ({ to: '/main/settings' }),
+    },
+  },
 });
 
 const ExternalController = () => (
@@ -25,7 +31,7 @@ const ExternalController = () => (
 function RouteComponent() {
   return (
     <>
-      <SettingsTitle>{m.settings_label_control()}</SettingsTitle>
+      <PageTitle legacySlot="settings-title" />
       <div className="space-y-4 px-4 pb-4">
         <ExternalController />
         <div data-slot="web-ui-settings-container">

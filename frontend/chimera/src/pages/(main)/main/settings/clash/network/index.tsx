@@ -1,4 +1,5 @@
 import { createFileRoute } from '@tanstack/react-router';
+import { PageTitle } from '@/components/page-title';
 import * as m from '@/paraglide/messages';
 import AllowLanSwitch from '../_modules/allow-lan-switch';
 import IPv6Switch from '../_modules/ipv6-switch';
@@ -13,10 +14,15 @@ import {
   SettingsGroup,
   SettingsLabel,
 } from '../../_modules/settings-card';
-import { SettingsTitle } from '../../_modules/settings-title';
 
 export const Route = createFileRoute('/(main)/main/settings/clash/network/')({
   component: RouteComponent,
+  staticData: {
+    crumb: {
+      title: () => m.settings_label_network(),
+      parent: () => ({ to: '/main/settings' }),
+    },
+  },
 });
 
 const PortSettings = () => (
@@ -54,7 +60,7 @@ const LanSettings = () => (
 function RouteComponent() {
   return (
     <>
-      <SettingsTitle>{m.settings_label_network()}</SettingsTitle>
+      <PageTitle legacySlot="settings-title" />
       <div className="space-y-4 px-4 pb-4">
         <PortSettings />
         <TransparentProxyConfigSettings />

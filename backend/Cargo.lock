@@ -1217,6 +1217,7 @@ dependencies = [
  "slab",
  "snafu",
  "specta",
+ "specta-typescript",
  "struct-patch",
  "strum",
  "sys-locale",

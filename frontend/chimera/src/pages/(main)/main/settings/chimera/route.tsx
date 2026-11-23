@@ -1,7 +1,7 @@
 import { createFileRoute, Outlet, useMatchRoute } from '@tanstack/react-router';
+import { PageTitle } from '@/components/page-title';
 import * as m from '@/paraglide/messages';
 import { SettingsGroup, SettingsLabel } from '../_modules/settings-card';
-import { SettingsTitle } from '../_modules/settings-title';
 import BreakWhenModeChangeSwitch from './_modules/break-when-mode-change-switch';
 import BreakWhenProfileChangeSwitch from './_modules/break-when-profile-change-switch';
 import BreakWhenProxyChangeSwitch from './_modules/break-when-proxy-change-switch';
@@ -19,6 +19,7 @@ import WindowCloseBehaviorCards from './_modules/window-close-behavior';
 
 export const Route = createFileRoute('/(main)/main/settings/chimera')({
   component: RouteComponent,
+  staticData: { crumb: { title: () => m.settings_label_chimera() } },
 });
 
 const LogSettings = () => {
@@ -131,7 +132,7 @@ function RouteComponent() {
 
   return (
     <>
-      <SettingsTitle>{m.settings_label_chimera()}</SettingsTitle>
+      <PageTitle legacySlot="settings-title" />
 
       <div className="space-y-4 px-4 pb-4">
         <LogSettings />

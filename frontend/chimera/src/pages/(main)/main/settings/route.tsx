@@ -15,10 +15,12 @@ import { Sidebar, SidebarContent } from '@chimera/ui/sidebar';
 import { cn } from '@chimera/utils';
 import { createFileRoute } from '@tanstack/react-router';
 import { AnimatedOutletPreset } from '@/components/router/animated-outlet';
+import * as m from '@/paraglide/messages';
 import SettingsNavigate from './_modules/settings-navigate';
 
 export const Route = createFileRoute('/(main)/main/settings')({
   component: RouteComponent,
+  staticData: { crumb: { title: () => m.navbar_label_settings(), hub: true } },
 });
 
 function RouteComponent() {

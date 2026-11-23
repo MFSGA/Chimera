@@ -1,7 +1,7 @@
 import {
   useClashSetting,
+  useConfigFeatures,
   useRuntimeProfile,
-  useSetting,
   type TunStack,
 } from '@chimera/interface';
 import { Button } from '@chimera/ui/button';
@@ -12,7 +12,6 @@ import {
   DropdownMenuTrigger,
 } from '@chimera/ui/dropdown-menu';
 import ArrowForwardIosRounded from '~icons/material-symbols/arrow-forward-ios-rounded';
-import { useMemo } from 'react';
 import { useLockFn } from '@/hooks/use-lock-fn';
 import * as m from '@/paraglide/messages';
 import { formatError } from '@/utils';
@@ -26,8 +25,15 @@ import {
   SettingsCardContent,
 } from '../../_modules/settings-card';
 
+const TUN_STACK_LABELS: Record<TunStack, string> = {
+  system: 'System',
+  gvisor: 'gVisor',
+  mixed: 'Mixed',
+  mips: 'Mips (Mihomo IP Stack)',
+};
+
 export default function TunStackSelector() {
-  const coreType = useSetting('core');
+  const features = useConfigFeatures();
 
   const tunStack = useClashSetting('tun_stack');
 
@@ -35,31 +41,18 @@ export default function TunStackSelector() {
 
   const runtimeProfile = useRuntimeProfile();
 
-  const tunStackOptions = useMemo(() => {
-    const options: Record<string, string> = {
-      system: 'System',
-      gvisor: 'gVisor',
-      mixed: 'Mixed',
-    };
+  // Ref: only the core's capability matrix decides whether the stack exists.
+  const stacks = features.data?.tun.stack;
 
-    if (coreType.value === 'clash') {
-      delete options.mixed;
-    }
-    if (coreType.value === 'mihomo' || coreType.value === 'mihomo-alpha') {
-      options.mips = 'MIPS';
-    }
+  const currentTunStack =
+    stacks?.kind === 'values' &&
+    stacks.value.includes(tunStack.value ?? 'gvisor')
+      ? (tunStack.value ?? 'gvisor')
+      : null;
 
-    return options;
-  }, [coreType.value]);
-
-  const currentTunStack = useMemo(() => {
-    const stack = tunStack.value || 'gvisor';
-    return stack in tunStackOptions ? stack : 'gvisor';
-  }, [tunStack.value, tunStackOptions]);
-
-  const handleTunStackChange = useLockFn(async (value: string) => {
+  const handleTunStackChange = useLockFn(async (value: TunStack) => {
     try {
-      await tunStack.upsert(value as TunStack);
+      await tunStack.upsert(value);
 
       if (enableTunMode.value) {
         await enableTunMode.upsert(true);
@@ -76,6 +69,11 @@ export default function TunStackSelector() {
 
   const isPending = tunStack.isPending || enableTunMode.isPending;
 
+  // A core that ignores tun.stack must not show an unsupported control.
+  if (stacks?.kind !== 'values') {
+    return null;
+  }
+
   return (
     <SettingsCard data-slot="tun-stack-selector-card">
       <DropdownMenu align="end">
@@ -89,7 +87,7 @@ export default function TunStackSelector() {
                   </ItemLabelText>
 
                   <ItemLabelDescription>
-                    {currentTunStack ? tunStackOptions[currentTunStack] : null}
+                    {currentTunStack ? TUN_STACK_LABELS[currentTunStack] : null}
                   </ItemLabelDescription>
                 </ItemLabel>
 
@@ -100,14 +98,14 @@ export default function TunStackSelector() {
         </DropdownMenuTrigger>
 
         <DropdownMenuContent sideOffset={-16} alignOffset={16}>
-          {Object.entries(tunStackOptions).map(([key, label]) => (
+          {stacks.value.map((stack) => (
             <DropdownMenuCheckboxItem
-              checked={tunStack.value === key}
+              checked={tunStack.value === stack}
               disabled={isPending}
-              key={key}
-              onSelect={() => void handleTunStackChange(key)}
+              key={stack}
+              onSelect={() => void handleTunStackChange(stack)}
             >
-              {label}
+              {TUN_STACK_LABELS[stack]}
             </DropdownMenuCheckboxItem>
           ))}
         </DropdownMenuContent>

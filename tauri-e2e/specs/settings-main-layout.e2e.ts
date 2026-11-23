@@ -1,55 +1,248 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { openMainRoute } from './main-window.js';
+import { ensureMainWindow, openMainRoute } from './main-window.js';
 
 const targetPath = '/main/settings/system/proxy';
+type ThemeMode = 'light' | 'dark' | 'system';
+
+let originalThemeMode: ThemeMode = 'system';
+let themeModeOverrideInstalled = false;
+
+async function readThemeMode(): Promise<ThemeMode> {
+  return browser.execute(async () => {
+    const internals = (
+      window as Window & {
+        __TAURI_INTERNALS__?: {
+          invoke: <T>(command: string) => Promise<T>;
+        };
+      }
+    ).__TAURI_INTERNALS__;
+    if (!internals) throw new Error('Tauri page internals are unavailable.');
+    const config = await internals.invoke<{ theme_mode?: ThemeMode }>(
+      'get_verge_config',
+    );
+    return config.theme_mode ?? 'system';
+  });
+}
+
+async function writeThemeMode(themeMode: ThemeMode) {
+  await browser.execute(async (mode) => {
+    const internals = (
+      window as Window & {
+        __TAURI_INTERNALS__?: {
+          invoke: <T>(
+            command: string,
+            args?: Record<string, unknown>,
+          ) => Promise<T>;
+        };
+      }
+    ).__TAURI_INTERNALS__;
+    if (!internals) throw new Error('Tauri page internals are unavailable.');
+    await internals.invoke<null>('patch_verge_config', {
+      payload: { theme_mode: mode },
+    });
+  }, themeMode);
+}
+
+async function clickVisibleSettingsLink(href: string) {
+  for (const link of await $$(
+    `[data-slot="settings-sidebar-scroll-area"] a[href="${href}"]`,
+  )) {
+    if (await link.isDisplayed()) {
+      await link.click();
+      return;
+    }
+  }
+  throw new Error(`No visible settings link: ${href}`);
+}
+
+async function waitForActiveSettingsLink(href: string) {
+  try {
+    await browser.waitUntil(
+      async () =>
+        browser.execute((target) => {
+          const link = Array.from(
+            document.querySelectorAll<HTMLElement>(
+              '[data-slot="settings-sidebar-scroll-area"] a',
+            ),
+          ).find(
+            (candidate) =>
+              candidate.getAttribute('href') === target &&
+              candidate.getClientRects().length > 0 &&
+              candidate.getAttribute('data-active') === 'true' &&
+              candidate.getAttribute('aria-current') === 'page',
+          );
+          return location.pathname === target && link !== undefined;
+        }, href),
+      { timeout: 15_000 },
+    );
+  } catch (error) {
+    const state = await browser.execute(() => ({
+      pathname: location.pathname,
+      href: location.href,
+      links: Array.from(
+        document.querySelectorAll<HTMLElement>(
+          '[data-slot="settings-sidebar-scroll-area"] a',
+        ),
+      )
+        .filter((link) => link.getClientRects().length > 0)
+        .map((link) => ({
+          href: link.getAttribute('href'),
+          active: link.getAttribute('data-active'),
+          current: link.getAttribute('aria-current'),
+        })),
+    }));
+    throw new Error(
+      `The visible settings link did not become active: ${href}; state=${JSON.stringify(state)}`,
+      { cause: error },
+    );
+  }
+}
+
+async function visibleElement(selector: string) {
+  let visible: WebdriverIO.Element | undefined;
+  await browser.waitUntil(
+    async () => {
+      for (const element of await $$(selector)) {
+        if (await element.isDisplayed()) {
+          visible = element;
+          return true;
+        }
+      }
+      return false;
+    },
+    {
+      timeout: 15_000,
+      timeoutMsg: `No visible element matches: ${selector}`,
+    },
+  );
+  return visible!;
+}
 
 describe('main settings reference layout', () => {
+  let originalWindowSize: { width: number; height: number } | undefined;
+  let originalLanguage: string | null | undefined;
+
   before(async () => {
+    await ensureMainWindow();
+    originalWindowSize = await browser.getWindowSize();
+    originalLanguage = await browser.execute(() =>
+      localStorage.getItem(btoa('paraglide-language-cache')),
+    );
     await browser.setWindowSize(1240, 638);
     await browser.execute(() => {
       localStorage.setItem(btoa('paraglide-language-cache'), 'zh-cn');
     });
     await openMainRoute(targetPath);
-    await browser.setWindowSize(1240, 638);
+    originalThemeMode = await readThemeMode();
+    await writeThemeMode('light');
+    themeModeOverrideInstalled = true;
+    await browser.waitUntil(
+      async () =>
+        browser.execute(() =>
+          document.documentElement.classList.contains('light'),
+        ),
+      {
+        timeout: 15_000,
+        timeoutMsg: 'The settings layout did not enter light theme.',
+      },
+    );
+    await browser.execute(async () => {
+      await document.fonts.ready;
+    });
+  });
+
+  after(async () => {
+    const cleanupErrors: Error[] = [];
+    const attemptCleanup = async (
+      label: string,
+      cleanup: () => Promise<void>,
+    ) => {
+      try {
+        await cleanup();
+      } catch (error) {
+        cleanupErrors.push(new Error(`Failed to ${label}.`, { cause: error }));
+      }
+    };
+
+    await attemptCleanup('focus the main window', ensureMainWindow);
+    if (themeModeOverrideInstalled) {
+      await attemptCleanup('restore the original theme', async () => {
+        await writeThemeMode(originalThemeMode);
+        await browser.waitUntil(
+          async () =>
+            browser.execute((mode) => {
+              const theme =
+                mode === 'system'
+                  ? window.matchMedia('(prefers-color-scheme: dark)').matches
+                    ? 'dark'
+                    : 'light'
+                  : mode;
+              return document.documentElement.classList.contains(theme);
+            }, originalThemeMode),
+          {
+            timeout: 15_000,
+            timeoutMsg: 'The original settings theme was not restored.',
+          },
+        );
+      });
+    }
+    const language = originalLanguage;
+    if (language !== undefined) {
+      await attemptCleanup('restore the original language', async () => {
+        await browser.execute((language) => {
+          const key = btoa('paraglide-language-cache');
+          if (language === null) localStorage.removeItem(key);
+          else localStorage.setItem(key, language);
+        }, language);
+      });
+    }
+    const windowSize = originalWindowSize;
+    if (windowSize) {
+      await attemptCleanup('restore the original window size', async () => {
+        await browser.setWindowSize(windowSize.width, windowSize.height);
+      });
+    }
+    if (cleanupErrors.length) {
+      throw new AggregateError(
+        cleanupErrors,
+        'Settings layout cleanup failed.',
+      );
+    }
   });
 
   it('renders grouped reference navigation and retains the full-height content layout', async () => {
-    const content = await $('[data-slot="settings-content"]');
-    await content.waitForDisplayed({ timeout: 15_000 });
-    await browser.waitUntil(
-      async () =>
-        browser.execute(() => {
-          const content = document.querySelector(
-            '[data-slot="settings-content"]',
-          );
-          return content?.children.length === 1;
-        }),
-      {
-        timeout: 15_000,
-        timeoutMsg: 'The settings route transition did not settle.',
-      },
-    );
+    await waitForActiveSettingsLink(targetPath);
 
     const state = await browser.execute(() => {
-      const container = document.querySelector<HTMLElement>(
-        '[data-slot="settings-container"]',
-      );
-      const sidebar = document.querySelector<HTMLElement>(
-        '[data-slot="settings-sidebar-scroll-area"]',
-      );
-      const content = document.querySelector<HTMLElement>(
-        '[data-slot="settings-content"]',
-      );
+      const proxyLink =
+        Array.from(
+          document.querySelectorAll<HTMLElement>(
+            '[data-slot="settings-sidebar-scroll-area"] a[href="/main/settings/system/proxy"]',
+          ),
+        ).find(
+          (link) =>
+            link.getClientRects().length > 0 &&
+            link.getAttribute('data-active') === 'true' &&
+            link.getAttribute('aria-current') === 'page',
+        ) ?? null;
+      const container =
+        proxyLink?.closest<HTMLElement>('[data-slot="settings-container"]') ??
+        null;
+      const sidebar =
+        container?.querySelector<HTMLElement>(
+          '[data-slot="settings-sidebar-scroll-area"]',
+        ) ?? null;
+      const content =
+        container?.querySelector<HTMLElement>(
+          '[data-slot="settings-content"]',
+        ) ?? null;
       const animatedOutlet = content?.firstElementChild as HTMLElement | null;
       const routeContent =
         animatedOutlet?.firstElementChild as HTMLElement | null;
       const nav = sidebar?.querySelector<HTMLElement>(
         '[data-slot="navigation-list"]',
-      );
-      const proxyLink = sidebar?.querySelector<HTMLElement>(
-        'a[href="/main/settings/system/proxy"]',
       );
       const rect = (element: HTMLElement | null) => {
         if (!element) return null;
@@ -95,7 +288,7 @@ describe('main settings reference layout', () => {
     );
     assert.ok(state.navigation && state.proxyLink, JSON.stringify(state));
     assert.equal(state.navigationGroups, 4, JSON.stringify(state));
-    assert.equal(state.navigationItems, 15, JSON.stringify(state));
+    assert.equal(state.navigationItems, 16, JSON.stringify(state));
     assert.equal(state.proxyActive, 'true', JSON.stringify(state));
     assert.equal(state.proxyCurrent, 'page', JSON.stringify(state));
     assert.equal(state.outletDisplay, 'flex', JSON.stringify(state));
@@ -115,80 +308,25 @@ describe('main settings reference layout', () => {
   });
 
   it('navigates from proxy settings to service settings and back through visible links', async () => {
-    const service = await $('a[href="/main/settings/system/service"]');
-    await service.waitForClickable({ timeout: 15_000 });
-    await service.click();
+    await clickVisibleSettingsLink('/main/settings/system/service');
 
-    const startup = await $('[data-slot="system-launch-container"]');
+    const startup = await visibleElement(
+      '[data-slot="system-launch-container"]',
+    );
     await startup.waitForDisplayed({ timeout: 15_000 });
-    await browser.waitUntil(
-      async () =>
-        browser.execute(() => {
-          const selected = document.querySelector<HTMLElement>(
-            'a[href="/main/settings/system/service"]',
-          );
-          return (
-            location.pathname === '/main/settings/system/service' &&
-            selected?.getAttribute('data-active') === 'true' &&
-            selected?.getAttribute('aria-current') === 'page'
-          );
-        }),
-      {
-        timeout: 15_000,
-        timeoutMsg: 'Service settings navigation did not become active.',
-      },
-    );
+    await waitForActiveSettingsLink('/main/settings/system/service');
 
-    const proxy = await $('a[href="/main/settings/system/proxy"]');
-    await proxy.waitForClickable({ timeout: 15_000 });
-    await proxy.click();
+    await clickVisibleSettingsLink('/main/settings/system/proxy');
 
-    const mode = await $('[data-slot="proxy-mode-container"]');
+    const mode = await visibleElement('[data-slot="proxy-mode-container"]');
     await mode.waitForDisplayed({ timeout: 15_000 });
-    await browser.waitUntil(
-      async () =>
-        browser.execute(() => {
-          const selected = document.querySelector<HTMLElement>(
-            'a[href="/main/settings/system/proxy"]',
-          );
-          return (
-            location.pathname === '/main/settings/system/proxy' &&
-            selected?.getAttribute('data-active') === 'true' &&
-            selected?.getAttribute('aria-current') === 'page'
-          );
-        }),
-      {
-        timeout: 15_000,
-        timeoutMsg: 'Proxy settings navigation did not become active.',
-      },
-    );
+    await waitForActiveSettingsLink('/main/settings/system/proxy');
   });
 
   it('opens the reference control-channel settings through the sidebar', async () => {
-    const control = await $('a[href="/main/settings/clash/control"]');
-    await control.waitForClickable({ timeout: 15_000 });
-    await control.click();
+    await clickVisibleSettingsLink('/main/settings/clash/control');
 
-    await browser.waitUntil(
-      async () =>
-        browser.execute(() => {
-          const selected = document.querySelector<HTMLElement>(
-            'a[href="/main/settings/clash/control"]',
-          );
-          return (
-            location.pathname === '/main/settings/clash/control' &&
-            selected?.getAttribute('data-active') === 'true' &&
-            selected?.getAttribute('aria-current') === 'page' &&
-            document.querySelector(
-              '[data-slot="web-ui-settings-container"]',
-            ) !== null
-          );
-        }),
-      {
-        timeout: 15_000,
-        timeoutMsg: 'Control-channel settings did not become active.',
-      },
-    );
+    await waitForActiveSettingsLink('/main/settings/clash/control');
 
     assert.equal(
       new URL(await browser.getUrl()).pathname,
@@ -197,30 +335,14 @@ describe('main settings reference layout', () => {
   });
 
   it('opens network settings and displays the existing port controls', async () => {
-    const network = await $('a[href="/main/settings/clash/network"]');
-    await network.waitForClickable({ timeout: 15_000 });
-    await network.click();
+    await clickVisibleSettingsLink('/main/settings/clash/network');
 
-    const portSettings = await $('[data-slot="port-settings-container"]');
+    const portSettings = await visibleElement(
+      '[data-slot="port-settings-container"]',
+    );
     await portSettings.waitForDisplayed({ timeout: 15_000 });
 
-    await browser.waitUntil(
-      async () =>
-        browser.execute(() => {
-          const selected = document.querySelector<HTMLElement>(
-            'a[href="/main/settings/clash/network"]',
-          );
-          return (
-            location.pathname === '/main/settings/clash/network' &&
-            selected?.getAttribute('data-active') === 'true' &&
-            selected?.getAttribute('aria-current') === 'page'
-          );
-        }),
-      {
-        timeout: 15_000,
-        timeoutMsg: 'Network settings did not become active.',
-      },
-    );
+    await waitForActiveSettingsLink('/main/settings/clash/network');
 
     assert.equal(
       new URL(await browser.getUrl()).pathname,
@@ -229,32 +351,18 @@ describe('main settings reference layout', () => {
   });
 
   it('opens the tray and window settings from the new reference navigation', async () => {
-    const tray = await $('a[href="/main/settings/chimera/tray"]');
-    await tray.waitForClickable({ timeout: 15_000 });
-    await tray.click();
+    await clickVisibleSettingsLink('/main/settings/chimera/tray');
 
-    const traySettings = await $('[data-slot="tray-settings-container"]');
-    const windowSettings = await $('[data-slot="window-settings-container"]');
+    const traySettings = await visibleElement(
+      '[data-slot="tray-settings-container"]',
+    );
+    const windowSettings = await visibleElement(
+      '[data-slot="window-settings-container"]',
+    );
     await traySettings.waitForDisplayed({ timeout: 15_000 });
     await windowSettings.waitForDisplayed({ timeout: 15_000 });
 
-    await browser.waitUntil(
-      async () =>
-        browser.execute(() => {
-          const selected = document.querySelector<HTMLElement>(
-            'a[href="/main/settings/chimera/tray"]',
-          );
-          return (
-            location.pathname === '/main/settings/chimera/tray' &&
-            selected?.getAttribute('data-active') === 'true' &&
-            selected?.getAttribute('aria-current') === 'page'
-          );
-        }),
-      {
-        timeout: 15_000,
-        timeoutMsg: 'Tray settings route did not become active.',
-      },
-    );
+    await waitForActiveSettingsLink('/main/settings/chimera/tray');
     assert.equal(
       new URL(await browser.getUrl()).pathname,
       '/main/settings/chimera/tray',
@@ -262,30 +370,12 @@ describe('main settings reference layout', () => {
   });
 
   it('opens public IP settings while retaining the original controls', async () => {
-    const publicIp = await $('a[href="/main/settings/chimera/public-ip"]');
-    await publicIp.waitForClickable({ timeout: 15_000 });
-    await publicIp.click();
+    await clickVisibleSettingsLink('/main/settings/chimera/public-ip');
 
-    const settings = await $('[data-slot="public-ip-settings"]');
+    const settings = await visibleElement('[data-slot="public-ip-settings"]');
     await settings.waitForDisplayed({ timeout: 15_000 });
 
-    await browser.waitUntil(
-      async () =>
-        browser.execute(() => {
-          const selected = document.querySelector<HTMLElement>(
-            'a[href="/main/settings/chimera/public-ip"]',
-          );
-          return (
-            location.pathname === '/main/settings/chimera/public-ip' &&
-            selected?.getAttribute('data-active') === 'true' &&
-            selected?.getAttribute('aria-current') === 'page'
-          );
-        }),
-      {
-        timeout: 15_000,
-        timeoutMsg: 'Public IP settings route did not become active.',
-      },
-    );
+    await waitForActiveSettingsLink('/main/settings/chimera/public-ip');
     assert.equal(
       new URL(await browser.getUrl()).pathname,
       '/main/settings/chimera/public-ip',
