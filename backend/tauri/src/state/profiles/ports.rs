@@ -2,7 +2,7 @@
 //! implementations live in `crate::service::profile_file`.
 
 use chimera_config::profile::{
-    ExternalProfilePath, ManagedProfilePath, Profiles, RemoteProfileOptions, SubscriptionInfo,
+    ExternalProfilePath, ManagedProfilePath, Profiles, RemoteProfileOptions,
 };
 use url::Url;
 
@@ -29,15 +29,9 @@ pub trait ProfileFsPort: Send + Sync + 'static {
     ) -> anyhow::Result<()>;
 }
 
-#[derive(Debug, Clone)]
-pub struct FetchedSubscription {
-    pub content: String,
-    /// Server-provided display name (`profile-title` / `Content-Disposition`).
-    pub filename: Option<String>,
-    pub subscription: SubscriptionInfo,
-    /// Server-advertised `profile-update-interval`, normalized from hours to minutes.
-    pub suggested_update_interval_minutes: Option<u64>,
-}
+// The downloaded subscription shape is owned by the ref-derived shared
+// contracts crate. The legacy Actor temporarily retains its anyhow port.
+pub use chimera_contracts::profiles::ports::FetchedSubscription;
 
 /// Subscription download. Network timeouts are managed inside the
 /// implementation (D9); content validation is the caller's concern (per
@@ -59,93 +53,13 @@ pub trait RebuildNotifier: Send + Sync + 'static {
     fn request_rebuild(&self);
 }
 
-#[derive(Debug, Clone)]
-pub(crate) enum MaterializationResource {
-    File { content: String },
-    Symlink { target: ExternalProfilePath },
-}
-
-/// Opaque durable transaction handle. Phase and storage paths stay adapter-owned.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct PreparedMaterialization {
-    operation_id: String,
-}
-
-impl PreparedMaterialization {
-    pub(crate) fn new(operation_id: String) -> Self {
-        Self { operation_id }
-    }
-
-    pub(crate) fn operation_id(&self) -> &str {
-        &self.operation_id
-    }
-}
-
-/// Opaque durable cleanup handle. Phase and storage paths stay adapter-owned.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct PreparedCleanup {
-    operation_id: String,
-}
-
-impl PreparedCleanup {
-    pub(crate) fn new(operation_id: String) -> Self {
-        Self { operation_id }
-    }
-
-    pub(crate) fn operation_id(&self) -> &str {
-        &self.operation_id
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum CleanupOutcome {
-    Removed,
-    AlreadyAbsent,
-    FencedActivePath,
-    FencedHashMismatch,
-}
-
-/// Internal degradation details. S08 owns any public IPC representation.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct ProfileDegradation {
-    pub phase: ProfileDegradationPhase,
-    pub code: ProfileDegradationCode,
-    pub message: String,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ProfileDegradationPhase {
-    Cleanup,
-    Reconcile,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ProfileDegradationCode {
-    JournalInvalid,
-    MaterializationDeferred,
-    CleanupDeferred,
-}
-
-impl ProfileDegradationCode {
-    /// Retryability is derived from the code, not stored per instance.
-    pub(crate) const fn retryable(self) -> bool {
-        match self {
-            Self::JournalInvalid => false,
-            Self::MaterializationDeferred | Self::CleanupDeferred => true,
-        }
-    }
-}
-
-#[derive(Debug, Default, Clone, PartialEq, Eq)]
-pub(crate) struct MaterializationReconcileReport {
-    pub discarded: usize,
-    pub promoted: usize,
-    pub completed: usize,
-    pub compensated: usize,
-    pub cleanups_completed: usize,
-    pub cleanups_fenced: usize,
-    pub degradations: Vec<ProfileDegradation>,
-}
+// These are exact upstream contract values, not actor-owned transaction state.
+// Keep the legacy port's anyhow signatures until the adapter preserves typed
+// filesystem causes and IPC behavior on all supported platforms.
+pub(crate) use chimera_contracts::profiles::ports::{
+    CleanupOutcome, MaterializationReconcileReport, MaterializationResource, PreparedCleanup,
+    PreparedMaterialization, ProfileDegradation, ProfileDegradationCode, ProfileDegradationPhase,
+};
 
 /// Crate-internal transactional materialization and durable cleanup. Blocking
 /// callers must invoke this port through `spawn_blocking` from the actor layer.

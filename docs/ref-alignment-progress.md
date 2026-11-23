@@ -1,5 +1,45 @@
 # ref 对齐进度
 
+## DIFF-086：ProfileFsPort 文件操作的精准类型化错误映射（2026-11-13）
+
+- **基线与范围**：在固定 `ref@59724e85c`、`backend/chimera-runtime@d56b083` 和本地 `codex/ref-os-dns-20261112` 上继续承接 DIFF-085。只改 `backend/tauri/src/service/profile_file.rs` 文件 I/O 失败的错误映射与对应测试，不改 App/Profiles 配置、文件事务算法、IPC 错误协议或生产行为；未合并、未推送。此轮风险为文件操作错误来源和日志文本的变化。
+- **对应上游**：对照 `ref/backend/nyanpasu-profile-io/src/fs_service.rs` 的 `ProfileFsPort` 实现和 `ref/backend/nyanpasu-contracts/src/profiles/error.rs`，将 `read` 的直接 I/O 错误映射为 `ReadFile`（路径、原始 `io::Error`），将 `write_atomic` 的 `atomicwrites` 错误封装为 `AtomicWrite`（路径、原始库错误对象），将 `read_external` 映射为 `ReadExternalTarget`（外部目标、原始 `io::Error`），将 `ensure_not_symlink` 的叶节点拒绝与 metadata 读取错误分别归类为 `UnexpectedSymlink` 和 `InspectPath`。`ensure_symlink` 保持原判断/链接更新顺序，将已有文件占用、旧链接删除、metadata 读取、链接创建分别归类为 `ExistingFileBlocksSymlink`、`RemoveFile`、`InspectPath` 和 `CreateSymlink`。
+- **兼容与安全边界**：`resolve`、目录链验证、`ensure_managed_parent`、`remove_nofollow`、`symlink_points_to` 及物化 journal/cleanup/recovery 暂仍返回旧的 `anyhow::Result`，避免未保留失败阶段与真实 `io::Error` 的错误统一包装。现有 Tauri `ProfileFsPort`/`ProfileMaterializationPort` **仍然是 `anyhow` 签名**，本轮仅在实际生产代码中通过 `?`/`into()` 保留底层 `ProfileFileError`，使调用方可 `downcast_ref` 且原始来源链不丢失。上游 Contracts 的完整 typed Port **仍未作为生产 Trait 接线**；不同错误文本可能影响日志消费方，须在跨平台/桌面验收时检查。
+- **新增断言**：缺失托管文件与外部文件能精确 downcast 为 `ReadFile` / `ReadExternalTarget`，并保留目标及 `ErrorKind::NotFound`；将目录作为原子写入目标时返回 `AtomicWrite`，原目录标记内容不被改写；既有符号链接拒绝用例强化为 `UnexpectedSymlink`；已有正常文件阻挡 symlink 的保护强化为 `ExistingFileBlocksSymlink`。若 Windows 测试环境禁止创建测试链接，沿用旧测试的权限跳过规则，不能把跳过视为已覆盖 Windows symlink。
+- **实测验证**：`cargo check --locked -p chimera --all-features --tests` **通过**；`cargo test --locked -p chimera --lib service::profile_file::tests -- --test-threads=2` **45/45 通过**；`cargo test --locked -p chimera --lib client::profiles::tests -- --test-threads=2` **86/86 通过**；`cargo fmt --check`、提交钩子进一步校验。未执行 Windows/Linux CI、实际提权/真实配置、全部后端单测或桌面 E2E。
+- **后续工作**：分别审计路径解析/目录链错误、`remove_nofollow`、journal 读写与恢复的 typed mapping，在完整覆盖后再将生产 `ProfileFsPort` 和 `ProfileMaterializationPort` 替换为 Contracts 签名；严格保持 Windows reparse point 拒绝、no-follow、不覆盖旧状态及异步失败传播。
+
+
+## DIFF-085：完整 Profile 错误及文件/事务 Port 契约下沉（2026-11-13）
+
+- **基线与范围**：继续固定 `ref@59724e85c` 和 `backend/chimera-runtime@d56b083`，仅在 `codex/ref-os-dns-20261112` 开发分支操作，不推送、不合并、不触碰实际用户 Profiles 数据或系统代理。Mac 开发助手连接恢复后发现磁盘仅剩 123 MiB，因此在确认 Cargo/rustc 未运行后仅清除 `backend/target/debug/incremental/chimera_lib-*` 等可再生成构建缓存，为编译/测试腾出空间，Git 工作树未受清理影响。
+- **共享错误契约**：以 `ref/backend/nyanpasu-contracts/src/profiles/error.rs` 为源复制完整 `ExpectedNode`、`ProfileFileError`（文件读写、目录/符号链接安全、materialization journal、cleanup fencing、恢复和异常路径）、`ErrorPath` 及已有的 `SubscriptionFetchError`，在 `backend/chimera-contracts/src/profiles/error.rs` 只替换 config crate 名。增加 Chimera 既有路径的显示序列化回归和 `ReadFile` wire shape、原始 `std::io::Error` 来源链测试；不改现有线上错误 wire 协议。
+- **文件和物化端口**：以 `ref/backend/nyanpasu-contracts/src/profiles/ports.rs` 替换之前仅有订阅部分的 Contracts Port，完整保留 `ProfileFsPort`、`ProfileMaterializationPort`、`SubscriptionFetcher` 的上游类型化签名，以及 `MaterializationResource`、`PreparedMaterialization`、`PreparedCleanup`、`CleanupOutcome`、`ProfileDegradation*`、`MaterializationReconcileReport`。除 crate 名和文件行尾规范化外结构与固定 ref 一致。
+- **Tauri 兼容性**：`backend/tauri/src/state/profiles/ports.rs` 原有重复的八种事务/降级数据类型改为共享 Contract 重导出。原有 `ProfileFsPort` / `ProfileMaterializationPort` 的 **`anyhow::Result` 签名暂保留**，它们的 `ProfileFileService` 实现、已有状态机、文件物化、恢复和调用线程规则均未改动。上游 typed Port 已可编译，但尚**未作为生产端口接线**。此分界保证不把所有文件错误草率归成同一个变体，后续需要按文件操作失败阶段逐个转换，保留真实 `io::Error` 来源和清理围栏语义。
+- **实际验证**：`cargo test --locked -p chimera-contracts --lib` **8/8 通过**；`cargo check --locked -p chimera --all-features --tests` **通过**；`cargo test --locked -p chimera --lib service::profile_file::tests -- --test-threads=2` **43/43 通过**；`cargo test --locked -p chimera --lib client::profiles::tests -- --test-threads=2` **86/86 通过**。清理与测试过程未改动 `ref`、runtime 或开发分支以外的 Git 引用。仍未执行 Windows/Linux 真实 CI、完整桌面 E2E 和系统文件错误注入；不宣称跨平台验收通过。
+- **下轮与回滚**：先按 ref 审计 `ProfileFileService` 每个文件与 journal 操作的错误映射，再分阶段让其实现 typed Port 并调整 Actor/IPC 接口；不能简单把 `anyhow` 强制转换成某一个 `ProfileFileError`。此轮的 Contracts 和 Tauri 重导出将分批提交，按相反顺序可独立回滚。
+
+
+## DIFF-084：订阅 HTTP、解析器、设备头和结构化网络错误下沉（2026-11-13）
+
+- **基线与目标**：基于只读固定 `ref@59724e85c`，将 Profiles 订阅下载中的请求、代理读取、响应头解析和错误归类，从 Tauri 的 Profile 文件服务移到独立 `chimera-net`。保持当前 `codex/ref-os-dns-20261112` 开发分支，不改 `ref` 或 runtime gitlink，不碰真实配置/宿主网络、不推送或合并 `master`。风险 L2：影响生产订阅 HTTP 请求与用户代理选择。
+- **上游源码映射**：复制改名 `ref/backend/nyanpasu-net/src/{subscription_http.rs,subscription.rs,device_headers.rs,key_value.rs,policy.rs}` 到 `backend/chimera-net/src/`，连同上游 `subscription_http/error_contract_tests.rs`，主要差异是 `nyanpasu`→`chimera` 品牌和 crate 名。`SubscriptionHttpFetcher::with_http_timeout` 为现有外部兼容测试由仅 test 作用域提升为公开配置方法；实际请求/代理/重试算法未更改。将 `ref/backend/nyanpasu-contracts/src/profiles/error.rs::SubscriptionFetchError` 和 `ref/backend/nyanpasu-contracts/src/profiles/ports.rs` 的 `FetchedSubscription`、`SubscriptionFetcher` 精确抽取到 `chimera-contracts`，保留 HTTP 客户端构建、请求、HTTP 状态及读取响应体四种类型化错误和原始错误来源链。完整 Profile filesystem/materialization 类型化 Port **尚未迁移**。
+- **生产接线**：`backend/tauri/src/service/profile_file.rs` 删除直接创建 `reqwest::Client`、重试/解析的第二套生产实现，使用上游 `chimera_net::subscription_http::SubscriptionHttpFetcher`；Tauri 侧旧 `SubscriptionFetcher` 暂维持 `anyhow::Result` 并通过薄适配器转发（错误以 context 保留来源链）。`backend/tauri/src/state/profiles/ports.rs::FetchedSubscription` 改为重导出唯一共享类型，保留 `content_type`、`file_name` 新元数据；旧 Actor 目前仅消费旧字段。`SelfProxyPortSource` 也只保留共享契约，移除重复 Tauri Port 定义。`setup.rs` 注入实际 `BundleMetadata`、应用 mixed port、实时 OS proxy source 和在 Tauri 宿主构造/净化的 `DeviceHeaders`，使硬件设备识别不下沉到 net crate。保留既有 `clash-chimera/v{version}` 默认 User-Agent、`x-hwid` 以及当前 Profiles Actor 调度/文件事务逻辑。
+- **兼容范围和未迁移代码**：旧 `config/profile/item/remote.rs::subscribe_url` 仍是独立 Legacy 订阅入口；本批没有假装其已迁移。Tauri Profiles Actor 的 `anyhow` 网络错误合同和文件事务相关 Port 仍在 Tauri，下一轮需审查完整上游 Profile 错误和数据所有权后迁移，不能任意更换 IPC wire shape。Tauri 原三个仅验证 Header 解析的测试与重复实现同时删除，等价测试直接存在于上游派生的 `chimera-net/src/subscription.rs`；真实 Tauri HTTP 测试保留。
+- **实际测试**：新 `chimera-net --lib` **19/19** 通过（响应头、元数据、代理优先、直接回退、超时、拒绝/重试策略及错误 wire/source-chain）；`chimera-contracts --lib` **5/5**；Tauri 全功能测试目标 `cargo check --locked -p chimera --all-features --tests` **通过**；Profiles Actor `client::profiles::tests` **86/86**，Profile File `service::profile_file::tests` **43/43**（解析测试转至 net 后）。只使用临时目录及 loopback HTTP；没有实际订阅抓取、宿主代理变更、真实系统提权。完整 workspace、Windows/Linux 编译、真实用户订阅和桌面 E2E 未验证。
+- **剩余工作与回滚**：继续对齐完整 `profiles` 错误/文件 Port、独立 Legacy 订阅 HTTP 调用路径和 App/Net 网络策略；生产行为改动必须保持旧配置与现有行为，发现不兼容需记录理由。共享契约/网络模块和 Tauri 接线分两笔独立提交，均可按相反顺序回滚；不涉及用户数据迁移。
+
+
+## DIFF-083：System Proxy Source / Changelog HTTP 的 ref Port 及真实生产注入（2026-11-13）
+
+- **固定基线与边界**：继续以 `ref@59724e85c` 为只读基准。在 `codex/ref-os-dns-20261112` 迁移按需系统代理 URL 读取及更新、订阅、发布日志网络消费者，不读取/改写真实代理设置以进行测试。不合并、不推送、不修改 `ref` 或 runtime gitlink。风险为网络路由和启动依赖 L2。
+- **上游源码对应**：`ref/backend/nyanpasu-contracts/src/net.rs::SystemProxySource` → `backend/chimera-contracts/src/net.rs` 同形同步 Port；`ref/backend/nyanpasu-os/src/system_proxy_source.rs` → `backend/chimera-os/src/system_proxy_source.rs`，**实现只替换 crate 名**；`ref/backend/nyanpasu-net/src/changelog_http.rs` → 新独立 `backend/chimera-net/src/changelog_http.rs`，保留按每次请求读取代理、连接超时、总超时、错误源的机制，仅更换品牌 `Chimera/`、契约 crate 名和新增隔离测试。新 `chimera-net/src/policy.rs` 当前只引入上游同形 `get_self_proxy(port)`；其余 network policy/diagnostics/订阅适配器暂未迁移，不能宣称整个 net crate 已对齐。
+- **生产接线**：`backend/tauri/src/setup.rs` 创建唯一 `Arc<dyn SystemProxySource>`，分别注入 Profile File、`TauriAppUpdateBackend` 与新的 `chimera_net::changelog_http::ReqwestChangelogHttp`。App Update 保留 Chimera 特有 `fixed-webview` 更新端点与退出逻辑，移除 Tauri 直接 `utils/config::get_system_proxy` 查询。`service/profile_file.rs` 删除私有 `SystemProxySource` 和内置的 `Sysproxy::get_system_proxy`，在构造时接受 shared Port；自身代理优先、系统代理次之、失败回退直连的语义不变。Legacy `utils/config.rs::get_system_proxy` 保留兼容函数签名，但委托同一个 OS 实现以覆盖旧订阅/HTTP 调用方，不再重复实现原始查询。
+- **不迁移的真实差异**：IPC、Agent diagnostics/actions 及遗留 Sysopt 读取需要完整 `Sysproxy` 字段（enable/host/port/bypass）以进行状态诊断和恢复，不能错误地替换成只返回 URL 的共享 Port。这部分尚有直接 OS 读取，待后续分离类型化完整状态读取端口和所有权。测试用的 `ProfileFileService::new` 仅在 `cfg(test)` 下可用并注入无副作用假源；生产使用 `new_with_system_proxy`。
+- **本轮验收**：Tauri `cargo check --locked -p chimera --all-features --tests` 通过；Profile File 定向测试 **46/46**（新增系统代理读取错误回退直连、自身代理优先且不额外读取系统代理）；App Update 定向测试 **3/3**；新 `chimera-net` **1/1**（通过两个不同的本地 HTTP 代理验证同一 Changelog 客户端每次请求读取当前代理）。全部使用模拟端口或本地回环网络，未修改宿主系统代理。提交前还需 Rustfmt/Clippy hooks；未执行 Windows/Linux CI、真实用户代理切换、发行包更新及完整桌面 E2E。
+- **回滚**：可按 Contracts/OS source 与 Net/Tauri 接线批次依次回滚；无配置迁移或宿主网络侧效应。后续优先依 `ref/backend/nyanpasu-net/src` 迁移更完整的网络策略和订阅处理，但不得在尚无验证时破坏 Legacy Profile 兼容语义。
+
+
 ## DIFF-082：同步最新 origin/master，保留上游 CI 修复并 rebase（2026-11-13）
 
 - **来源与操作**：从本地 `master@7f08640f`、开发分支 `codex/ref-os-dns-20261112@2d8e2351` 开始，`git fetch --prune origin master` 获取远程 `origin/master@ba79abf6`，新增 6 笔主线提交（Profiles 转换链、E2E、manifest、CI 测试修复）。初始相对远程主线为落后 6、领先 13。仅 `backend/tauri/src/client/core_lifecycle/mod.rs` 与本地改动重叠，`ref`/runtime gitlink 无变化。随后对**当前开发分支**执行有 GPG 签名的 `git rebase origin/master`；没有更改本地 `master` 指针、远程 `master`、配置或子模块，也没有推送。

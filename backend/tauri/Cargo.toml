@@ -202,6 +202,7 @@ zip = "8"
 num_cpus = "1"
 sysinfo = "0.39"
 
+chimera-net = { path = '../chimera-net' }
 chimera-os = { path = '../chimera-os' }
 chimera-contracts = { path = '../chimera-contracts', default-features = false, features = [
   'test-support'
