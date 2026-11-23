@@ -1,7 +1,7 @@
 //! Typed client for the ProfilesActor. Committed reads come from the state
 //! snapshot handle; writes go through the actor with no RPC timeout.
 
-use crate::state::mutation::MutationCoordinator;
+use crate::state::mutation::{MutationCoordinator, ProfileContentLock, ProfileContentReader};
 
 use std::{sync::Arc, time::Duration};
 
@@ -34,6 +34,7 @@ pub(super) struct ProfilesClientInner {
     /// Committed state, read straight from the coordinator's store so a reader
     /// never queues behind a mutation the actor is still holding open.
     pub(super) snapshot: StateSnapshot<Profiles>,
+    pub(super) content_lock: ProfileContentLock,
     pub(super) jobs: crate::state::profiles::jobs::ProfileJobs,
     #[cfg(test)]
     _test_owner: Option<TestJobsOwner>,
@@ -157,6 +158,7 @@ impl ProfilesClient {
         }
 
         let snapshot = manager.snapshot_handle();
+        let content_lock = ProfileContentLock::default();
         snapshot
             .load()
             .state
@@ -168,6 +170,7 @@ impl ProfilesClient {
             ProfilesActor,
             ProfilesActorArgs {
                 mutations,
+                content_lock: content_lock.clone(),
                 manager,
                 fs,
                 fetcher,
@@ -184,6 +187,7 @@ impl ProfilesClient {
             inner: Arc::new(ProfilesClientInner {
                 actor_ref,
                 snapshot,
+                content_lock,
                 jobs,
                 #[cfg(test)]
                 _test_owner: test_owner,
@@ -201,6 +205,12 @@ impl ProfilesClient {
     /// without holding a client that could write it.
     pub(crate) fn snapshot_handle(&self) -> StateSnapshot<Profiles> {
         self.inner.snapshot.clone()
+    }
+
+    /// Ref: a committed profile document and its managed bytes must be read
+    /// under one consistency fence. The client remains read-only to callers.
+    pub(crate) fn content_reader(&self) -> ProfileContentReader {
+        ProfileContentReader::new(self.inner.snapshot.clone(), self.inner.content_lock.clone())
     }
 
     pub async fn save_file(

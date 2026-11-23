@@ -24,7 +24,7 @@ use crate::{
         policy::CommandClass,
     },
     core::migration::modules::profiles::ProfilesFormat,
-    state::mutation::MutationCoordinator,
+    state::mutation::{MutationCoordinator, ProfileContentLock},
 };
 use tokio::task::JoinHandle;
 
@@ -136,6 +136,7 @@ pub enum ReorderOp {
 pub struct ProfilesActorArgs {
     pub(crate) mutations: MutationCoordinator,
     pub manager: PersistentStateManager<Profiles, ProfilesFormat>,
+    pub(crate) content_lock: ProfileContentLock,
     pub fs: Arc<dyn ProfileFsPort>,
     pub fetcher: Arc<dyn SubscriptionFetcher>,
     pub(crate) materialization: Arc<dyn ProfileMaterializationPort>,
@@ -145,6 +146,7 @@ pub struct ProfilesActorArgs {
 pub struct ProfilesActorState {
     mutations: MutationCoordinator,
     manager: PersistentStateManager<Profiles, ProfilesFormat>,
+    content_lock: ProfileContentLock,
     index: ProfileDependencyIndex,
     fs: Arc<dyn ProfileFsPort>,
     fetcher: Arc<dyn SubscriptionFetcher>,
@@ -674,6 +676,7 @@ impl ProfilesActor {
         cleanup: PreparedCleanup,
         snapshot: &Profiles,
     ) -> Vec<ProfileDegradation> {
+        let _guard = state.content_lock.write().await;
         let retry = cleanup.clone();
         if let Err(error) =
             Self::materialization_call(state, move |port| port.activate_cleanup(&cleanup)).await
@@ -824,6 +827,18 @@ impl ProfilesActor {
             .mutations
             .participant(operation.clone(), hints, class)
             .map_err(|error| ProfilesError::Persist(error.to_string()))?;
+        let write_lock = state.content_lock.clone();
+        // The manager runs local_write after the legacy participant's preflight.
+        // It then commits/compensates and acknowledges the participant before
+        // returning. Keep the write fence in a shared owner slot for *that*
+        // entire phase, including config publication and recovery. This slot
+        // is empty for preflight refusals, which never promoted a source file.
+        let fence = Arc::new(std::sync::Mutex::new(None));
+        let write_fence = Arc::clone(&fence);
+        // Retain the fence in the detached persistence owner even when the
+        // caller is cancelled. A dropped waiter must not free the fence while
+        // a file promotion or source publication is still in flight.
+        let recovery_fence = Arc::clone(&fence);
         let write_port = state.materialization.clone();
         let write_resource = prepared.clone();
         let recover_port = state.materialization.clone();
@@ -836,6 +851,12 @@ impl ProfilesActor {
                 candidate.clone(),
                 participant,
                 move || async move {
+                    if write_resource.is_some() {
+                        let guard = write_lock.write().await;
+                        *write_fence
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(guard);
+                    }
                     tokio::task::spawn_blocking(move || {
                         if let Some(prepared) = write_resource {
                             write_port.promote(&prepared)?;
@@ -845,6 +866,7 @@ impl ProfilesActor {
                     .await?
                 },
                 move || async move {
+                    let _owner_fence = recovery_fence;
                     tokio::task::spawn_blocking(move || {
                         let resource = recover_resource
                             .as_ref()
@@ -865,6 +887,14 @@ impl ProfilesActor {
                 },
             )
             .await;
+        // Publication/compensation and the participant's settlement have
+        // completed. Do not hold the file fence for later job reconciliation.
+        drop(
+            fence
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .take(),
+        );
         match result {
             Ok(ReplaceIfVersionResult::Replaced) => {}
             result => {
@@ -879,6 +909,14 @@ impl ProfilesActor {
                         ))
                 );
                 let mut failures = Vec::new();
+                // A refused preflight never entered the manager's local write
+                // step. Compensation can still touch staged resource journals,
+                // so fence it against a simultaneous committed-content read.
+                let _cleanup_guard = if before_write {
+                    Some(state.content_lock.write().await)
+                } else {
+                    None
+                };
                 if before_write {
                     if let Some(prepared) = prepared {
                         if let Err(error) = Self::materialization_call(state, move |port| {
@@ -985,6 +1023,7 @@ impl ProfilesActor {
     async fn reconcile_materializations(
         state: &ProfilesActorState,
     ) -> anyhow::Result<MaterializationReconcileReport> {
+        let _guard = state.content_lock.write().await;
         let snapshot = Self::current_state(state);
         let materialization = Arc::clone(&state.materialization);
         tokio::task::spawn_blocking(move || materialization.reconcile(&snapshot))
@@ -1201,6 +1240,7 @@ impl Actor for ProfilesActor {
         // armed. Blocking port work stays off the async runtime via spawn_blocking.
         let loaded = args.manager.snapshot_handle().load().state.clone();
         let materialization = Arc::clone(&args.materialization);
+        let _guard = args.content_lock.write().await;
         let report = tokio::task::spawn_blocking(move || materialization.reconcile(&loaded))
             .await
             .map_err(|error| {
@@ -1214,6 +1254,7 @@ impl Actor for ProfilesActor {
                 ))
             })?;
         Self::log_reconcile_report(&report);
+        drop(_guard);
 
         args.jobs
             .reconcile(
@@ -1228,6 +1269,7 @@ impl Actor for ProfilesActor {
         Ok(ProfilesActorState {
             mutations: args.mutations,
             manager: args.manager,
+            content_lock: args.content_lock,
             index,
             fs: args.fs,
             fetcher: args.fetcher,

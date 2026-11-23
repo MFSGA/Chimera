@@ -1,0 +1,24 @@
+[package]
+name = "chimera-state-engine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+chimera-persistence = { path = "../chimera-persistence" }
+anyhow = "1"
+bon = "3"
+arc-swap = "1"
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+serde = { version = "1.0", features = ["derive", "rc"] }
+atomicwrites = "0.4.4"
+camino = { version = "1.1.9", features = ["serde1"] }
+fs-err.workspace = true
+
+[dev-dependencies]
+tempfile = "3"
+serde_yaml_ng.workspace = true
+tokio = { workspace = true, features = ["full", "test-util"] }

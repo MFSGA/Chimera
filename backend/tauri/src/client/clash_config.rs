@@ -14,8 +14,8 @@ use chimera_config::clash::config::{
     clash_strategy::{PortStrategy, PortStrategyKind},
     overrides::ClashGuardOverridesPatch,
 };
-use chimera_core::state::{PersistentStateManagerSetup, StateSnapshot};
 use chimera_ipc::api::status::CoreState;
+use chimera_state_engine::{PersistentStateManagerSetup, StateSnapshot};
 use ractor::{Actor, ActorRef, RpcReplyPort, rpc::CallResult};
 use serde_yaml::{Mapping, Value};
 use struct_patch::Patch;
@@ -118,10 +118,7 @@ impl ClashConfigClient {
                 .await
                 .context("failed to load clash persistent state manager")?
         } else {
-            setup
-                .from_state(seed)
-                .await
-                .context("failed to initialize clash persistent state manager")?
+            setup.from_state(seed)
         };
         let snapshot = manager.snapshot_handle();
         let (actor_ref, _handle) = Actor::spawn(

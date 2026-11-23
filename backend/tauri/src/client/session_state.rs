@@ -6,7 +6,7 @@ use chimera_config::state::{
     PersistentState, PersistentStatePatch,
     window::{WindowLabel, WindowState},
 };
-use chimera_core::state::{PersistentStateManagerSetup, StateSnapshot};
+use chimera_state_engine::{PersistentStateManagerSetup, StateSnapshot};
 use ractor::{Actor, ActorRef, RpcReplyPort, rpc::CallResult};
 use struct_patch::Patch;
 
@@ -64,10 +64,7 @@ impl SessionStateClient {
         let setup = PersistentStateManagerSetup::<PersistentState>::builder()
             .config_path(config_path)
             .assemble();
-        let manager = setup
-            .from_state(persisted.unwrap_or(seed))
-            .await
-            .context("failed to initialize session persistent state manager")?;
+        let manager = setup.from_state(persisted.unwrap_or(seed));
         let snapshot = manager.snapshot_handle();
         let (actor_ref, _handle) = Actor::spawn(
             None,

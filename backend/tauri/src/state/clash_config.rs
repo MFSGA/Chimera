@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use anyhow::Context as _;
 use chimera_config::clash::config::{ClashConfig, ClashConfigPatch};
-use chimera_core::state::{PersistentStateManager, ReplaceIfVersionResult, Version};
+use chimera_state_engine::{PersistentStateManager, ReplaceIfVersionResult, Version};
 use ractor::{Actor, ActorProcessingErr, ActorRef, RpcReplyPort};
 use struct_patch::Patch;
 
@@ -172,7 +172,7 @@ impl Actor for ClashConfigActor {
 mod tests {
     use super::*;
     use crate::state::mirror::PreparedLegacyMirror;
-    use chimera_core::state::PersistentStateManagerSetup;
+    use chimera_state_engine::PersistentStateManagerSetup;
     use ractor::rpc::CallResult;
     use struct_patch::Patch;
     use tempfile::tempdir;
@@ -199,9 +199,7 @@ mod tests {
         let manager = PersistentStateManagerSetup::<ClashConfig>::builder()
             .config_path(path)
             .assemble()
-            .from_state(ClashConfig::default())
-            .await
-            .expect("clash config manager should initialize");
+            .from_state(ClashConfig::default());
         let (actor_ref, _handle) = Actor::spawn(
             None,
             ClashConfigActor,

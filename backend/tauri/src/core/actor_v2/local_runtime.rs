@@ -789,12 +789,12 @@ impl LocalRuntimeHost {
             bail!("promoted runtime product differs from the confirmed runtime receipt");
         }
         self.lifecycle.publish_promoted(product.clone());
-        if let Err(error) = self.lifecycle.publish_applied(product) {
+        if let Err(error) = self.lifecycle.publish_applied(product.clone()) {
             return Err(error).context(
                 "the core applied the committed Profile runtime, but Chimera could not publish its applied snapshot",
             );
         }
-        Config::runtime().apply();
+        Config::publish_applied_runtime_legacy(&product.config);
         Ok(())
     }
 
@@ -983,13 +983,13 @@ impl LocalRuntimeHost {
             bail!("restored runtime product differs from its confirmed receipt");
         }
         self.lifecycle.publish_promoted(snapshot.clone());
-        if let Err(error) = self.lifecycle.publish_applied(snapshot) {
+        if let Err(error) = self.lifecycle.publish_applied(snapshot.clone()) {
             self.outcome_uncertain.store(true, Ordering::Release);
             return Err(error).context(
                 "the core restored the runtime, but Chimera could not publish its applied snapshot",
             );
         }
-        Config::runtime().apply();
+        Config::publish_applied_runtime_legacy(&snapshot.config);
         Ok(())
     }
 

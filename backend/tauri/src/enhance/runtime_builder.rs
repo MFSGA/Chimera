@@ -157,16 +157,15 @@ pub(crate) async fn build_from_profiles_with_inspection(
     } else {
         Vec::new()
     };
-    let content = FsProfileContentSource::new(profiles_dir);
-    let data = chimera_core::client::runtime_build::RuntimeBuildService::build_with_capture(
-        input,
-        content,
-        staged_content,
-        builtin_transforms,
-        || Ok(Box::new(EnhanceScriptRunner::new()?)),
-        strict_transforms,
-    )
-    .await?;
+    // Ref runtime_build.rs: host ports are injected once, not discovered
+    // behind a build. The script runner is created inside spawn_blocking.
+    let builder = chimera_core::client::runtime_build::RuntimeBuildService::new(
+        Arc::new(FsProfileContentSource::new(profiles_dir)),
+        Arc::new(|| Ok(Box::new(EnhanceScriptRunner::new()?))),
+    );
+    let data = builder
+        .build(input, staged_content, builtin_transforms, strict_transforms)
+        .await?;
     Ok((
         data.config,
         data.exists_keys,
@@ -193,6 +192,8 @@ fn map_core(core: LegacyClashCore) -> chimera_config::application::ClashCore {
 mod tests {
     use super::*;
     use crate::enhance::{EnhanceScriptRunner, FsProfileContentSource};
+    #[cfg(target_os = "linux")]
+    use chimera_config::clash::config::TransparentProxyMode;
     use chimera_config::{
         clash::config::overrides::ManageableField,
         profile::{
@@ -313,21 +314,31 @@ mod tests {
         assert!(data.inspection.final_node < data.inspection.graph.nodes.len() as u32);
 
         let path_to_remove = path.clone();
-        let second = chimera_core::client::runtime_build::RuntimeBuildService::build_with_capture(
-            after_input,
-            FsProfileContentSource::new(directory.path().to_path_buf()),
-            BTreeMap::new(),
-            Vec::new(),
-            move || {
-                // Runs *after* capture; deleting the file must not affect
-                // the executor's already-frozen document.
+        // Exercise the new injected service that the production Tauri builder
+        // also uses, rather than only the earlier static compatibility helper.
+        let builder = chimera_core::client::runtime_build::RuntimeBuildService::new(
+            Arc::new(FsProfileContentSource::new(directory.path().to_path_buf())),
+            Arc::new(move || {
+                // This closure is called on the blocking build thread, after
+                // the managed file has been captured into FrozenProfileContent.
                 std::fs::remove_file(&path_to_remove)?;
                 Ok(Box::new(EchoRunner))
-            },
-            true,
-        )
-        .await
-        .unwrap();
+            }),
+        );
+        let frozen = builder
+            .capture_content(Arc::clone(&after_input.profiles), BTreeMap::new())
+            .await
+            .unwrap();
+        assert_eq!(
+            frozen
+                .read(&ManagedProfilePath::new("active.yaml").unwrap())
+                .unwrap(),
+            disk,
+        );
+        let second = builder
+            .build(after_input, BTreeMap::new(), Vec::new(), true)
+            .await
+            .unwrap();
         assert_eq!(
             second
                 .config

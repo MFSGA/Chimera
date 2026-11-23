@@ -121,6 +121,7 @@ pub(in crate::client) struct CoreLifecycleWorkflow {
     application: ApplicationClient,
     clash: ClashConfigClient,
     profiles: Option<chimera_core::state::StateSnapshot<chimera_config::profile::Profiles>>,
+    content_reader: Option<crate::state::mutation::ProfileContentReader>,
     core: Arc<dyn CoreLifecyclePort>,
     installer: Arc<dyn BinaryInstaller>,
     service: Arc<dyn ServiceLifecyclePort>,
@@ -145,6 +146,7 @@ impl CoreLifecycleWorkflow {
             application,
             clash,
             profiles,
+            content_reader: None,
             core,
             installer,
             service,
@@ -154,6 +156,14 @@ impl CoreLifecycleWorkflow {
             service_failed_generation_shared: Arc::new(AtomicU64::new(0)),
             service_status: None,
         }
+    }
+
+    pub(super) fn with_profile_content_reader(
+        mut self,
+        reader: Option<crate::state::mutation::ProfileContentReader>,
+    ) -> Self {
+        self.content_reader = reader;
+        self
     }
 
     pub(super) fn with_service_status(
@@ -1185,7 +1195,16 @@ impl CoreLifecycleWorkflow {
     ) -> anyhow::Result<RuntimeInputs> {
         let profiles_dir = crate::utils::dirs::app_profiles_dir()?;
         let source = FsProfileContentSource::new(profiles_dir);
-        let content = FrozenProfileContent::capture_content(&profiles, &source, staged_content);
+        let content = match &self.content_reader {
+            Some(reader) => {
+                reader
+                    .candidate(async {
+                        FrozenProfileContent::capture_content(&profiles, &source, staged_content)
+                    })
+                    .await
+            }
+            None => FrozenProfileContent::capture_content(&profiles, &source, staged_content),
+        };
         Ok(RuntimeInputs {
             app,
             clash,
@@ -1194,18 +1213,74 @@ impl CoreLifecycleWorkflow {
         })
     }
 
+    /// Ref: sample committed Profiles and capture all managed file inputs
+    /// under one fence. The old workflow otherwise could pair a promoted file
+    /// with a snapshot from before its successful source commit.
+    async fn capture_committed_profile_inputs_for(
+        &self,
+        app: ChimeraAppConfig,
+        clash: chimera_config::clash::config::ClashConfig,
+    ) -> anyhow::Result<RuntimeInputs> {
+        if let Some(reader) = &self.content_reader {
+            let profiles_dir = crate::utils::dirs::app_profiles_dir()?;
+            return reader
+                .committed(|versioned| async move {
+                    let profiles = Arc::new(versioned.state.clone());
+                    let source = FsProfileContentSource::new(profiles_dir);
+                    let content = FrozenProfileContent::capture_content(
+                        &profiles,
+                        &source,
+                        Default::default(),
+                    );
+                    Ok(RuntimeInputs {
+                        app,
+                        clash,
+                        profiles,
+                        content,
+                    })
+                })
+                .await;
+        }
+        let profiles = self.profiles.as_ref().ok_or_else(|| {
+            anyhow::anyhow!("Profile state is unavailable for committed runtime capture")
+        })?;
+        self.capture_profile_inputs_for(
+            app,
+            clash,
+            Arc::new(profiles.load().state.clone()),
+            Default::default(),
+        )
+        .await
+    }
+
+    async fn capture_reconcile_committed_target(
+        &self,
+        app: ChimeraAppConfig,
+        clash: chimera_config::clash::config::ClashConfig,
+    ) -> anyhow::Result<(
+        String,
+        ChimeraAppConfig,
+        chimera_config::clash::config::ClashConfig,
+        Arc<chimera_config::profile::Profiles>,
+        std::collections::BTreeMap<String, String>,
+    )> {
+        let inputs = self
+            .capture_committed_profile_inputs_for(app, clash)
+            .await?;
+        let target = inputs.target_key()?;
+        let (app, clash, profiles, content) = inputs.into_parts()?;
+        Ok((target, app, clash, profiles, content))
+    }
+
     pub(in crate::client) async fn startup_target_identity(&self) -> anyhow::Result<String> {
-        if let Some(profiles) = &self.profiles {
-            let profiles = Arc::new(profiles.load().state.clone());
-            let inputs = self
-                .capture_profile_inputs_for(
+        if self.profiles.is_some() {
+            return self
+                .capture_committed_profile_inputs_for(
                     self.application.get_typed(),
                     self.clash.get()?,
-                    profiles,
-                    Default::default(),
                 )
-                .await?;
-            return inputs.target_key();
+                .await?
+                .target_key();
         }
         self.startup_source_identity(None)
     }
@@ -1432,14 +1507,8 @@ impl CoreLifecycleWorkflow {
             );
             return self.core.reconcile(clash, target_core, run_type).await;
         };
-        let (target, app, clash, profiles, staged_content) = self
-            .capture_reconcile_target(
-                app,
-                clash,
-                Arc::new(profiles.load().state.clone()),
-                Default::default(),
-            )
-            .await?;
+        let (target, app, clash, profiles, staged_content) =
+            self.capture_reconcile_committed_target(app, clash).await?;
         let target_core = app.core;
         let run_type = crate::core::RunType::classify(
             app.enable_service_mode,
@@ -1473,14 +1542,8 @@ impl CoreLifecycleWorkflow {
                 .reconcile_after_service_release(clash, app.core)
                 .await;
         };
-        let (target, app, clash, profiles, staged_content) = self
-            .capture_reconcile_target(
-                app,
-                clash,
-                Arc::new(profiles.load().state.clone()),
-                Default::default(),
-            )
-            .await?;
+        let (target, app, clash, profiles, staged_content) =
+            self.capture_reconcile_committed_target(app, clash).await?;
         self.core
             .reconcile_profiles_after_service_release(
                 clash,
@@ -1522,18 +1585,8 @@ impl CoreLifecycleWorkflow {
     }
 
     async fn retry_deferred_profiles(&self, expected_digest: &str) -> anyhow::Result<()> {
-        let profiles = self
-            .profiles
-            .as_ref()
-            .ok_or_else(|| {
-                anyhow::anyhow!("Profile state is unavailable for deferred runtime retry")
-            })?
-            .load()
-            .state
-            .clone();
-        let profiles = Arc::new(profiles);
         let inputs = self
-            .capture_profile_inputs(profiles, Default::default())
+            .capture_committed_profile_inputs_for(self.application.get_typed(), self.clash.get()?)
             .await?;
         if inputs.target_key()? != expected_digest {
             return Ok(());

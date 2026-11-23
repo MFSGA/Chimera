@@ -56,6 +56,7 @@ thiserror = { workspace = true }
 # 
 chimera-macro = { path = "../chimera-macro" }
 chimera-core = { path = "../chimera-core" }
+chimera-state-engine = { path = "../chimera-state-engine" }
 chimera-config = { path = "../chimera-config" }
 chimera-geodata = { path = "../chimera-geodata" }
 chimera-traffic = { path = "../chimera-traffic", features = ["specta"] }

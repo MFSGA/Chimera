@@ -1560,6 +1560,36 @@ impl CoreLifecycleClient {
         shutdown: CancellationToken,
         tasks: &TaskTracker,
     ) -> anyhow::Result<Self> {
+        Self::spawn_with_profiles_and_content(
+            core,
+            application,
+            clash,
+            profiles,
+            None,
+            runtime_paths,
+            installer,
+            service,
+            shutdown,
+            tasks,
+        )
+        .await
+    }
+
+    /// Production passes the read fence owned by the Profiles source actor;
+    /// test adapters without a ProfilesActor may keep the old snapshot path.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) async fn spawn_with_profiles_and_content(
+        core: Arc<dyn CoreLifecyclePort>,
+        application: ApplicationClient,
+        clash: ClashConfigClient,
+        profiles: Option<chimera_core::state::StateSnapshot<chimera_config::profile::Profiles>>,
+        content_reader: Option<crate::state::mutation::ProfileContentReader>,
+        runtime_paths: RuntimePaths,
+        installer: Arc<dyn ports::BinaryInstaller>,
+        service: Arc<dyn ports::ServiceLifecyclePort>,
+        shutdown: CancellationToken,
+        tasks: &TaskTracker,
+    ) -> anyhow::Result<Self> {
         let recovery_notify = core.recovery_notify();
         let service_status = ServiceHostWatch::new();
         let service_status_rx = service_status.subscribe();
@@ -1572,7 +1602,8 @@ impl CoreLifecycleClient {
             runtime_paths,
             service.clone(),
         )
-        .with_service_status(service_status_rx.clone());
+        .with_service_status(service_status_rx.clone())
+        .with_profile_content_reader(content_reader);
         let startup_owner_unproven = lifecycle.startup_owner_unproven_handle();
         #[cfg(not(test))]
         let startup_owner_unproven_signal = startup_owner_unproven.clone();

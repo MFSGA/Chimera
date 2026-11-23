@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use anyhow::Context as _;
 use chimera_config::application::{ChimeraAppConfig, ChimeraAppConfigPatch, ReleaseChannel};
-use chimera_core::state::{PersistentStateManager, ReplaceIfVersionResult, Version};
+use chimera_state_engine::{PersistentStateManager, ReplaceIfVersionResult, Version};
 use ractor::{Actor, ActorProcessingErr, ActorRef, RpcReplyPort};
 use struct_patch::Patch;
 
@@ -197,7 +197,7 @@ impl Actor for ApplicationActor {
 mod tests {
     use super::*;
     use crate::state::mirror::PreparedLegacyMirror;
-    use chimera_core::state::PersistentStateManagerSetup;
+    use chimera_state_engine::PersistentStateManagerSetup;
     use ractor::rpc::CallResult;
     use tempfile::tempdir;
 
@@ -245,9 +245,7 @@ mod tests {
         let manager = PersistentStateManagerSetup::<ChimeraAppConfig>::builder()
             .config_path(path)
             .assemble()
-            .from_state(config)
-            .await
-            .expect("application manager should initialize");
+            .from_state(config);
         let (actor_ref, _handle) = Actor::spawn(
             None,
             ApplicationActor,
