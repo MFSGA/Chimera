@@ -13,22 +13,23 @@ import {
 import { useBlockTask } from '@/components/providers/block-task-provider';
 import { formatError } from '@/utils';
 import { message } from '@/utils/notification';
+import { runProviderAction } from './provider-action';
 
 export const useRulesProviderUpdate = (data: ClashRulesProviderQueryItem) => {
   const updateProvider = useUpdateClashRulesProvider();
   const blockTask = useBlockTask(
     `update-rules-provider-${data.name}`,
-    async () => {
-      try {
-        await updateProvider.mutateAsync(data.name);
-      } catch (error) {
-        console.error('Failed to update rules provider', error);
-        await message(`Update provider failed: \n ${formatError(error)}`, {
-          title: 'Error',
-          kind: 'error',
-        });
-      }
-    },
+    async () =>
+      runProviderAction(
+        () => updateProvider.mutateAsync(data.name),
+        async (error) => {
+          console.error('Failed to update rules provider', error);
+          await message(`Update provider failed: \n ${formatError(error)}`, {
+            title: 'Error',
+            kind: 'error',
+          });
+        },
+      ),
   );
 
   return blockTask;

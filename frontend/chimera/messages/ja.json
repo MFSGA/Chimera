@@ -481,6 +481,8 @@
   "providers_rules_rule_count_label": "{count} 件のルール",
   "providers_info_title": "リソースの情報",
   "providers_subscription_title": "状態と残量",
+  "providers_healthcheck_provider": "ヘルスチェック",
+  "providers_healthcheck_failed_message": "{name} のヘルスチェックに失敗しました",
   "providers_update_provider": "更新",
   "dashboard_context_menu_edit_widgets": "ウィジェットを編集",
   "dashboard_context_menu_add_widgets": "ウィジェットを追加",

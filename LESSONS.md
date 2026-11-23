@@ -97,6 +97,7 @@
 | LESSON-20261119-003 | 2026-11-19 | E2E / Runtime / Proxies | 隔离 UID=root 让 Service probe 变 Unknown；首个 Config 自动激活后重选只产生 unchanged；真实 Core+13 项 WebKit E2E 复验通过 | Verified |
 | LESSON-20261119-004 | 2026-11-19 | E2E / Router | 点击导航后漏等嵌套动画导致几何和 Tooltip 误失败；旧路径重定向不能用 pathname 恒等辅助函数验证 | Verified |
 | LESSON-20261120-001 | 2026-11-20 | Proxies / Delay UI | Native Core 已解析实时测试参数；UI 漏捕获延迟请求失败，沿 ref 五语文案补可见反馈并由真实 WebKitGTK 验证 | Verified |
+| LESSON-20261120-002 | 2026-11-20 | Providers / E2E / Task | 实测 Core SAFE_PATHS 拒绝 config 目录下的 Provider；改用隔离 data，Native 更新失败必须让 Task 保持 rejected | Verified |
 
 ### LESSON-20261113-001/002：架构迁移要覆盖原生运行时与稀疏配置
 
@@ -1378,3 +1379,10 @@ backend/Cargo.toml -p chimera --lib core::clash::proxies::tests:: -- --nocapture
 - **真实 E2E 证据**：在网络命名空间隔离的 WebKitGTK 与真实 Mihomo 上，合成不可达的 SOCKS5 节点导致整组及单节点真实 native 测试均返回 error；两项 E2E 检查通知可见、不显示成功、节点选中没有被内部按钮点击改动并恢复原选择。首次增强套件节点 10/10、相邻 Rules 4/4、Proxies 空态 2/2 全部通过；收紧为离线节点必须返回 error 后，重新执行节点 E2E 10/10 成功，连同同版相邻 6 项合计 16/16。Linux 测试不覆盖外网成功分支或 Windows/macOS 平台，Core 安全约束与 IPC 接口均未修改。
 
 - **2026-11-20 最新基线独立重测**：快进 `fc50370d` 至 `5bbeec75`（只变动 Runtime 启动流程与文档）后，完整重建 E2E native binary、再次独立运行 Linux WebKitGTK 套件，结果 Proxies 10/10、Rules 4/4、Proxies 空态 2/2，**最新 SHA 总计 16/16**。本轮 Proxies 套件用时 1m03.8s，上一基线约 20.2s，另有 mixed port 未确认一次警告；因 Core 后续 Running、UI 测试全过，记录为待排查的启动时序/性能线索，而非凭时长推断 Runtime 必然有错误。严格区分跨 SHA 测试证据。
+
+### LESSON-20261120-002：Provider E2E 不应绕过 Core SAFE_PATHS，更新失败不能被 Task 记录为成功
+
+- **反例一（Native 安全约束）**：真实 `providers-detail-main.e2e.ts` 初次使用临时 `app/config/providers-detail-fixture` 作为 `file` Provider 绝对路径，`create_profile` 虽落盘，但自动激活候选检查拒绝，返回 `committed_degraded: profile_auto_activation_failed`，具体为 `path is not subpath of home directory or SAFE_PATHS`；工具链报告的 allowed paths 明确包含独立 `app/data`。因此测试应把文件放入运行时允许的隔离数据目录、验证实际资源被 Core 读取，而不是修改 `SAFE_PATHS`、丢弃状态检查或假造 Provider API 返回。修正后真实 Linux WebKitGTK + Mihomo 详情测试 **2/2 通过**，可见 Proxy 与 Rule Provider InfoCard，测试清理保留原始配置不变量。
+- **反例二（UI Task 误成功）**：三个 Provider mutation Hook 原先 `catch` 中显示失败对话框后直接返回；`BlockTaskProvider.run()` 认为 Promise fulfilled，给真实拒绝的 Native 操作写入 `success`。现在三条 Hook 通过统一 `runProviderAction` 报错并保留原始 rejected Promise，即使错误对话框自身失败也保持原始拒绝；卡片 click handler 捕获已通知的错误，避免未处理异步异常。纯单元测试覆盖操作成功/失败/通知失败，且详情 UI 按 ref 恢复专用健康检查文案和当前语言相对时间。未把请求成功视为资源肯定更新；其网络/文件持久化结果需另行验收。
+
+- **2026-11-20 后续最新 SHA 桌面复验**：CoreLifecycle 新增启动协调提交后同步本地到 `7b61f150`，完整重构原生测试应用，真正隔离 WebKitGTK/Mihomo `providers-detail-main.e2e.ts` **2/2**、`providers-main-layout.e2e.ts` **2/2**，合计 **4/4**。新 Runtime 的启动等待较长、存在一次 mixed port 未确认的警告，但随后 Core Running、Profile/Provider UI 正确、清理成功；保留为另案性能与启动时序排查，不从 UI 测试反推出 Runtime 无性能问题。
