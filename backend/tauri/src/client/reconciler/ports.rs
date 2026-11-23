@@ -1,16 +1,11 @@
 use super::super::runtime;
 use chimera_contracts::runtime_error::RuntimeCheckUnavailable;
 
-use super::inputs::FrozenProfileContent;
 use async_trait::async_trait;
-use chimera_config::{
-    profile::Profiles,
-    runtime::executor::{PortError, ProfileContentSource, ScriptRunner},
-};
+use chimera_config::runtime::executor::{PortError, ScriptRunner};
 use chimera_contracts::publish::PublishRuntimeError;
 use chimera_core::client::core_spec::CoreSpecError;
 use chimera_core::client::runtime_build::RuntimeBuildError;
-use std::collections::BTreeMap;
 use std::sync::Arc;
 
 /// Builds a script runner on the blocking thread that will use and drop it.
@@ -65,33 +60,4 @@ pub(in crate::client) enum RuntimeCheckOutcome {
 #[async_trait]
 pub(in crate::client) trait RuntimeValidatorPort: Send + Sync + 'static {
     async fn check(&self, request: RuntimeCheckRequest<'_>) -> RuntimeCheckOutcome;
-}
-
-// Chimera temporary compatibility: the active CoreLifecycle still asks its
-// injected filesystem content source to capture staged bytes. Remove after
-// RuntimeBuildPort takes ownership of the candidate build.
-/// Capture the active managed-file dependency closure from one supplied
-/// content source. A staged candidate may replace bytes it explicitly owns.
-/// File reads are fenced by RuntimePreparation, not by this port.
-#[async_trait::async_trait]
-pub(in crate::client) trait RuntimeContentPort: Send + Sync {
-    async fn capture_content(
-        &self,
-        profiles: &Profiles,
-        staged_content: BTreeMap<String, String>,
-    ) -> FrozenProfileContent;
-}
-
-#[async_trait::async_trait]
-impl<T> RuntimeContentPort for T
-where
-    T: ProfileContentSource + Send + Sync,
-{
-    async fn capture_content(
-        &self,
-        profiles: &Profiles,
-        staged_content: BTreeMap<String, String>,
-    ) -> FrozenProfileContent {
-        FrozenProfileContent::capture_content(profiles, self, staged_content)
-    }
 }

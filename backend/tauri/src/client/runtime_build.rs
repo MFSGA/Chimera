@@ -1,6 +1,6 @@
 //! Application orchestration for content capture, blocking builds, and runtime publication.
 
-use std::sync::Arc;
+use std::{collections::BTreeMap, sync::Arc};
 
 use async_trait::async_trait;
 use chimera_config::runtime::executor::BuiltinTransform;
@@ -51,19 +51,11 @@ impl RuntimeBuildPort for RuntimeBuildService {
         &self,
         profiles: &chimera_config::profile::Profiles,
     ) -> inputs::FrozenProfileContent {
-        let mut content = inputs::FrozenProfileContent::default();
-        for uid in chimera_core::client::runtime_build_port::current_profile_closure(profiles) {
-            if let Some(source_path) = profiles
-                .items
-                .get(&uid)
-                .and_then(|item| item.definition.source())
-            {
-                let path = &source_path.materialized().file;
-                let text = self.content.read(path).map_err(|error| error.to_string());
-                content.0.insert(path.to_string(), text);
-            }
-        }
-        content
+        inputs::FrozenProfileContent::capture_content(
+            profiles,
+            self.content.as_ref(),
+            BTreeMap::new(),
+        )
     }
 
     fn core_spec(

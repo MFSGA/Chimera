@@ -372,3 +372,11 @@ cargo clippy --manifest-path backend/Cargo.toml --all-targets --all-features
 - 迁移后：client::traffic::LocalSourceCache 使用当前唯一 ApplicationClient 与 ClashConfigClient 提交状态，显式 probe 的结果按地址族解析后写入共享缓存；ChimeraClientInner.local_source 是唯一缓存持有者，TrafficArgs 复用相同 Arc，未引入第二个网络探测或 Core/Service owner。明确禁止捕获模式、未授权时的本机来源归因，读出前重新执行和网络探测完全相同的 gate。
 - Chimera 特有安全适配：地址与探测开始时的两个源版本一同保存。网络探测期间发生任意提交版本更新的结果不入缓存，已缓存数据在任一源版本变更后不再使用，防止用户关掉探测、切换网络捕获模式又恢复时误把旧代理出口认成本机地址。后续只有用户再次显式探测才能刷新缓存。
 - 本轮仅后端流量来源归因，不改变网络探测端点、配置文件、DNS/代理/透明捕获运行时或前端接口。未执行任何单元测试、编译检查或桌面 E2E（用户指定）；已做 Rustfmt 和静态代码/差异审阅。当前所有异步任务仍由现有网络探测请求和 Traffic actor 持有，不新增长期后台 worker。
+
+### DIFF-RUNTIME-FROZEN-PROFILE-CONTENT：收敛 Runtime 与 Profiles 的冻结内容边界
+
+- ref 基线：4607a7379f0aa060daf55b369dc8103dda929d82；上游 client/reconciler/inputs.rs 的 FrozenProfileContent 和 RuntimeBuildPort::capture_content 是候选构建及 Core 验证的唯一冻结输入。源文档的提交与 managed-file 的读取必须保持原有 ProfileContentReader 文件锁和版本边界。
+- 本地旧差异：backend/tauri/src/client/reconciler/inputs.rs 重复定义 FrozenProfileContent + 依赖闭包读取，与 backend/chimera-core/src/client/runtime_build_port.rs 有两套等价逻辑；runtime_build.rs 又手写一次闭包遍历。Tauri 还保留 ref 不再使用的 RuntimeContentPort blanket adapter。
+- 当前收敛：Reconciler inputs 直接 re-export chimera_core::client::runtime_build_port::FrozenProfileContent；RuntimeBuildService 的新构建路径与 legacy_preparation 的候选/已提交读取，都调用同一个 core::runtime_build_port::FrozenProfileContent::capture_content。删去冗余 RuntimeContentPort 与重复文件读取实现。legacy_preparation 仅保留现阶段必需的 staged_content 与 ProfileContentReader 的读锁/提交版本栅栏；没有新建 source owner。
+- 原语义边界：闭包顺序、global/scoped transform、Composition 来源、读取错误保留、仅为活跃依赖替换 staged_content、Target identity 和 Core 校验字节均由共享 core 类型决定；没有修改 RuntimeBuildPort、Config 持久化、Service host、Source CAS 或 Core 运行时写入。同步维持 content source 的 Send + Sync 约束。
+- 仅代码迁移，本轮没有执行单元测试、构建、Clippy 或 E2E（用户要求）；已执行 Rustfmt、git diff --check 和人工静态差异检查。下一次集中验证重点是 staged 文件优先级、源晋升时的内容读锁，以及 Reconciler 和 legacy gate 输入类型一致性。

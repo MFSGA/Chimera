@@ -7,10 +7,11 @@ use std::{collections::BTreeMap, sync::Arc};
 
 use chimera_config::{
     application::ChimeraAppConfig, clash::config::ClashConfig, profile::Profiles,
+    runtime::executor::ProfileContentSource,
 };
 use chimera_core::state::StateSnapshot;
 
-use super::{inputs::RuntimeInputs, ports::RuntimeContentPort};
+use super::inputs::{FrozenProfileContent, RuntimeInputs};
 use crate::state::mutation::ProfileContentReader;
 
 /// The read-only runtime candidate preparation boundary. All managed file
@@ -18,19 +19,19 @@ use crate::state::mutation::ProfileContentReader;
 pub(in crate::client) struct RuntimePreparation<'a> {
     profile_content: Option<&'a ProfileContentReader>,
     committed_profiles: Option<&'a StateSnapshot<Profiles>>,
-    builder: &'a dyn RuntimeContentPort,
+    content_source: &'a (dyn ProfileContentSource + Send + Sync),
 }
 
 impl<'a> RuntimePreparation<'a> {
     pub fn new(
         profile_content: Option<&'a ProfileContentReader>,
         committed_profiles: Option<&'a StateSnapshot<Profiles>>,
-        builder: &'a dyn RuntimeContentPort,
+        content_source: &'a (dyn ProfileContentSource + Send + Sync),
     ) -> Self {
         Self {
             profile_content,
             committed_profiles,
-            builder,
+            content_source,
         }
     }
 
@@ -47,14 +48,20 @@ impl<'a> RuntimePreparation<'a> {
         let content = match self.profile_content {
             Some(reader) => {
                 reader
-                    .candidate(self.builder.capture_content(&profiles, staged_content))
+                    .candidate(async {
+                        FrozenProfileContent::capture_content(
+                            &profiles,
+                            self.content_source,
+                            staged_content,
+                        )
+                    })
                     .await
             }
-            None => {
-                self.builder
-                    .capture_content(&profiles, staged_content)
-                    .await
-            }
+            None => FrozenProfileContent::capture_content(
+                &profiles,
+                self.content_source,
+                staged_content,
+            ),
         };
         Ok(RuntimeInputs {
             app,
@@ -76,10 +83,11 @@ impl<'a> RuntimePreparation<'a> {
             return reader
                 .committed(|versioned| async move {
                     let profiles = Arc::new(versioned.state.clone());
-                    let content = self
-                        .builder
-                        .capture_content(&profiles, BTreeMap::new())
-                        .await;
+                    let content = FrozenProfileContent::capture_content(
+                        &profiles,
+                        self.content_source,
+                        BTreeMap::new(),
+                    );
                     Ok(RuntimeInputs {
                         app,
                         clash,

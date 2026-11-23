@@ -1,27 +1,19 @@
 //! Fixed source inputs and content for one runtime target and build.
 use crate::state::mutation::impact;
 use chimera_config::{
-    application::ChimeraAppConfig,
-    clash::config::ClashConfig,
-    profile::{ManagedProfilePath, Profiles},
+    application::ChimeraAppConfig, clash::config::ClashConfig, profile::Profiles,
+};
+#[cfg(test)]
+use chimera_config::{
+    profile::ManagedProfilePath,
     runtime::executor::{PortError, ProfileContentSource},
 };
 use std::{collections::BTreeMap, sync::Arc};
 
-#[derive(Debug, Clone, Default)]
-pub struct FrozenProfileContent(pub BTreeMap<String, Result<String, String>>);
-
-impl ProfileContentSource for FrozenProfileContent {
-    fn read(&self, path: &ManagedProfilePath) -> Result<String, PortError> {
-        self.0
-            .get(&path.to_string())
-            .cloned()
-            .map(|result| result.map_err(Into::into))
-            .ok_or_else(|| -> PortError {
-                format!("profile content was not captured: {path}").into()
-            })?
-    }
-}
+// The frozen dependency closure belongs to the shared runtime builder, not a
+// second Tauri facade. Both ref-style Reconciler and legacy checked gates must
+// consume the same captured bytes and read-error semantics.
+pub use chimera_core::client::runtime_build_port::FrozenProfileContent;
 
 // Chimera's existing fallible preparation tests use unwrap_err() and require
 // Debug for the success payload; the upstream fields are already Debug.
@@ -74,37 +66,6 @@ impl RuntimeInputs {
             })
             .collect::<anyhow::Result<_>>()?;
         Ok((self.app, self.clash, self.profiles, staged_content))
-    }
-}
-
-// Chimera compatibility adapter: the independent content source is still in
-// chimera-core until the upstream RuntimeBuildPort owns content capture.
-impl FrozenProfileContent {
-    pub fn capture_content(
-        profiles: &Profiles,
-        source: &dyn ProfileContentSource,
-        staged_content: BTreeMap<String, String>,
-    ) -> Self {
-        let mut content = Self::default();
-        for uid in chimera_core::client::runtime_build_port::current_profile_closure(profiles) {
-            if let Some(source_path) = profiles
-                .items
-                .get(&uid)
-                .and_then(|item| item.definition.source())
-            {
-                let path = &source_path.materialized().file;
-                content.0.insert(
-                    path.to_string(),
-                    source.read(path).map_err(|error| error.to_string()),
-                );
-            }
-        }
-        for (path, staged) in staged_content {
-            if let Some(captured) = content.0.get_mut(&path) {
-                *captured = Ok(staged);
-            }
-        }
-        content
     }
 }
 
