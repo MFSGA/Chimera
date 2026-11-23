@@ -247,6 +247,7 @@ mod tests {
         assert_eq!(typed.max_log_files, 14);
         assert_eq!(typed.traffic_retention, TrafficRetention::ThirtyDays);
         assert!(typed.enable_service_mode);
+        assert!(typed.enable_silent_start);
         assert!(typed.enable_system_proxy);
         assert!(typed.always_on_top);
     }
@@ -258,6 +259,7 @@ mod tests {
 
         assert_eq!(typed.core, ClashCore::Mihomo);
         assert_eq!(typed.proxy_guard_interval, 10);
+        assert!(!typed.enable_silent_start);
         assert_eq!(typed.window_type, AppWindowType::Legacy);
         assert!(typed.enable_builtin_enhanced);
         assert_eq!(typed.max_log_files, 7);

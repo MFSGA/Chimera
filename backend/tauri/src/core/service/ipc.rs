@@ -2,8 +2,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use atomic_enum::atomic_enum;
 use chimera_ipc::types::ServiceStatus;
-use chimera_utils::runtime::block_on;
 use serde::Serialize;
+use tokio::sync::{MutexGuard, Notify};
 use tracing::instrument;
 
 use crate::{client::ChimeraClient, core::RunType};
@@ -28,12 +28,117 @@ static IPC_STATE: AtomicIpcState = AtomicIpcState::new(IpcState::Disconnected);
 pub(super) static KILL_FLAG: AtomicBool = AtomicBool::new(false);
 pub(super) static HEALTH_CHECK_RUNNING: AtomicBool = AtomicBool::new(false);
 static HEALTH_ROUNDS: ServiceHealthRounds = ServiceHealthRounds::new();
+static SERVICE_TRANSITION_EPOCH: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+static HEALTH_CHECK_WAKE: Notify = Notify::const_new();
+static HEALTH_CHECK_CHANGED: Notify = Notify::const_new();
+const IPC_TRANSITION_CORE_STATUS_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
-/// The OS stop/uninstall already succeeded: invalidate all outstanding
-/// health probes before they can publish an obsolete Service observation.
+fn notify_health_check_changed() {
+    HEALTH_CHECK_CHANGED.notify_waiters();
+    HEALTH_CHECK_CHANGED.notify_one();
+}
+
+/// Invalidate outstanding health probes around a serialized Service transition
+/// so they cannot publish an obsolete Service observation.
 pub(super) fn stop_health_check() {
     HEALTH_ROUNDS.set_enabled(false);
     KILL_FLAG.store(true, Ordering::Release);
+    HEALTH_CHECK_WAKE.notify_one();
+    notify_health_check_changed();
+}
+
+/// Start a new Service transition generation and retire any health monitor
+/// that observed the previous generation. Call while holding the host lock.
+pub(super) fn retire_health_check() -> u64 {
+    SERVICE_TRANSITION_EPOCH.fetch_add(1, Ordering::AcqRel);
+    stop_health_check();
+    service_transition_epoch()
+}
+
+pub(super) fn service_transition_epoch() -> u64 {
+    SERVICE_TRANSITION_EPOCH.load(Ordering::Acquire)
+}
+
+fn transition_is_retired(rounds: &ServiceHealthRounds, kill_flag: &AtomicBool, round: u64) -> bool {
+    kill_flag.load(Ordering::Acquire) || !rounds.is_current(round)
+}
+
+async fn acquire_host_transition<'a>(
+    shutdown: &tokio_util::sync::CancellationToken,
+    health_round: Option<u64>,
+    rounds: &ServiceHealthRounds,
+    kill_flag: &AtomicBool,
+    wake: &Notify,
+    transition_lock: &'a tokio::sync::Mutex<()>,
+) -> Option<MutexGuard<'a, ()>> {
+    loop {
+        if shutdown.is_cancelled()
+            || health_round.is_some_and(|round| transition_is_retired(rounds, kill_flag, round))
+        {
+            return None;
+        }
+
+        tokio::select! {
+            biased;
+            _ = shutdown.cancelled() => return None,
+            _ = wake.notified(), if health_round.is_some() => {
+                if health_round.is_some_and(|round| transition_is_retired(rounds, kill_flag, round)) {
+                    return None;
+                }
+            }
+            transition = transition_lock.lock() => {
+                if shutdown.is_cancelled()
+                    || health_round.is_some_and(|round| transition_is_retired(rounds, kill_flag, round))
+                {
+                    return None;
+                }
+                return Some(transition);
+            }
+        }
+    }
+}
+
+async fn wait_for_health_monitor_retirement(
+    running: &AtomicBool,
+    kill_flag: &AtomicBool,
+    changed: &Notify,
+    shutdown: &tokio_util::sync::CancellationToken,
+) -> bool {
+    loop {
+        if shutdown.is_cancelled() {
+            return false;
+        }
+        if !running.load(Ordering::Acquire) || !kill_flag.load(Ordering::Acquire) {
+            return true;
+        }
+
+        let changed = changed.notified();
+        tokio::pin!(changed);
+        changed.as_mut().enable();
+        if !running.load(Ordering::Acquire) || !kill_flag.load(Ordering::Acquire) {
+            continue;
+        }
+        tokio::select! {
+            biased;
+            _ = shutdown.cancelled() => return false,
+            _ = &mut changed => {}
+        }
+    }
+}
+
+async fn await_core_status_or_shutdown<T>(
+    shutdown: &tokio_util::sync::CancellationToken,
+    status: impl std::future::Future<Output = anyhow::Result<T>>,
+    timeout: std::time::Duration,
+) -> Option<anyhow::Result<T>> {
+    tokio::select! {
+        biased;
+        _ = shutdown.cancelled() => None,
+        result = tokio::time::timeout(timeout, status) => Some(result.unwrap_or_else(|_| {
+            Err(anyhow::anyhow!("core status read timed out after {} ms", timeout.as_millis()))
+        })),
+    }
 }
 
 pub fn get_ipc_state() -> IpcState {
@@ -123,10 +228,10 @@ pub(crate) fn mark_disconnected_now() {
 
 pub(super) fn set_ipc_state(state: IpcState, client: &ChimeraClient) {
     IPC_STATE.store(state, Ordering::Relaxed);
-    on_ipc_state_changed(state, client);
+    on_ipc_state_changed(state, client, None);
 }
 
-fn dispatch_disconnected(client: &ChimeraClient) -> bool {
+fn dispatch_disconnected(client: &ChimeraClient, health_round: Option<u64>) -> bool {
     if IPC_STATE
         .compare_exchange(
             IpcState::Connected,
@@ -136,14 +241,14 @@ fn dispatch_disconnected(client: &ChimeraClient) -> bool {
         )
         .is_ok()
     {
-        on_ipc_state_changed(IpcState::Disconnected, client);
+        on_ipc_state_changed(IpcState::Disconnected, client, health_round);
         true
     } else {
         false
     }
 }
 
-fn dispatch_connected(client: &ChimeraClient) {
+fn dispatch_connected(client: &ChimeraClient, health_round: Option<u64>) {
     if IPC_STATE
         .compare_exchange(
             IpcState::Disconnected,
@@ -153,7 +258,7 @@ fn dispatch_connected(client: &ChimeraClient) {
         )
         .is_ok()
     {
-        on_ipc_state_changed(IpcState::Connected, client)
+        on_ipc_state_changed(IpcState::Connected, client, health_round)
     }
 }
 
@@ -173,50 +278,71 @@ fn should_rebuild_for_ipc_event(
 }
 
 #[instrument(skip(client))]
-fn on_ipc_state_changed(state: IpcState, client: &ChimeraClient) {
+fn on_ipc_state_changed(state: IpcState, client: &ChimeraClient, health_round: Option<u64>) {
     tracing::info!("IPC state changed: {:?}", state);
     let client = client.clone();
-    std::thread::spawn(move || {
-        chimera_utils::runtime::block_on(async move {
-            let enabled_service = match client.get_app_config() {
-                Ok(config) => config.enable_service_mode,
-                Err(error) => {
-                    tracing::warn!(
-                        "failed to read Service Mode during service IPC transition: {error}"
-                    );
-                    return;
-                }
-            };
-            if !enabled_service {
-                return;
-            }
+    let shutdown = client.shutdown_child_token();
+    let _ = client.clone().spawn_tracked(async move {
+        let Some(_transition) = acquire_host_transition(
+            &shutdown,
+            health_round,
+            &HEALTH_ROUNDS,
+            &KILL_FLAG,
+            &HEALTH_CHECK_WAKE,
+            &super::HOST_TRANSITION_LOCK,
+        )
+        .await
+        else {
+            return;
+        };
 
-            let _transition = super::HOST_TRANSITION_LOCK.lock().await;
-            let current_state = get_ipc_state();
-            if current_state != state {
-                tracing::debug!(
-                    observed = ?state,
-                    current = ?current_state,
-                    "discarding stale service IPC transition"
+        let enabled_service = match client.get_app_config() {
+            Ok(config) => config.enable_service_mode,
+            Err(error) => {
+                tracing::warn!(
+                    "failed to read Service Mode during service IPC transition: {error}"
                 );
                 return;
             }
+        };
+        if !enabled_service || shutdown.is_cancelled() {
+            return;
+        }
 
-            let status = match client.core_status().await {
-                Ok(status) => status,
-                Err(err) => {
-                    tracing::warn!(
-                        "failed to read core status during service IPC transition: {err}"
-                    );
-                    return;
-                }
-            };
+        let current_state = get_ipc_state();
+        if current_state != state {
+            tracing::debug!(
+                observed = ?state,
+                current = ?current_state,
+                "discarding stale service IPC transition"
+            );
+            return;
+        }
 
-            if should_rebuild_for_ipc_event(state, current_state, status.run_type) {
-                tracing::info!("Marking runtime dirty due to IPC state change");
-                client.request_runtime_rebuild();
+        let Some(status) = await_core_status_or_shutdown(
+            &shutdown,
+            client.core_status(),
+            IPC_TRANSITION_CORE_STATUS_TIMEOUT,
+        )
+        .await
+        else {
+            return;
+        };
+        let status = match status {
+            Ok(status) => status,
+            Err(err) => {
+                tracing::warn!("failed to read core status during service IPC transition: {err}");
+                return;
             }
-        })
+        };
+
+        if !shutdown.is_cancelled()
+            && !health_round.is_some_and(health_round_retired)
+            && should_rebuild_for_ipc_event(state, current_state, status.run_type)
+        {
+            tracing::info!("Marking runtime dirty due to IPC state change");
+            client.request_runtime_rebuild();
+        }
     });
 }
 
@@ -225,7 +351,7 @@ fn on_ipc_state_changed(state: IpcState, client: &ChimeraClient) {
 /// failed. This deliberately reuses the same guarded reconcile path rather
 /// than introducing a second host-switch implementation.
 pub(crate) fn request_reconcile(client: &ChimeraClient) {
-    on_ipc_state_changed(get_ipc_state(), client);
+    on_ipc_state_changed(get_ipc_state(), client, None);
 }
 
 fn claim_health_check(running: &AtomicBool) -> bool {
@@ -243,43 +369,117 @@ fn spawn_health_check(client: ChimeraClient) {
     let round = HEALTH_ROUNDS
         .set_enabled(true)
         .expect("a started health monitor owns an enabled round");
-    // Keep admission owned until the thread exits, including on unwind.
+    notify_health_check_changed();
+    // Keep admission owned until the task exits, including on unwind.
     struct RunningGuard;
     impl Drop for RunningGuard {
         fn drop(&mut self) {
             HEALTH_ROUNDS.set_enabled(false);
             HEALTH_CHECK_RUNNING.store(false, Ordering::Release);
+            notify_health_check_changed();
         }
     }
 
-    let spawn = std::thread::Builder::new()
-        .name("chimera-service-health".into())
-        .spawn(move || {
-            let _running = RunningGuard;
-            block_on(async {
-                let mut warned_ineligible = false;
-                loop {
+    let shutdown = client.shutdown_child_token();
+    if !client.clone().spawn_tracked(async move {
+        let _running = RunningGuard;
+        let mut warned_ineligible = false;
+        loop {
+            if shutdown.is_cancelled() || health_round_retired(round) {
+                // A successful stop/uninstall invalidates this round. Its late
+                // exit must not overwrite a newer synchronous host handoff or
+                // a replacement monitor's IPC state.
+                break;
+            }
+            let Some(_transition) = acquire_host_transition(
+                &shutdown,
+                Some(round),
+                &HEALTH_ROUNDS,
+                &KILL_FLAG,
+                &HEALTH_CHECK_WAKE,
+                &super::HOST_TRANSITION_LOCK,
+            )
+            .await
+            else {
+                break;
+            };
+            // Let a started health transition finish before AppShutdown begins
+            // core cleanup; cancellation is observed between complete probes.
+            let (next_warned, endpoint_down) =
+                health_check(warned_ineligible, &client, round).await;
+            drop(_transition);
+            if endpoint_down && !shutdown.is_cancelled() && !health_round_retired(round) {
+                // Endpoint recovery takes its own Service transition lease, so
+                // submit it only after releasing the probe's host lock. Do not
+                // keep shutdown draining on a lease that has not been acquired.
+                let recovery_shutdown = shutdown.clone();
+                tokio::select! {
+                    biased;
+                    _ = shutdown.cancelled() => break,
+                    _ = client.request_service_endpoint_down_if(move || {
+                        !recovery_shutdown.is_cancelled() && !health_round_retired(round)
+                    }) => {}
+                }
+            }
+            warned_ineligible = next_warned;
+            tokio::select! {
+                biased;
+                _ = shutdown.cancelled() => break,
+                _ = HEALTH_CHECK_WAKE.notified() => {
                     if health_round_retired(round) {
-                        // A successful stop/uninstall invalidates this round.
-                        // Its late exit must not overwrite a newer synchronous
-                        // host handoff or a replacement monitor's IPC state.
                         break;
                     }
-                    warned_ineligible = health_check(warned_ineligible, &client, round).await;
-                    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
                 }
-            })
-        });
-    if let Err(error) = spawn {
+                _ = tokio::time::sleep(std::time::Duration::from_secs(5)) => {}
+            }
+        }
+    }) {
         HEALTH_ROUNDS.set_enabled(false);
         HEALTH_CHECK_RUNNING.store(false, Ordering::Release);
-        tracing::error!(%error, "could not start service health monitor");
+        notify_health_check_changed();
     }
 }
 
-pub(crate) fn ensure_health_check(client: ChimeraClient) {
-    if claim_health_check(&HEALTH_CHECK_RUNNING) {
-        spawn_health_check(client);
+pub(crate) async fn ensure_health_check_for_epoch(client: ChimeraClient, expected_epoch: u64) {
+    let shutdown = client.shutdown_child_token();
+    loop {
+        if shutdown.is_cancelled() || service_transition_epoch() != expected_epoch {
+            return;
+        }
+        if claim_health_check(&HEALTH_CHECK_RUNNING) {
+            let transition = tokio::select! {
+                biased;
+                _ = shutdown.cancelled() => None,
+                transition = super::HOST_TRANSITION_LOCK.lock() => Some(transition),
+            };
+            let Some(_transition) = transition else {
+                HEALTH_ROUNDS.set_enabled(false);
+                HEALTH_CHECK_RUNNING.store(false, Ordering::Release);
+                notify_health_check_changed();
+                return;
+            };
+            if shutdown.is_cancelled() || service_transition_epoch() != expected_epoch {
+                HEALTH_ROUNDS.set_enabled(false);
+                HEALTH_CHECK_RUNNING.store(false, Ordering::Release);
+                notify_health_check_changed();
+                return;
+            }
+            spawn_health_check(client);
+            return;
+        }
+        if !KILL_FLAG.load(Ordering::Acquire) {
+            return;
+        }
+        if !wait_for_health_monitor_retirement(
+            &HEALTH_CHECK_RUNNING,
+            &KILL_FLAG,
+            &HEALTH_CHECK_CHANGED,
+            &shutdown,
+        )
+        .await
+        {
+            return;
+        }
     }
 }
 
@@ -313,11 +513,11 @@ fn target_ipc_state(
 }
 
 #[instrument(skip(client))]
-async fn health_check(warned: bool, client: &ChimeraClient, round: u64) -> bool {
+async fn health_check(warned: bool, client: &ChimeraClient, round: u64) -> (bool, bool) {
     match super::control::probe_service_status().await {
         Ok(info) => {
             if !HEALTH_ROUNDS.is_current(round) {
-                return warned;
+                return (warned, false);
             }
             let runtime_owned = super::is_service_runtime_owned(&info);
             let (state, compat) = target_ipc_state(&info, runtime_owned);
@@ -342,30 +542,25 @@ async fn health_check(warned: bool, client: &ChimeraClient, round: u64) -> bool 
 
             let endpoint_down = match state {
                 IpcState::Connected => {
-                    dispatch_connected(client);
+                    dispatch_connected(client, Some(round));
                     false
                 }
-                IpcState::Disconnected => dispatch_disconnected(client),
+                IpcState::Disconnected => dispatch_disconnected(client, Some(round)),
             };
-            if endpoint_down {
-                client.request_service_endpoint_down().await;
-            }
             if HEALTH_ROUNDS.is_current(round) {
                 client.observe_service_status(info);
             }
-            next_warned
+            (next_warned, endpoint_down)
         }
         Err(e) => {
             if !HEALTH_ROUNDS.is_current(round) {
-                return warned;
+                return (warned, false);
             }
             tracing::error!("IPC health check failed: {}", e);
             client.observe_service_probe_failure();
-            if dispatch_disconnected(client) {
-                client.request_service_endpoint_down().await;
-            }
+            let endpoint_down = dispatch_disconnected(client, Some(round));
             let (_, next_warned) = next_ineligible_warning_state(warned, false);
-            next_warned
+            (next_warned, endpoint_down)
         }
     }
 }
@@ -387,13 +582,16 @@ mod tests {
     };
 
     use super::{
-        HEALTH_ROUNDS, IpcState, KILL_FLAG, ServiceBackendObservation, WarnLevel,
-        claim_health_check, health_round_retired, next_ineligible_warning_state,
-        should_rebuild_for_ipc_event, should_rebuild_for_ipc_transition, stop_health_check,
-        target_ipc_state,
+        HEALTH_ROUNDS, IpcState, KILL_FLAG, ServiceBackendObservation, ServiceHealthRounds,
+        WarnLevel, acquire_host_transition, await_core_status_or_shutdown, claim_health_check,
+        health_round_retired, next_ineligible_warning_state, retire_health_check,
+        service_transition_epoch, should_rebuild_for_ipc_event, should_rebuild_for_ipc_transition,
+        stop_health_check, target_ipc_state, wait_for_health_monitor_retirement,
     };
     use crate::core::RunType;
     use chimera_core::service::compat::{REQUIRED_SERVICE_MIN, ServiceCompat};
+    use tokio::sync::Notify;
+    use tokio_util::sync::CancellationToken;
 
     fn running_status(server_version: &str) -> StatusInfo<'static> {
         StatusInfo {
@@ -424,20 +622,134 @@ mod tests {
     }
 
     #[test]
-    fn successful_os_stop_revokes_any_pending_health_probe_round() {
-        // This is the actual host stop/uninstall hook, not merely the core
-        // generation primitive. A probe started before stop cannot publish.
+    fn service_transition_retirement_invalidates_health_round_and_advances_epoch() {
+        // This is the shared retirement hook used before explicit Service
+        // commands. It invalidates the current health round and advances the
+        // generation checked by monitor registration.
         let round = HEALTH_ROUNDS.set_enabled(true).unwrap();
+        let expected_epoch = service_transition_epoch();
         KILL_FLAG.store(false, Ordering::Release);
         assert!(HEALTH_ROUNDS.is_current(round));
         assert!(!health_round_retired(round));
-        stop_health_check();
+        let retired_epoch = retire_health_check();
+        assert_ne!(retired_epoch, expected_epoch);
+        assert_ne!(service_transition_epoch(), expected_epoch);
         assert!(!HEALTH_ROUNDS.is_current(round));
         assert!(KILL_FLAG.load(Ordering::Acquire));
         assert!(health_round_retired(round));
         // A retired monitor exits without dispatching a second disconnected
         // transition; the serialized Service handoff owns that publication.
         KILL_FLAG.store(false, Ordering::Release);
+    }
+
+    #[test]
+    fn late_stop_completion_does_not_supersede_a_newer_start_transition() {
+        // A Service stop completion can arrive after a later start has already
+        // retired the previous monitor. It must signal retirement without
+        // advancing the newer transition's expected epoch.
+        let expected_epoch = retire_health_check();
+        assert_eq!(service_transition_epoch(), expected_epoch);
+        stop_health_check();
+        assert_eq!(service_transition_epoch(), expected_epoch);
+        KILL_FLAG.store(false, Ordering::Release);
+    }
+
+    /// Initial state: a health result owns the current generation but waits
+    /// behind a serialized Service transition. Operation: stop invalidates the
+    /// generation and wakes that waiter. Expected result: it cannot acquire the
+    /// transition slot and publish the stale result; this fails if generation
+    /// validation happens only before the lock wait.
+    #[tokio::test]
+    async fn retired_health_round_cannot_publish_after_waiting_for_host_lock() {
+        let rounds = ServiceHealthRounds::new();
+        let round = rounds.set_enabled(true).unwrap();
+        let kill = AtomicBool::new(false);
+        let wake = Notify::new();
+        let transition_lock = tokio::sync::Mutex::new(());
+        let shutdown = CancellationToken::new();
+        let held = transition_lock.lock().await;
+
+        let acquire = acquire_host_transition(
+            &shutdown,
+            Some(round),
+            &rounds,
+            &kill,
+            &wake,
+            &transition_lock,
+        );
+        tokio::pin!(acquire);
+        tokio::select! {
+            biased;
+            _ = &mut acquire => panic!("probe acquired the host lock while the stop held it"),
+            _ = tokio::task::yield_now() => {}
+        }
+
+        rounds.set_enabled(false);
+        kill.store(true, Ordering::Release);
+        wake.notify_one();
+        drop(held);
+        assert!(acquire.await.is_none());
+    }
+
+    /// Initial state: a stopped monitor still owns admission while its task is
+    /// retiring. Operation: an immediate start waits for the retirement signal.
+    /// Expected result: it can claim admission after the old task exits instead
+    /// of silently leaving health monitoring disabled.
+    #[tokio::test]
+    async fn immediate_restart_waits_for_retiring_monitor_before_reclaiming_admission() {
+        let running = AtomicBool::new(true);
+        let kill = AtomicBool::new(true);
+        let changed = Notify::new();
+        let shutdown = CancellationToken::new();
+        let wait = wait_for_health_monitor_retirement(&running, &kill, &changed, &shutdown);
+        tokio::pin!(wait);
+
+        tokio::select! {
+            biased;
+            _ = &mut wait => panic!("restart did not wait for the old monitor to retire"),
+            _ = tokio::task::yield_now() => {}
+        }
+
+        running.store(false, Ordering::Release);
+        changed.notify_waiters();
+        changed.notify_one();
+        assert!(wait.await);
+        assert!(claim_health_check(&running));
+    }
+
+    #[tokio::test]
+    async fn ipc_transition_status_read_stops_waiting_on_shutdown() {
+        let shutdown = CancellationToken::new();
+        let read = await_core_status_or_shutdown(
+            &shutdown,
+            std::future::pending::<anyhow::Result<()>>(),
+            std::time::Duration::from_secs(5),
+        );
+        tokio::pin!(read);
+
+        tokio::select! {
+            biased;
+            _ = &mut read => panic!("pending core status read unexpectedly completed"),
+            _ = tokio::task::yield_now() => {}
+        }
+
+        shutdown.cancel();
+        assert!(read.await.is_none());
+    }
+
+    #[tokio::test]
+    async fn ipc_transition_status_read_has_a_finite_timeout() {
+        let shutdown = CancellationToken::new();
+        let status = await_core_status_or_shutdown(
+            &shutdown,
+            std::future::pending::<anyhow::Result<()>>(),
+            std::time::Duration::from_millis(1),
+        )
+        .await
+        .expect("shutdown was not requested");
+
+        assert!(status.is_err());
+        assert!(format!("{:#}", status.unwrap_err()).contains("timed out after 1 ms"));
     }
 
     #[test]

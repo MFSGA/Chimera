@@ -180,8 +180,21 @@ impl WindowManager {
 
         #[cfg(target_os = "macos")]
         if config.decorations.unwrap_or(true) {
-            let mtm = objc2_foundation::MainThreadMarker::new().unwrap();
-            super::macos::setup_traffic_lights_pos(window.clone(), (18.0, 22.0), mtm);
+            let traffic_lights_window = window.clone();
+            crate::log_err!(
+                window.run_on_main_thread(move || {
+                    let Some(mtm) = objc2_foundation::MainThreadMarker::new() else {
+                        log::error!(target: "app", "cannot set traffic light position off the main thread");
+                        return;
+                    };
+                    super::macos::setup_traffic_lights_pos(
+                        traffic_lights_window,
+                        (18.0, 22.0),
+                        mtm,
+                    );
+                }),
+                "schedule traffic light setup on the main thread"
+            );
         }
 
         kind.on_created(&window);
@@ -274,6 +287,12 @@ fn apply(handle: &AppHandle, label: &str) {
     }
 
     if actions.show {
+        #[cfg(target_os = "macos")]
+        if label == crate::consts::MAIN_WINDOW_LABEL || label == crate::consts::LEGACY_WINDOW_LABEL
+        {
+            crate::utils::dock::macos::show_dock_icon();
+        }
+
         engine::set_in_sight(&window, true);
         crate::trace_err!(window.unminimize(), "set win unminimize");
         crate::trace_err!(window.show(), "set win visible");

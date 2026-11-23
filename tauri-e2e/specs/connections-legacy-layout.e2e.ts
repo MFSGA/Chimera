@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import path from 'node:path';
 import { displayedElement, focusElement } from './interaction.js';
 
 /*
@@ -93,6 +94,22 @@ describe('legacy connections shared layout', () => {
           parents,
         };
       });
+      const artifactDirectory = process.env.CHIMERA_E2E_ARTIFACT_DIR;
+      if (artifactDirectory) {
+        await browser
+          .saveScreenshot(
+            path.join(
+              artifactDirectory,
+              'connections-legacy-layout-before-each-failure.png',
+            ),
+          )
+          .catch((screenshotError) => {
+            console.error(
+              'Could not capture the legacy window failure:',
+              screenshotError,
+            );
+          });
+      }
       throw new Error(
         `Legacy Connections invisible: ${JSON.stringify(diagnostics)}`,
         { cause },

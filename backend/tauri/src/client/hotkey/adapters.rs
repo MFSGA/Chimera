@@ -220,7 +220,7 @@ impl WindowControl for TauriWindowControl {
         // pump, which runs on the async runtime.
         self.app_handle
             .run_on_main_thread(move || {
-                let label = crate::utils::resolve::configured_window_label();
+                let label = crate::utils::resolve::configured_window_label(&app_handle);
                 if let Some(window) = app_handle.get_webview_window(label) {
                     if let Err(error) = window.close() {
                         tracing::warn!(%error, label, "failed to close dashboard window");

@@ -20,6 +20,7 @@ use std::{
 
 use futures_util::FutureExt;
 use ractor::{Actor, ActorProcessingErr, ActorRef, RpcReplyPort, rpc::CallResult};
+use tokio_util::{sync::CancellationToken, task::TaskTracker};
 
 use super::{
     ChimeraClient, application::ApplicationClient,
@@ -975,6 +976,8 @@ impl CoreLifecycleClient {
         installer: Arc<dyn ports::BinaryInstaller>,
         service: Arc<dyn ports::ServiceLifecyclePort>,
     ) -> anyhow::Result<Self> {
+        let shutdown = CancellationToken::new();
+        let tasks = TaskTracker::new();
         Self::spawn_with_profiles(
             core,
             application,
@@ -983,6 +986,8 @@ impl CoreLifecycleClient {
             runtime_paths,
             installer,
             service,
+            shutdown,
+            &tasks,
         )
         .await
     }
@@ -995,6 +1000,8 @@ impl CoreLifecycleClient {
         runtime_paths: RuntimePaths,
         installer: Arc<dyn ports::BinaryInstaller>,
         service: Arc<dyn ports::ServiceLifecyclePort>,
+        shutdown: CancellationToken,
+        tasks: &TaskTracker,
     ) -> anyhow::Result<Self> {
         let recovery_notify = core.recovery_notify();
         let workflow = CoreLifecycleWorkflow::new(
@@ -1023,11 +1030,16 @@ impl CoreLifecycleClient {
         .await?;
         if let Some(recovery_notify) = recovery_notify {
             let recovery_actor = actor_ref.clone();
-            tauri::async_runtime::spawn(async move {
+            let recovery_shutdown = shutdown.child_token();
+            tasks.spawn(async move {
                 loop {
-                    recovery_notify.notified().await;
-                    if recovery_actor.cast(Message::RecoverCore).is_err() {
-                        break;
+                    tokio::select! {
+                        _ = recovery_shutdown.cancelled() => break,
+                        _ = recovery_notify.notified() => {
+                            if recovery_actor.cast(Message::RecoverCore).is_err() {
+                                break;
+                            }
+                        }
                     }
                 }
             });
@@ -1274,6 +1286,13 @@ impl CoreLifecycleClient {
     }
 
     pub(super) async fn request_service_endpoint_down(&self) {
+        self.request_service_endpoint_down_if(|| true).await;
+    }
+
+    pub(super) async fn request_service_endpoint_down_if<F>(&self, still_current: F)
+    where
+        F: Fn() -> bool + Send + 'static,
+    {
         let (actor_ref, next_id, service) = match self.0.as_ref() {
             CoreLifecycleClientInner::Actor {
                 actor_ref,
@@ -1294,6 +1313,11 @@ impl CoreLifecycleClient {
                 return;
             }
         };
+        if !still_current() {
+            // The Service host lock is now ours. A retired health observation
+            // must drop its lease without submitting recovery after stop/restart.
+            return;
+        }
         let id = next_id.fetch_add(1, Ordering::Relaxed);
         let request = Request {
             command: Command::ServiceEndpointDown(transition),
@@ -1527,6 +1551,16 @@ impl ChimeraClient {
             .await;
     }
 
+    pub(crate) async fn request_service_endpoint_down_if<F>(&self, still_current: F)
+    where
+        F: Fn() -> bool + Send + 'static,
+    {
+        self.inner
+            .core_lifecycle
+            .request_service_endpoint_down_if(still_current)
+            .await;
+    }
+
     pub(crate) fn core_lifecycle_status(&self) -> CoreLifecycleStatus {
         self.inner.core_lifecycle.status()
     }
@@ -1578,9 +1612,7 @@ impl ChimeraClient {
     }
 
     pub(crate) async fn install_service(&self) -> anyhow::Result<()> {
-        self.inner.core_lifecycle.install_service().await?;
-        crate::core::service::ipc::ensure_health_check(self.clone());
-        Ok(())
+        self.inner.core_lifecycle.install_service().await
     }
 
     pub(crate) async fn uninstall_service(&self) -> anyhow::Result<()> {
@@ -1592,21 +1624,14 @@ impl ChimeraClient {
     }
 
     pub(crate) async fn start_service(&self, ready_timeout: Duration) -> anyhow::Result<()> {
-        self.inner
-            .core_lifecycle
-            .start_service(ready_timeout)
-            .await?;
-        crate::core::service::ipc::ensure_health_check(self.clone());
-        Ok(())
+        self.inner.core_lifecycle.start_service(ready_timeout).await
     }
 
     pub(crate) async fn restart_service(&self, ready_timeout: Duration) -> anyhow::Result<()> {
         self.inner
             .core_lifecycle
             .restart_service(ready_timeout)
-            .await?;
-        crate::core::service::ipc::ensure_health_check(self.clone());
-        Ok(())
+            .await
     }
 }
 

@@ -253,138 +253,180 @@ pub fn run() -> std::process::ExitCode {
                 paths.app_config_dir().as_std_path().to_path_buf(),
                 paths.app_data_dir().as_std_path().to_path_buf(),
             );
-            // Do not use the reference directory helper here: it can remove a
-            // file obstructing a root. Chimera must preserve user data on error.
-            setup_paths.create_base_dirs()?;
-            init::init_config(&setup_paths)?;
+            let setup_failure_capture = parking_lot::Mutex::new(None);
+            let failure_host = setup::TauriStartupFailureHost {
+                handle: app.handle().clone(),
+            };
 
-            #[cfg(all(debug_assertions, not(feature = "e2e")))]
-            {
-                const SPECTA_BINDINGS_PATH: &str = "../../frontend/interface/src/ipc/bindings.ts";
-                specta_builder.export(
-                    specta_typescript::Typescript::default()
-                        .header("/* oxlint-disable */\n// @ts-nocheck"),
-                    SPECTA_BINDINGS_PATH,
-                )?;
-                let npx_command = if cfg!(target_os = "windows") { "npx.cmd" } else { "npx" };
-                let status = std::process::Command::new(npx_command)
-                    .args(["prettier", "--write", SPECTA_BINDINGS_PATH])
-                    .status()?;
-                if !status.success() {
-                    return Err(format!("Prettier failed for {SPECTA_BINDINGS_PATH}").into());
-                }
-                specta_export::normalize_typescript_bindings(SPECTA_BINDINGS_PATH)?;
-            }
+            setup::run_setup(
+                setup::AppShutdown::default(),
+                |owners| {
+                    // Do not use the reference directory helper here: it can remove a
+                    // file obstructing a root. Chimera must preserve user data on error.
+                    setup_paths.create_base_dirs()?;
+                    init::init_config(&setup_paths)?;
 
-            specta_builder.mount_events(app);
-            setup::setup(app, setup_paths, paths.clone(), metadata)?;
-            core::updater::recover_interrupted_update();
-            core::clash::setup(app)?;
-
-            #[cfg(feature = "agent")]
-            features::agent::setup(app);
-
-            // All window/IPC state must exist before the first webview loads.
-            app.manage(crate::window::WindowManager::new(app.handle().clone()));
-            app.manage(crate::utils::resolve::AppStartupStatus::default());
-            app.manage(crate::ipc::PendingDeepLink::default());
-
-            #[cfg(debug_assertions)]
-            setup_frontend_console_bridge(app);
-
-            resolve::resolve_setup(app);
-
-            #[cfg(windows)]
-            {
-                let app_handle = app.handle().clone();
-                let stop_strategy = std::sync::Arc::clone(
-                    app.state::<std::sync::Arc<chimera_utils::process::AtomicStopStrategy>>()
-                        .inner(),
-                );
-                shutdown_hook::setup_shutdown_hook(move || {
-                    // Forced Windows session shutdown must not wait for a graceful core exit.
-                    stop_strategy.store(
-                        chimera_utils::process::StopStrategy::Kill,
-                        std::sync::atomic::Ordering::Release,
-                    );
-                    crate::log_err!(utils::exit::shutdown_before_exit_blocking(
-                        &app_handle
-                    ));
-                })?;
-            }
-
-            #[cfg(any(target_os = "linux", all(debug_assertions, windows)))]
-            app.deep_link().register_all()?;
-
-            #[cfg(any(target_os = "macos", target_os = "linux", windows))]
-            {
-                let app_handle = app.handle().clone();
-                let on_open_url_handle = app_handle.clone();
-
-                app.deep_link().on_open_url(move |event| {
-                    let Some(url) = event.urls().first().map(ToString::to_string) else {
-                        return;
-                    };
-
-                    let target_label = resolve::configured_window_label();
-                    resolve::create_window(&on_open_url_handle);
-
-                    let entry = on_open_url_handle
-                        .state::<crate::ipc::PendingDeepLink>()
-                        .store(url.clone());
-
-                    let delivery_handle = on_open_url_handle.clone();
-                    std::thread::spawn(move || {
-                        if !resolve::wait_for_frontend_ready(
-                            target_label,
-                            std::time::Duration::from_secs(15),
-                        ) {
-                            log::warn!(target: "app", "frontend {target_label} did not become ready before delivering scheme request");
-                            return;
-                        }
-
-                        if let Err(error) = delivery_handle.emit_to(
-                            target_label,
-                            "scheme-request-received",
-                            entry,
-                        ) {
-                            log::error!(target: "app", "failed to emit scheme request {url} to {target_label}: {error:?}");
-                        }
-                    });
-                });
-
-                // The Client, window state and deep-link listener now exist.
-                // Deliver any activation coalesced during the primary startup.
-                #[cfg(not(feature = "e2e"))]
-                if secondary_activation.mark_ready() {
-                    resolve::create_window(app.handle());
-                }
-
-                if let Some(url) = app
-                    .deep_link()
-                    .get_current()?
-                    .and_then(|urls| urls.first().map(ToString::to_string))
-                {
-                    let target_label = resolve::configured_window_label();
-                    let entry = app
-                        .state::<crate::ipc::PendingDeepLink>()
-                        .store(url.clone());
-                    std::thread::spawn(move || {
-                        if resolve::wait_for_frontend_ready(
-                            target_label,
-                            std::time::Duration::from_secs(15),
-                        ) {
-                            if let Err(error) = app_handle.emit_to(target_label, "scheme-request-received", entry) {
-                                log::error!(target: "app", "failed to deliver startup scheme request: {error:?}");
-                            }
+                    #[cfg(all(debug_assertions, not(feature = "e2e")))]
+                    {
+                        const SPECTA_BINDINGS_PATH: &str = "../../frontend/interface/src/ipc/bindings.ts";
+                        let bindings_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                            .join(SPECTA_BINDINGS_PATH);
+                        specta_builder.export(
+                            specta_typescript::Typescript::default()
+                                .header("/* oxlint-disable */\n// @ts-nocheck"),
+                            &bindings_path,
+                        )?;
+                        let prettier_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                            .join("../../node_modules/.bin")
+                            .join(if cfg!(target_os = "windows") {
+                                "prettier.cmd"
+                            } else {
+                                "prettier"
+                            });
+                        let mut prettier = if cfg!(target_os = "windows") {
+                            let mut command = std::process::Command::new("cmd");
+                            command.arg("/C").arg(prettier_path);
+                            command
                         } else {
-                            log::warn!(target: "app", "frontend {target_label} did not become ready before delivering startup scheme request");
-                        }
-                    });
-                }
-            }
+                            std::process::Command::new(prettier_path)
+                        };
+                        let _ = prettier.args(["--write"]).arg(&bindings_path).output();
+                        specta_export::normalize_typescript_bindings(&bindings_path)?;
+                        log::debug!(
+                            "Exported TypeScript bindings, path: {}",
+                            bindings_path.display()
+                        );
+                    }
 
-            Ok(())
+                    specta_builder.mount_events(app);
+                    setup::setup(
+                        app,
+                        setup_paths.clone(),
+                        paths.clone(),
+                        metadata,
+                        owners,
+                        &setup_failure_capture,
+                    )?;
+                    app.manage(owners.clone());
+                    core::updater::recover_interrupted_update();
+                    core::clash::setup(app)?;
+
+                    #[cfg(feature = "agent")]
+                    features::agent::setup(app);
+
+                    // All window/IPC state must exist before the first webview loads.
+                    app.manage(crate::window::WindowManager::new(app.handle().clone()));
+                    app.manage(crate::utils::resolve::AppStartupStatus::default());
+                    app.manage(crate::ipc::PendingDeepLink::default());
+
+                    #[cfg(debug_assertions)]
+                    setup_frontend_console_bridge(app);
+
+                    resolve::resolve_setup(app, &setup_paths);
+
+                    #[cfg(windows)]
+                    {
+                        let app_handle = app.handle().clone();
+                        let stop_strategy = std::sync::Arc::clone(
+                            app.state::<std::sync::Arc<chimera_utils::process::AtomicStopStrategy>>()
+                                .inner(),
+                        );
+                        shutdown_hook::setup_shutdown_hook(move || {
+                            // Forced Windows session shutdown must not wait for a graceful core exit.
+                            stop_strategy.store(
+                                chimera_utils::process::StopStrategy::Kill,
+                                std::sync::atomic::Ordering::Release,
+                            );
+                            crate::log_err!(utils::exit::shutdown_before_exit_blocking(
+                                &app_handle
+                            ));
+                        })?;
+                    }
+
+                    #[cfg(any(target_os = "linux", all(debug_assertions, windows)))]
+                    app.deep_link().register_all()?;
+
+                    #[cfg(any(target_os = "macos", target_os = "linux", windows))]
+                    {
+                        let app_handle = app.handle().clone();
+                        let on_open_url_handle = app_handle.clone();
+
+                        app.deep_link().on_open_url(move |event| {
+                            let Some(url) = event.urls().first().map(ToString::to_string) else {
+                                return;
+                            };
+
+                            let target_label = resolve::configured_window_label(&on_open_url_handle);
+                            resolve::create_window(&on_open_url_handle);
+
+                            let entry = on_open_url_handle
+                                .state::<crate::ipc::PendingDeepLink>()
+                                .store(url.clone());
+
+                            let delivery_handle = on_open_url_handle.clone();
+                            std::thread::spawn(move || {
+                                if !resolve::wait_for_frontend_ready(
+                                    target_label,
+                                    std::time::Duration::from_secs(15),
+                                ) {
+                                    log::warn!(target: "app", "frontend {target_label} did not become ready before delivering scheme request");
+                                    return;
+                                }
+
+                                if let Err(error) = delivery_handle.emit_to(
+                                    target_label,
+                                    "scheme-request-received",
+                                    entry,
+                                ) {
+                                    log::error!(target: "app", "failed to emit scheme request {url} to {target_label}: {error:?}");
+                                }
+                            });
+                        });
+
+                        // The Client, window state and deep-link listener now exist.
+                        // Deliver any activation coalesced during the primary startup.
+                        #[cfg(not(feature = "e2e"))]
+                        if secondary_activation.mark_ready() {
+                            resolve::create_window(app.handle());
+                        }
+
+                        if let Some(url) = app
+                            .deep_link()
+                            .get_current()?
+                            .and_then(|urls| urls.first().map(ToString::to_string))
+                        {
+                            let target_label = resolve::configured_window_label(&app_handle);
+                            let entry = app
+                                .state::<crate::ipc::PendingDeepLink>()
+                                .store(url.clone());
+                            std::thread::spawn(move || {
+                                if resolve::wait_for_frontend_ready(
+                                    target_label,
+                                    std::time::Duration::from_secs(15),
+                                ) {
+                                    if let Err(error) = app_handle.emit_to(target_label, "scheme-request-received", entry) {
+                                        log::error!(target: "app", "failed to deliver startup scheme request: {error:?}");
+                                    }
+                                } else {
+                                    log::warn!(target: "app", "frontend {target_label} did not become ready before delivering startup scheme request");
+                                }
+                            });
+                        }
+                    }
+
+                    Ok(())
+                },
+                |error| {
+                    setup_failure_capture.lock().take().unwrap_or_else(|| {
+                        startup_failure::Report::from_error(
+                            error.as_ref(),
+                            startup_failure::StartupStage::Setup,
+                            &setup_paths,
+                        )
+                    })
+                },
+                &failure_host,
+            )
         });
 
     let app = match builder.build(context) {
