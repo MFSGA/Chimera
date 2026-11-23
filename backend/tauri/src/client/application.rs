@@ -171,6 +171,34 @@ impl ApplicationClient {
         Config::verge().latest().clone()
     }
 
+    /// Read-only ref RuntimeGate source handle. No RPC into a source actor
+    /// waiting for a runtime apply, and no independent persisted-state copy.
+    pub(crate) fn committed_snapshot_handle(
+        &self,
+    ) -> anyhow::Result<StateSnapshot<ChimeraAppConfig>> {
+        match self.inner.as_ref() {
+            ApplicationClientInner::Actor { snapshot, .. } => Ok(snapshot.clone()),
+            #[cfg(test)]
+            ApplicationClientInner::Static { .. } => anyhow::bail!(
+                "test-only unversioned application fixture has no persistent state handle"
+            ),
+        }
+    }
+
+    /// Read the source document and its monotonic version from one committed
+    /// snapshot without messaging the writer Actor. A Core apply that calls
+    /// back into a writer waiting for the lifecycle mailbox can deadlock.
+    pub(crate) fn committed_runtime_source(&self) -> (ChimeraAppConfig, u64) {
+        match self.inner.as_ref() {
+            ApplicationClientInner::Actor { snapshot, .. } => {
+                let observed = snapshot.load();
+                (observed.state.clone(), *observed.version)
+            }
+            #[cfg(test)]
+            ApplicationClientInner::Static { state, .. } => state.read().clone(),
+        }
+    }
+
     pub(crate) fn get_typed(&self) -> ChimeraAppConfig {
         match self.inner.as_ref() {
             ApplicationClientInner::Actor { snapshot, .. } => snapshot.load().state.clone(),

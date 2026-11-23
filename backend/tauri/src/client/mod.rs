@@ -320,6 +320,9 @@ impl ChimeraClient {
                 typed.clash_config.clone(),
                 Some(typed_profiles.snapshot_handle()),
                 Some(typed_profiles.content_reader()),
+                Some(Arc::new(crate::enhance::FsProfileContentSource::new(
+                    paths.app_profiles_dir(),
+                ))),
                 runtime_paths,
                 Arc::new(chimera_os::core_install::FsBinaryInstaller::new(Arc::new(
                     crate::adapters::elevation::InteractiveElevationConsent,

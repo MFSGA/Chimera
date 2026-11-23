@@ -1171,6 +1171,7 @@ export type ChimeraAppConfigPatch_Deserialize = {
   tray_menu_close_behavior?: TrayMenuCloseBehavior | null;
   network_statistic_widget?: NetworkStatisticWidgetConfig | null;
   traffic_retention?: TrafficRetention | null;
+  network_automation?: NetworkAutomation | null;
   pac_url?: string | null;
   enable_tray_text?: boolean | null;
   enable_tray_traffic?: boolean | null;
@@ -1214,6 +1215,7 @@ export type ChimeraAppConfigPatch_Serialize = {
   tray_menu_close_behavior?: TrayMenuCloseBehavior | null;
   network_statistic_widget?: NetworkStatisticWidgetConfig | null;
   traffic_retention?: TrafficRetention | null;
+  network_automation?: NetworkAutomation | null;
   pac_url?: string | null;
   enable_tray_text?: boolean | null;
   enable_tray_traffic?: boolean | null;
@@ -1276,6 +1278,12 @@ export type ChimeraAppConfig_Deserialize = {
   network_statistic_widget?: NetworkStatisticWidgetConfig;
   /**  How long recorded connection traffic is kept. */
   traffic_retention?: TrafficRetention;
+  /**
+   *  Ref network-specific capture policy, saved atomically as one document.
+   *  Remains disabled until the network observer and permission-scoped RPC
+   *  have a production owner in Chimera.
+   */
+  network_automation?: NetworkAutomation;
   /**  PAC URL for automatic proxy configuration. */
   pac_url?: string | null;
   enable_tray_text?: boolean;
@@ -1340,6 +1348,12 @@ export type ChimeraAppConfig_Serialize = {
   network_statistic_widget: NetworkStatisticWidgetConfig;
   /**  How long recorded connection traffic is kept. */
   traffic_retention: TrafficRetention;
+  /**
+   *  Ref network-specific capture policy, saved atomically as one document.
+   *  Remains disabled until the network observer and permission-scoped RPC
+   *  have a production owner in Chimera.
+   */
+  network_automation: NetworkAutomation;
   /**  PAC URL for automatic proxy configuration. */
   pac_url?: string | null;
   enable_tray_text: boolean;
@@ -1672,7 +1686,10 @@ export type ClosedPage = {
   next: ClosedCursor | null;
 };
 
-/**  A source commit and its critical runtime result. Peripheral owners settle separately. */
+/**
+ *  A source commit and its critical runtime outcome. Side effects settle
+ *  separately and cannot undo a committed source mutation.
+ */
 export type CommitReceipt = {
   operation_id: string | null;
   domain: string;
@@ -2098,9 +2115,11 @@ export type Degradation = {
 };
 
 export type DegradationPhase =
+  /**  Chimera keeps legacy config mirror errors separate from runtime apply. */
   | 'legacy_mirror'
   | 'profile_materialization'
   | 'runtime_build'
+  /**  Chimera's distinct validate/check/promote/publish transaction stages. */
   | 'runtime_check'
   | 'runtime_promote'
   | 'runtime_publish'
@@ -2490,6 +2509,9 @@ export type IVerge_Serialize = {
   window_type: WindowType | null;
 };
 
+/**  The link type of the primary network interface. */
+export type InterfaceKind = 'wifi' | 'ethernet' | 'other';
+
 /**
  *  HTTP services that answer with the caller's address. Each one receives
  *  the address and ordinary request metadata, so none is used until the user
@@ -2620,6 +2642,18 @@ export type ManifestVersionLatest = {
   clash_premium: string;
 };
 
+/**  What a rule does to one capture mechanism when it starts to apply. */
+export type MechanismAction =
+  /**  Leaves the switch as the user set it. */
+  'keep' | 'enable' | 'disable';
+
+/**  One action per capture mechanism. */
+export type MechanismActions = {
+  system_proxy?: MechanismAction;
+  tun?: MechanismAction;
+  transparent_proxy?: MechanismAction;
+};
+
 /**  What a topology orders and merges its nodes by. */
 export type Metric = 'bytes' | 'connections';
 
@@ -2674,6 +2708,30 @@ export type NativeProxies_Serialize = {
   nodes: { [key in ProxyName]: Proxy_Serialize };
 };
 
+/**
+ *  The persisted policy. Disabled and empty by default, so an installation
+ *  that never opens the feature behaves as before.
+ */
+export type NetworkAutomation = {
+  enabled?: boolean;
+  /**  Applied on a network no rule matches. */
+  default_actions?: MechanismActions;
+  /**  Tested in order; the first enabled match decides. */
+  rules?: NetworkRule[];
+};
+
+/**
+ *  The facts a rule requires of the primary network. Every present field must
+ *  hold, and a field whose fact the observation lacks never holds.
+ */
+export type NetworkConditions = {
+  /**  Exact Wi-Fi name. */
+  wifi_ssid?: string | null;
+  /**  Default gateway MAC address, `aa:bb:cc:dd:ee:ff`. */
+  gateway_mac?: string | null;
+  interface_kind?: InterfaceKind | null;
+};
+
 export type NetworkProbeRequest = {
   url: string;
   expected_status: number | null;
@@ -2685,6 +2743,16 @@ export type NetworkProbeResult = {
   expected_status: number | null;
   matches_expected_status: boolean | null;
   latency_ms: number;
+};
+
+/**  A named network and what arriving on it does to each mechanism. */
+export type NetworkRule = {
+  /**  Stable identity, so renaming or reordering a rule is not a new match. */
+  id: string;
+  name: string;
+  enabled?: boolean;
+  conditions: NetworkConditions;
+  actions?: MechanismActions;
 };
 
 /**  Whether the network statistic widget is shown. */
@@ -2708,7 +2776,7 @@ export type NewProfileRequest_Deserialize = {
   metadata: ProfileMetadata_Deserialize;
   /**  Add rewrites the materialized path to `{uid}.{ext}`. */
   definition: ProfileDefinition_Deserialize;
-  /**  Folder the new Config joins in the same durable commit. */
+  /**  Folder the new Config profile joins in the same commit. */
   folder?: FolderId | null;
 };
 
@@ -2716,7 +2784,7 @@ export type NewProfileRequest_Serialize = {
   metadata: ProfileMetadata_Serialize;
   /**  Add rewrites the materialized path to `{uid}.{ext}`. */
   definition: ProfileDefinition_Serialize;
-  /**  Folder the new Config joins in the same durable commit. */
+  /**  Folder the new Config profile joins in the same commit. */
   folder?: FolderId | null;
 };
 
@@ -3168,12 +3236,13 @@ export type ProxyGroupCapabilities = {
 };
 
 /**
- *  User-defined presentation folder for proxy groups; members are Clash group
- *  names, not Profile ids or runtime-config mutations.
+ *  A user-named group of proxy groups in the Proxies sidebar. Clash identifies a
+ *  proxy group only by its name, so members are names.
  */
 export type ProxyGroupFolder = {
   id: FolderId;
   name: string;
+  /**  Display order inside the folder. */
   members: string[];
 };
 
@@ -3232,8 +3301,13 @@ export type ProxyGroupKind =
   | string;
 
 /**
- *  A Config Profile's proxy-group arrangement. A layout can mention groups
- *  absent from the current core snapshot: reconciliation preserves those names.
+ *  How a Config profile's proxy groups are arranged in the sidebar: the groups
+ *  in no folder, then the folders.
+ *
+ *  The groups come from the running core, not from the profile document, so a
+ *  layout may name groups that no longer exist and may not name new ones. It is
+ *  presentation only: [`ProxyGroupLayout::resolve`] reconciles it with the live
+ *  groups, and nothing here touches the runtime config.
  */
 export type ProxyGroupLayout = {
   folders: ProxyGroupFolder[];
@@ -3492,7 +3566,9 @@ export type RuntimeCommitStatus =
   | 'deferred'
   | 'saved_inactive'
   | 'unchanged'
+  /**  Chimera's explicitly unproven async runtime state. */
   | 'pending'
+  /**  Chimera's durable recovery-required state. */
   | 'recovery_required';
 
 export type RuntimeInfos = {

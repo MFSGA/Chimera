@@ -452,6 +452,13 @@ pub struct RuntimeLifecycle {
 }
 
 impl RuntimeLifecycle {
+    /// The checked candidate builder and the Core owner must allocate from
+    /// the same monotonic session counter. Never create another allocator
+    /// when wiring a new RuntimeReconciler producer into the running host.
+    pub(crate) fn revision_allocator(&self) -> RuntimeRevisionAllocator {
+        self.revisions.clone()
+    }
+
     pub fn allocate_revision(&self) -> Result<RuntimeRevision> {
         self.revisions.allocate()
     }

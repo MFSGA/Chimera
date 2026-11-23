@@ -6,7 +6,8 @@ use chimera_contracts::{
     mutation::ConfigDomain,
     runtime_error::{RuntimeCheckUnavailable, RuntimeError},
 };
-use chimera_core::state::{StateSnapshot, Version};
+use chimera_core::state::Version;
+use chimera_state_engine::StateSnapshot;
 
 use super::{
     ports::{RuntimeBuildPort, RuntimeCheckOutcome, RuntimeCheckRequest, RuntimeValidatorPort},
@@ -16,7 +17,6 @@ use crate::{
     client::{
         core_lifecycle::ports::{PreparedRuntime, RuntimePreparationPort},
         ports::SessionPortResolver,
-        runtime::RuntimeRevisionAllocator,
     },
     state::mutation::{DomainChange, RuntimeCandidate, RuntimeGate},
 };
@@ -25,8 +25,16 @@ use crate::{
 /// This contract intentionally does NOT provide a no-op implementation. The
 /// source commit may proceed only if that owner has retained the exact checked
 /// product and can later pair it with a committed source version.
+#[async_trait::async_trait]
 pub(in crate::client) trait CheckedCandidatePort: Send + Sync + 'static {
-    fn checked(&self, candidate: PreparedRuntime) -> Result<(), Arc<RuntimeError>>;
+    /// Admission is acknowledged by the sole runtime owner before source commit.
+    /// An enqueued-but-unhandled message is not proof of ownership.
+    async fn checked(
+        &self,
+        domain: ConfigDomain,
+        candidate: PreparedRuntime,
+        core_spec: chimera_core_manager::CoreSpec,
+    ) -> Result<(), Arc<RuntimeError>>;
     fn source_committed(&self, domain: ConfigDomain, version: Version);
 }
 
@@ -43,8 +51,9 @@ pub(in crate::client) struct Args {
     pub clash: StateSnapshot<ClashConfig>,
     pub profile_content: crate::state::mutation::ProfileContentReader,
     pub builder: Arc<dyn RuntimeBuildPort>,
-    pub ports: Arc<SessionPortResolver>,
-    pub revisions: RuntimeRevisionAllocator,
+    /// Both handles must originate from the actual Core owner. Splitting
+    /// the allocator and resolver would silently fork the runtime session.
+    pub session: crate::client::ports::RuntimePreparationSession,
     pub validator: Arc<dyn RuntimeValidatorPort>,
     pub workflow: Arc<dyn CheckedCandidatePort>,
 }
@@ -56,13 +65,11 @@ impl CandidateCheck {
             clash,
             profile_content,
             builder,
-            ports,
-            revisions,
+            session,
             validator,
             workflow,
         } = args;
-        let preparation =
-            RuntimePreparation::new(profile_content, builder, ports).with_revisions(revisions);
+        let preparation = RuntimePreparation::new(profile_content, builder, session);
         Self {
             application,
             clash,
@@ -76,6 +83,11 @@ impl CandidateCheck {
 #[async_trait::async_trait]
 impl RuntimeGate for CandidateCheck {
     async fn check(&self, candidate: RuntimeCandidate) -> Result<(), Arc<RuntimeError>> {
+        let domain = match &candidate.change {
+            DomainChange::Application { .. } => ConfigDomain::Application,
+            DomainChange::Clash { .. } => ConfigDomain::Clash,
+            DomainChange::Profiles { .. } => ConfigDomain::Profiles,
+        };
         let app = match &candidate.change {
             DomainChange::Application { candidate } => candidate.as_ref().clone(),
             _ => self.application.load().state.clone(),
@@ -118,12 +130,14 @@ impl RuntimeGate for CandidateCheck {
         match self
             .validator
             .check(RuntimeCheckRequest {
-                core_spec,
+                core_spec: core_spec.clone(),
                 intent: &prepared.intent,
             })
             .await
         {
-            RuntimeCheckOutcome::Passed => self.workflow.checked(prepared)?,
+            RuntimeCheckOutcome::Passed => {
+                self.workflow.checked(domain, prepared, core_spec).await?
+            }
             RuntimeCheckOutcome::Rejected { kind, message } => {
                 return Err(Arc::new(RuntimeError::CoreRejectedConfig {
                     core_kind: kind,
@@ -157,11 +171,10 @@ mod tests {
         application::ClashCore, profile::Profiles, runtime::executor::ResolvedPortBindings,
     };
     use chimera_contracts::runtime_error::RuntimeCheckUnavailable;
-    use chimera_core::{
-        client::{core_spec::CoreSpecError, runtime_build::RuntimeBuildError},
-        state::PersistentStateManagerSetup,
-    };
+    use chimera_core::client::{core_spec::CoreSpecError, runtime_build::RuntimeBuildError};
+    use chimera_core::state::PersistentStateManagerSetup as ProfilesManagerSetup;
     use chimera_core_manager::{CoreErrorKind, CoreKind, CoreSpec};
+    use chimera_state_engine::PersistentStateManagerSetup;
 
     use crate::{
         client::{
@@ -244,16 +257,25 @@ mod tests {
     #[derive(Default)]
     struct RecordingInbox {
         checked: Mutex<Vec<PreparedRuntime>>,
+        domains: Mutex<Vec<ConfigDomain>>,
         committed: Mutex<Vec<(ConfigDomain, Version)>>,
         reject: bool,
     }
 
+    #[async_trait::async_trait]
     impl CheckedCandidatePort for RecordingInbox {
-        fn checked(&self, candidate: PreparedRuntime) -> Result<(), Arc<RuntimeError>> {
+        async fn checked(
+            &self,
+            domain: ConfigDomain,
+            candidate: PreparedRuntime,
+            core_spec: chimera_core_manager::CoreSpec,
+        ) -> Result<(), Arc<RuntimeError>> {
+            assert_eq!(core_spec.kind, chimera_core_manager::CoreKind::Mihomo);
             if self.reject {
                 return Err(Arc::new(RuntimeError::ShuttingDown));
             }
             self.checked.lock().unwrap().push(candidate);
+            self.domains.lock().unwrap().push(domain);
             Ok(())
         }
 
@@ -276,16 +298,12 @@ mod tests {
         let app = PersistentStateManagerSetup::<ChimeraAppConfig>::builder()
             .config_path(path("app.yaml"))
             .assemble()
-            .from_state(ChimeraAppConfig::default())
-            .await
-            .unwrap();
+            .from_state(ChimeraAppConfig::default());
         let clash = PersistentStateManagerSetup::<ClashConfig>::builder()
             .config_path(path("clash.yaml"))
             .assemble()
-            .from_state(ClashConfig::default())
-            .await
-            .unwrap();
-        let profiles = PersistentStateManagerSetup::<Profiles>::builder()
+            .from_state(ClashConfig::default());
+        let profiles = ProfilesManagerSetup::<Profiles>::builder()
             .config_path(path("profiles.yaml"))
             .assemble()
             .from_state(Profiles::default())
@@ -308,10 +326,13 @@ mod tests {
                 ProfileContentLock::default(),
             ),
             builder: builder.clone(),
-            ports: Arc::new(SessionPortResolver::new(Arc::new(
-                RuntimeLifecycle::default(),
-            ))),
-            revisions: RuntimeRevisionAllocator::default(),
+            session: {
+                let lifecycle = Arc::new(RuntimeLifecycle::default());
+                crate::client::ports::RuntimePreparationSession {
+                    revisions: lifecycle.revision_allocator(),
+                    ports: Arc::new(SessionPortResolver::new(lifecycle)),
+                }
+            },
             validator: validator.clone(),
             workflow: inbox.clone(),
         });
@@ -334,6 +355,10 @@ mod tests {
         let prepared = inbox.checked.lock().unwrap();
         assert_eq!(prepared.len(), 1);
         let build = &prepared[0];
+        assert_eq!(
+            inbox.domains.lock().unwrap().as_slice(),
+            &[ConfigDomain::Application]
+        );
         let validation = validator.checked.lock().unwrap();
         assert_eq!(
             validation.as_slice(),
@@ -359,6 +384,32 @@ mod tests {
             inbox.committed.lock().unwrap().as_slice(),
             &[(ConfigDomain::Application, Version::new(7))]
         );
+    }
+
+    #[tokio::test]
+    async fn checked_gate_preserves_the_actual_source_domain_for_each_candidate() {
+        let (gate, _builder, _validator, inbox) = gate(RuntimeCheckOutcome::Passed, false).await;
+        gate.check(RuntimeCandidate {
+            change: DomainChange::Profiles {
+                candidate: Arc::new(Profiles::default()),
+            },
+            staged: BTreeMap::new(),
+        })
+        .await
+        .unwrap();
+        gate.check(RuntimeCandidate {
+            change: DomainChange::Clash {
+                candidate: Arc::new(ClashConfig::default()),
+            },
+            staged: BTreeMap::new(),
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            inbox.domains.lock().unwrap().as_slice(),
+            &[ConfigDomain::Profiles, ConfigDomain::Clash]
+        );
+        assert_eq!(inbox.checked.lock().unwrap().len(), 2);
     }
 
     #[tokio::test]

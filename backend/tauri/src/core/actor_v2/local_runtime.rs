@@ -148,7 +148,7 @@ fn transform_uid_of(tag: &OperatorTag) -> Option<&str> {
 pub(crate) struct LocalRuntimeHost {
     control: CoreControl,
     runtime_paths: RuntimePaths,
-    ports: crate::client::SessionPortResolver,
+    ports: Arc<crate::client::SessionPortResolver>,
     lifecycle: Arc<crate::client::runtime::RuntimeLifecycle>,
     pending_profile_candidates:
         tokio::sync::Mutex<HashMap<OperationId, crate::client::runtime::CandidateFile>>,
@@ -213,7 +213,7 @@ impl LocalRuntimeHost {
         Self {
             control,
             runtime_paths,
-            ports: crate::client::SessionPortResolver::new(lifecycle.clone()),
+            ports: Arc::new(crate::client::SessionPortResolver::new(lifecycle.clone())),
             lifecycle,
             pending_profile_candidates: tokio::sync::Mutex::new(HashMap::new()),
             run_type: RwLock::new(RunType::Normal),
@@ -266,8 +266,165 @@ impl LocalRuntimeHost {
         self.lifecycle.accepted_confirmed_receipt()
     }
 
+    /// Returns the real Core owner session, not a parallel preparation cache.
+    /// Port candidate reads and confirmed Core publications use this exact
+    /// resolver/RuntimeLifecycle instance on both sides of the Actor.
+    pub(crate) fn preparation_session(&self) -> crate::client::ports::RuntimePreparationSession {
+        crate::client::ports::RuntimePreparationSession {
+            revisions: self.lifecycle.revision_allocator(),
+            ports: self.ports.clone(),
+        }
+    }
+
     pub(crate) fn invalidate_ports(&self) {
         self.ports.invalidate();
+    }
+
+    /// Submit the *exact* checked document through Chimera's existing single
+    /// Core host, bypassing a second config build. This is the port required
+    /// by pinned ref `RuntimeReconciler::submit_prepared`; enabling the new
+    /// production gate additionally requires serializing SourceCommitted and
+    /// host ownership in the outer CoreLifecycle Actor.
+    pub(crate) async fn reconcile_prepared(
+        &self,
+        prepared: &crate::client::core_lifecycle::ports::PreparedRuntime,
+        core_spec: chimera_core_manager::CoreSpec,
+        endpoint: &dyn ControlEndpoint,
+        expected_owner: (ExecutionHost, u64),
+    ) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            !self.closed.load(Ordering::Acquire),
+            "the local core control plane is shutting down"
+        );
+        anyhow::ensure!(
+            !self.outcome_uncertain(),
+            "the local core runtime outcome is uncertain; recover before applying"
+        );
+        anyhow::ensure!(
+            expected_owner.0 == endpoint.host(),
+            "the checked Core owner no longer matches the selected endpoint"
+        );
+        let target_core = prepared.snapshot.target_core;
+        let bytes = prepared.snapshot.product_bytes();
+        anyhow::ensure!(
+            prepared.target.is_some(),
+            "checked runtime has no source target identity"
+        );
+        anyhow::ensure!(
+            prepared.intent.config_text.as_bytes() == bytes,
+            "checked runtime intent does not match the built product bytes"
+        );
+        anyhow::ensure!(
+            chimera_core_manager::payload_digest(bytes) == prepared.intent.digest,
+            "checked runtime digest does not match its exact product bytes"
+        );
+        anyhow::ensure!(
+            prepared.intent.core_type == (&target_core).into(),
+            "checked runtime core identity does not match its product"
+        );
+        anyhow::ensure!(
+            core_spec.kind == chimera_core::client::core_spec::core_kind(target_core),
+            "checked runtime CoreSpec selects a different core"
+        );
+
+        let candidate = self.runtime_paths.create_candidate(bytes).await?;
+        // An actor-validated candidate already has an authoritative check.
+        // The host still verifies the content digest on submit; re-running
+        // transforms or serializing YAML here would violate ref byte identity.
+        let status = match endpoint.status().await {
+            Ok(status) => status,
+            Err(error) => {
+                cleanup_candidate(candidate, "could not read checked runtime baseline").await;
+                return Err(error.into());
+            }
+        };
+        let expected_applied = match expected_applied_revision(&status) {
+            Ok(revision) => revision,
+            Err(error) => {
+                cleanup_candidate(candidate, "checked runtime baseline is not authoritative").await;
+                return Err(error);
+            }
+        };
+        let operation_id = OperationId::generate();
+        let submission = CoreSubmission {
+            expected_owner: Some(expected_owner),
+            envelope: CoreCommandEnvelope {
+                operation_id,
+                command: CoreCommand::Reconcile(Box::new(ReconcileRequest {
+                    core: core_spec.clone(),
+                    config: ConfigInput::Inline {
+                        bytes: bytes.to_vec(),
+                        expected_digest: Some(prepared.intent.digest.clone()),
+                    },
+                    options: InstanceOptions {
+                        local_ipc: Some(prepared.intent.local_ipc),
+                        ..InstanceOptions::default()
+                    },
+                    expected_applied,
+                })),
+            },
+            core_type: Some(prepared.intent.core_type.clone()),
+        };
+        let outcome = match self
+            .submit_and_wait(endpoint, submission, operation_id)
+            .await
+        {
+            Ok(outcome) => outcome,
+            Err(error) => {
+                cleanup_candidate(candidate, "checked runtime operation failed").await;
+                return Err(error);
+            }
+        };
+        let applied_status = match endpoint.status().await {
+            Ok(status) => status,
+            Err(error) => {
+                cleanup_candidate(candidate, "could not confirm checked runtime").await;
+                self.ports.invalidate();
+                self.outcome_uncertain.store(true, Ordering::Release);
+                return Err(anyhow::Error::from(error).context(
+                    "core accepted checked runtime, but its applied status could not be confirmed",
+                ));
+            }
+        };
+        let applied_revision = match confirmed_applied_revision(
+            endpoint.host(),
+            &applied_status,
+            &outcome.revision,
+            &core_spec,
+        ) {
+            Ok(revision) => revision,
+            Err(error) => {
+                cleanup_candidate(candidate, "checked runtime identity not confirmed").await;
+                self.ports.invalidate();
+                self.outcome_uncertain.store(true, Ordering::Release);
+                return Err(error)
+                    .context("checked runtime was submitted but could not be confirmed");
+            }
+        };
+
+        let receipt = Arc::new(RuntimeApplyReceipt {
+            revision: prepared.snapshot.revision,
+            config_text: prepared.intent.config_text.clone(),
+            config_digest: prepared.intent.digest.clone(),
+            target_core,
+            core_spec,
+            host: endpoint.host(),
+            run_intent: crate::client::application_workflow::policy::CoreRunIntent::Running,
+            local_ipc: prepared.intent.local_ipc,
+            applied_revision,
+            target: prepared.target.clone(),
+            ports: prepared.ports.clone(),
+            artifact: Some(prepared.snapshot.clone()),
+        });
+        *self.run_type.write() = match endpoint.host() {
+            ExecutionHost::Local => RunType::Normal,
+            ExecutionHost::Service => RunType::Service,
+        };
+        // Publish only the verified Core outcome. `publish_profile_candidate`
+        // handles exact-file promotion and applied snapshot identity checks.
+        self.lifecycle.publish_confirmed(receipt.clone());
+        self.publish_profile_candidate(candidate, receipt, prepared.snapshot.clone())
+            .await
     }
 
     pub(crate) async fn reconcile(
@@ -1431,7 +1588,13 @@ mod tests {
 
     struct RecordingEndpoint {
         status: StdMutex<super::super::control_endpoint::CoreStatusSnapshot>,
-        submitted: StdMutex<Vec<(Vec<u8>, Option<LocalIpcSettings>)>>,
+        submitted: StdMutex<
+            Vec<(
+                Vec<u8>,
+                Option<LocalIpcSettings>,
+                Option<(ExecutionHost, u64)>,
+            )>,
+        >,
         apply_submission: bool,
     }
 
@@ -1465,7 +1628,7 @@ mod tests {
             self.submitted
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .push((bytes, request.options.local_ipc));
+                .push((bytes, request.options.local_ipc, submission.expected_owner));
 
             let generation = if self.apply_submission {
                 let mut status = self
@@ -1613,6 +1776,194 @@ mod tests {
             ports: Default::default(),
             artifact: Some(artifact),
         })
+    }
+
+    fn prepared_runtime_fixture(
+        bytes: Arc<str>,
+    ) -> (
+        crate::client::core_lifecycle::ports::PreparedRuntime,
+        chimera_core_manager::CoreSpec,
+    ) {
+        use chimera_core::actor_v2::intent::RuntimeIntentBuilder;
+        let receipt = restore_receipt(bytes.clone());
+        let snapshot = receipt.artifact.as_ref().unwrap().clone();
+        let prepared = crate::client::core_lifecycle::ports::PreparedRuntime {
+            snapshot,
+            intent: Arc::new(RuntimeIntentBuilder::build(
+                (&receipt.target_core).into(),
+                bytes,
+                receipt.local_ipc,
+            )),
+            ports: receipt.ports.clone(),
+            target: Some("committed-source-42".into()),
+        };
+        (prepared, receipt.core_spec.clone())
+    }
+
+    #[tokio::test]
+    async fn checked_preparation_and_core_owner_share_revision_and_confirmed_port_session() {
+        use chimera_config::clash::config::ClashConfig;
+        let (_root, host, _paths) = runtime_host_fixture().await;
+        let checked_session = host.preparation_session();
+        let clash = ClashConfig::default();
+        let before = checked_session.ports.resolve_candidate(&clash).unwrap();
+        assert!(
+            host.accepted_runtime_receipt().is_none(),
+            "a candidate must remain inert"
+        );
+        let revision = checked_session.revisions.allocate().unwrap();
+        let (mut prepared, spec) = prepared_runtime_fixture(Arc::from("mode: rule\n"));
+        prepared.snapshot = Arc::new(prepared.snapshot.with_revision(revision));
+        prepared.ports = before.clone();
+        let endpoint = recording_endpoint(true);
+        host.reconcile_prepared(&prepared, spec, &endpoint, (ExecutionHost::Local, 3))
+            .await
+            .unwrap();
+
+        // The Core receipt must contain the exact prepared picks and revision,
+        // rather than a second generator's independently allocated values.
+        let receipt = host.accepted_runtime_receipt().unwrap();
+        assert_eq!(receipt.revision, revision);
+        assert_eq!(receipt.ports, before);
+        assert!(Arc::ptr_eq(
+            receipt.artifact.as_ref().unwrap(),
+            &prepared.snapshot
+        ));
+        let future_session = host.preparation_session();
+        assert!(
+            Arc::ptr_eq(&checked_session.ports, &future_session.ports),
+            "the checked builder must share the actual Core host resolver Arc"
+        );
+        let next = future_session.ports.resolve_candidate(&clash).unwrap();
+        assert_eq!(
+            next, before,
+            "unchanged strategy must reuse the confirmed running listeners"
+        );
+        let revision_two = future_session.revisions.allocate().unwrap();
+        assert_eq!(revision_two.get(), revision.get() + 1);
+        let revision_three = host.lifecycle.allocate_revision().unwrap();
+        assert_eq!(
+            revision_three.get(),
+            revision_two.get() + 1,
+            "Core-host allocations and checked builder allocations share one counter"
+        );
+        // A confirmed listener baseline belongs to the previous Core host.
+        // After S2 owner switching it must be invalidated for *all* session
+        // borrowers, without creating a new resolver or resetting revisions.
+        host.select_execution_host(ExecutionHost::Service).unwrap();
+        assert!(host.accepted_runtime_receipt().is_none());
+        assert!(Arc::ptr_eq(
+            &host.preparation_session().ports,
+            &checked_session.ports
+        ));
+        assert_eq!(
+            checked_session.revisions.allocate().unwrap().get(),
+            revision_three.get() + 1
+        );
+        host.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn checked_runtime_submits_exact_prevalidated_bytes_and_publishes_same_snapshot() {
+        let (_root, host, paths) = runtime_host_fixture().await;
+        let bytes: Arc<str> = "mode: rule\nexternal-controller: 127.0.0.1:9090\n".into();
+        let (prepared, spec) = prepared_runtime_fixture(bytes.clone());
+        let snapshot = prepared.snapshot.clone();
+        let expected_intent = prepared.intent.clone();
+        let endpoint = recording_endpoint(true);
+        assert!(host.confirmed_runtime_receipt().is_none());
+
+        host.reconcile_prepared(&prepared, spec, &endpoint, (ExecutionHost::Local, 3))
+            .await
+            .unwrap();
+
+        let submits = endpoint.submitted.lock().unwrap();
+        assert_eq!(submits.len(), 1);
+        assert_eq!(submits[0].0, expected_intent.config_text.as_bytes());
+        assert_eq!(submits[0].1, Some(expected_intent.local_ipc));
+        assert_eq!(submits[0].2, Some((ExecutionHost::Local, 3)));
+        drop(submits);
+        let receipt = host.confirmed_runtime_receipt().unwrap();
+        assert_eq!(receipt.config_digest, expected_intent.digest);
+        assert_eq!(receipt.target.as_deref(), Some("committed-source-42"));
+        assert!(Arc::ptr_eq(receipt.artifact.as_ref().unwrap(), &snapshot));
+        assert!(Arc::ptr_eq(
+            host.lifecycle.snapshot().applied.as_ref().unwrap(),
+            &snapshot
+        ));
+        assert_eq!(
+            tokio::fs::read(paths.product()).await.unwrap(),
+            bytes.as_bytes()
+        );
+        host.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn checked_runtime_refuses_mismatched_intent_before_any_core_submission() {
+        use chimera_core::actor_v2::intent::RuntimeIntentBuilder;
+        let (_root, host, paths) = runtime_host_fixture().await;
+        let (mut prepared, spec) = prepared_runtime_fixture("mode: rule\n".into());
+        prepared.intent = Arc::new(RuntimeIntentBuilder::build(
+            prepared.intent.core_type.clone(),
+            Arc::from("mode: global\n"),
+            prepared.intent.local_ipc,
+        ));
+        let endpoint = recording_endpoint(true);
+        let error = host
+            .reconcile_prepared(
+                &prepared,
+                spec.clone(),
+                &endpoint,
+                (ExecutionHost::Local, 3),
+            )
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("intent does not match"));
+        assert!(endpoint.submitted.lock().unwrap().is_empty());
+        assert!(host.confirmed_runtime_receipt().is_none());
+        assert!(!paths.product().exists());
+        prepared.intent = Arc::new(RuntimeIntentBuilder::build(
+            (&prepared.snapshot.target_core).into(),
+            Arc::from("mode: rule\n"),
+            prepared.intent.local_ipc,
+        ));
+        prepared.target = Some("committed-source-42".into());
+        assert!(
+            host.reconcile_prepared(
+                &prepared,
+                spec.clone(),
+                &endpoint,
+                (ExecutionHost::Service, 3)
+            )
+            .await
+            .is_err(),
+            "wrong Core host must fail before submitting"
+        );
+        prepared.target = None;
+        assert!(
+            host.reconcile_prepared(&prepared, spec, &endpoint, (ExecutionHost::Local, 3))
+                .await
+                .is_err()
+        );
+        assert!(endpoint.submitted.lock().unwrap().is_empty());
+        host.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn checked_runtime_requires_fresh_status_confirmation_not_just_submit_reply() {
+        let (_root, host, paths) = runtime_host_fixture().await;
+        let (prepared, spec) = prepared_runtime_fixture("mode: rule\n".into());
+        let endpoint = recording_endpoint(false);
+        let error = host
+            .reconcile_prepared(&prepared, spec, &endpoint, (ExecutionHost::Local, 3))
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("could not be confirmed"));
+        assert_eq!(endpoint.submitted.lock().unwrap().len(), 1);
+        assert!(host.lifecycle.accepted_confirmed_receipt().is_none());
+        assert!(!paths.product().exists());
+        assert!(host.outcome_uncertain());
+        host.shutdown().await.unwrap();
     }
 
     #[tokio::test]

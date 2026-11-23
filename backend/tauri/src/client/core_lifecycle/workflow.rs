@@ -106,6 +106,15 @@ pub(in crate::client) enum Command {
         reason: String,
     },
     Reconcile,
+    /// The exact upstream checked bytes, handed from the only lifecycle
+    /// mailbox into the existing CoreFacade mutation executor. No rebuild.
+    ApplyChecked {
+        prepared: super::ports::PreparedRuntime,
+        core_spec: chimera_core_manager::CoreSpec,
+        domain: super::super::reconciler::committed::SourceDomain,
+        version: u64,
+        authority: Arc<dyn crate::client::reconciler::authority::RuntimeSourceAuthority>,
+    },
     /// One source notification requests a latest-committed-target round.
     ReconcileSource,
     /// Ref release-owed maintenance; no Core submit or startup handoff.
@@ -692,6 +701,30 @@ impl CoreLifecycleWorkflow {
             Command::RecoverCore => self.reconcile_with_trigger(Trigger::CoreChanged).await,
             Command::Reconcile => self.reconcile_with_trigger(Trigger::Retry).await,
             Command::ReconcileSource => self.reconcile_with_trigger(Trigger::SourceCommitted).await,
+            Command::ApplyChecked {
+                prepared,
+                core_spec,
+                domain,
+                version,
+                authority,
+            } => {
+                let target = prepared.target.as_deref().ok_or_else(|| {
+                    anyhow::anyhow!("checked runtime has no source target identity")
+                })?;
+                // Verify once before handing any bytes to Core and again
+                // after the Core owner confirms the apply. A later durable
+                // source commit may race this async Core operation. The old
+                // target's successful Core receipt must never be reported as
+                // latest-source convergence or settle Effects as current.
+                let checked_target = target.to_owned();
+                authority.verify(domain, version, &checked_target).await?;
+                self.core.reconcile_prepared(prepared, core_spec).await?;
+                // A changed source is typed CommittedTargetAdvanced by the
+                // live authority. The sole Actor's Completed handler already
+                // schedules its existing latest-source recovery on that type.
+                // Do not replay Core from here: that would create two owners.
+                authority.verify(domain, version, &checked_target).await
+            }
             Command::StartCore => self.reconcile_with_trigger(Trigger::Start).await,
             #[cfg(test)]
             Command::StartupReconcile {

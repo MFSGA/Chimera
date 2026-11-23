@@ -76,6 +76,14 @@ impl Default for CandidatePortBindings {
 /// The executor receives concrete bindings and never performs port probing. A
 /// later config change only re-probes the strategy fields that changed, so a
 /// running core's existing listeners are not mistaken for collisions.
+/// Borrowed session handles from the *existing* Core host. A checked
+/// RuntimePreparation does not create a second runtime port/ revision owner.
+#[derive(Debug, Clone)]
+pub(crate) struct RuntimePreparationSession {
+    pub(crate) revisions: super::runtime::RuntimeRevisionAllocator,
+    pub(crate) ports: Arc<SessionPortResolver>,
+}
+
 #[derive(Debug)]
 pub(crate) struct SessionPortResolver {
     lifecycle: Arc<super::runtime::RuntimeLifecycle>,

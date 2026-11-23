@@ -6,8 +6,10 @@
 pub(in crate::client) mod adapters;
 pub(crate) mod apply;
 pub(crate) mod attempt;
+pub(in crate::client) mod authority;
 pub(in crate::client) mod check;
 pub(crate) mod committed;
+pub(in crate::client) mod composition;
 pub(crate) mod decision;
 pub(in crate::client) mod inputs;
 pub(crate) mod legacy_check;

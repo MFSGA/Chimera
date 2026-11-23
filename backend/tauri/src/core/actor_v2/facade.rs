@@ -282,6 +282,16 @@ where
 }
 
 impl CoreFacade {
+    /// Read-only ref preparation session from the *same* LocalRuntimeHost
+    /// used for the authoritative Core submission and runtime product.
+    pub(crate) fn preparation_session(
+        &self,
+    ) -> Option<crate::client::ports::RuntimePreparationSession> {
+        self.local_runtime
+            .as_ref()
+            .map(|host| host.preparation_session())
+    }
+
     #[cfg(test)]
     pub(crate) fn new_local() -> Self {
         Self {
@@ -432,6 +442,50 @@ impl CoreFacade {
                 )
             }
         }
+    }
+
+    /// Ref-style submit: the existing CoreFacade owns this operation; no
+    /// second Core controller or new configuration generation is created.
+    /// Startup S2 must have selected the owner host before admission.
+    pub(crate) async fn reconcile_prepared(
+        &self,
+        prepared: crate::client::core_lifecycle::ports::PreparedRuntime,
+        core_spec: chimera_core_manager::CoreSpec,
+    ) -> anyhow::Result<()> {
+        let local_runtime = self
+            .local_runtime
+            .as_ref()
+            .cloned()
+            .context("prepared runtime requires the shared CoreControl host")?;
+        let router = self
+            .core_router
+            .as_ref()
+            .context("prepared runtime requires the authoritative Core router")?;
+        let observed = router.refresh_status().await?;
+        let selected = local_runtime.run_type();
+        let endpoint = self.endpoint_for_run_type(selected)?;
+        anyhow::ensure!(
+            observed.host == endpoint.host()
+                && matches!(
+                    observed.connectivity,
+                    chimera_core::actor_v2::EndpointConnectivity::Connected
+                ),
+            "prepared runtime host is not the proven selected Core owner"
+        );
+        let result = self
+            .run_local_mutation("checked runtime reconcile", async move {
+                local_runtime
+                    .reconcile_prepared(
+                        &prepared,
+                        core_spec,
+                        endpoint.as_ref(),
+                        (observed.host, observed.generation),
+                    )
+                    .await
+            })
+            .await;
+        self.refresh_ws_binding().await;
+        result
     }
 
     pub(crate) async fn reconcile(

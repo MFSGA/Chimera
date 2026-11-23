@@ -265,6 +265,12 @@ impl LegacyCoreBridge {
 
 #[async_trait]
 impl CoreLifecyclePort for LegacyCoreBridge {
+    fn runtime_preparation_session(
+        &self,
+    ) -> Option<crate::client::ports::RuntimePreparationSession> {
+        self.facade().preparation_session()
+    }
+
     async fn reconcile_transparent_proxy(
         &self,
         request: &chimera_ipc::api::network::transparent_proxy::NetworkTransparentProxyRequest,
@@ -289,6 +295,14 @@ impl CoreLifecyclePort for LegacyCoreBridge {
         run_type: RunType,
     ) -> anyhow::Result<()> {
         self.facade().reconcile(clash, target_core, run_type).await
+    }
+
+    async fn reconcile_prepared(
+        &self,
+        prepared: super::ports::PreparedRuntime,
+        core_spec: chimera_core_manager::CoreSpec,
+    ) -> anyhow::Result<()> {
+        self.facade().reconcile_prepared(prepared, core_spec).await
     }
 
     async fn retire_service_core(

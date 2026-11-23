@@ -437,12 +437,14 @@ mod tests {
             .await
             .unwrap();
         let builder = Arc::new(CountingBuildPort::default());
+        let lifecycle = Arc::new(RuntimeLifecycle::default());
         let preparation = RuntimePreparation::new(
             ProfileContentReader::new(manager.snapshot_handle(), ProfileContentLock::default()),
             builder.clone(),
-            Arc::new(SessionPortResolver::new(Arc::new(
-                RuntimeLifecycle::default(),
-            ))),
+            crate::client::ports::RuntimePreparationSession {
+                revisions: lifecycle.revision_allocator(),
+                ports: Arc::new(SessionPortResolver::new(lifecycle)),
+            },
         );
         let inputs = RuntimeInputs {
             app: ChimeraAppConfig {
