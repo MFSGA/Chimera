@@ -92,6 +92,7 @@
 | LESSON-20261116-004 | 2026-11-16 | Startup recovery / committed target | 成功的 Reconcile 已应用当前 Profiles 后，恢复不能再写回旧 baseline；需让实际 actor 回归确认最终运行配置 | Mitigated |
 | LESSON-20261116-005 | 2026-11-16 | Development / test workflow | 新增 actor 回归后才补读测试规范；随后按 T01/T02 复核并明确真实 actor 边界 | Mitigated |
 | LESSON-20261116-008 | 2026-11-16 | Startup / Service readiness | ready 与 unavailable 的 readiness 变化都要触发 owner follow-up；同代探测恢复断言需同步覆盖新语义 | Mitigated |
+| LESSON-20261119-001 | 2026-11-19 | CI / Signature | Daily Manifest bot 未签名提交被 GH013 拒绝；GitHub Verified GraphQL 修复待 CI 复验 | Mitigated |
 
 ### LESSON-20261113-001/002：架构迁移要覆盖原生运行时与稀疏配置
 
@@ -1334,3 +1335,10 @@ backend/Cargo.toml -p chimera --lib core::clash::proxies::tests:: -- --nocapture
 - 证据与根因：完整 `client::` 测试首次运行 **397 项通过、1 项失败**。`startup_recovery_evidence_detects_same_generation_probe_recovery` 仍断言同一 `ready_generation` 的 probe failure 恢复不触发 follow-up；但 phase 从 Unknown 变为 Ready 本身已经改变 readiness，即使 generation 没变也必须重新评估 owner。旧断言只覆盖 generation 推进的单向信号。
 - 修正与验证：将 probe recovery 断言改为 readiness 改变会触发 follow-up；增加的 actor 集成用例覆盖 Service 就绪后 Local→Service、Service 失效后 Service→Local 的顺序，以及没有显式 stop intent 的 stopped Local 会跟随 Service readiness。复核后 `cargo test -p chimera --lib client:: -- --test-threads=4` **416/416** 通过，完整 Tauri 单元测试 **983/983** 通过（另 1 项忽略；已配置仓库指定 pnpm）。
 - 防复发：readiness 事件应比较前后 phase/readiness，而不是只观察 `ready_generation` 增长；手动恢复到相同 generation 也要触发 owner 重算。测试至少覆盖 Ready→Unavailable 和 Unavailable→Ready，并验证对应的 Core owner handoff。
+
+### LESSON-20261119-001：Daily Manifest 不能用未签名的 Git Bot Commit 更新受保护主线
+
+- 证据与根因：[Daily Run 44450684852](https://github.com/MFSGA/Chimera/actions/runs/44450684852)，触发 SHA `2eff6880eae341ecf726516be7c5e2d3e6627d30`，`Generate Manifest` Job `135313569932`。清单生成、变更检测及 pre-commit Prettier 均成功；`git commit` 创建的 `95f911e0905f6de912a8632ac549266b96b223a3` 未经签名，`git push` 被 `GH013: Commits must have verified signatures` 拒绝。`Generate Manifest V1` 成功，是因为未发生清单变化，提交步骤被跳过；此次没有失败时 UI 截图或测试 artifact，故障本身是纯 Git 分支保护问题。
+- 与上游比较：本地 `ref/` 为 `c4b35e04870a9caa53f21d10af6fcfde4a6f4c01`。上游 Daily 使用 Release App token 和普通 `git commit`，但这个提交方式不能保证满足 Chimera 的 Verified 签名规则，故不能直接复制来修复。
+- 修正与验证：`master` Daily 改为 `scripts/ci/commit-manifest-verified.sh` 调用 GitHub GraphQL `createCommitOnBranch`，只发布 `manifest/version.json`；不自定义 author/committer，让 GitHub 自动签名，校验 `signature.isValid`，并使用 `expectedHeadOid` 阻止过期定时任务覆盖较新提交。保留 Prettier 格式化和无变化跳过；`dev` 检出独立历史，不强行调用只存在于 master 的脚本。mock GitHub API 测试 **4/4**、Manifest Node 全套 **8/8** 及 Manifest 类型检查、Prettier 均通过。
+- 验证边界与防复发：本地测试只证明 GraphQL 参数、内容编码、正确分支、失败反馈和跳过策略，**不证明 GitHub 实际返回 Verified 或允许受保护分支写入**；需提交后使用新 Daily workflow_dispatch/schedule 检查真实 commit 的 `verification.verified` 和远端 SHA。不要以禁用签名规则、忽略失败、使用未知 GPG 私钥或跳过检查来变绿；修改 workflow 与权限属 L3，须按仓库治理审查。

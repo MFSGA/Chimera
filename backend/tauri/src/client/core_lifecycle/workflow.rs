@@ -4,7 +4,9 @@ use std::sync::{
 };
 
 use chimera_config::application::{ChimeraAppConfig, ChimeraAppConfigPatch};
-use chimera_core::actor_v2::service_status::ServiceHostStatus;
+use chimera_core::{
+    actor_v2::service_status::ServiceHostStatus, client::reconciler::plan::Trigger,
+};
 use chimera_core_manager::CoreKind;
 use chimera_ipc::api::status::CoreState;
 use struct_patch::Patch;
@@ -23,6 +25,9 @@ use crate::client::application_workflow::workflow::ApplicationWorkflow;
 use crate::client::application_workflow::{
     inputs::{FrozenProfileContent, RuntimeInputs},
     workflow::ProfileRuntime,
+};
+use crate::client::reconciler::attempt::{
+    AttemptPolicy, CommittedTargetAdvanced, ServiceFallbackDeferred, waiting_dependency,
 };
 use crate::config::chimera::ClashCore;
 use crate::core::actor_v2::control_endpoint::ExecutionHost;
@@ -53,7 +58,8 @@ pub(crate) struct ProfilesSourceAdvanced {
 pub(in crate::client) enum Command {
     ProfileMutation(Box<crate::client::application_workflow::mutation::MutationRequest>),
     Shutdown,
-    #[cfg(test)]
+    /// Explicit user intent, distinct from automatic reconciliation.
+    StartCore,
     StopCore,
     PatchApplicationConfig {
         patch: ChimeraAppConfigPatch,
@@ -102,6 +108,10 @@ pub(in crate::client) enum Command {
         reason: String,
     },
     Reconcile,
+    /// One source notification requests a latest-committed-target round.
+    ReconcileSource,
+    /// Ref release-owed maintenance; no Core submit or startup handoff.
+    MaintainServiceRelease,
     RetryDeferredProfiles {
         digest: String,
     },
@@ -152,6 +162,7 @@ pub(in crate::client) struct CoreLifecycleWorkflow {
     service_failed_generation_shared: Arc<AtomicU64>,
     service_status: Option<watch::Receiver<ServiceHostStatus>>,
     service_recovery: Arc<parking_lot::Mutex<ServiceRecovery>>,
+    attempt_policy: Arc<parking_lot::Mutex<AttemptPolicy>>,
     service_recovery_reconnected: Arc<AtomicBool>,
     shutdown: CancellationToken,
 }
@@ -239,6 +250,7 @@ impl CoreLifecycleWorkflow {
             service_failed_generation_shared: Arc::new(AtomicU64::new(0)),
             service_status: None,
             service_recovery: Arc::new(parking_lot::Mutex::new(ServiceRecovery::default())),
+            attempt_policy: Arc::new(parking_lot::Mutex::new(AttemptPolicy::default())),
             service_recovery_reconnected: Arc::new(AtomicBool::new(false)),
             shutdown: CancellationToken::new(),
         }
@@ -659,6 +671,7 @@ impl CoreLifecycleWorkflow {
         #[cfg(test)]
         let refresh_startup_target = match &command {
             Command::Reconcile
+            | Command::ReconcileSource
             | Command::RecoverCore
             | Command::RetryDeferredProfiles { .. }
             | Command::ReconcileProfiles { .. } => true,
@@ -678,7 +691,10 @@ impl CoreLifecycleWorkflow {
             Command::ProfileMutation(_) => {
                 anyhow::bail!("Profile mutations must run through ApplicationWorkflowActor")
             }
-            Command::RecoverCore | Command::Reconcile => self.reconcile().await,
+            Command::RecoverCore => self.reconcile_with_trigger(Trigger::CoreChanged).await,
+            Command::Reconcile => self.reconcile_with_trigger(Trigger::Retry).await,
+            Command::ReconcileSource => self.reconcile_with_trigger(Trigger::SourceCommitted).await,
+            Command::StartCore => self.reconcile_with_trigger(Trigger::Start).await,
             #[cfg(test)]
             Command::StartupReconcile {
                 operation_id,
@@ -744,7 +760,6 @@ impl CoreLifecycleWorkflow {
                 self.service_recovery.lock().suppress();
                 self.core.stop().await
             }
-            #[cfg(test)]
             Command::StopCore => self.core.stop().await,
             Command::PatchApplicationConfig {
                 patch,
@@ -802,6 +817,7 @@ impl CoreLifecycleWorkflow {
                     .await
             }
             Command::StopService(mut transition) => self.stop_service(transition.as_mut()).await,
+            Command::MaintainServiceRelease => self.maintain_service_release().await,
             Command::ServiceEndpointDown(mut transition) => {
                 match self.report_service_endpoint_down(transition.as_mut()).await {
                     Ok(recovered) => {
@@ -1041,14 +1057,372 @@ impl CoreLifecycleWorkflow {
         Ok(())
     }
 
+    /// Independent ref release-owed maintenance: only a verified Local
+    /// runtime may retire a daemon whose *stopped* Core is still owned by this
+    /// instance. Running, foreign, quarantined and unreadable Service owners
+    /// are never grounds for stopping the daemon.
+    pub(super) async fn service_release_observation(
+        &self,
+    ) -> crate::client::reconciler::release::ReleaseObservation {
+        use crate::client::reconciler::release::{ReleaseObservation, observation};
+
+        if self.application.get_typed().enable_service_mode {
+            return ReleaseObservation::Cleared;
+        }
+        let Ok(core) = self.core.status().await else {
+            return ReleaseObservation::Unproven;
+        };
+        let verified_local = core.run_type == crate::core::RunType::Normal
+            && self.verified_applied_runtime(&core).await;
+        if !verified_local {
+            return ReleaseObservation::Unproven;
+        }
+        let (service, _) = self.service_evidence().await;
+        observation(false, verified_local, &service)
+    }
+
+    pub(super) async fn maintain_service_release(&self) -> anyhow::Result<()> {
+        use crate::client::reconciler::release::ReleaseObservation;
+
+        let before = self.core.status().await?;
+        anyhow::ensure!(
+            self.service_release_observation().await == ReleaseObservation::Owed,
+            "Service daemon release is not authorized by a verified Local owner"
+        );
+        // Nonblocking lock acquisition preserves ServiceActor -> CoreLifecycle
+        // ordering: a UI command can hold this lock while awaiting our mailbox.
+        let mut lease = self.try_begin_service_transition().await?;
+        anyhow::ensure!(
+            self.service_release_observation().await == ReleaseObservation::Owed,
+            "Service owner evidence changed after acquiring the transition lease"
+        );
+        // An intentionally retired daemon must not be restarted by the
+        // separate endpoint-recovery loop on the next interval.
+        self.service_recovery.lock().suppress();
+        lease.stop_daemon().await?;
+        lease.confirm_stopped().await?;
+        let (after, _) = self.service_evidence().await;
+        anyhow::ensure!(
+            matches!(after, ServiceEvidence::Absent { .. }),
+            "Service stop was acknowledged but a fresh probe did not prove daemon shutdown: {after:?}"
+        );
+        let current = self.core.status().await?;
+        anyhow::ensure!(
+            before.instance_id == current.instance_id
+                && before.state_changed_at == current.state_changed_at
+                && before.run_type == current.run_type
+                && matches!(current.state, CoreState::Running),
+            "Local Core changed while retiring the Service daemon"
+        );
+        self.refresh_service_recovery_host().await;
+        Ok(())
+    }
+
+    pub(super) fn pending_runtime_product_target(&self) -> Option<String> {
+        self.core.pending_runtime_product_target()
+    }
+
+    /// Ref's applied-target proof: the Core must report the exact receipt
+    /// for the current committed inputs and selected host, then remain the
+    /// same instance through a second authoritative observation.
+    pub(super) async fn verified_applied_runtime(&self, observed: &CoreStatusSnapshot) -> bool {
+        if !matches!(observed.state, CoreState::Running) {
+            return false;
+        }
+        let target = match self.startup_target_identity().await {
+            Ok(target) => target,
+            Err(error) => {
+                tracing::debug!(%error, "could not identify committed runtime target for proof");
+                return false;
+            }
+        };
+        let first = match self.core.active_runtime_receipt().await {
+            Ok(Some(receipt)) => receipt,
+            Ok(None) => return false,
+            Err(error) => {
+                tracing::debug!(%error, "could not verify active Core receipt");
+                return false;
+            }
+        };
+        if !crate::client::reconciler::proof::receipt_matches_target(
+            &first,
+            &target,
+            crate::client::reconciler::proof::host_for(observed.run_type),
+        ) {
+            return false;
+        }
+        let after = match self.core.status().await {
+            Ok(after) => after,
+            Err(_) => return false,
+        };
+        if !same_core_status(observed, &after) {
+            return false;
+        }
+        let still_active = match self.core.active_runtime_receipt().await {
+            Ok(Some(current)) => Arc::ptr_eq(&first, &current),
+            _ => false,
+        };
+        if !still_active {
+            return false;
+        }
+        self.startup_target_identity()
+            .await
+            .is_ok_and(|latest| latest == target)
+    }
+
     async fn reconcile(&self) -> anyhow::Result<()> {
+        self.reconcile_with_trigger(Trigger::ServiceOperation).await
+    }
+
+    /// Upstream Step::FallBackToLocal, adapted to Chimera's existing host
+    /// transition owner. A rejected Service target may fall back only after a
+    /// stable Stopped observation and an instance-bound Service release. The
+    /// Local apply re-captures committed inputs rather than replaying the old
+    /// pre-commit candidate. No second host controller is created here.
+    pub(super) async fn fallback_after_service_refusal(
+        &self,
+        target: &str,
+        refusal: anyhow::Error,
+    ) -> anyhow::Result<()> {
+        if self.core.outcome_uncertain() || waiting_dependency(&refusal) {
+            return Err(refusal);
+        }
+        let observed = match self.core.status().await {
+            Ok(observed) => observed,
+            Err(_) => return Err(refusal),
+        };
+        if observed.run_type != crate::core::RunType::Service
+            || !matches!(observed.state, CoreState::Stopped(_))
+        {
+            return Err(refusal);
+        }
+
+        // Keep the nonblocking Service transition lease across both release
+        // and the Local apply. Dropping it between those operations would let
+        // another owner start Service after the release proof but before Local
+        // finished, violating ref's single-owner handoff ordering.
+        let _transition =
+            self.try_begin_service_transition()
+                .await
+                .map_err(|error| ServiceFallbackDeferred {
+                    reason: format!(
+                        "{refusal}; cannot acquire Service transition lease: {error:#}"
+                    ),
+                })?;
+        let (_, generation) = self.service_evidence().await;
+        let released =
+            self.release_service_owner()
+                .await
+                .map_err(|reason| ServiceFallbackDeferred {
+                    reason: format!("{refusal}; {reason}"),
+                })?;
+        if !released.proves_no_owned_core() {
+            return Err(ServiceFallbackDeferred {
+                reason: format!(
+                    "{refusal}; no fresh evidence that Service released its owned Core"
+                ),
+            }
+            .into());
+        }
+        // Only suppress Service for this readiness generation after its Core
+        // release has been proved. A failed or unknown release MUST NOT make
+        // an ordinary Local start eligible.
+        if generation != 0 {
+            self.set_startup_failed_generation(generation);
+        }
+        if !self
+            .startup_target_identity()
+            .await
+            .is_ok_and(|current| current == target)
+        {
+            return Err(CommittedTargetAdvanced.into());
+        }
+
+        let local = self
+            .reconcile_application_after_service_release(self.application.get_typed())
+            .await;
+        self.refresh_service_recovery_host().await;
+        self.attempt_policy.lock().record(
+            target.to_owned(),
+            ExecutionHost::Local,
+            &local,
+            self.core.outcome_uncertain(),
+        );
+        if !self
+            .startup_target_identity()
+            .await
+            .is_ok_and(|current| current == target)
+        {
+            return Err(CommittedTargetAdvanced.into());
+        }
+        local
+    }
+
+    /// Treat Service failure for one readiness generation as a Local
+    /// preference only after the previous Service Core was safely released.
+    async fn committed_run_type(&self, enable_service_mode: bool) -> crate::core::RunType {
+        let preferred = crate::core::RunType::classify(
+            enable_service_mode,
+            crate::core::service::ipc::get_ipc_state(),
+        );
+        if preferred != crate::core::RunType::Service {
+            return preferred;
+        }
+        let failed_generation = self.startup_failed_generation();
+        if failed_generation == 0 {
+            return preferred;
+        }
+        let (_, current_generation) = self.service_evidence().await;
+        if failed_generation == current_generation {
+            crate::core::RunType::Normal
+        } else {
+            preferred
+        }
+    }
+
+    /// Execute only those decisions of ref's S3/S4 plan for which Chimera
+    /// has established the selected host and has a live runtime receipt.
+    /// Ownership moves continue through the single startup handoff actor.
+    /// Returning Some means this round has already been handled; None means
+    /// the existing Core submission path should execute.
+    async fn planned_committed_round(
+        &self,
+        target: &str,
+        host: ExecutionHost,
+        trigger: Trigger,
+    ) -> anyhow::Result<Option<anyhow::Result<()>>> {
+        use chimera_core::client::reconciler::plan::{Conclusion, Step};
+
+        // Do not turn a possibly unknown in-flight Core operation into a
+        // second stop or submit. The actor's uncertain gate remains in charge.
+        if self.core.outcome_uncertain()
+            || !matches!(trigger, Trigger::SourceCommitted | Trigger::Retry)
+        {
+            return Ok(None);
+        }
+        let observed = match self.core.status().await {
+            Ok(observed) => observed,
+            Err(_) => return Ok(None),
+        };
+        let receipt = self.core.active_runtime_receipt().await.ok().flatten();
+        let verified = if receipt.is_some() && matches!(observed.state, CoreState::Running) {
+            self.verified_applied_runtime(&observed).await
+        } else {
+            false
+        };
+        let previous = self.attempt_policy.lock().snapshot();
+        // Read the same ServiceActor-owned evidence as StartupWorkflow. Its
+        // epoch/readiness and the selected Core state form ONE ref Facts round
+        // instead of permitting S3 to bypass a pending S2 owner transition.
+        let (service, _) = self.service_evidence().await;
+        // The Service probe is asynchronous. A Core instance or routing
+        // generation change during that await invalidates the paired Facts
+        // sample; never stop/apply based on observations from two owners.
+        let resampled = self.core.status().await.ok();
+        if !resampled
+            .as_ref()
+            .is_some_and(|current| same_core_status(&observed, current))
+        {
+            return Ok(Some(Err(
+                crate::client::reconciler::attempt::OwnershipTransitionPending {
+                    reason: "the selected Core changed while sampling Service ownership".into(),
+                }
+                .into(),
+            )));
+        }
+        if let Some(original) = receipt.as_ref()
+            && !self
+                .core
+                .active_runtime_receipt()
+                .await
+                .ok()
+                .flatten()
+                .is_some_and(|current| Arc::ptr_eq(original, &current))
+        {
+            return Ok(Some(Err(
+                crate::client::reconciler::attempt::OwnershipTransitionPending {
+                    reason: "the accepted Core revision changed while sampling Service ownership"
+                        .into(),
+                }
+                .into(),
+            )));
+        }
+        if host == ExecutionHost::Service && matches!(service, ServiceEvidence::ForeignCore { .. })
+        {
+            return Ok(Some(Err(
+                crate::client::reconciler::attempt::OwnershipTransitionPending {
+                    reason:
+                        "Service belongs to another instance; Local owner selection is required"
+                            .into(),
+                }
+                .into(),
+            )));
+        }
+        let step = crate::client::reconciler::decision::plan_committed_target(
+            target,
+            host,
+            &observed,
+            crate::client::application_workflow::startup::reconciler_service_evidence(&service),
+            self.service_recovery_blocks_handoff(),
+            receipt.as_deref(),
+            verified,
+            previous,
+            trigger,
+        );
+        match step {
+            Some(Step::Idle(Conclusion::Converged)) => Ok(Some(Ok(()))),
+            Some(Step::Owner(owner_plan)) => Ok(Some(Err(
+                crate::client::reconciler::attempt::OwnershipTransitionPending {
+                    reason: format!("ref S2 selected {owner_plan:?}; the existing lifecycle actor must acquire the Service handoff lease"),
+                }
+                .into(),
+            ))),
+            Some(Step::Idle(Conclusion::Waiting { cause })) => Ok(Some(Err(
+                crate::client::reconciler::attempt::OwnershipTransitionPending {
+                    reason: cause.to_string(),
+                }
+                .into(),
+            ))),
+            Some(Step::Stop { intent: false }) => {
+                // A live Core with the wrong accepted revision must stop
+                // before we submit this different committed target.
+                self.core.stop().await?;
+                Ok(None)
+            }
+            Some(Step::FallBackToLocal) => {
+                let refusal =
+                    anyhow::anyhow!("previously refused committed Service target: {target}");
+                Ok(Some(
+                    self.fallback_after_service_refusal(target, refusal).await,
+                ))
+            }
+            _ => Ok(None),
+        }
+    }
+
+    async fn reconcile_with_trigger(&self, trigger: Trigger) -> anyhow::Result<()> {
+        // Ref pending-product maintenance happens before rebuilding the target.
+        // A manual Retry may repair the *same* confirmed runtime publication
+        // without a second Core apply. Source notifications and ordinary
+        // readiness ticks never replay a stale pending snapshot.
+        if trigger == Trigger::Retry
+            && !self.core.outcome_uncertain()
+            && let Some(pending) = self.core.pending_runtime_product_target()
+            && self
+                .startup_target_identity()
+                .await
+                .is_ok_and(|current| current == pending)
+            && self
+                .core
+                .republish_pending_runtime_product(&pending)
+                .await?
+        {
+            return Ok(());
+        }
         let clash = self.clash.get()?;
         let app = self.application.get_typed();
         let target_core = app.core;
-        let run_type = crate::core::RunType::classify(
-            app.enable_service_mode,
-            crate::core::service::ipc::get_ipc_state(),
-        );
+        let run_type = self.committed_run_type(app.enable_service_mode).await;
         if let Some(profiles) = &self.profiles {
             let before = *profiles.load().version.as_ref();
             // Capture both the authoritative committed document and its managed
@@ -1063,21 +1437,52 @@ impl CoreLifecycleWorkflow {
                 }
                 .into());
             }
-            let applied = self
-                .core
-                .reconcile_profiles(
-                    clash,
-                    app.core,
-                    crate::core::RunType::classify(
-                        app.enable_service_mode,
-                        crate::core::service::ipc::get_ipc_state(),
-                    ),
-                    current,
-                    app,
-                    content,
-                    Some(target),
-                )
-                .await;
+            let run_type = self.committed_run_type(app.enable_service_mode).await;
+            let host = match run_type {
+                crate::core::RunType::Service => ExecutionHost::Service,
+                crate::core::RunType::Normal | crate::core::RunType::Elevated => {
+                    ExecutionHost::Local
+                }
+            };
+            let planned = self.planned_committed_round(&target, host, trigger).await?;
+            let handled_by_plan = planned.is_some();
+            let applied = if let Some(result) = planned {
+                result
+            } else {
+                let admitted = self.attempt_policy.lock().allow(&target, host, trigger);
+                match admitted {
+                    Ok(()) => {
+                        let applied = self
+                            .core
+                            .reconcile_profiles(
+                                clash,
+                                app.core,
+                                run_type,
+                                current,
+                                app,
+                                content,
+                                Some(target.clone()),
+                            )
+                            .await;
+                        self.attempt_policy.lock().record(
+                            target.clone(),
+                            host,
+                            &applied,
+                            self.core.outcome_uncertain(),
+                        );
+                        applied
+                    }
+                    Err(previous_refusal) => Err(previous_refusal.into()),
+                }
+            };
+            let applied = if host == ExecutionHost::Service && !handled_by_plan {
+                match applied {
+                    Ok(()) => Ok(()),
+                    Err(refusal) => self.fallback_after_service_refusal(&target, refusal).await,
+                }
+            } else {
+                applied
+            };
             let after = *profiles.load().version.as_ref();
             if after != captured {
                 return Err(ProfilesSourceAdvanced {
@@ -1088,7 +1493,41 @@ impl CoreLifecycleWorkflow {
             }
             applied
         } else {
-            self.core.reconcile(clash, target_core, run_type).await
+            let target = self.startup_source_identity(None)?;
+            let host = match run_type {
+                crate::core::RunType::Service => ExecutionHost::Service,
+                crate::core::RunType::Normal | crate::core::RunType::Elevated => {
+                    ExecutionHost::Local
+                }
+            };
+            let planned = self.planned_committed_round(&target, host, trigger).await?;
+            let handled_by_plan = planned.is_some();
+            let result = if let Some(result) = planned {
+                result
+            } else {
+                let admitted = self.attempt_policy.lock().allow(&target, host, trigger);
+                match admitted {
+                    Ok(()) => {
+                        let result = self.core.reconcile(clash, target_core, run_type).await;
+                        self.attempt_policy.lock().record(
+                            target.clone(),
+                            host,
+                            &result,
+                            self.core.outcome_uncertain(),
+                        );
+                        result
+                    }
+                    Err(previous_refusal) => Err(previous_refusal.into()),
+                }
+            };
+            if host == ExecutionHost::Service && !handled_by_plan {
+                match result {
+                    Ok(()) => Ok(()),
+                    Err(refusal) => self.fallback_after_service_refusal(&target, refusal).await,
+                }
+            } else {
+                result
+            }
         }
     }
 

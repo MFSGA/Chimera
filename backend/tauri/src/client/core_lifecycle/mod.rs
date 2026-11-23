@@ -18,7 +18,12 @@ use std::{
     time::Duration,
 };
 
-use super::reconciler::committed::{SourceDomain, SourceVersions};
+use super::reconciler::{
+    committed::{SourceDomain, SourceVersions},
+    release::{ReleaseObservation, ServiceReleaseDebt},
+    status::ReconcilerStatus,
+};
+use chimera_core::client::reconciler::plan::RunIntent;
 use futures_util::FutureExt;
 use ractor::{Actor, ActorProcessingErr, ActorRef, RpcReplyPort, rpc::CallResult};
 use tokio_util::{sync::CancellationToken, task::TaskTracker};
@@ -26,8 +31,11 @@ use tokio_util::{sync::CancellationToken, task::TaskTracker};
 #[cfg(test)]
 use super::application_workflow::startup::{StartupOutcome, StartupWorkflowState};
 use super::{
-    ChimeraClient, application::ApplicationClient, application_workflow::startup::StartupReport,
-    application_workflow::workflow::ApplicationWorkflow, clash_config::ClashConfigClient,
+    ChimeraClient,
+    application::ApplicationClient,
+    application_workflow::startup::StartupReport,
+    application_workflow::workflow::{ApplicationWorkflow, ProfileRuntime},
+    clash_config::ClashConfigClient,
     runtime::RuntimePaths,
 };
 pub(in crate::client) use workflow::{Command, CoreLifecycleWorkflow};
@@ -291,6 +299,7 @@ enum Message {
 struct ApplicationWorkflowActor;
 
 struct ApplicationWorkflowState {
+    reconciler: tokio::sync::watch::Sender<ReconcilerStatus>,
     workflow: Option<ApplicationWorkflow>,
     pending_mutation_connection: Option<(ApplicationWorkflow, RpcReplyPort<anyhow::Result<()>>)>,
     active: Option<ActiveOperation>,
@@ -310,8 +319,14 @@ struct ApplicationWorkflowState {
     shutdown_waiters: Vec<Response>,
     dirty: bool,
     dirty_tick_scheduled: bool,
+    source_dirty: bool,
+    run_intent: RunIntent,
     seen_sources: SourceVersions,
     service_recovery_inflight: bool,
+    service_handoff_maintenance: Option<String>,
+    service_release_debt: ServiceReleaseDebt,
+    service_recovery_maintenance: Option<String>,
+    product_maintenance: Option<String>,
     service_recovery_timer: tokio::task::JoinHandle<()>,
     startup_recovery_pending: Arc<AtomicBool>,
 }
@@ -342,6 +357,7 @@ fn apply_pending_startup_retry_lease_failures(
 }
 
 struct ApplicationWorkflowArgs {
+    reconciler: tokio::sync::watch::Sender<ReconcilerStatus>,
     workflow: ApplicationWorkflow,
     next_id: Arc<AtomicU64>,
     status: Arc<parking_lot::Mutex<CoreLifecycleStatus>>,
@@ -366,6 +382,27 @@ struct ActiveOperation {
     response: Response,
     task: tokio::task::JoinHandle<()>,
     shutdown: bool,
+    trigger: &'static str,
+    observed_sources: SourceVersions,
+}
+
+fn runtime_trigger(command: &Command) -> &'static str {
+    match command {
+        Command::StartCore => "Start",
+        Command::StopCore => "Stop",
+        Command::Shutdown => "Shutdown",
+        Command::Reconcile => "Retry",
+        Command::ReconcileSource => "SourceCommitted",
+        Command::MaintainServiceRelease => "ServiceRelease",
+        Command::StartupReconcile { .. } => "Startup",
+        Command::RetryStartup { .. } => "Retry",
+        Command::FollowService { .. } => "ServiceReadiness",
+        Command::ReplaceCoreBinary(_) => "BinaryReplaced",
+        Command::ProfileMutation(_) => "Mutation",
+        Command::RecoverCore => "CoreChanged",
+        Command::RetryDeferredProfiles { .. } => "Tick",
+        _ => "ServiceOperation",
+    }
 }
 
 impl ApplicationWorkflowState {
@@ -437,7 +474,7 @@ impl ApplicationWorkflowState {
     }
 
     fn mark_runtime_dirty(&mut self, myself: &ActorRef<Message>) {
-        if self.uncertain || self.shutting_down {
+        if self.run_intent == RunIntent::Stopped || self.uncertain || self.shutting_down {
             return;
         }
         self.dirty = true;
@@ -503,8 +540,67 @@ impl ApplicationWorkflowState {
         );
     }
 
+    /// A handoff failure and a degraded Service endpoint are independent
+    /// maintenance debts; keep both even when a Core round converged.
+    fn publish_maintenance(&self) {
+        let service_release = self.service_release_debt.maintenance();
+        let details: Vec<_> = [
+            self.service_handoff_maintenance.as_deref(),
+            service_release.as_deref(),
+            self.service_recovery_maintenance.as_deref(),
+            self.product_maintenance.as_deref(),
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
+        let reason = (!details.is_empty()).then(|| details.join("; "));
+        self.reconciler
+            .send_modify(|status| status.set_maintenance(reason));
+    }
+
+    /// Evaluate release debt after a proven runtime round or a Service
+    /// observation. This never starts a second Core controller: the actual
+    /// daemon stop is admitted as its own serialized lifecycle command.
+    async fn schedule_service_release(&mut self, explicit_retry: bool) {
+        if self.run_intent == RunIntent::Stopped
+            || self.uncertain
+            || self.shutting_down
+            || self.active.is_some()
+            || self.startup_owner_unproven
+            || self.startup_owner_unproven_shared.load(Ordering::Acquire)
+            || !matches!(
+                self.reconciler.borrow().conclusion,
+                chimera_core::client::reconciler::plan::Conclusion::Converged
+            )
+        {
+            return;
+        }
+        let Some(workflow) = self.workflow.as_ref() else {
+            return;
+        };
+        let observation = workflow.lifecycle().service_release_observation().await;
+        self.service_release_debt.observe(observation);
+        if observation != ReleaseObservation::Owed {
+            self.publish_maintenance();
+            return;
+        }
+        if !self.service_release_debt.begin(explicit_retry) {
+            self.publish_maintenance();
+            return;
+        }
+        if self.pending.len() >= MAX_PENDING {
+            self.service_release_debt
+                .deferred("lifecycle queue is full".into());
+            self.publish_maintenance();
+            return;
+        }
+        self.push_background(Command::MaintainServiceRelease);
+        self.publish_maintenance();
+    }
+
     async fn follow_service(&mut self) {
-        if self.active.is_some()
+        if self.run_intent == RunIntent::Stopped
+            || self.active.is_some()
             || self.uncertain
             || self.shutting_down
             || self.startup_owner_unproven
@@ -522,6 +618,10 @@ impl ApplicationWorkflowState {
             Ok(transition) => transition,
             Err(error) => {
                 tracing::debug!(%error, "Service owner follow-up deferred while a transition is active");
+                self.service_handoff_maintenance = Some(format!(
+                    "Service ownership transition is waiting for its lease: {error:#}"
+                ));
+                self.publish_maintenance();
                 return;
             }
         };
@@ -530,8 +630,13 @@ impl ApplicationWorkflowState {
         }
         if self.pending.len() >= MAX_PENDING {
             tracing::warn!("dropping Service owner follow-up because the lifecycle queue is full");
+            self.service_handoff_maintenance =
+                Some("Service owner handoff is waiting for lifecycle queue capacity".into());
+            self.publish_maintenance();
             return;
         }
+        self.service_handoff_maintenance = Some("Service owner handoff is pending".into());
+        self.publish_maintenance();
         let operation_id = self.allocate_operation_id();
         // Run this post-command owner reconciliation before requests already
         // queued behind the event that observed the readiness change. The
@@ -695,6 +800,7 @@ impl ApplicationWorkflowState {
     fn close(&mut self) {
         self.shutting_down = true;
         self.dirty = false;
+        self.source_dirty = false;
         while let Some(request) = self.pending.pop_front() {
             self.reject(request, anyhow::anyhow!("core lifecycle is shutting down"));
         }
@@ -764,6 +870,34 @@ impl ApplicationWorkflowState {
             return;
         };
 
+        // Upstream RunIntent survives source commits and readiness signals.
+        // An explicit StopCore latches Stopped before the command starts;
+        // only StartCore can resume runtime application. Retry/rebuild and
+        // automatic source recovery are not implicit start requests.
+        match &request.command {
+            Command::StopCore => {
+                self.run_intent = RunIntent::Stopped;
+                self.dirty = false;
+                self.source_dirty = false;
+            }
+            Command::StartCore => self.run_intent = RunIntent::Running,
+            _ => {}
+        }
+        if self.run_intent == RunIntent::Stopped
+            && matches!(
+                &request.command,
+                Command::Reconcile
+                    | Command::ReconcileSource
+                    | Command::ReconcileProfiles { .. }
+                    | Command::RetryDeferredProfiles { .. }
+                    | Command::RecoverCore
+            )
+        {
+            self.settle(request.response, Ok(()));
+            self.drive(myself);
+            return;
+        }
+
         let Some(mut workflow) = self.workflow.take() else {
             tracing::error!("core lifecycle workflow missing without an active operation");
             self.reject(
@@ -786,6 +920,9 @@ impl ApplicationWorkflowState {
         }
 
         let id = request.response.id;
+        let trigger = runtime_trigger(&request.command);
+        let observed_sources = self.seen_sources.clone();
+        self.reconciler.send_modify(|status| status.begin(id));
         let shutdown = matches!(&request.command, Command::Shutdown);
         let deferred_retry = request.deferred_retry.clone();
         let runtime_converged = match &request.command {
@@ -809,6 +946,8 @@ impl ApplicationWorkflowState {
         let reconciled = matches!(
             &request.command,
             Command::Reconcile
+                | Command::ReconcileSource
+                | Command::StartCore
                 | Command::StartupReconcile { .. }
                 | Command::FollowService { .. }
                 | Command::RecoverStartup { .. }
@@ -983,6 +1122,8 @@ impl ApplicationWorkflowState {
             response: request.response,
             task,
             shutdown,
+            trigger,
+            observed_sources,
         });
         self.publish();
     }
@@ -1001,6 +1142,7 @@ impl Actor for ApplicationWorkflowActor {
         let service_recovery_timer =
             myself.send_interval(RECOVERY_INTERVAL, || Message::ServiceRecoveryTick);
         Ok(ApplicationWorkflowState {
+            reconciler: args.reconciler,
             workflow: Some(args.workflow),
             pending_mutation_connection: None,
             active: None,
@@ -1020,8 +1162,14 @@ impl Actor for ApplicationWorkflowActor {
             shutdown_waiters: Vec::new(),
             dirty: false,
             dirty_tick_scheduled: false,
+            source_dirty: false,
+            run_intent: RunIntent::Running,
             seen_sources: SourceVersions::default(),
             service_recovery_inflight: false,
+            service_handoff_maintenance: None,
+            service_release_debt: ServiceReleaseDebt::default(),
+            service_recovery_maintenance: None,
+            product_maintenance: None,
             service_recovery_timer,
             startup_recovery_pending: args.startup_recovery_pending,
         })
@@ -1173,9 +1321,59 @@ impl Actor for ApplicationWorkflowActor {
                         .expect("matched active lifecycle operation");
                     debug_assert_eq!(active.shutdown, shutdown);
                     let _ = active.task.await;
+                    // A successful command alone is not proof that the Core
+                    // reached Running or Stopped. Publish Converged/Inactive
+                    // only after sampling the runtime owner.
+                    let observed_core =
+                        if result.is_ok() && (reconciled || active.trigger == "Stop") {
+                            workflow.lifecycle().core_status().await.ok()
+                        } else {
+                            None
+                        };
+                    let verified_running = if reconciled && result.is_ok() {
+                        if let Some(observed) = observed_core.as_ref() {
+                            workflow
+                                .lifecycle()
+                                .verified_applied_runtime(observed)
+                                .await
+                        } else {
+                            false
+                        }
+                    } else {
+                        false
+                    };
+                    let verified_stopped = active.trigger == "Stop"
+                        && observed_core.as_ref().is_some_and(|snapshot| {
+                            matches!(
+                                snapshot.state,
+                                chimera_ipc::api::status::CoreState::Stopped(_)
+                            )
+                        });
+                    // This belongs to the existing LocalRuntimeHost. The
+                    // status projection only records outstanding publication
+                    // debt and cannot mutate or duplicate the runtime product.
+                    state.product_maintenance = workflow
+                        .lifecycle()
+                        .pending_runtime_product_target()
+                        .map(|target| {
+                            format!("RuntimeProduct publication pending for target {target}")
+                        });
+                    state.publish_maintenance();
                     state.workflow = Some(workflow);
                     if service_endpoint_recovery {
                         state.service_recovery_inflight = false;
+                        state.service_recovery_maintenance = result.as_ref().err().map(|error| {
+                            format!("Service endpoint recovery is pending: {error:#}")
+                        });
+                    }
+                    if active.trigger == "ServiceReadiness" {
+                        state.service_handoff_maintenance = result
+                            .as_ref()
+                            .err()
+                            .map(|error| format!("Service owner handoff is pending: {error:#}"));
+                    }
+                    if service_endpoint_recovery || active.trigger == "ServiceReadiness" {
+                        state.publish_maintenance();
                     }
                     state.startup_owner_unproven = startup_owner_unproven;
                     state
@@ -1247,6 +1445,47 @@ impl Actor for ApplicationWorkflowActor {
                         error
                             .downcast_ref::<workflow::ProfilesSourceAdvanced>()
                             .is_some()
+                            || error
+                                .downcast_ref::<crate::client::reconciler::attempt::CommittedTargetAdvanced>()
+                                .is_some()
+                    });
+                    if let Some(error) = result.as_ref().err().and_then(|error| {
+                        error.downcast_ref::<crate::client::reconciler::attempt::ServiceFallbackDeferred>()
+                    }) {
+                        state.service_handoff_maintenance = Some(error.to_string());
+                        state.publish_maintenance();
+                    } else if reconciled
+                        && result.is_ok()
+                        && state
+                            .service_handoff_maintenance
+                            .as_deref()
+                            .is_some_and(|reason| reason.starts_with("Service-to-Local fallback"))
+                    {
+                        state.service_handoff_maintenance = None;
+                        state.publish_maintenance();
+                    }
+                    if active.trigger == "ServiceRelease" {
+                        state.service_release_debt.finish(
+                            result
+                                .as_ref()
+                                .map(|_| ())
+                                .map_err(|error| format!("{error:#}")),
+                        );
+                        state.publish_maintenance();
+                    }
+                    state.reconciler.send_modify(|status| {
+                        status.finish(
+                            active.response.id,
+                            active.trigger,
+                            &active.observed_sources,
+                            state.run_intent,
+                            &result,
+                            reconciled,
+                            verified_running,
+                            verified_stopped,
+                            state.uncertain,
+                            source_advanced,
+                        );
                     });
                     let deferred_retry_error = result.as_ref().err().map(ToString::to_string);
                     let deferred_retry_retryable = result.as_ref().err().is_some_and(
@@ -1329,6 +1568,9 @@ impl Actor for ApplicationWorkflowActor {
                         });
                     }
                     state.follow_service().await;
+                    state
+                        .schedule_service_release(active.trigger == "Retry")
+                        .await;
                 } else {
                     tracing::warn!(id, "ignoring stale core lifecycle completion");
                 }
@@ -1347,11 +1589,16 @@ impl Actor for ApplicationWorkflowActor {
             Message::ObserveService { info } => {
                 state.publish_service_status(info);
                 state.follow_service().await;
+                state.schedule_service_release(false).await;
             }
-            Message::ServiceReadiness => state.follow_service().await,
+            Message::ServiceReadiness => {
+                state.follow_service().await;
+                state.schedule_service_release(false).await;
+            }
             Message::ServiceProbeFailed => {
                 state.publish_service_probe_failure();
                 state.follow_service().await;
+                state.schedule_service_release(false).await;
             }
             Message::ServiceRecoveryTick => {
                 let can_recover = !state.uncertain
@@ -1369,6 +1616,9 @@ impl Actor for ApplicationWorkflowActor {
                 };
                 if recovery_due {
                     state.service_recovery_inflight = true;
+                    state.service_recovery_maintenance =
+                        Some("Service endpoint recovery is in progress".into());
+                    state.publish_maintenance();
                     let service = state.service.clone();
                     let actor = myself.clone();
                     let operation_id = state.allocate_operation_id();
@@ -1397,6 +1647,9 @@ impl Actor for ApplicationWorkflowActor {
             }
             Message::ServiceRecoveryLeaseFailed => {
                 state.service_recovery_inflight = false;
+                state.service_recovery_maintenance =
+                    Some("Service endpoint recovery is waiting for a transition lease".into());
+                state.publish_maintenance();
             }
             Message::RecoverCore => {
                 if state.uncertain || state.shutting_down {
@@ -1420,22 +1673,34 @@ impl Actor for ApplicationWorkflowActor {
                 // round; legacy inline domains pass false to avoid a second apply.
                 // Always load the latest source, not the notification payload.
                 state.seen_sources.observe(domain, version);
-                if reconcile_requested && !state.uncertain && !state.shutting_down {
+                if !reconcile_requested || state.run_intent == RunIntent::Stopped {
+                    state.reconciler.send_modify(|status| {
+                        status.observe_source_only(domain, version);
+                    });
+                }
+                if reconcile_requested
+                    && state.run_intent == RunIntent::Running
+                    && !state.uncertain
+                    && !state.shutting_down
+                {
                     if state.startup_owner_unproven
                         || state.startup_owner_unproven_shared.load(Ordering::Acquire)
                     {
                         state.request_startup_recovery(&myself);
                     } else {
+                        state.source_dirty = true;
                         state.mark_runtime_dirty(&myself);
                     }
                 }
             }
             Message::RuntimeDirty => {
-                if state.uncertain || state.shutting_down {
+                if state.run_intent == RunIntent::Stopped || state.uncertain || state.shutting_down
+                {
                     tracing::debug!(
+                        ?state.run_intent,
                         uncertain = state.uncertain,
                         shutting_down = state.shutting_down,
-                        "ignoring runtime dirty signal because lifecycle is unavailable"
+                        "ignoring runtime dirty signal while stopped or unavailable"
                     );
                 } else {
                     state.mark_runtime_dirty(&myself);
@@ -1447,11 +1712,17 @@ impl Actor for ApplicationWorkflowActor {
             }
             Message::DirtyTick => {
                 state.dirty_tick_scheduled = false;
-                if state.uncertain || state.shutting_down {
+                if state.run_intent == RunIntent::Stopped || state.uncertain || state.shutting_down
+                {
                     state.dirty = false;
                 } else if state.dirty {
                     state.dirty = false;
-                    state.push_background(Command::Reconcile);
+                    let source_round = std::mem::take(&mut state.source_dirty);
+                    state.push_background(if source_round {
+                        Command::ReconcileSource
+                    } else {
+                        Command::Reconcile
+                    });
                 }
             }
             Message::StartupRetryDue { identity } => {
@@ -1692,6 +1963,7 @@ impl Actor for ApplicationWorkflowActor {
         state: &mut Self::State,
     ) -> Result<(), ActorProcessingErr> {
         state.service_recovery_timer.abort();
+        state.reconciler.send_modify(ReconcilerStatus::close);
         Ok(())
     }
 }
@@ -1701,6 +1973,7 @@ enum CoreLifecycleClientInner {
         actor_ref: ActorRef<Message>,
         next_id: Arc<AtomicU64>,
         status: Arc<parking_lot::Mutex<CoreLifecycleStatus>>,
+        reconciler: tokio::sync::watch::Receiver<ReconcilerStatus>,
         service_status: tokio::sync::watch::Receiver<ServiceHostStatus>,
         service: Arc<dyn ports::ServiceLifecyclePort>,
         core: Arc<dyn CoreLifecyclePort>,
@@ -1720,6 +1993,36 @@ enum CoreLifecycleClientInner {
 
 #[derive(Clone)]
 pub(crate) struct CoreLifecycleClient(Arc<CoreLifecycleClientInner>);
+
+/// A direct, core-only test has no ServiceActor. Its Service endpoint is
+/// explicitly **not installed**, not an ambiguous OS-global legacy probe.
+/// This makes the fixture model a real no-daemon environment while keeping
+/// production's fail-closed S2 ownership checks fully enabled.
+#[cfg(test)]
+struct DirectNoDaemonService {
+    inner: Arc<dyn ports::ServiceLifecyclePort>,
+}
+
+#[cfg(test)]
+#[async_trait::async_trait]
+impl ports::ServiceLifecyclePort for DirectNoDaemonService {
+    async fn probe(&self) -> anyhow::Result<chimera_ipc::types::StatusInfo<'static>> {
+        Ok(chimera_ipc::types::StatusInfo {
+            name: "chimera-test-service".into(),
+            version: "0".into(),
+            status: chimera_ipc::types::ServiceStatus::NotInstalled,
+            server: None,
+        })
+    }
+
+    async fn begin_transition(&self) -> anyhow::Result<Box<dyn ServiceTransitionLease>> {
+        self.inner.begin_transition().await
+    }
+
+    async fn try_begin_transition(&self) -> anyhow::Result<Box<dyn ServiceTransitionLease>> {
+        self.inner.try_begin_transition().await
+    }
+}
 
 impl CoreLifecycleClient {
     #[cfg(test)]
@@ -1845,11 +2148,13 @@ impl CoreLifecycleClient {
         let workflow = ApplicationWorkflow::with_lifecycle(lifecycle);
         let startup_recovery_pending = Arc::new(AtomicBool::new(false));
         let status = Arc::new(parking_lot::Mutex::new(CoreLifecycleStatus::default()));
+        let (reconciler_tx, reconciler) = tokio::sync::watch::channel(ReconcilerStatus::default());
         let next_id = Arc::new(AtomicU64::new(1));
         let (actor_ref, _handle) = Actor::spawn(
             None,
             ApplicationWorkflowActor,
             ApplicationWorkflowArgs {
+                reconciler: reconciler_tx,
                 workflow,
                 next_id: next_id.clone(),
                 status: status.clone(),
@@ -1884,6 +2189,7 @@ impl CoreLifecycleClient {
             actor_ref,
             next_id,
             status,
+            reconciler,
             service_status: service_status_rx.clone(),
             service,
             core,
@@ -1973,9 +2279,11 @@ impl CoreLifecycleClient {
         clash: ClashConfigClient,
         runtime_paths: RuntimePaths,
     ) -> Self {
-        let service: Arc<dyn ports::ServiceLifecyclePort> = Arc::new(LegacyServiceBridge::new(
-            Arc::new(crate::core::actor_v2::CoreFacade::new_local()),
-        ));
+        let service: Arc<dyn ports::ServiceLifecyclePort> = Arc::new(DirectNoDaemonService {
+            inner: Arc::new(LegacyServiceBridge::new(Arc::new(
+                crate::core::actor_v2::CoreFacade::new_local(),
+            ))),
+        });
         let (_service_status_tx, service_status_rx) =
             tokio::sync::watch::channel(ServiceHostStatus::probing());
         let workflow = CoreLifecycleWorkflow::new(
@@ -2555,6 +2863,40 @@ impl CoreLifecycleClient {
         }
     }
 
+    /// Ref-shaped outcome projection; unlike the legacy lifecycle status,
+    /// this carries the last sampled source versions and runtime conclusion.
+    pub(crate) fn reconciler_status(&self) -> ReconcilerStatus {
+        match self.0.as_ref() {
+            CoreLifecycleClientInner::Actor { reconciler, .. } => reconciler.borrow().clone(),
+            #[cfg(test)]
+            CoreLifecycleClientInner::Direct { .. } => ReconcilerStatus::default(),
+        }
+    }
+
+    pub(crate) async fn settled(&self, domain: SourceDomain, version: u64) -> ReconcilerStatus {
+        let CoreLifecycleClientInner::Actor { reconciler, .. } = self.0.as_ref() else {
+            return ReconcilerStatus::default();
+        };
+        let mut watch = reconciler.clone();
+        loop {
+            let current = watch.borrow_and_update().clone();
+            if matches!(
+                current.conclusion,
+                chimera_core::client::reconciler::plan::Conclusion::Closed
+            ) || (current.active.is_none()
+                && current
+                    .seen
+                    .version(domain)
+                    .is_some_and(|seen| seen >= version))
+            {
+                return current;
+            }
+            if watch.changed().await.is_err() {
+                return watch.borrow().clone();
+            }
+        }
+    }
+
     /// Observe a source-owned durable commit in the single lifecycle mailbox.
     /// `reconcile_requested` asks the one runtime owner to apply the latest
     /// committed snapshots. Already-applied legacy domains pass false.
@@ -2737,7 +3079,12 @@ impl CoreLifecycleClient {
         }
     }
 
-    #[cfg(test)]
+    /// Explicitly resume core execution; retrying a source while stopped
+    /// never implicitly changes this intent.
+    pub(super) async fn start_core(&self) -> anyhow::Result<()> {
+        self.execute(Command::StartCore).await
+    }
+
     pub(super) async fn stop_core(&self) -> anyhow::Result<()> {
         self.execute(Command::StopCore).await
     }
@@ -2972,7 +3319,10 @@ impl ChimeraClient {
         .await
     }
 
-    #[cfg(test)]
+    pub(crate) async fn start_core(&self) -> anyhow::Result<()> {
+        self.inner.core_lifecycle.start_core().await
+    }
+
     pub(crate) async fn stop_core(&self) -> anyhow::Result<()> {
         self.inner.core_lifecycle.stop_core().await
     }
@@ -3525,6 +3875,7 @@ mod tests {
         let events = Arc::new(Mutex::new(Vec::new()));
         let core = Arc::new(ProfileTccCore {
             validations: AtomicUsize::new(0),
+            attempts: AtomicUsize::new(0),
             stops: AtomicUsize::new(0),
             fail_next_reconcile: AtomicBool::new(false),
             active_profiles: Mutex::new(None),
@@ -3709,9 +4060,195 @@ mod tests {
 
     struct ProfileTccCore {
         validations: AtomicUsize,
+        attempts: AtomicUsize,
         stops: AtomicUsize,
         fail_next_reconcile: AtomicBool,
         active_profiles: Mutex<Option<chimera_config::profile::Profiles>>,
+    }
+
+    /// A test endpoint with a stable accepted runtime receipt. Unlike
+    /// lifecycle-only fakes it can prove the exact committed target.
+    struct ReceiptProofCore {
+        active: Mutex<Option<Arc<crate::client::runtime::RuntimeApplyReceipt>>>,
+        publish_wrong_target: bool,
+        change_instance_between_reads: bool,
+        status_reads: AtomicUsize,
+        submissions: AtomicUsize,
+        stops: AtomicUsize,
+    }
+
+    /// The Core accepted a committed revision, but publishing the derived
+    /// Applied snapshot failed after the product had been promoted.
+    struct PendingProductCore {
+        lifecycle: Arc<crate::client::runtime::RuntimeLifecycle>,
+        confirmed: Mutex<Option<Arc<crate::client::runtime::RuntimeApplyReceipt>>>,
+        submissions: AtomicUsize,
+        publications: AtomicUsize,
+    }
+
+    #[async_trait]
+    impl CoreLifecyclePort for PendingProductCore {
+        async fn reconcile(&self, _: ClashConfig, _: ClashCore, _: RunType) -> anyhow::Result<()> {
+            anyhow::bail!("this fixture needs a typed committed target")
+        }
+
+        async fn reconcile_profiles(
+            &self,
+            _: ClashConfig,
+            _: ClashCore,
+            _: RunType,
+            _: Arc<chimera_config::profile::Profiles>,
+            _: chimera_config::application::ChimeraAppConfig,
+            _: std::collections::BTreeMap<String, String>,
+            target: Option<String>,
+        ) -> anyhow::Result<()> {
+            self.submissions.fetch_add(1, AtomicOrdering::AcqRel);
+            let product = Arc::new(crate::client::runtime::RuntimeSnapshot::new(
+                self.lifecycle.allocate_revision().unwrap(),
+                ClashCore::Mihomo,
+                b"mode: rule\n".to_vec(),
+                serde_yaml::Mapping::new(),
+            ));
+            let mut receipt = crate::client::ports::test_runtime_receipt(Default::default());
+            receipt.revision = product.revision;
+            receipt.config_digest = chimera_core_manager::payload_digest(product.product_bytes());
+            receipt.target = target;
+            let receipt = Arc::new(receipt);
+            self.lifecycle.publish_confirmed(receipt.clone());
+            self.lifecycle.publish_promoted(product);
+            *self.confirmed.lock().unwrap() = Some(receipt);
+            anyhow::bail!("injected derived RuntimeProduct publication failure")
+        }
+
+        fn pending_runtime_product_target(&self) -> Option<String> {
+            self.lifecycle.pending_confirmed_product()?.0.target.clone()
+        }
+
+        async fn republish_pending_runtime_product(&self, target: &str) -> anyhow::Result<bool> {
+            let Some(receipt) = self.confirmed.lock().unwrap().clone() else {
+                return Ok(false);
+            };
+            if receipt.target.as_deref() != Some(target) {
+                return Ok(false);
+            }
+            let published = self
+                .lifecycle
+                .republish_confirmed_product(&receipt)?
+                .is_some();
+            if published {
+                self.publications.fetch_add(1, AtomicOrdering::AcqRel);
+            }
+            Ok(published)
+        }
+
+        async fn active_runtime_receipt(
+            &self,
+        ) -> anyhow::Result<Option<Arc<crate::client::runtime::RuntimeApplyReceipt>>> {
+            Ok(self.confirmed.lock().unwrap().clone())
+        }
+
+        async fn status(&self) -> anyhow::Result<CoreStatusSnapshot> {
+            let active = self.confirmed.lock().unwrap().is_some();
+            Ok(CoreStatusSnapshot {
+                instance_id: active.then(|| "pending-product-core".to_owned()),
+                state: if active {
+                    CoreState::Running
+                } else {
+                    CoreState::Stopped(None)
+                },
+                state_changed_at: 1,
+                run_type: RunType::Normal,
+            })
+        }
+
+        async fn stop(&self) -> anyhow::Result<()> {
+            self.lifecycle.invalidate_confirmed();
+            *self.confirmed.lock().unwrap() = None;
+            Ok(())
+        }
+
+        async fn change_core(&self, _: ClashCore) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        fn recovery_notify(&self) -> Option<Arc<Notify>> {
+            None
+        }
+
+        async fn on_profile_change(&self, _: bool) {}
+    }
+
+    #[async_trait]
+    impl CoreLifecyclePort for ReceiptProofCore {
+        async fn reconcile(&self, _: ClashConfig, _: ClashCore, _: RunType) -> anyhow::Result<()> {
+            anyhow::bail!("this fixture requires typed committed Profiles")
+        }
+
+        async fn reconcile_profiles(
+            &self,
+            _: ClashConfig,
+            _: ClashCore,
+            _: RunType,
+            _: Arc<chimera_config::profile::Profiles>,
+            _: chimera_config::application::ChimeraAppConfig,
+            _: std::collections::BTreeMap<String, String>,
+            target: Option<String>,
+        ) -> anyhow::Result<()> {
+            self.submissions.fetch_add(1, AtomicOrdering::AcqRel);
+            let mut receipt = crate::client::ports::test_runtime_receipt(Default::default());
+            receipt.target = if self.publish_wrong_target {
+                Some("an-older-committed-target".into())
+            } else {
+                target
+            };
+            *self.active.lock().unwrap() = Some(Arc::new(receipt));
+            Ok(())
+        }
+
+        async fn stop(&self) -> anyhow::Result<()> {
+            self.stops.fetch_add(1, AtomicOrdering::AcqRel);
+            *self.active.lock().unwrap() = None;
+            Ok(())
+        }
+
+        async fn change_core(&self, _: ClashCore) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        async fn status(&self) -> anyhow::Result<CoreStatusSnapshot> {
+            let running = self.active.lock().unwrap().is_some();
+            Ok(CoreStatusSnapshot {
+                instance_id: running.then(|| {
+                    if self.change_instance_between_reads {
+                        format!(
+                            "receipt-proof-core-{}",
+                            self.status_reads.fetch_add(1, AtomicOrdering::AcqRel)
+                        )
+                    } else {
+                        "receipt-proof-core".to_owned()
+                    }
+                }),
+                state: if running {
+                    CoreState::Running
+                } else {
+                    CoreState::Stopped(None)
+                },
+                state_changed_at: 1,
+                run_type: RunType::Normal,
+            })
+        }
+
+        async fn active_runtime_receipt(
+            &self,
+        ) -> anyhow::Result<Option<Arc<crate::client::runtime::RuntimeApplyReceipt>>> {
+            Ok(self.active.lock().unwrap().clone())
+        }
+
+        fn recovery_notify(&self) -> Option<Arc<Notify>> {
+            None
+        }
+
+        async fn on_profile_change(&self, _: bool) {}
     }
 
     struct AckOnlyProfileChange;
@@ -3804,6 +4341,88 @@ mod tests {
         events: Arc<Mutex<Vec<&'static str>>>,
         ready: Arc<AtomicBool>,
         core_running: Arc<AtomicBool>,
+    }
+
+    /// A Service daemon with an owned but *stopped* Core. Its transition
+    /// lease can reject one stop so tests exercise ref's pending_release debt.
+    struct ReleaseOwedService {
+        inner: ToggleStartupServiceProbe,
+        runtime_owned: bool,
+        attempts: Arc<AtomicUsize>,
+        fail_next: Arc<AtomicBool>,
+    }
+
+    struct ReleaseOwedLease {
+        delegate: RecordingServiceTransition,
+        ready: Arc<AtomicBool>,
+        attempts: Arc<AtomicUsize>,
+        fail_next: Arc<AtomicBool>,
+    }
+
+    #[async_trait]
+    impl ServiceTransitionLease for ReleaseOwedLease {
+        async fn install_daemon(&mut self) -> anyhow::Result<()> {
+            self.delegate.install_daemon().await
+        }
+        async fn uninstall_daemon(&mut self) -> anyhow::Result<()> {
+            self.delegate.uninstall_daemon().await
+        }
+        async fn update_daemon(&mut self) -> anyhow::Result<()> {
+            self.delegate.update_daemon().await
+        }
+        async fn start_daemon(&mut self) -> anyhow::Result<()> {
+            self.delegate.start_daemon().await
+        }
+        async fn restart_daemon(&mut self) -> anyhow::Result<()> {
+            self.delegate.restart_daemon().await
+        }
+        async fn stop_daemon(&mut self) -> anyhow::Result<()> {
+            self.attempts.fetch_add(1, AtomicOrdering::AcqRel);
+            if self.fail_next.swap(false, AtomicOrdering::AcqRel) {
+                anyhow::bail!("injected Service daemon stop failure");
+            }
+            self.ready.store(false, AtomicOrdering::Release);
+            self.delegate.stop_daemon().await
+        }
+        async fn confirm_ready(&mut self, timeout: Duration) -> anyhow::Result<()> {
+            self.delegate.confirm_ready(timeout).await
+        }
+        async fn confirm_stopped(&mut self) -> anyhow::Result<()> {
+            anyhow::ensure!(
+                !self.ready.load(AtomicOrdering::Acquire),
+                "daemon was not confirmed stopped"
+            );
+            self.delegate.confirm_stopped().await
+        }
+    }
+
+    #[async_trait]
+    impl ServiceLifecyclePort for ReleaseOwedService {
+        async fn probe(&self) -> anyhow::Result<chimera_ipc::types::StatusInfo<'static>> {
+            self.inner.probe().await
+        }
+        fn runtime_owned(&self, _: &chimera_ipc::types::StatusInfo<'_>) -> bool {
+            self.runtime_owned
+        }
+        async fn begin_transition(&self) -> anyhow::Result<Box<dyn ServiceTransitionLease>> {
+            self.try_begin_transition().await
+        }
+        async fn try_begin_transition(&self) -> anyhow::Result<Box<dyn ServiceTransitionLease>> {
+            Ok(Box::new(ReleaseOwedLease {
+                delegate: RecordingServiceTransition {
+                    events: self.inner.events.clone(),
+                },
+                ready: self.inner.ready.clone(),
+                attempts: self.attempts.clone(),
+                fail_next: self.fail_next.clone(),
+            }))
+        }
+    }
+
+    /// Inject one transient lease refusal on the post-startup S2 handoff.
+    struct LeaseBlockedToggleService {
+        inner: ToggleStartupServiceProbe,
+        block_next: AtomicBool,
     }
 
     struct TransitionUnavailableService {
@@ -3904,6 +4523,113 @@ mod tests {
         reconciles: AtomicU8,
         stopped: AtomicBool,
         selected: Mutex<RunType>,
+    }
+
+    /// Simulates a Service application whose operation returned a refusal and
+    /// whose Core status has settled to Stopped; the independent Service probe
+    /// may still observe an owned daemon Core until its conditional retirement.
+    struct PostcommitServiceFallbackCore {
+        events: Arc<Mutex<Vec<&'static str>>>,
+        service_running: Arc<AtomicBool>,
+        selected: Mutex<RunType>,
+        local_running: AtomicBool,
+        refused_service: AtomicBool,
+        forbid_local: AtomicBool,
+    }
+
+    #[async_trait]
+    impl CoreLifecyclePort for PostcommitServiceFallbackCore {
+        async fn reconcile(
+            &self,
+            _: ClashConfig,
+            _: ClashCore,
+            run_type: RunType,
+        ) -> anyhow::Result<()> {
+            *self.selected.lock().unwrap() = run_type;
+            match run_type {
+                RunType::Service => {
+                    self.events.lock().unwrap().push("service-apply-refused");
+                    self.refused_service.store(true, AtomicOrdering::Release);
+                    anyhow::bail!("injected Service Core apply refusal")
+                }
+                RunType::Normal => {
+                    anyhow::ensure!(
+                        !self.forbid_local.load(AtomicOrdering::Acquire)
+                            && !self.service_running.load(AtomicOrdering::Acquire),
+                        "unsafe Local start while Service still owns a Core"
+                    );
+                    self.local_running.store(true, AtomicOrdering::Release);
+                    self.events.lock().unwrap().push("rebuild-local");
+                    Ok(())
+                }
+                RunType::Elevated => anyhow::bail!("unexpected elevated fallback"),
+            }
+        }
+
+        async fn reconcile_after_service_release(
+            &self,
+            _: ClashConfig,
+            _: ClashCore,
+        ) -> anyhow::Result<()> {
+            anyhow::ensure!(
+                !self.forbid_local.load(AtomicOrdering::Acquire)
+                    && !self.service_running.load(AtomicOrdering::Acquire),
+                "Local fallback must not start while an owned Service Core remains"
+            );
+            *self.selected.lock().unwrap() = RunType::Normal;
+            self.local_running.store(true, AtomicOrdering::Release);
+            self.events
+                .lock()
+                .unwrap()
+                .push("rebuild-after-service-release");
+            Ok(())
+        }
+
+        async fn retire_service_core(
+            &self,
+            _: chimera_core_manager::CoreOwner,
+        ) -> anyhow::Result<()> {
+            self.events.lock().unwrap().push("service-core-retire");
+            self.service_running.store(false, AtomicOrdering::Release);
+            Ok(())
+        }
+
+        async fn stop(&self) -> anyhow::Result<()> {
+            self.local_running.store(false, AtomicOrdering::Release);
+            Ok(())
+        }
+
+        async fn change_core(&self, _: ClashCore) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        async fn status(&self) -> anyhow::Result<CoreStatusSnapshot> {
+            let run_type = *self.selected.lock().unwrap();
+            let running = match run_type {
+                RunType::Service => {
+                    self.service_running.load(AtomicOrdering::Acquire)
+                        && !self.refused_service.load(AtomicOrdering::Acquire)
+                }
+                RunType::Normal => self.local_running.load(AtomicOrdering::Acquire),
+                RunType::Elevated => false,
+            };
+            Ok(CoreStatusSnapshot {
+                instance_id: Some("service-fallback-test-instance".into()),
+                state: if running {
+                    CoreState::Running
+                } else {
+                    CoreState::Stopped(None)
+                },
+                state_changed_at: if running { 1 } else { 2 },
+                run_type,
+            })
+        }
+
+        fn recovery_notify(&self) -> Option<Arc<Notify>> {
+            None
+        }
+
+        async fn on_profile_change(&self, _: bool) {}
     }
 
     struct StartupTransientCore {
@@ -5272,6 +5998,28 @@ mod tests {
     }
 
     #[async_trait]
+    impl ServiceLifecyclePort for LeaseBlockedToggleService {
+        async fn probe(&self) -> anyhow::Result<chimera_ipc::types::StatusInfo<'static>> {
+            self.inner.probe().await
+        }
+
+        fn runtime_owned(&self, info: &chimera_ipc::types::StatusInfo<'_>) -> bool {
+            self.inner.runtime_owned(info)
+        }
+
+        async fn begin_transition(&self) -> anyhow::Result<Box<dyn ServiceTransitionLease>> {
+            self.inner.begin_transition().await
+        }
+
+        async fn try_begin_transition(&self) -> anyhow::Result<Box<dyn ServiceTransitionLease>> {
+            if self.block_next.swap(false, AtomicOrdering::AcqRel) {
+                anyhow::bail!("injected Service transition lease busy");
+            }
+            self.inner.try_begin_transition().await
+        }
+    }
+
+    #[async_trait]
     impl ServiceLifecyclePort for ForeignAfterRecoveryServiceProbe {
         async fn probe(&self) -> anyhow::Result<chimera_ipc::types::StatusInfo<'static>> {
             self.inner.probe().await
@@ -5971,6 +6719,7 @@ mod tests {
             _staged_content: std::collections::BTreeMap<String, String>,
             _target: Option<String>,
         ) -> anyhow::Result<()> {
+            self.attempts.fetch_add(1, AtomicOrdering::AcqRel);
             if self.fail_next_reconcile.swap(false, AtomicOrdering::AcqRel) {
                 anyhow::bail!("injected current Profiles reconcile failure");
             }
@@ -7362,10 +8111,409 @@ mod tests {
         client.shutdown().await.unwrap();
     }
 
+    /// Ref S2: an already selected Local host still owes retirement of a
+    /// second owned Service Core. A mere desired!=current-host check misses it.
+    #[tokio::test]
+    async fn service_readiness_retires_second_owned_core_while_local_is_preferred() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let service_ready = Arc::new(AtomicBool::new(false));
+        let service_running = Arc::new(AtomicBool::new(false));
+        let core = Arc::new(startup_owner_core(
+            events.clone(),
+            (CoreState::Running, 1),
+            service_running.clone(),
+        ));
+        let service = Arc::new(ToggleStartupServiceProbe {
+            events: events.clone(),
+            ready: service_ready.clone(),
+            core_running: service_running.clone(),
+        });
+        let app = chimera_config::application::ChimeraAppConfig {
+            enable_service_mode: false,
+            ..Default::default()
+        };
+        let client = spawn_startup_client_with_application(
+            core.clone(),
+            service,
+            ApplicationClient::static_state(app),
+        )
+        .await;
+        let startup = client.startup_reconcile().await.unwrap();
+        assert_eq!(startup.report.outcome, StartupOutcome::Ready);
+        let baseline = events.lock().unwrap().len();
+        // Simulate a previously owned daemon Core becoming visible while
+        // Local remains the user's selected host.
+        service_ready.store(true, AtomicOrdering::Release);
+        service_running.store(true, AtomicOrdering::Release);
+        signal_service_readiness_change(&client);
+        tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                if events
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .skip(baseline)
+                    .any(|event| *event == "service-core-retire")
+                    && !service_running.load(AtomicOrdering::Acquire)
+                    && client.status().active.is_none()
+                {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("ref S2 must retire the unexpected owned Service Core");
+        assert_eq!(
+            client.core_status().await.unwrap().run_type,
+            RunType::Normal
+        );
+        let trace = events.lock().unwrap().clone();
+        let recent = &trace[baseline..];
+        let retire = recent
+            .iter()
+            .position(|event| *event == "service-core-retire")
+            .unwrap();
+        if let Some(local_rebuild) = recent.iter().position(|event| *event == "rebuild-local") {
+            assert!(
+                retire < local_rebuild,
+                "the Service Core must retire before Local is rebuilt"
+            );
+        }
+        assert!(!recent.contains(&"select-service"));
+        client.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn postcommit_service_refusal_retires_owned_core_before_local_apply() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let service_running = Arc::new(AtomicBool::new(true));
+        let core = Arc::new(PostcommitServiceFallbackCore {
+            events: events.clone(),
+            service_running: service_running.clone(),
+            selected: Mutex::new(RunType::Service),
+            local_running: AtomicBool::new(false),
+            refused_service: AtomicBool::new(false),
+            forbid_local: AtomicBool::new(false),
+        });
+        let app = chimera_config::application::ChimeraAppConfig {
+            enable_service_mode: true,
+            ..Default::default()
+        };
+        let service = Arc::new(ToggleStartupServiceProbe {
+            events: events.clone(),
+            ready: Arc::new(AtomicBool::new(true)),
+            core_running: service_running.clone(),
+        });
+        let workflow = CoreLifecycleWorkflow::new(
+            ApplicationClient::static_state(app.clone()),
+            ClashConfigClient::legacy().unwrap(),
+            None,
+            core.clone(),
+            Arc::new(RecordingInstaller {
+                events: events.clone(),
+            }),
+            RuntimePaths::from_config_root(std::path::PathBuf::from("test-runtime-root")),
+            service,
+        );
+        let target = workflow.startup_target_identity().await.unwrap();
+        let refusal = core
+            .reconcile(ClashConfig::default(), app.core, RunType::Service)
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            core.status().await.unwrap().state,
+            CoreState::Stopped(_)
+        ));
+        workflow
+            .fallback_after_service_refusal(&target, refusal)
+            .await
+            .expect("a safely retired Service owner allows one Local application");
+
+        let trace = events.lock().unwrap();
+        let failed = trace
+            .iter()
+            .position(|event| *event == "service-apply-refused")
+            .unwrap();
+        let retired = trace
+            .iter()
+            .position(|event| *event == "service-core-retire")
+            .unwrap();
+        let local = trace
+            .iter()
+            .position(|event| *event == "rebuild-after-service-release")
+            .unwrap();
+        assert!(failed < retired && retired < local);
+        assert!(!service_running.load(AtomicOrdering::Acquire));
+        assert!(core.local_running.load(AtomicOrdering::Acquire));
+        assert_eq!(core.status().await.unwrap().run_type, RunType::Normal);
+    }
+
+    #[tokio::test]
+    async fn postcommit_service_fallback_waits_on_lease_without_starting_local() {
+        use crate::client::reconciler::attempt::{ServiceFallbackDeferred, waiting_dependency};
+
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let service_running = Arc::new(AtomicBool::new(true));
+        let core = Arc::new(PostcommitServiceFallbackCore {
+            events: events.clone(),
+            service_running: service_running.clone(),
+            selected: Mutex::new(RunType::Service),
+            local_running: AtomicBool::new(false),
+            refused_service: AtomicBool::new(false),
+            forbid_local: AtomicBool::new(false),
+        });
+        let app = chimera_config::application::ChimeraAppConfig {
+            enable_service_mode: true,
+            ..Default::default()
+        };
+        let service = Arc::new(LeaseBlockedToggleService {
+            inner: ToggleStartupServiceProbe {
+                events: events.clone(),
+                ready: Arc::new(AtomicBool::new(true)),
+                core_running: service_running.clone(),
+            },
+            block_next: AtomicBool::new(true),
+        });
+        let workflow = CoreLifecycleWorkflow::new(
+            ApplicationClient::static_state(app.clone()),
+            ClashConfigClient::legacy().unwrap(),
+            None,
+            core.clone(),
+            Arc::new(RecordingInstaller {
+                events: events.clone(),
+            }),
+            RuntimePaths::from_config_root(std::path::PathBuf::from("test-runtime-root")),
+            service,
+        );
+        let target = workflow.startup_target_identity().await.unwrap();
+        let refusal = core
+            .reconcile(ClashConfig::default(), app.core, RunType::Service)
+            .await
+            .unwrap_err();
+        let error = workflow
+            .fallback_after_service_refusal(&target, refusal)
+            .await
+            .expect_err("fallback must wait while the Service owner lease is unavailable");
+        assert!(error.downcast_ref::<ServiceFallbackDeferred>().is_some());
+        assert!(waiting_dependency(&error));
+        assert!(service_running.load(AtomicOrdering::Acquire));
+        assert!(!core.local_running.load(AtomicOrdering::Acquire));
+        assert!(!events.lock().unwrap().contains(&"service-core-retire"));
+
+        workflow
+            .fallback_after_service_refusal(&target, anyhow::anyhow!("same refused Service target"))
+            .await
+            .expect("another event can safely retry the owner release");
+        assert!(!service_running.load(AtomicOrdering::Acquire));
+        assert!(core.local_running.load(AtomicOrdering::Acquire));
+    }
+
+    #[tokio::test]
+    async fn service_failure_with_still_running_core_never_falls_back() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let service_running = Arc::new(AtomicBool::new(true));
+        let core = Arc::new(PostcommitServiceFallbackCore {
+            events: events.clone(),
+            service_running: service_running.clone(),
+            selected: Mutex::new(RunType::Service),
+            local_running: AtomicBool::new(false),
+            refused_service: AtomicBool::new(false),
+            forbid_local: AtomicBool::new(false),
+        });
+        let workflow = CoreLifecycleWorkflow::new(
+            ApplicationClient::static_state(Default::default()),
+            ClashConfigClient::legacy().unwrap(),
+            None,
+            core.clone(),
+            Arc::new(RecordingInstaller {
+                events: events.clone(),
+            }),
+            RuntimePaths::from_config_root(std::path::PathBuf::from("test-runtime-root")),
+            Arc::new(ToggleStartupServiceProbe {
+                events: events.clone(),
+                ready: Arc::new(AtomicBool::new(true)),
+                core_running: service_running.clone(),
+            }),
+        );
+        let target = workflow.startup_target_identity().await.unwrap();
+        let error = workflow
+            .fallback_after_service_refusal(&target, anyhow::anyhow!("application rejected"))
+            .await
+            .expect_err("still-running Service Core must not be retired on an unproven failure");
+        assert!(error.to_string().contains("application rejected"));
+        assert!(service_running.load(AtomicOrdering::Acquire));
+        assert!(!core.local_running.load(AtomicOrdering::Acquire));
+        assert!(!events.lock().unwrap().contains(&"service-core-retire"));
+    }
+
+    #[tokio::test]
+    async fn service_handoff_lease_failure_is_visible_and_clears_after_retry() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let ready = Arc::new(AtomicBool::new(false));
+        let service_running = Arc::new(AtomicBool::new(false));
+        let core = Arc::new(startup_owner_core(
+            events.clone(),
+            (CoreState::Running, 1),
+            service_running.clone(),
+        ));
+        let service = Arc::new(LeaseBlockedToggleService {
+            inner: ToggleStartupServiceProbe {
+                events: events.clone(),
+                ready: ready.clone(),
+                core_running: service_running.clone(),
+            },
+            block_next: AtomicBool::new(true),
+        });
+        let client = spawn_startup_client_with_application(
+            core,
+            service,
+            ApplicationClient::static_state(chimera_config::application::ChimeraAppConfig {
+                enable_service_mode: false,
+                ..Default::default()
+            }),
+        )
+        .await;
+        assert_eq!(
+            client.startup_reconcile().await.unwrap().report.outcome,
+            StartupOutcome::Ready
+        );
+
+        ready.store(true, AtomicOrdering::Release);
+        service_running.store(true, AtomicOrdering::Release);
+        signal_service_readiness_change(&client);
+        tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                if client
+                    .reconciler_status()
+                    .maintenance
+                    .as_deref()
+                    .is_some_and(|reason| reason.contains("injected Service transition lease busy"))
+                {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("a failed owner lease must be published as pending maintenance");
+        assert!(
+            service_running.load(AtomicOrdering::Acquire),
+            "the ownership lease failure must not stop the daemon's Core"
+        );
+
+        signal_service_readiness_change(&client);
+        tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                if !service_running.load(AtomicOrdering::Acquire)
+                    && client.reconciler_status().maintenance.is_none()
+                    && client.status().active.is_none()
+                {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("a successful subsequent owner transition should settle maintenance");
+        assert_eq!(
+            client.core_status().await.unwrap().run_type,
+            RunType::Normal
+        );
+        assert_eq!(
+            events
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|event| **event == "service-core-retire")
+                .count(),
+            1,
+            "only the successful owner transition may retire Service"
+        );
+        client.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn stop_returning_ok_without_stopped_proof_remains_waiting() {
+        use chimera_core::client::reconciler::plan::Conclusion;
+
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let mut fake = startup_owner_core(
+            events.clone(),
+            (CoreState::Running, 1),
+            Arc::new(AtomicBool::new(false)),
+        );
+        fake.stop_confirms = false;
+        let client =
+            spawn_startup_client(Arc::new(fake), Arc::new(RecordingService { events })).await;
+        client.stop_core().await.unwrap();
+        let status = client.reconciler_status();
+        assert!(
+            matches!(status.conclusion, Conclusion::Waiting { .. }),
+            "a successful stop call is not evidence that Core actually stopped"
+        );
+        client.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn service_readiness_does_not_restart_core_after_explicit_stop() {
+        use chimera_core::client::reconciler::plan::Conclusion;
+
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let service_ready = Arc::new(AtomicBool::new(false));
+        let service_running = Arc::new(AtomicBool::new(false));
+        let core = Arc::new(startup_owner_core(
+            events.clone(),
+            (CoreState::Running, 1),
+            service_running.clone(),
+        ));
+        let service = Arc::new(ToggleStartupServiceProbe {
+            events: events.clone(),
+            ready: service_ready.clone(),
+            core_running: service_running,
+        });
+        let app = chimera_config::application::ChimeraAppConfig {
+            enable_service_mode: true,
+            ..Default::default()
+        };
+        let client = spawn_startup_client_with_application(
+            core.clone(),
+            service,
+            ApplicationClient::static_state(app),
+        )
+        .await;
+
+        let startup = client.startup_reconcile().await.unwrap();
+        assert_eq!(startup.report.outcome, StartupOutcome::Ready);
+        client.stop_core().await.unwrap();
+        let before = core.reconciles.load(AtomicOrdering::SeqCst);
+        assert!(matches!(
+            client.reconciler_status().conclusion,
+            Conclusion::Inactive
+        ));
+        service_ready.store(true, AtomicOrdering::Release);
+        signal_service_readiness_change(&client);
+        tokio::time::sleep(DIRTY_WINDOW + Duration::from_millis(70)).await;
+        assert_eq!(
+            core.reconciles.load(AtomicOrdering::SeqCst),
+            before,
+            "service readiness is not an explicit Start request"
+        );
+        assert!(
+            !events
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|event| *event == "rebuild-service"),
+            "stopped intent must prohibit a Service Core restart"
+        );
+        client.shutdown().await.unwrap();
+    }
+
     /// Contract: a stopped Local snapshot without explicit stop intent still
     /// follows Service readiness, as ref does when `stop_requested` is false.
-    /// The fixture mutates only its in-memory status to represent an external
-    /// runtime stop; production has no StopCore command or stop-intent signal.
+    /// This fixture mutates only its in-memory status to represent an external
+    /// runtime stop, unlike an explicit StopCore command.
     #[tokio::test]
     async fn service_readiness_follows_after_local_core_stops_without_explicit_intent() {
         let events = Arc::new(Mutex::new(Vec::new()));
@@ -8558,6 +9706,7 @@ mod tests {
         let profile_snapshot = manager.snapshot_handle();
         let core = Arc::new(ProfileTccCore {
             validations: AtomicUsize::new(0),
+            attempts: AtomicUsize::new(0),
             stops: AtomicUsize::new(0),
             fail_next_reconcile: AtomicBool::new(false),
             active_profiles: Mutex::new(None),
@@ -8690,6 +9839,7 @@ mod tests {
             .push("resource-recovery-failure-test".into());
         let core = Arc::new(ProfileTccCore {
             validations: AtomicUsize::new(0),
+            attempts: AtomicUsize::new(0),
             stops: AtomicUsize::new(0),
             fail_next_reconcile: AtomicBool::new(false),
             active_profiles: Mutex::new(None),
@@ -9731,6 +10881,159 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_new_committed_target_unblocks_a_previous_core_refusal() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = Utf8PathBuf::from_path_buf(dir.path().join("profiles.yaml")).unwrap();
+        let mut manager = PersistentStateManagerSetup::<
+            chimera_config::profile::Profiles,
+            crate::core::migration::modules::profiles::ProfilesFormat,
+        >::builder()
+        .config_path(path)
+        .assemble()
+        .from_state(chimera_config::profile::Profiles::default())
+        .await
+        .unwrap();
+        let mut first = manager.snapshot().as_ref().clone();
+        first.valid.push("initial-refused-target".into());
+        manager
+            .replace_if_version(chimera_core::state::Version::new(0), first.clone())
+            .await
+            .unwrap();
+        let core = Arc::new(ProfileTccCore {
+            validations: AtomicUsize::new(0),
+            attempts: AtomicUsize::new(0),
+            stops: AtomicUsize::new(0),
+            fail_next_reconcile: AtomicBool::new(true),
+            active_profiles: Mutex::new(None),
+        });
+        let client = spawn_startup_client_with_profiles(
+            core.clone(),
+            Arc::new(RecordingService {
+                events: Arc::new(Mutex::new(Vec::new())),
+            }),
+            manager.snapshot_handle(),
+        )
+        .await;
+        client.source_committed(SourceDomain::Profiles, 1, true);
+        tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                if core.attempts.load(AtomicOrdering::Acquire) == 1
+                    && client.status().active.is_none()
+                {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("the first target must be refused");
+
+        let mut second = first;
+        second.valid.push("changed-target-is-eligible".into());
+        manager
+            .replace_if_version(chimera_core::state::Version::new(1), second.clone())
+            .await
+            .unwrap();
+        client.source_committed(SourceDomain::Profiles, 2, true);
+        tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                if core.attempts.load(AtomicOrdering::Acquire) >= 2
+                    && core
+                        .active_profiles
+                        .lock()
+                        .unwrap()
+                        .as_ref()
+                        .is_some_and(|profiles| profiles.valid == second.valid)
+                {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("a genuinely changed target must not inherit the old refusal");
+        assert_eq!(core.attempts.load(AtomicOrdering::Acquire), 2);
+        client.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn refused_committed_target_waits_until_explicit_retry_without_repeating_core_apply() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = Utf8PathBuf::from_path_buf(dir.path().join("profiles.yaml")).unwrap();
+        let mut manager = PersistentStateManagerSetup::<
+            chimera_config::profile::Profiles,
+            crate::core::migration::modules::profiles::ProfilesFormat,
+        >::builder()
+        .config_path(path)
+        .assemble()
+        .from_state(chimera_config::profile::Profiles::default())
+        .await
+        .unwrap();
+        let mut committed = manager.snapshot().as_ref().clone();
+        committed.valid.push("rejected-runtime-target".into());
+        manager
+            .replace_if_version(chimera_core::state::Version::new(0), committed.clone())
+            .await
+            .unwrap();
+        let core = Arc::new(ProfileTccCore {
+            validations: AtomicUsize::new(0),
+            attempts: AtomicUsize::new(0),
+            stops: AtomicUsize::new(0),
+            fail_next_reconcile: AtomicBool::new(true),
+            active_profiles: Mutex::new(None),
+        });
+        let client = spawn_startup_client_with_profiles(
+            core.clone(),
+            Arc::new(RecordingService {
+                events: Arc::new(Mutex::new(Vec::new())),
+            }),
+            manager.snapshot_handle(),
+        )
+        .await;
+        client.source_committed(SourceDomain::Profiles, 1, true);
+        tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                if core.attempts.load(AtomicOrdering::Acquire) == 1
+                    && client.status().active.is_none()
+                {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("initial committed target should be attempted and refused");
+        assert!(core.active_profiles.lock().unwrap().is_none());
+
+        // A second publication of the exact same target is not an
+        // instruction to repeatedly hammer a Core that already refused it.
+        client.source_committed(SourceDomain::Profiles, 1, true);
+        tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                if client.status().completed.iter().any(|round| {
+                    round
+                        .error
+                        .as_deref()
+                        .is_some_and(|message| message.contains("previously refused"))
+                }) {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("second source notification should report a blocked attempt");
+        assert_eq!(core.attempts.load(AtomicOrdering::Acquire), 1);
+        client.reconcile().await.unwrap();
+        assert_eq!(core.attempts.load(AtomicOrdering::Acquire), 2);
+        assert_eq!(
+            core.active_profiles.lock().unwrap().as_ref().unwrap().valid,
+            committed.valid
+        );
+        client.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
     async fn failed_postcommit_profiles_apply_preserves_the_source_document() {
         let dir = tempfile::tempdir().unwrap();
         let path = Utf8PathBuf::from_path_buf(dir.path().join("profiles.yaml")).unwrap();
@@ -9752,6 +11055,7 @@ mod tests {
             .unwrap();
         let core = Arc::new(ProfileTccCore {
             validations: AtomicUsize::new(0),
+            attempts: AtomicUsize::new(0),
             stops: AtomicUsize::new(0),
             fail_next_reconcile: AtomicBool::new(true),
             active_profiles: Mutex::new(None),
@@ -9797,6 +11101,682 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn explicit_stop_intent_survives_profiles_source_and_runtime_dirty_until_start() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = Utf8PathBuf::from_path_buf(directory.path().join("profiles.yaml")).unwrap();
+        let mut manager = PersistentStateManagerSetup::<
+            chimera_config::profile::Profiles,
+            crate::core::migration::modules::profiles::ProfilesFormat,
+        >::builder()
+        .config_path(path)
+        .assemble()
+        .from_state(chimera_config::profile::Profiles::default())
+        .await
+        .unwrap();
+        let core = Arc::new(ProfileTccCore {
+            validations: AtomicUsize::new(0),
+            attempts: AtomicUsize::new(0),
+            stops: AtomicUsize::new(0),
+            fail_next_reconcile: AtomicBool::new(false),
+            active_profiles: Mutex::new(None),
+        });
+        let client = spawn_startup_client_with_profiles(
+            core.clone(),
+            Arc::new(RecordingService {
+                events: Arc::new(Mutex::new(Vec::new())),
+            }),
+            manager.snapshot_handle(),
+        )
+        .await;
+        client.stop_core().await.unwrap();
+        assert_eq!(core.stops.load(AtomicOrdering::SeqCst), 1);
+        let mut candidate = manager.snapshot().as_ref().clone();
+        candidate
+            .valid
+            .push("committed-while-explicitly-stopped".into());
+        manager
+            .replace_if_version(chimera_core::state::Version::new(0), candidate.clone())
+            .await
+            .unwrap();
+        client.source_committed(
+            crate::client::reconciler::committed::SourceDomain::Profiles,
+            1,
+            true,
+        );
+        client.request_runtime_rebuild();
+        tokio::time::sleep(DIRTY_WINDOW + Duration::from_millis(70)).await;
+        assert!(
+            core.active_profiles.lock().unwrap().is_none(),
+            "source notifications and dirty ticks must not undo explicit stop"
+        );
+        assert_eq!(core.stops.load(AtomicOrdering::SeqCst), 1);
+        client.start_core().await.unwrap();
+        assert_eq!(
+            core.active_profiles.lock().unwrap().as_ref().unwrap().valid,
+            candidate.valid
+        );
+        client.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn explicit_retry_republishes_confirmed_product_without_another_core_apply() {
+        use chimera_core::client::reconciler::plan::Conclusion;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = Utf8PathBuf::from_path_buf(dir.path().join("profiles.yaml")).unwrap();
+        let manager = PersistentStateManagerSetup::<
+            chimera_config::profile::Profiles,
+            crate::core::migration::modules::profiles::ProfilesFormat,
+        >::builder()
+        .config_path(path)
+        .assemble()
+        .from_state(chimera_config::profile::Profiles::default())
+        .await
+        .unwrap();
+        let core = Arc::new(PendingProductCore {
+            lifecycle: Arc::new(crate::client::runtime::RuntimeLifecycle::default()),
+            confirmed: Mutex::new(None),
+            submissions: AtomicUsize::new(0),
+            publications: AtomicUsize::new(0),
+        });
+        let client = spawn_startup_client_with_profiles(
+            core.clone(),
+            Arc::new(RecordingService {
+                events: Arc::new(Mutex::new(Vec::new())),
+            }),
+            manager.snapshot_handle(),
+        )
+        .await;
+
+        let error = client.start_core().await.expect_err(
+            "first Core application is accepted, but the RuntimeProduct was not published",
+        );
+        assert!(error.to_string().contains("RuntimeProduct"));
+        assert_eq!(core.submissions.load(AtomicOrdering::Acquire), 1);
+        assert!(
+            client
+                .reconciler_status()
+                .maintenance
+                .as_deref()
+                .is_some_and(|reason| reason.contains("RuntimeProduct publication pending"))
+        );
+
+        client
+            .reconcile()
+            .await
+            .expect("explicit Retry must finish the identical accepted RuntimeProduct");
+        assert_eq!(core.submissions.load(AtomicOrdering::Acquire), 1);
+        assert_eq!(core.publications.load(AtomicOrdering::Acquire), 1);
+        assert!(core.lifecycle.pending_confirmed_product().is_none());
+        assert!(client.reconciler_status().maintenance.is_none());
+        assert!(matches!(
+            client.reconciler_status().conclusion,
+            Conclusion::Converged
+        ));
+        client.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn local_convergence_never_stops_a_foreign_or_unowned_service() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = Utf8PathBuf::from_path_buf(dir.path().join("profiles.yaml")).unwrap();
+        let manager = PersistentStateManagerSetup::<
+            chimera_config::profile::Profiles,
+            crate::core::migration::modules::profiles::ProfilesFormat,
+        >::builder()
+        .config_path(path)
+        .assemble()
+        .from_state(chimera_config::profile::Profiles::default())
+        .await
+        .unwrap();
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let ready = Arc::new(AtomicBool::new(true));
+        let service = Arc::new(ReleaseOwedService {
+            inner: ToggleStartupServiceProbe {
+                events: Arc::new(Mutex::new(Vec::new())),
+                ready: ready.clone(),
+                core_running: Arc::new(AtomicBool::new(false)),
+            },
+            runtime_owned: false,
+            attempts: attempts.clone(),
+            fail_next: Arc::new(AtomicBool::new(false)),
+        });
+        let client = spawn_startup_client_with_profiles(
+            Arc::new(ReceiptProofCore {
+                active: Mutex::new(None),
+                publish_wrong_target: false,
+                change_instance_between_reads: false,
+                status_reads: AtomicUsize::new(0),
+                submissions: AtomicUsize::new(0),
+                stops: AtomicUsize::new(0),
+            }),
+            service,
+            manager.snapshot_handle(),
+        )
+        .await;
+        client.start_core().await.unwrap();
+        signal_service_readiness_change(&client);
+        tokio::time::sleep(Duration::from_millis(90)).await;
+        assert_eq!(attempts.load(AtomicOrdering::Acquire), 0);
+        assert!(ready.load(AtomicOrdering::Acquire));
+        assert!(client.reconciler_status().maintenance.is_none());
+        client.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn release_owed_is_independent_and_only_retry_replays_a_failed_daemon_stop() {
+        use chimera_core::client::reconciler::plan::Conclusion;
+
+        for fails_first in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let path = Utf8PathBuf::from_path_buf(dir.path().join("profiles.yaml")).unwrap();
+            let manager = PersistentStateManagerSetup::<
+                chimera_config::profile::Profiles,
+                crate::core::migration::modules::profiles::ProfilesFormat,
+            >::builder()
+            .config_path(path)
+            .assemble()
+            .from_state(chimera_config::profile::Profiles::default())
+            .await
+            .unwrap();
+            let events = Arc::new(Mutex::new(Vec::new()));
+            let ready = Arc::new(AtomicBool::new(true));
+            let attempts = Arc::new(AtomicUsize::new(0));
+            let service = Arc::new(ReleaseOwedService {
+                inner: ToggleStartupServiceProbe {
+                    events: events.clone(),
+                    ready: ready.clone(),
+                    core_running: Arc::new(AtomicBool::new(false)),
+                },
+                runtime_owned: true,
+                attempts: attempts.clone(),
+                fail_next: Arc::new(AtomicBool::new(fails_first)),
+            });
+            let core = Arc::new(ReceiptProofCore {
+                active: Mutex::new(None),
+                publish_wrong_target: false,
+                change_instance_between_reads: false,
+                status_reads: AtomicUsize::new(0),
+                submissions: AtomicUsize::new(0),
+                stops: AtomicUsize::new(0),
+            });
+            let client =
+                spawn_startup_client_with_profiles(core, service, manager.snapshot_handle()).await;
+            client.start_core().await.unwrap();
+
+            tokio::time::timeout(Duration::from_secs(3), async {
+                loop {
+                    if attempts.load(AtomicOrdering::Acquire) == 1
+                        && client.status().completed.iter().any(|item| {
+                            item.error.as_deref().is_some_and(|reason| {
+                                reason.contains("injected Service daemon stop failure")
+                            }) == fails_first
+                        })
+                        && client.status().active.is_none()
+                    {
+                        break;
+                    }
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .expect("the first daemon release attempt must finish");
+
+            assert!(matches!(
+                client.reconciler_status().conclusion,
+                Conclusion::Converged
+            ));
+            if fails_first {
+                assert!(ready.load(AtomicOrdering::Acquire));
+                assert!(
+                    client
+                        .reconciler_status()
+                        .maintenance
+                        .as_deref()
+                        .is_some_and(
+                            |reason| reason.contains("injected Service daemon stop failure")
+                        )
+                );
+                signal_service_readiness_change(&client);
+                tokio::time::sleep(Duration::from_millis(80)).await;
+                assert_eq!(
+                    attempts.load(AtomicOrdering::Acquire),
+                    1,
+                    "normal readiness does not hammer a failed daemon stop"
+                );
+                client.reconcile().await.unwrap();
+                tokio::time::timeout(Duration::from_secs(3), async {
+                    loop {
+                        if attempts.load(AtomicOrdering::Acquire) == 2
+                            && !ready.load(AtomicOrdering::Acquire)
+                            && client.status().active.is_none()
+                            && client.reconciler_status().maintenance.is_none()
+                        {
+                            break;
+                        }
+                        tokio::task::yield_now().await;
+                    }
+                })
+                .await
+                .expect("explicit Retry must settle the retained release debt");
+            } else {
+                assert!(!ready.load(AtomicOrdering::Acquire));
+                assert!(client.reconciler_status().maintenance.is_none());
+            }
+            let events = events.lock().unwrap().clone();
+            assert!(events.contains(&"service-stop"));
+            assert!(events.contains(&"service-confirm"));
+            assert_eq!(
+                attempts.load(AtomicOrdering::Acquire),
+                if fails_first { 2 } else { 1 }
+            );
+            client.shutdown().await.unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn source_committed_does_not_stop_a_core_whose_instance_changed_during_s2_sampling() {
+        use chimera_core::client::reconciler::plan::Conclusion;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = Utf8PathBuf::from_path_buf(dir.path().join("profiles.yaml")).unwrap();
+        let mut manager = PersistentStateManagerSetup::<
+            chimera_config::profile::Profiles,
+            crate::core::migration::modules::profiles::ProfilesFormat,
+        >::builder()
+        .config_path(path)
+        .assemble()
+        .from_state(chimera_config::profile::Profiles::default())
+        .await
+        .unwrap();
+        let core = Arc::new(ReceiptProofCore {
+            active: Mutex::new(None),
+            publish_wrong_target: false,
+            change_instance_between_reads: true,
+            status_reads: AtomicUsize::new(0),
+            submissions: AtomicUsize::new(0),
+            stops: AtomicUsize::new(0),
+        });
+        let client = spawn_startup_client_with_profiles(
+            core.clone(),
+            Arc::new(RecordingService {
+                events: Arc::new(Mutex::new(Vec::new())),
+            }),
+            manager.snapshot_handle(),
+        )
+        .await;
+        client.start_core().await.unwrap();
+        let mut changed = manager.snapshot().as_ref().clone();
+        changed
+            .valid
+            .push("source-must-not-stop-changed-core".into());
+        manager
+            .replace_if_version(chimera_core::state::Version::new(0), changed)
+            .await
+            .unwrap();
+        client.source_committed(SourceDomain::Profiles, 1, true);
+        let settled = tokio::time::timeout(
+            Duration::from_secs(3),
+            client.settled(SourceDomain::Profiles, 1),
+        )
+        .await
+        .expect("a changing Core instance must settle to a retryable ownership wait");
+        assert!(matches!(settled.conclusion, Conclusion::Waiting { .. }));
+        assert_eq!(core.submissions.load(AtomicOrdering::Acquire), 1);
+        assert_eq!(core.stops.load(AtomicOrdering::Acquire), 0);
+        client.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn source_committed_never_mutates_core_when_service_probe_is_unreadable() {
+        use chimera_core::client::reconciler::plan::Conclusion;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = Utf8PathBuf::from_path_buf(dir.path().join("profiles.yaml")).unwrap();
+        let mut manager = PersistentStateManagerSetup::<
+            chimera_config::profile::Profiles,
+            crate::core::migration::modules::profiles::ProfilesFormat,
+        >::builder()
+        .config_path(path)
+        .assemble()
+        .from_state(chimera_config::profile::Profiles::default())
+        .await
+        .unwrap();
+        let core = Arc::new(ReceiptProofCore {
+            active: Mutex::new(None),
+            publish_wrong_target: false,
+            change_instance_between_reads: false,
+            status_reads: AtomicUsize::new(0),
+            submissions: AtomicUsize::new(0),
+            stops: AtomicUsize::new(0),
+        });
+        let client = spawn_startup_client_with_profiles(
+            core.clone(),
+            Arc::new(UnreadableService {
+                events: Arc::new(Mutex::new(Vec::new())),
+            }),
+            manager.snapshot_handle(),
+        )
+        .await;
+        // Explicit Start is not an automatic SourceCommitted round. Once it
+        // is running, an unreadable Service probe must block a source-driven
+        // attempt to stop/restart the selected Core.
+        client.start_core().await.unwrap();
+        let mut changed = manager.snapshot().as_ref().clone();
+        changed
+            .valid
+            .push("blocked-until-service-owner-proven".into());
+        manager
+            .replace_if_version(chimera_core::state::Version::new(0), changed)
+            .await
+            .unwrap();
+        client.source_committed(SourceDomain::Profiles, 1, true);
+        let settled = tokio::time::timeout(
+            Duration::from_secs(3),
+            client.settled(SourceDomain::Profiles, 1),
+        )
+        .await
+        .expect("source round must publish an explicit ownership wait");
+        assert!(matches!(settled.conclusion, Conclusion::Waiting { .. }));
+        assert_eq!(core.submissions.load(AtomicOrdering::Acquire), 1);
+        assert_eq!(core.stops.load(AtomicOrdering::Acquire), 0);
+        client.shutdown().await.unwrap();
+    }
+
+    /// One actual SourceCommitted Actor round must run ref S2 before S3/S4.
+    /// Until another owned Service Core is cleared, neither Stop nor Apply
+    /// may be submitted to the Local Core, even if the source is newer.
+    #[tokio::test]
+    async fn source_committed_waits_for_second_service_owner_before_core_apply() {
+        use chimera_core::client::reconciler::plan::Conclusion;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = Utf8PathBuf::from_path_buf(dir.path().join("profiles.yaml")).unwrap();
+        let mut manager = PersistentStateManagerSetup::<
+            chimera_config::profile::Profiles,
+            crate::core::migration::modules::profiles::ProfilesFormat,
+        >::builder()
+        .config_path(path)
+        .assemble()
+        .from_state(chimera_config::profile::Profiles::default())
+        .await
+        .unwrap();
+        let core = Arc::new(ReceiptProofCore {
+            active: Mutex::new(None),
+            publish_wrong_target: false,
+            change_instance_between_reads: false,
+            status_reads: AtomicUsize::new(0),
+            submissions: AtomicUsize::new(0),
+            stops: AtomicUsize::new(0),
+        });
+        let other_service_core = Arc::new(AtomicBool::new(false));
+        let client = spawn_startup_client_with_profiles(
+            core.clone(),
+            Arc::new(ToggleStartupServiceProbe {
+                events: Arc::new(Mutex::new(Vec::new())),
+                ready: Arc::new(AtomicBool::new(true)),
+                core_running: other_service_core.clone(),
+            }),
+            manager.snapshot_handle(),
+        )
+        .await;
+        client.start_core().await.unwrap();
+        assert_eq!(core.submissions.load(AtomicOrdering::Acquire), 1);
+
+        let mut latest = manager.snapshot().as_ref().clone();
+        latest.valid.push("must-wait-for-S2-owner".into());
+        manager
+            .replace_if_version(chimera_core::state::Version::new(0), latest)
+            .await
+            .unwrap();
+        other_service_core.store(true, AtomicOrdering::Release);
+        client.source_committed(SourceDomain::Profiles, 1, true);
+        let waiting = tokio::time::timeout(
+            Duration::from_secs(3),
+            client.settled(SourceDomain::Profiles, 1),
+        )
+        .await
+        .expect("S2 ownership decision must settle the source round as Waiting");
+        assert!(matches!(waiting.conclusion, Conclusion::Waiting { .. }));
+        assert_eq!(core.submissions.load(AtomicOrdering::Acquire), 1);
+        assert_eq!(core.stops.load(AtomicOrdering::Acquire), 0);
+
+        // A new, fresh Service probe proves the other owned Core stopped.
+        // The source is still durable; a repeated notification now proceeds
+        // through S3/S4 to stop the outdated Local Core before reapplying.
+        other_service_core.store(false, AtomicOrdering::Release);
+        client.source_committed(SourceDomain::Profiles, 1, true);
+        tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                if core.submissions.load(AtomicOrdering::Acquire) == 2
+                    && core.stops.load(AtomicOrdering::Acquire) == 1
+                    && client.status().active.is_none()
+                {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("cleared S2 ownership must allow the latest target to apply once");
+        assert!(matches!(
+            client.reconciler_status().conclusion,
+            Conclusion::Converged
+        ));
+        client.shutdown().await.unwrap();
+    }
+
+    /// Ref S3/S4 is now called from the real committed-source actor route:
+    /// the same proven target is a no-op; a different accepted target requires
+    /// stopping the old Core before a single fresh application.
+    #[tokio::test]
+    async fn ref_plan_skips_identical_commits_and_stops_outdated_accepted_core() {
+        use chimera_core::client::reconciler::plan::Conclusion;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = Utf8PathBuf::from_path_buf(dir.path().join("profiles.yaml")).unwrap();
+        let mut manager = PersistentStateManagerSetup::<
+            chimera_config::profile::Profiles,
+            crate::core::migration::modules::profiles::ProfilesFormat,
+        >::builder()
+        .config_path(path)
+        .assemble()
+        .from_state(chimera_config::profile::Profiles::default())
+        .await
+        .unwrap();
+        let core = Arc::new(ReceiptProofCore {
+            active: Mutex::new(None),
+            publish_wrong_target: false,
+            change_instance_between_reads: false,
+            status_reads: AtomicUsize::new(0),
+            submissions: AtomicUsize::new(0),
+            stops: AtomicUsize::new(0),
+        });
+        let client = spawn_startup_client_with_profiles(
+            core.clone(),
+            Arc::new(RecordingService {
+                events: Arc::new(Mutex::new(Vec::new())),
+            }),
+            manager.snapshot_handle(),
+        )
+        .await;
+
+        client.start_core().await.unwrap();
+        assert_eq!(core.submissions.load(AtomicOrdering::Acquire), 1);
+        let round_count = client.reconciler_status().recent.len();
+
+        // A duplicate notification of the same durable revision should not
+        // restart an already proven, unchanged runtime.
+        client.source_committed(SourceDomain::Profiles, 0, true);
+        tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                let status = client.reconciler_status();
+                if status.recent.len() > round_count && status.active.is_none() {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("duplicate source notification must finish a planned round");
+        assert_eq!(core.submissions.load(AtomicOrdering::Acquire), 1);
+        assert_eq!(core.stops.load(AtomicOrdering::Acquire), 0);
+        assert!(matches!(
+            client.reconciler_status().conclusion,
+            Conclusion::Converged
+        ));
+
+        let mut latest = manager.snapshot().as_ref().clone();
+        latest.valid.push("next-committed-target".into());
+        manager
+            .replace_if_version(chimera_core::state::Version::new(0), latest)
+            .await
+            .unwrap();
+        client.source_committed(SourceDomain::Profiles, 1, true);
+        tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                if core.submissions.load(AtomicOrdering::Acquire) == 2
+                    && core.stops.load(AtomicOrdering::Acquire) == 1
+                    && client.status().active.is_none()
+                {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("changed committed target must stop old Core and apply once");
+        assert!(matches!(
+            client.reconciler_status().conclusion,
+            Conclusion::Converged
+        ));
+        client.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn running_core_only_converges_when_receipt_proves_exact_committed_target() {
+        use chimera_core::client::reconciler::plan::Conclusion;
+
+        for (wrong_target, changed_instance) in [(false, false), (true, false), (false, true)] {
+            let dir = tempfile::tempdir().unwrap();
+            let path = Utf8PathBuf::from_path_buf(dir.path().join("profiles.yaml")).unwrap();
+            let manager = PersistentStateManagerSetup::<
+                chimera_config::profile::Profiles,
+                crate::core::migration::modules::profiles::ProfilesFormat,
+            >::builder()
+            .config_path(path)
+            .assemble()
+            .from_state(chimera_config::profile::Profiles::default())
+            .await
+            .unwrap();
+            let core = Arc::new(ReceiptProofCore {
+                active: Mutex::new(None),
+                publish_wrong_target: wrong_target,
+                change_instance_between_reads: changed_instance,
+                status_reads: AtomicUsize::new(0),
+                submissions: AtomicUsize::new(0),
+                stops: AtomicUsize::new(0),
+            });
+            let client = spawn_startup_client_with_profiles(
+                core,
+                Arc::new(RecordingService {
+                    events: Arc::new(Mutex::new(Vec::new())),
+                }),
+                manager.snapshot_handle(),
+            )
+            .await;
+
+            client.start_core().await.unwrap();
+            let status = client.reconciler_status();
+            if wrong_target || changed_instance {
+                assert!(
+                    matches!(status.conclusion, Conclusion::Waiting { .. }),
+                    "an unmatched target or Core instance is not convergence: {wrong_target:?}/{changed_instance:?}"
+                );
+            } else {
+                assert!(
+                    matches!(status.conclusion, Conclusion::Converged),
+                    "the same stable Core and exact committed target must converge"
+                );
+            }
+            client.shutdown().await.unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn reconciler_status_waits_for_committed_version_and_keeps_stop_inactive() {
+        use chimera_core::client::reconciler::plan::Conclusion;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = Utf8PathBuf::from_path_buf(dir.path().join("profiles.yaml")).unwrap();
+        let mut manager = PersistentStateManagerSetup::<
+            chimera_config::profile::Profiles,
+            crate::core::migration::modules::profiles::ProfilesFormat,
+        >::builder()
+        .config_path(path)
+        .assemble()
+        .from_state(chimera_config::profile::Profiles::default())
+        .await
+        .unwrap();
+        let core = Arc::new(ProfileTccCore {
+            validations: AtomicUsize::new(0),
+            attempts: AtomicUsize::new(0),
+            stops: AtomicUsize::new(0),
+            fail_next_reconcile: AtomicBool::new(false),
+            active_profiles: Mutex::new(None),
+        });
+        let client = spawn_startup_client_with_profiles(
+            core,
+            Arc::new(RecordingService {
+                events: Arc::new(Mutex::new(Vec::new())),
+            }),
+            manager.snapshot_handle(),
+        )
+        .await;
+        client.stop_core().await.unwrap();
+        let stopped = client.reconciler_status();
+        assert!(matches!(stopped.conclusion, Conclusion::Inactive));
+        assert_eq!(stopped.recent.back().unwrap().trigger, "Stop");
+
+        let mut next = manager.snapshot().as_ref().clone();
+        next.valid.push("saved-after-stop".into());
+        manager
+            .replace_if_version(chimera_core::state::Version::new(0), next)
+            .await
+            .unwrap();
+        client.source_committed(
+            crate::client::reconciler::committed::SourceDomain::Profiles,
+            1,
+            true,
+        );
+        let settled = tokio::time::timeout(
+            Duration::from_secs(2),
+            client.settled(
+                crate::client::reconciler::committed::SourceDomain::Profiles,
+                1,
+            ),
+        )
+        .await
+        .expect("stopped runtime must still acknowledge a durable source version");
+        assert_eq!(
+            settled
+                .seen
+                .version(crate::client::reconciler::committed::SourceDomain::Profiles),
+            Some(1)
+        );
+        assert!(matches!(settled.conclusion, Conclusion::Inactive));
+        assert!(settled.active.is_none());
+        client.start_core().await.unwrap();
+        let resumed = client.reconciler_status();
+        assert!(
+            matches!(resumed.conclusion, Conclusion::Waiting { .. }),
+            "a successful apply without an observed Running state is not Converged"
+        );
+        assert_eq!(resumed.recent.back().unwrap().trigger, "Start");
+        client.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
     async fn profiles_source_commit_applies_latest_document_not_notified_version() {
         let dir = tempfile::tempdir().unwrap();
         let path = Utf8PathBuf::from_path_buf(dir.path().join("profiles.yaml")).unwrap();
@@ -9825,6 +11805,7 @@ mod tests {
 
         let core = Arc::new(ProfileTccCore {
             validations: AtomicUsize::new(0),
+            attempts: AtomicUsize::new(0),
             stops: AtomicUsize::new(0),
             fail_next_reconcile: AtomicBool::new(false),
             active_profiles: Mutex::new(None),
@@ -9861,6 +11842,20 @@ mod tests {
         .await
         .expect("a source notification should apply the latest committed profiles");
         assert_eq!(core.validations.load(AtomicOrdering::SeqCst), 0);
+        let settled = tokio::time::timeout(
+            Duration::from_secs(2),
+            client.settled(
+                crate::client::reconciler::committed::SourceDomain::Profiles,
+                1,
+            ),
+        )
+        .await
+        .expect("committed source round must publish its sampled version");
+        assert_eq!(
+            settled.recent.back().unwrap().trigger,
+            "SourceCommitted",
+            "source-driven work should be distinct from explicit retry"
+        );
         client.shutdown().await.unwrap();
     }
 

@@ -20,6 +20,15 @@ pub struct RuntimeError {
     reason: String,
 }
 
+impl RuntimeError {
+    /// Preserve a typed reconciler conclusion without exposing planner fields.
+    pub fn new(reason: impl Into<String>) -> Self {
+        Self {
+            reason: reason.into(),
+        }
+    }
+}
+
 /// The single Reconciler's proof, distinct from a requested host.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Ownership {
@@ -53,13 +62,13 @@ impl Conclusion {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum RunIntent {
+pub enum RunIntent {
     Running,
     Stopped,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum Trigger {
+pub enum Trigger {
     Startup,
     SourceCommitted,
     ServiceReadiness,
@@ -74,7 +83,7 @@ pub(super) enum Trigger {
     InterruptConnections,
 }
 impl Trigger {
-    pub(super) fn forced(self) -> bool {
+    pub fn forced(self) -> bool {
         matches!(
             self,
             Self::Start | Self::Retry | Self::BinaryReplaced { restart: true }
@@ -99,26 +108,26 @@ impl Trigger {
 }
 
 #[derive(Debug, Clone)]
-pub(super) enum AttemptOutcome {
+pub enum AttemptOutcome {
     Applied,
     Refused(Arc<RuntimeError>),
     Unknown(Arc<RuntimeError>),
 }
 #[derive(Debug, Clone)]
-pub(super) struct Attempt {
+pub struct Attempt {
     pub target: String,
     pub host: ExecutionHost,
     pub outcome: AttemptOutcome,
 }
 
 #[derive(Debug, Clone, Copy)]
-pub(super) enum CoreFact {
+pub enum CoreFact {
     Stopped { failed: bool },
     Running { verified: bool },
     Transitional,
     Unreadable,
 }
-pub(super) struct Facts {
+pub struct Facts {
     pub trigger: Trigger,
     /// The degraded service owner still has an armed endpoint recovery.
     pub recovering: bool,
@@ -133,7 +142,7 @@ pub(super) struct Facts {
     pub attempt: Option<Attempt>,
 }
 #[derive(Debug)]
-pub(super) enum Step {
+pub enum Step {
     Idle(Conclusion),
     Owner(OwnerPlan),
     FallBackToLocal,
@@ -148,7 +157,7 @@ fn waiting(reason: String) -> Step {
 }
 
 #[must_use]
-pub(super) fn plan(facts: &Facts) -> Step {
+pub fn plan(facts: &Facts) -> Step {
     if facts.recovering {
         return waiting("the service endpoint is being recovered".to_owned());
     }

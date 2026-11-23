@@ -526,6 +526,16 @@ impl CoreLifecyclePort for LegacyCoreBridge {
         self.facade().promoted_runtime_snapshot()
     }
 
+    fn pending_runtime_product_target(&self) -> Option<String> {
+        self.facade().pending_runtime_product_target()
+    }
+
+    async fn republish_pending_runtime_product(&self, target: &str) -> anyhow::Result<bool> {
+        self.facade()
+            .republish_pending_runtime_product(target)
+            .await
+    }
+
     fn effective_clash_info(&self) -> crate::config::clash::ClashInfo {
         self.facade().effective_clash_info()
     }
