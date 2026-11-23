@@ -41,6 +41,7 @@ export * from './use-proxy-group-icons';
 export * from './use-native-proxy-actions';
 /** 9 */
 export * from './use-clash-cores';
+export * from './use-config-features';
 /** 10 */
 export * from './use-clash-version';
 export * from './use-clash-info';

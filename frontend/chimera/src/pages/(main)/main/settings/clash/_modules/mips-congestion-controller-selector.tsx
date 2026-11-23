@@ -1,7 +1,7 @@
 import {
   useClashSetting,
+  useConfigFeatures,
   useRuntimeProfile,
-  useSetting,
   type TunCongestionController,
 } from '@chimera/interface';
 import { Button } from '@chimera/ui/button';
@@ -34,16 +34,13 @@ const CONGESTION_CONTROLLER_LABELS: Record<TunCongestionController, string> = {
 
 /** The TCP congestion controller of the mips stack, shown while it is selected. */
 export default function MipsCongestionControllerSelector() {
-  const core = useSetting('core');
+  const features = useConfigFeatures();
   const tunStack = useClashSetting('tun_stack');
   const tunMips = useClashSetting('tun_mips');
 
   const runtimeProfile = useRuntimeProfile();
 
-  // The selected core is the existing UI's capability boundary. Only Mihomo
-  // and MihomoAlpha read tun.congestion-controller (ref's feature matrix).
-  const supportsController =
-    core.value === 'mihomo' || core.value === 'mihomo-alpha';
+  const controllers = features.data?.tun.congestion_controller;
 
   const current = tunMips.value?.congestion_controller ?? null;
 
@@ -61,7 +58,7 @@ export default function MipsCongestionControllerSelector() {
     [tunMips, runtimeProfile],
   );
 
-  if (tunStack.value !== 'mips' || !supportsController) {
+  if (tunStack.value !== 'mips' || controllers?.kind !== 'values') {
     return null;
   }
 
@@ -104,11 +101,7 @@ export default function MipsCongestionControllerSelector() {
             {m.settings_clash_settings_tun_congestion_controller_core_default()}
           </DropdownMenuCheckboxItem>
 
-          {(
-            Object.keys(
-              CONGESTION_CONTROLLER_LABELS,
-            ) as TunCongestionController[]
-          ).map((controller) => (
+          {controllers.value.map((controller) => (
             <DropdownMenuCheckboxItem
               checked={current === controller}
               key={controller}
