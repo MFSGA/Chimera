@@ -292,14 +292,22 @@ describe('legacy proxy localization', () => {
     const nameInput = await $('input[name="name"]');
     await nameInput.setValue(profileName);
     const confirmButton = await $('//button[normalize-space()="OK"]');
+    await confirmButton.waitForClickable({ timeout: 15_000 });
+    // The Windows smoke run previously timed out while the UI still showed
+    // the creation dialog's loading spinner. Stage markers identify whether
+    // the native click, dialog close, or backend read is actually blocked.
+    console.info('[proxy-localization] before clicking Create Profile');
     await confirmButton.click();
+    console.info('[proxy-localization] after clicking Create Profile');
 
     const profileNameElement = await $(
       `//*[normalize-space()="${profileName}"]`,
     );
     await profileNameElement.waitForDisplayed({ timeout: 15_000 });
+    console.info('[proxy-localization] created Profile visible in legacy list');
 
     const profiles = await invoke<ProfilesResponse>('get_profiles');
+    console.info('[proxy-localization] authoritative Profiles read completed');
     profileUid = profiles.items.find((item) => item.name === profileName)?.uid;
     assert.ok(
       profileUid,

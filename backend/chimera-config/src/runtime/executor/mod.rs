@@ -28,7 +28,7 @@ pub use script_error::{ScriptExecutionError, ScriptOperation};
 use crate::{
     clash::config::{
         overrides::{ClashGuardOverrides, TunOverrides},
-        tun_stack::TunStack,
+        tun_stack::{TunCongestionController, TunStack},
     },
     profile::{
         ProfileDefinition, ProfileId, Profiles, ScriptRuntime, TransformDefinition, TransformKind,
@@ -97,16 +97,34 @@ pub struct TunParams {
     pub windows_fake_ip_filter: bool,
 }
 
-/// Caller derives from (core, tun_stack), including the legacy
-/// Premium+Mixed→Gvisor downgrade (tun.rs:58-60); executor stays core-free.
+/// Caller derives from the core and its config features; executor stays
+/// core-free.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum TunFlavor {
     ClashRs,
-    /// Chimera Client's product-specific TUN contract, retained as an
-    /// extension to the reference flavor set.
+    /// Chimera Client has its own TUN schema; Mihomo-only keys are omitted.
     ChimeraClient,
     Standard {
-        stack: TunStack,
+        stack: TunStackWrite,
+        /// Forced while set; the caller sets it only for a written mips stack.
+        /// Unset on a written mips stack, a profile's controller is removed so
+        /// the core uses its own default.
+        congestion_controller: Option<TunCongestionController>,
+    },
+}
+
+/// The `tun.stack` writes from selected core capabilities, decided by the caller from what the core
+/// reads.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum TunStackWrite {
+    /// The core does not read `stack`.
+    Omitted,
+    Selected(TunStack),
+    /// The core does not support the selected stack, so `written` replaces it
+    /// and the build logs a warning. The saved setting is left as it is.
+    Downgraded {
+        selected: TunStack,
+        written: TunStack,
     },
 }
 
@@ -328,11 +346,12 @@ pub fn execute(
 
     let (next, patch) = apply_settings(&working, &ownership);
     working = Arc::new(next);
-    builder.push_delta(
-        step(BuiltinStepKind::ManagedSettings),
-        working.clone(),
-        patch,
-    )?;
+    let managed_settings = step(BuiltinStepKind::ManagedSettings);
+    logs.extend(
+        managed_settings.node_key(),
+        plan::managed_settings_logs(&inputs.tun),
+    );
+    builder.push_delta(managed_settings, working.clone(), patch)?;
 
     let (next, patch) = apply_defaults(&working, &ownership);
     working = Arc::new(next);

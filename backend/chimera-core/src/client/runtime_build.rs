@@ -4,15 +4,19 @@
 
 use anyhow::Context;
 use chimera_config::{
-    application::ChimeraAppConfig,
-    clash::config::{
-        ClashConfig, TransparentProxyMode, TransparentProxyValidationError, tun_stack::TunStack,
+    application::{ChimeraAppConfig, ClashCore},
+    clash::{
+        config::{
+            ClashConfig, TransparentProxyMode, TransparentProxyValidationError,
+            tun_stack::SelectedTunStack,
+        },
+        features::{FieldSupport, TunFeatures, UnsupportedConfigValue},
     },
     profile::Profiles,
     runtime::executor::{
         BuiltinTransform, ExecutionTarget, GuardInputs, ProfileContentSource, ResolvedPortBindings,
         RuntimeArtifact, RuntimePipelineError, RuntimePipelineInputs, ScriptRunner,
-        TransformFailure, TunFlavor, TunParams, execute,
+        TransformFailure, TunFlavor, TunParams, TunStackWrite, execute,
     },
     runtime::snapshot::OperatorTag,
 };
@@ -41,6 +45,8 @@ pub enum RuntimeBuildError {
     ValidateTransparentProxy(#[from] TransparentProxyValidationError),
     #[error("transparent capture requires service mode")]
     TransparentProxyRequiresServiceMode,
+    #[error("the selected core does not support {values:?}")]
+    UnsupportedConfigValues { values: Vec<UnsupportedConfigValue> },
     #[error(transparent)]
     Pipeline(#[from] RuntimePipelineError),
     #[error("runtime candidate contains failed transforms: {failures:?}")]
@@ -63,29 +69,42 @@ pub struct RuntimeBuildInput {
     pub resolved_ports: ResolvedPortBindings,
 }
 
-/// Legacy TUN derivation, including Premium+Mixed -> Gvisor.
+/// Only `ClashRs` (not Alpha) takes the ClashRs branch, a legacy quirk
+/// (enhance/tun.rs:47). The stack and its options follow the core's config
+/// features.
 pub fn derive_tun_flavor(
     core: chimera_config::application::ClashCore,
-    stack: TunStack,
+    selected: SelectedTunStack<'_>,
 ) -> TunFlavor {
-    if core == chimera_config::application::ClashCore::ClashRs {
+    if core == ClashCore::ClashRs {
         return TunFlavor::ClashRs;
     }
     if matches!(
         core,
-        chimera_config::application::ClashCore::ChimeraClient
-            | chimera_config::application::ClashCore::ChimeraClientAlpha
+        ClashCore::ChimeraClient | ClashCore::ChimeraClientAlpha
     ) {
         return TunFlavor::ChimeraClient;
     }
-    let stack = if core == chimera_config::application::ClashCore::ClashPremium
-        && stack == TunStack::Mixed
-    {
-        TunStack::Gvisor
-    } else {
-        stack
+    let features = core.config_features().tun;
+    let stack = match features.stack {
+        FieldSupport::Ignored => TunStackWrite::Omitted,
+        support if support.supports(&selected.stack()) => TunStackWrite::Selected(selected.stack()),
+        FieldSupport::Values(_) => TunStackWrite::Downgraded {
+            selected: selected.stack(),
+            written: TunFeatures::FALLBACK_STACK,
+        },
     };
-    TunFlavor::Standard { stack }
+    // A downgraded stack drops the options of the stack that was selected.
+    let congestion_controller = match (stack, selected) {
+        (TunStackWrite::Selected(_), SelectedTunStack::Mips(mips)) => mips
+            .congestion_controller
+            .filter(|controller| features.congestion_controller.supports(controller)),
+        _ => None,
+    };
+    TunFlavor::Standard {
+        stack,
+        congestion_controller,
+    }
 }
 
 pub struct RuntimeBuilder;
@@ -161,13 +180,24 @@ impl RuntimeBuilder {
             tun: TunParams {
                 enable: input.clash.enable_tun_mode,
                 overrides: input.clash.tun,
-                flavor: derive_tun_flavor(input.app.core, input.clash.tun_stack),
+                flavor: derive_tun_flavor(input.app.core, input.clash.selected_tun_stack()),
                 windows_fake_ip_filter: cfg!(windows),
             },
             expand_include_all: input.clash.expand_include_all,
             builtin_transforms,
         };
-        execute(&inputs, content, scripts).map_err(RuntimeBuildError::Pipeline)
+        let artifact = execute(&inputs, content, scripts).map_err(RuntimeBuildError::Pipeline)?;
+        // Ref validates the final document, including script-produced fields,
+        // even when the TUN switch is disabled.
+        let values = input
+            .app
+            .core
+            .config_features()
+            .unsupported_values(&artifact.final_config);
+        if !values.is_empty() {
+            return Err(RuntimeBuildError::UnsupportedConfigValues { values });
+        }
+        Ok(artifact)
     }
 }
 
@@ -383,6 +413,125 @@ mod tests {
         fn eval_item_expr(&self, _: &str, item: &ConfigValue) -> Result<ConfigValue, PortError> {
             Ok(item.clone())
         }
+    }
+
+    struct EmitInvalidStack;
+    impl ScriptRunner for EmitInvalidStack {
+        fn run(
+            &self,
+            _: ScriptRuntime,
+            _: &str,
+            _: &ConfigValue,
+            _: &mut Vec<StepLogEntry>,
+        ) -> Result<ConfigValue, PortError> {
+            Ok(ConfigValue::try_from(serde_json::json!({
+                "proxies": [],
+                "tun": {"enable": false, "stack": "mixed"}
+            }))
+            .unwrap())
+        }
+        fn eval_item_predicate(&self, _: &str, _: &ConfigValue) -> Result<bool, PortError> {
+            Ok(true)
+        }
+        fn eval_item_expr(&self, _: &str, item: &ConfigValue) -> Result<ConfigValue, PortError> {
+            Ok(item.clone())
+        }
+    }
+
+    #[test]
+    fn mips_controller_is_emitted_only_when_selected_for_mihomo() {
+        use chimera_config::clash::config::tun_stack::{TunCongestionController, TunStack};
+        let mut candidate = input();
+        candidate.app.core = ClashCore::Mihomo;
+        candidate.clash.enable_tun_mode = true;
+        candidate.clash.tun_mips.congestion_controller = Some(TunCongestionController::Bbr3);
+        for (stack, expected) in [(TunStack::Mips, Some("bbr3")), (TunStack::Gvisor, None)] {
+            candidate.clash.tun_stack = stack;
+            let artifact =
+                RuntimeBuilder::build(&candidate, &[], &EmptyContent, &PassthroughScripts).unwrap();
+            let config = artifact.final_config.to_json();
+            assert_eq!(config["tun"]["stack"], serde_json::json!(stack.as_ref()));
+            assert_eq!(
+                config["tun"]
+                    .get("congestion-controller")
+                    .and_then(|v| v.as_str()),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn unsupported_premium_mips_downgrades_with_warning_but_keeps_saved_selection() {
+        use chimera_config::clash::config::tun_stack::{TunCongestionController, TunStack};
+        let mut candidate = input();
+        candidate.app.core = ClashCore::ClashPremium;
+        candidate.clash.enable_tun_mode = true;
+        candidate.clash.tun_stack = TunStack::Mips;
+        candidate.clash.tun_mips.congestion_controller = Some(TunCongestionController::Bbr);
+        let artifact =
+            RuntimeBuilder::build(&candidate, &[], &EmptyContent, &PassthroughScripts).unwrap();
+        let config = artifact.final_config.to_json();
+        assert_eq!(config["tun"]["stack"], "gvisor");
+        assert!(config["tun"].get("congestion-controller").is_none());
+        assert_eq!(candidate.clash.tun_stack, TunStack::Mips);
+        let warnings: Vec<_> = artifact
+            .step_logs
+            .iter()
+            .flat_map(|log| &log.entries)
+            .filter(|entry| entry.level == chimera_config::runtime::executor::StepLogLevel::Warn)
+            .collect();
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(warnings[0].message.contains("mips"));
+        assert!(warnings[0].message.contains("gvisor"));
+
+        candidate.clash.enable_tun_mode = false;
+        let disabled =
+            RuntimeBuilder::build(&candidate, &[], &EmptyContent, &PassthroughScripts).unwrap();
+        assert!(disabled.step_logs.iter().all(|log| {
+            log.entries
+                .iter()
+                .all(|entry| entry.level != chimera_config::runtime::executor::StepLogLevel::Warn)
+        }));
+    }
+
+    #[test]
+    fn final_config_validation_rejects_a_known_unsupported_stack_even_if_tun_is_off() {
+        let mut candidate = input();
+        candidate.app.core = ClashCore::ClashPremium;
+        candidate.clash.enable_tun_mode = false;
+        let builtins = [BuiltinTransform {
+            name: "invalid-tun-script".into(),
+            runtime: ScriptRuntime::JavaScript,
+            source: "replace".into(),
+        }];
+        let error = RuntimeBuilder::build(&candidate, &builtins, &EmptyContent, &EmitInvalidStack)
+            .unwrap_err();
+        let RuntimeBuildError::UnsupportedConfigValues { values } = error else {
+            panic!("unsupported stack must reject the candidate, not publish it");
+        };
+        assert_eq!(values.len(), 1);
+        assert_eq!(values[0].path, "tun.stack");
+        assert_eq!(values[0].value, "mixed");
+        assert_eq!(values[0].supported, ["system", "gvisor"]);
+    }
+
+    #[test]
+    fn client_core_does_not_inherit_mihomo_stack_or_mips_options() {
+        use chimera_config::clash::config::tun_stack::{TunCongestionController, TunStack};
+        let mut candidate = input();
+        candidate.app.core = ClashCore::ChimeraClient;
+        candidate.clash.enable_tun_mode = true;
+        candidate.clash.tun_stack = TunStack::Mips;
+        candidate.clash.tun_mips.congestion_controller = Some(TunCongestionController::Bbr3);
+        let config = RuntimeBuilder::build(&candidate, &[], &EmptyContent, &PassthroughScripts)
+            .unwrap()
+            .final_config
+            .to_json();
+        assert!(config["tun"].get("stack").is_none());
+        assert!(config["tun"].get("congestion-controller").is_none());
+        assert_eq!(config["tun"]["route-all"], true);
+        assert_eq!(config["tun"]["so-mark"], 7777);
+        assert!(config["dns"]["default-nameserver"].is_array());
     }
 
     fn input() -> RuntimeBuildInput {

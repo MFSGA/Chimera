@@ -2,6 +2,7 @@ import { createFileRoute } from '@tanstack/react-router';
 import * as m from '@/paraglide/messages';
 import AllowLanSwitch from '../_modules/allow-lan-switch';
 import IPv6Switch from '../_modules/ipv6-switch';
+import MipsCongestionControllerSelector from '../_modules/mips-congestion-controller-selector';
 import MixedPortConfig from '../_modules/mixed-port-config';
 import RandomPortSwitch from '../_modules/random-port-switch';
 import TransparentProxyConfigSettings from '../_modules/transparent-proxy-config';
@@ -59,6 +60,7 @@ function RouteComponent() {
         <TransparentProxyConfigSettings />
         <LanSettings />
         <TunStackSelector />
+        <MipsCongestionControllerSelector />
       </div>
     </>
   );

@@ -8,7 +8,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use chimera_config::{
     application::ChimeraAppConfig,
-    clash::config::{ClashConfig, tun_stack::TunStack},
+    clash::config::{ClashConfig, tun_stack::SelectedTunStack},
     profile::Profiles,
     runtime::executor::{
         BuiltinTransform, ProfileContentSource, ResolvedPortBindings, RuntimeArtifact,
@@ -91,12 +91,12 @@ pub fn builtin_transforms_for(
         .collect()
 }
 
-/// Legacy TUN derivation delegated to the shared ref-style builder.
+/// Core capability-based TUN derivation delegated to the shared ref builder.
 pub fn derive_tun_flavor(
     core: chimera_config::application::ClashCore,
-    stack: TunStack,
+    selected: SelectedTunStack<'_>,
 ) -> TunFlavor {
-    chimera_core::client::runtime_build::derive_tun_flavor(core, stack)
+    chimera_core::client::runtime_build::derive_tun_flavor(core, selected)
 }
 
 /// Tauri shell: chooses bundled scripts, delegates the pure build to Core.
@@ -384,30 +384,53 @@ mod tests {
 
     #[test]
     fn tun_flavor_derivation_matches_ref_quirks() {
+        use chimera_config::application::ClashCore;
+        use chimera_config::{
+            clash::config::tun_stack::{MipsConfig, TunCongestionController, TunStack},
+            runtime::executor::TunStackWrite,
+        };
+
         assert_eq!(
-            derive_tun_flavor(
-                chimera_config::application::ClashCore::ClashRs,
-                TunStack::Mixed
-            ),
+            derive_tun_flavor(ClashCore::ClashRs, SelectedTunStack::Mixed),
             TunFlavor::ClashRs
         );
         assert_eq!(
-            derive_tun_flavor(
-                chimera_config::application::ClashCore::ClashRsAlpha,
-                TunStack::Mixed
-            ),
+            derive_tun_flavor(ClashCore::ClashRsAlpha, SelectedTunStack::Mixed),
             TunFlavor::Standard {
-                stack: TunStack::Mixed
+                stack: TunStackWrite::Omitted,
+                congestion_controller: None
             }
         );
         assert_eq!(
-            derive_tun_flavor(
-                chimera_config::application::ClashCore::ClashPremium,
-                TunStack::Mixed
-            ),
+            derive_tun_flavor(ClashCore::ClashPremium, SelectedTunStack::Mixed),
             TunFlavor::Standard {
-                stack: TunStack::Gvisor
+                stack: TunStackWrite::Downgraded {
+                    selected: TunStack::Mixed,
+                    written: TunStack::Gvisor
+                },
+                congestion_controller: None
             }
+        );
+        assert_eq!(
+            derive_tun_flavor(ClashCore::Mihomo, SelectedTunStack::System),
+            TunFlavor::Standard {
+                stack: TunStackWrite::Selected(TunStack::System),
+                congestion_controller: None
+            }
+        );
+        let mips = MipsConfig {
+            congestion_controller: Some(TunCongestionController::Bbr3),
+        };
+        assert_eq!(
+            derive_tun_flavor(ClashCore::MihomoAlpha, SelectedTunStack::Mips(&mips)),
+            TunFlavor::Standard {
+                stack: TunStackWrite::Selected(TunStack::Mips),
+                congestion_controller: Some(TunCongestionController::Bbr3)
+            }
+        );
+        assert_eq!(
+            derive_tun_flavor(ClashCore::ChimeraClient, SelectedTunStack::Mips(&mips)),
+            TunFlavor::ChimeraClient
         );
     }
 

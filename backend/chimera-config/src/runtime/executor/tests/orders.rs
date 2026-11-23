@@ -14,7 +14,7 @@ use crate::{
         executor::{
             BuiltinTransform, ExecutionTarget, GuardInputs, ResolvedPortBindings,
             RuntimePipelineError, RuntimePipelineInputs, ScriptExecutionError, ScriptOperation,
-            StepLogLevel, TunFlavor, TunParams, execute,
+            StepLogLevel, TunFlavor, TunParams, TunStackWrite, execute,
         },
         snapshot::{BuiltinStepKind, ConfigExecutionRole, OperatorTag},
     },
@@ -47,7 +47,8 @@ pub fn base_inputs<'a>(
             enable: false,
             overrides: TunOverrides::default(),
             flavor: TunFlavor::Standard {
-                stack: TunStack::Gvisor,
+                stack: TunStackWrite::Selected(TunStack::Gvisor),
+                congestion_controller: None,
             },
             windows_fake_ip_filter: false,
         },
@@ -734,8 +735,6 @@ fn missing_selected_content_is_strict_error() {
     assert!(matches!(error, RuntimePipelineError::ContentSource { .. }));
 }
 
-/// Ref #5678: unfiltered subscriptions must not reopen disabled proxy
-/// listeners or steal the port from the configured mixed listener.
 // Contract: the built-in script sees the postprocessed Defaults node as
 // input and is not silently overwritten by a second ownership pass. This
 // detects the previous Chimera order even if final YAML happens to parse.
@@ -818,6 +817,45 @@ fn builtin_transform_runs_after_unified_defaults_without_late_rewrites() {
         serde_json::to_string(&artifact.graph.restore(artifact.final_node).unwrap()).unwrap(),
         serde_json::to_string(&config).unwrap()
     );
+}
+
+/// Ref #5678: unfiltered subscriptions cannot reopen disabled listeners.
+/// When MIPS has no managed congestion controller, remove a profile's
+/// controller rather than leaving an option that the core would read.
+#[test]
+fn unset_mips_controller_removes_profile_value_and_keeps_selected_mips_stack() {
+    let profiles = profiles_with(
+        Some("sub-a"),
+        &[],
+        &["tun"],
+        vec![config_file_item("sub-a", "sub-a.yaml", &[])],
+    );
+    let content = MapContentSource::from_pairs(&[(
+        "sub-a.yaml",
+        "tun: { enable: true, stack: gvisor, congestion-controller: bbr3 }\nproxies: []\n",
+    )]);
+    let ov = overrides();
+    let mut inputs = base_inputs(&profiles, ExecutionTarget::Selected(pid("sub-a")), &ov, &[]);
+    inputs.tun.enable = true;
+    inputs.tun.flavor = TunFlavor::Standard {
+        stack: TunStackWrite::Selected(TunStack::Mips),
+        congestion_controller: None,
+    };
+    let artifact = execute(&inputs, &content, &FakeScriptRunner::default()).unwrap();
+    let config = artifact.final_config.to_json();
+    assert_eq!(config["tun"]["stack"], "mips");
+    assert_eq!(config["tun"]["enable"], true);
+    assert!(config["tun"].get("congestion-controller").is_none());
+
+    inputs.tun.flavor = TunFlavor::Standard {
+        stack: TunStackWrite::Selected(TunStack::Mips),
+        congestion_controller: Some(crate::clash::config::tun_stack::TunCongestionController::Reno),
+    };
+    let configured = execute(&inputs, &content, &FakeScriptRunner::default())
+        .unwrap()
+        .final_config
+        .to_json();
+    assert_eq!(configured["tun"]["congestion-controller"], "reno");
 }
 
 #[test]

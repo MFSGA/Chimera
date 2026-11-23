@@ -91,6 +91,8 @@
   "settings_clash_settings_managed_guard_field_enabled": "Включено",
   "settings_clash_settings_managed_guard_field_disabled": "Отключено",
   "settings_clash_settings_tun_stack_label": "Стек TUN",
+  "settings_clash_settings_tun_congestion_controller_label": "Управление перегрузкой TCP",
+  "settings_clash_settings_tun_congestion_controller_core_default": "По умолчанию ядра",
   "settings_clash_settings_log_level_label": "Уровень журнала",
   "settings_clash_settings_port_label": "Настройки порта",
   "settings_clash_settings_mixed_port_label": "Смешанный порт",

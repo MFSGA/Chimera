@@ -7,7 +7,7 @@ use crate::{
     },
     runtime::{
         executor::{
-            TunFlavor, TunParams,
+            TunFlavor, TunParams, TunStackWrite,
             builtin::{
                 apply_runtime_defaults, apply_tun_overrides_with_source, finalize,
                 finalize_for_core, known_fields, known_fields_for_core, stage1_fields,
@@ -38,7 +38,8 @@ fn tun_off() -> TunParams {
         enable: false,
         overrides: TunOverrides::default(),
         flavor: TunFlavor::Standard {
-            stack: TunStack::Gvisor,
+            stack: TunStackWrite::Selected(TunStack::Gvisor),
+            congestion_controller: None,
         },
         windows_fake_ip_filter: false,
     }
@@ -252,7 +253,8 @@ fn tun_enabled_standard_appends_defaults_and_dns() {
         enable: true,
         overrides: TunOverrides::default(),
         flavor: TunFlavor::Standard {
-            stack: TunStack::Gvisor,
+            stack: TunStackWrite::Selected(TunStack::Gvisor),
+            congestion_controller: None,
         },
         windows_fake_ip_filter: true,
     };
@@ -518,7 +520,8 @@ fn unified_plan_defaults_cover_tun_flavors_without_replacing_user_dns_values() {
         TunFlavor::ClashRs,
         TunFlavor::ChimeraClient,
         TunFlavor::Standard {
-            stack: TunStack::Gvisor,
+            stack: TunStackWrite::Selected(TunStack::Gvisor),
+            congestion_controller: None,
         },
     ];
     for flavor in flavors {
@@ -545,10 +548,14 @@ fn unified_plan_defaults_cover_tun_flavors_without_replacing_user_dns_values() {
             json!("dns.msftncsi.com")
         );
         match flavor {
-            TunFlavor::Standard { stack } => {
+            TunFlavor::Standard {
+                stack: TunStackWrite::Selected(stack),
+                ..
+            } => {
                 assert_eq!(config["tun"]["stack"], json!(stack.as_ref()));
                 assert_eq!(config["tun"]["dns-hijack"], json!(["any:53"]));
             }
+            TunFlavor::Standard { .. } => panic!("unexpected standard stack fixture"),
             TunFlavor::ClashRs => {
                 assert_eq!(config["tun"]["device-id"], json!("dev://utun1989"));
             }

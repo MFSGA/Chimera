@@ -102,6 +102,8 @@ struct ClashRuntimeInputs<'a> {
     enable_tun_mode: bool,
     tun: TunOverrides,
     tun_stack: TunStack,
+    mips_congestion_controller:
+        Option<chimera_config::clash::config::tun_stack::TunCongestionController>,
     mixed_port: &'a PortStrategy,
     socks_port: Option<&'a PortStrategy>,
     http_port: Option<&'a PortStrategy>,
@@ -122,6 +124,9 @@ fn clash_runtime_inputs(clash: &ClashConfig) -> ClashRuntimeInputs<'_> {
         enable_tun_mode: clash.enable_tun_mode,
         tun: clash.tun,
         tun_stack: clash.tun_stack,
+        mips_congestion_controller: (clash.tun_stack == TunStack::Mips)
+            .then_some(clash.tun_mips.congestion_controller)
+            .flatten(),
         mixed_port: &clash.mixed_port,
         socks_port: clash.socks_port.as_ref(),
         http_port: clash.http_port.as_ref(),
@@ -230,6 +235,23 @@ mod tests {
         after.enable_builtin_enhanced = before.enable_builtin_enhanced;
         after.enable_service_mode = !before.enable_service_mode;
         assert!(reaches_runtime(&before, &after, &[]));
+    }
+
+    #[test]
+    fn selected_mips_options_impact_only_the_active_runtime_target() {
+        use chimera_config::clash::config::tun_stack::{TunCongestionController, TunStack};
+        let before = ClashConfig::default();
+        let mut after = before.clone();
+        after.tun_mips.congestion_controller = Some(TunCongestionController::Bbr3);
+        assert!(!reaches_runtime(&before, &after, &[]));
+        assert_eq!(clash_target(&before), clash_target(&after));
+
+        let mut active = before;
+        active.tun_stack = TunStack::Mips;
+        let mut changed = active.clone();
+        changed.tun_mips.congestion_controller = Some(TunCongestionController::Bbr3);
+        assert!(reaches_runtime(&active, &changed, &[]));
+        assert_ne!(clash_target(&active), clash_target(&changed));
     }
 
     #[test]
