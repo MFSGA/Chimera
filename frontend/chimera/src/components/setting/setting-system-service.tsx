@@ -1,4 +1,4 @@
-import { useCoreStatus } from '@chimera/interface';
+import { useCoreActorStatus, useCoreStatus } from '@chimera/interface';
 import { BaseCard, SwitchItem } from '@chimera/ui';
 import {
   Button,
@@ -9,6 +9,10 @@ import {
 } from '@mui/material';
 import { useMemoizedFn } from 'ahooks';
 import { useTransition } from 'react';
+import {
+  getRoutedCoreHostLabel,
+  getRoutedCoreStatusMessage,
+} from '@/features/dashboard/core-service-status';
 import {
   getAppCoreStatusLabel,
   getServiceCoreTypeLabel,
@@ -23,7 +27,8 @@ import {
 } from './modules/service-manual-prompt-dialog';
 
 export const SettingSystemService = () => {
-  const coreStatusQuery = useCoreStatus();
+  const actorStatusQuery = useCoreActorStatus();
+  const coreStatusQuery = useCoreStatus({ enabled: !actorStatusQuery.data });
   const promptDialog = useServerManualPromptDialog();
   const {
     query,
@@ -71,7 +76,11 @@ export const SettingSystemService = () => {
   const [refreshPending, startRefresh] = useTransition();
   const handleRefreshClick = useMemoizedFn(() => {
     startRefresh(async () => {
-      await Promise.all([query.refetch(), coreStatusQuery.refetch()]);
+      await Promise.all([
+        query.refetch(),
+        coreStatusQuery.refetch(),
+        actorStatusQuery.refetch(),
+      ]);
     });
   });
 
@@ -79,11 +88,17 @@ export const SettingSystemService = () => {
   const runtimeInfos = serviceServer?.runtime_infos;
   const serviceCoreInfos = serviceServer?.core_infos;
 
-  const currentCoreStatus = getAppCoreStatusLabel(coreStatusQuery.data?.status);
-  const currentRunType = coreStatusQuery.data?.type ?? m.common_unknown();
+  const actorStatus = actorStatusQuery.data;
+  const currentCoreStatus = actorStatus
+    ? getRoutedCoreStatusMessage(actorStatus)
+    : getAppCoreStatusLabel(coreStatusQuery.data?.status);
+  const currentRunType = actorStatus
+    ? getRoutedCoreHostLabel(actorStatus)
+    : (coreStatusQuery.data?.type ?? m.common_unknown());
   const serviceCoreType = getServiceCoreTypeLabel(serviceCoreInfos?.type);
 
-  const currentCoreChangedAt = coreStatusQuery.data?.startAt;
+  const currentCoreChangedAt =
+    actorStatus?.state_changed_at ?? coreStatusQuery.data?.startAt;
   const serviceCoreChangedAt = serviceCoreInfos?.state_changed_at;
 
   return (

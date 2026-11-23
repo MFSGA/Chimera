@@ -1,14 +1,19 @@
 import {
+  CLASH_CORE_STATUS_QUERY_KEY,
+  CORE_ACTOR_STATUS_QUERY_KEY,
   restartSidecar,
   useSystemService,
-  type ServiceType,
 } from '@chimera/interface';
+import { useQueryClient } from '@tanstack/react-query';
 import { useTransition } from 'react';
 import * as m from '@/paraglide/messages';
 import { formatError } from '@/utils';
 import { message } from '@/utils/notification';
+import {
+  runServiceOperation,
+  type ManualPromptOperation,
+} from './service-operation';
 
-type ManualPromptOperation = Exclude<ServiceType, 'restart'>;
 type ShowManualPrompt = (operation: ManualPromptOperation) => void;
 
 const getInstallOperation = (status: string | undefined) => {
@@ -44,17 +49,35 @@ const notifyOperationFailure = (
 
 export const useSystemServiceActions = (showManualPrompt: ShowManualPrompt) => {
   const { query, upsert } = useSystemService();
+  const queryClient = useQueryClient();
   const status = query.data?.status;
   const [installPending, startInstall] = useTransition();
   const [controlPending, startControl] = useTransition();
 
   const runOperation = async (operation: ManualPromptOperation) => {
-    try {
-      await upsert.mutateAsync(operation);
-      await restartSidecar();
-    } catch (error) {
-      notifyOperationFailure(operation, error);
+    const result = await runServiceOperation(
+      operation,
+      (nextOperation) => upsert.mutateAsync(nextOperation),
+      restartSidecar,
+    );
+
+    // A successful OS Service command can still be followed by an uncertain
+    // CoreActor result. Refresh both projections without inferring success.
+    void queryClient.invalidateQueries({
+      queryKey: [CORE_ACTOR_STATUS_QUERY_KEY],
+    });
+    void queryClient.invalidateQueries({
+      queryKey: [CLASH_CORE_STATUS_QUERY_KEY],
+    });
+
+    if (result.stage === 'service_failed') {
+      notifyOperationFailure(operation, result.error);
       showManualPrompt(operation);
+    } else if (result.stage === 'core_restart_failed') {
+      message(
+        `${m.settings_clash_core_restart_failed()}: ${formatError(result.error)}`,
+        { kind: 'error', title: m.common_error() },
+      );
     }
   };
 

@@ -965,6 +965,20 @@ pub async fn get_core_status(
     Ok((status.state, status.state_changed_at, status.run_type))
 }
 
+/// Ref-style typed Core Actor projection. Deliberately separate from the
+/// legacy get_core_status tuple: the latter cannot describe transitional or
+/// degraded host ownership without pretending the runtime is Stopped.
+#[tauri::command]
+#[specta::specta]
+pub fn get_core_actor_status(
+    client: State<'_, ChimeraClient>,
+) -> Result<chimera_core::actor_v2::router::CoreStatusInfo> {
+    Ok(client
+        .routed_core_status()
+        .ok_or_else(|| anyhow!("Core Actor is unavailable"))?
+        .into())
+}
+
 #[tauri::command]
 #[specta::specta]
 pub async fn get_transparent_proxy_status(

@@ -2031,13 +2031,25 @@ mod tests {
         assert!(result.is_err());
         drop(transition);
 
-        let _transition = tokio::time::timeout(
-            Duration::from_secs(1),
-            facade.try_begin_service_transition(),
-        )
+        // HOST_TRANSITION_LOCK is process-global. Another test running on
+        // the same test executor may acquire it immediately after our drop.
+        // One unsuccessful try proves only contention, not that the release
+        // failed. Retry with a bounded yield, preserving the nonblocking
+        // contract of each individual attempt.
+        let _transition = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if let Ok(transition) = facade.try_begin_service_transition().await {
+                    break transition;
+                }
+                assert!(
+                    !facade.outcome_uncertain(),
+                    "an unrelated lease contender must not mark our facade uncertain"
+                );
+                tokio::task::yield_now().await;
+            }
+        })
         .await
-        .expect("the nonblocking lease should become available after release")
-        .expect("a settled, certain Service host should admit the lease");
+        .expect("a released global Service lease should eventually be admitted");
     }
 
     #[tokio::test]

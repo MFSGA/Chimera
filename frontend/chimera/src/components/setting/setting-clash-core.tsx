@@ -3,6 +3,7 @@ import {
   useClashConnections,
   useClashCores,
   useClashVersion,
+  useCoreActorStatus,
   useSetting,
   type ClashCore_Serialize,
 } from '@chimera/interface';
@@ -12,6 +13,7 @@ import { useLockFn, useReactive } from 'ahooks';
 import { motion } from 'motion/react';
 import { useMemo, useState } from 'react';
 import { OS } from '@/consts';
+import { isCoreLifecycleTransitioning } from '@/features/dashboard/core-service-status';
 import * as m from '@/paraglide/messages';
 import { formatError } from '@/utils';
 import { message } from '@/utils/notification';
@@ -34,6 +36,8 @@ export const SettingClashCore = () => {
   } = useClashCores();
 
   const { data: clashVersion } = useClashVersion();
+  const coreActorStatus = useCoreActorStatus();
+  const actorTransition = isCoreLifecycleTransitioning(coreActorStatus.data);
 
   const { deleteConnections } = useClashConnections();
 
@@ -46,8 +50,9 @@ export const SettingClashCore = () => {
   }, [clashVersion]);
 
   const changeClashCore = useLockFn(async (core: ClashCore_Serialize) => {
+    if (loading.mask || actorTransition) return;
+    loading.mask = true;
     try {
-      loading.mask = true;
       try {
         await deleteConnections.mutateAsync(undefined);
       } catch (e) {
@@ -78,7 +83,9 @@ export const SettingClashCore = () => {
     }
   });
 
-  const handleRestart = async () => {
+  const handleRestart = useLockFn(async () => {
+    if (loading.mask || actorTransition) return;
+    loading.mask = true;
     try {
       await restartSidecar();
 
@@ -91,8 +98,10 @@ export const SettingClashCore = () => {
         kind: 'error',
         title: m.common_error(),
       });
+    } finally {
+      loading.mask = false;
     }
-  };
+  });
 
   const handleCheckUpdates = async () => {
     try {
@@ -108,7 +117,7 @@ export const SettingClashCore = () => {
   return (
     <BaseCard
       label={m.settings_clash_core_manager_card_title()}
-      loading={loading.mask}
+      loading={loading.mask || actorTransition}
       labelChildren={<span>{version}</span>}
     >
       <List disablePadding>
@@ -142,6 +151,7 @@ export const SettingClashCore = () => {
                   data={item}
                   core={core as ClashCore_Serialize}
                   selected={core === currentCore}
+                  disabled={loading.mask || actorTransition}
                   onClick={() => changeClashCore(core as ClashCore_Serialize)}
                 />
               </motion.div>
@@ -157,7 +167,11 @@ export const SettingClashCore = () => {
           }}
         >
           <Box sx={{ display: 'flex', gap: 1 }}>
-            <Button variant="outlined" onClick={handleRestart}>
+            <Button
+              variant="outlined"
+              disabled={loading.mask || actorTransition}
+              onClick={handleRestart}
+            >
               {m.settings_clash_core_manager_card_restart_sidecar()}
             </Button>
 

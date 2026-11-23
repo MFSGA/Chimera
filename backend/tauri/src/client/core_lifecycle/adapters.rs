@@ -100,22 +100,26 @@ use crate::{
     },
 };
 
-pub(crate) struct LegacyRunningConfigBridge {
-    core: Arc<dyn CoreLifecyclePort>,
+/// Production running Clash API config follows the ref CoreActor's
+/// instance-bound capability, not LegacyCoreBridge/Facade's host cache.
+pub(crate) struct ActorRunningConfigBridge {
+    core: chimera_core::actor_v2::CoreClient,
 }
 
-impl LegacyRunningConfigBridge {
-    pub(crate) fn new(core: Arc<dyn CoreLifecyclePort>) -> Self {
+impl ActorRunningConfigBridge {
+    pub(crate) fn new(core: chimera_core::actor_v2::CoreClient) -> Self {
         Self { core }
     }
 
     async fn api_client(&self) -> anyhow::Result<crate::core::actor_v2::api::ApiClient> {
-        self.core.clash_api_client().await
+        Ok(crate::core::actor_v2::api::ApiClient::from_core_client(
+            self.core.api_client().await?,
+        ))
     }
 }
 
 #[async_trait]
-impl RunningConfigPort for LegacyRunningConfigBridge {
+impl RunningConfigPort for ActorRunningConfigBridge {
     async fn read(&self) -> anyhow::Result<ClashRuntimeConfig> {
         self.api_client().await?.get_configs().await
     }

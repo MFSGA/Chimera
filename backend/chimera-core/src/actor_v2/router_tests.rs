@@ -70,6 +70,7 @@ struct FakeEndpoint {
     hang_submit: AtomicBool,
     never: Notify,
     last_core_type: Mutex<Option<Option<chimera_utils::core::CoreType>>>,
+    api_binding: Mutex<Option<chimera_ipc::api::core::v2::CoreApiConnection>>,
 }
 
 /// How the fake host answers a stop. Nothing here is derived from `status`.
@@ -106,6 +107,7 @@ impl FakeEndpoint {
             hang_submit: AtomicBool::new(false),
             never: Notify::new(),
             last_core_type: Mutex::new(None),
+            api_binding: Mutex::new(None),
         })
     }
 
@@ -185,6 +187,12 @@ fn snapshot(state: CoreStateDetail) -> CoreStatusSnapshot {
 impl ControlEndpoint for FakeEndpoint {
     fn host(&self) -> ExecutionHost {
         self.host
+    }
+
+    async fn api_connection(
+        &self,
+    ) -> Result<Option<chimera_ipc::api::core::v2::CoreApiConnection>, CoreError> {
+        Ok(self.api_binding.lock().unwrap().clone())
     }
 
     async fn submit(&self, submission: CoreSubmission) -> Result<OperationInfo, CoreError> {
@@ -1448,6 +1456,53 @@ async fn a_submit_queued_behind_other_work_is_reported_retryable_not_internal() 
         error.retryable,
         "mailbox residence must not turn a submit's caller-side timeout into a non-retryable Internal"
     );
+}
+
+#[tokio::test]
+async fn streams_and_proxies_share_ref_core_api_lease_and_revoke_after_handoff() {
+    use chimera_ipc::api::{core::v2::CoreApiConnection, status::CoreControllerInfo};
+
+    let local = FakeEndpoint::new(
+        ExecutionHost::Local,
+        CoreStateDetail::Stopped { reason: None },
+    );
+    let service = FakeEndpoint::new(
+        ExecutionHost::Service,
+        CoreStateDetail::Stopped { reason: None },
+    );
+    *local.api_binding.lock().unwrap() = Some(CoreApiConnection {
+        instance_id: "local-before-handoff".into(),
+        controller: CoreControllerInfo::Http("http://127.0.0.1:1/".into()),
+        secret: None,
+    });
+    *service.api_binding.lock().unwrap() = Some(CoreApiConnection {
+        instance_id: "service-after-handoff".into(),
+        controller: CoreControllerInfo::Http("http://127.0.0.1:1/".into()),
+        secret: None,
+    });
+
+    let core = CoreClient::spawn(local).await.unwrap();
+    let ws = crate::clash::ws::ClashApiClientSource::api_client(&core)
+        .await
+        .expect("streams should obtain a lease from CoreActor");
+    let proxy = crate::proxies_actor::ProxyApiClientSource::api_client(&core)
+        .await
+        .expect("proxy actor should obtain a lease from CoreActor");
+    assert!(ws.same_instance(&proxy));
+    assert_eq!(ws.instance_id(), Some("local-before-handoff"));
+
+    core.change_host_from(service, false).await.unwrap();
+
+    // Handoff revokes the old instance-bound capability. New readers acquire
+    // a lease against the newly selected Service endpoint.
+    assert!(ws.is_revoked());
+    assert!(proxy.is_revoked());
+    let next = crate::clash::ws::ClashApiClientSource::api_client(&core)
+        .await
+        .expect("streams should reacquire the Service capability");
+    assert_eq!(next.instance_id(), Some("service-after-handoff"));
+    assert!(!next.same_instance(&proxy));
+    core.finish_shutdown().await;
 }
 
 #[tokio::test]

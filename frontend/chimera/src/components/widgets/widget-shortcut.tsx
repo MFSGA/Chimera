@@ -2,11 +2,11 @@ import {
   useClashConfig,
   useClashCores,
   useClashSetting,
+  useCoreActorStatus,
   useCoreStatus,
   useSetting,
   useSystemProxy,
   useSystemService,
-  type CoreState,
 } from '@chimera/interface';
 import { cn } from '@chimera/ui';
 import { Button } from '@chimera/ui/button';
@@ -21,7 +21,11 @@ import {
   SystemProxyButton,
   TunModeButton,
 } from '@/components/settings/system-proxy';
-import { getCoreStatusBadgeMessage } from '@/features/dashboard/core-service-status';
+import {
+  getCoreStatusBadgeMessage,
+  getRoutedCoreStatusMessage,
+  isRoutedCoreRunning,
+} from '@/features/dashboard/core-service-status';
 import { getProxyStatus } from '@/features/dashboard/proxy-status';
 import useCoreIcon from '@/hooks/use-core-icon';
 import * as m from '@/paraglide/messages';
@@ -190,16 +194,23 @@ const CoreStatusBadge = () => {
   const {
     query: { data: serviceStatus },
   } = useSystemService();
-  const coreStatusQuery = useCoreStatus();
+  const routedCoreStatusQuery = useCoreActorStatus();
+  const coreStatusQuery = useCoreStatus({
+    enabled: !routedCoreStatusQuery.data,
+  });
 
   const message = useMemo<string>(
     () =>
-      getCoreStatusBadgeMessage({
-        coreState: coreStatusQuery.data?.status,
-        serviceStatus: serviceStatus?.status,
-        serviceCoreState: serviceStatus?.server?.core_infos?.state,
-      }),
-    [serviceStatus, coreStatusQuery.data],
+      routedCoreStatusQuery.data
+        ? getRoutedCoreStatusMessage(routedCoreStatusQuery.data)
+        : !coreStatusQuery.data
+          ? m.common_loading()
+          : getCoreStatusBadgeMessage({
+              coreState: coreStatusQuery.data?.status,
+              serviceStatus: serviceStatus?.status,
+              serviceCoreState: serviceStatus?.server?.core_infos?.state,
+            }),
+    [serviceStatus, coreStatusQuery.data, routedCoreStatusQuery.data],
   );
 
   return (
@@ -227,9 +238,19 @@ const CurrentCoreCard = ({
   const { value: currentCoreKey } = useSetting('core');
   const currentCoreIcon = useCoreIcon(currentCoreKey);
   const currentCore = currentCoreKey && clashCores.data?.[currentCoreKey];
-  const coreStatusQuery = useCoreStatus();
-  const coreState = coreStatusQuery.data?.status as CoreState | undefined;
-  const isRunning = coreState === 'Running';
+  const actorStatusQuery = useCoreActorStatus();
+  const coreStatusQuery = useCoreStatus({ enabled: !actorStatusQuery.data });
+  const actorStatus = actorStatusQuery.data;
+  const isRunning = actorStatus
+    ? isRoutedCoreRunning(actorStatus)
+    : coreStatusQuery.data?.status === 'Running';
+  const displayStatus = actorStatus
+    ? getRoutedCoreStatusMessage(actorStatus)
+    : !coreStatusQuery.data
+      ? m.common_loading()
+      : isRunning
+        ? m.dashboard_widget_core_status_running()
+        : m.dashboard_widget_core_status_stopped();
 
   return (
     <Button
@@ -275,9 +296,7 @@ const CurrentCoreCard = ({
             data-slot="core-status"
           >
             <span className="truncate text-xs" data-slot="core-status-text">
-              {isRunning
-                ? m.dashboard_widget_core_status_running()
-                : m.dashboard_widget_core_status_stopped()}
+              {displayStatus}
             </span>
             <span
               className={cn(

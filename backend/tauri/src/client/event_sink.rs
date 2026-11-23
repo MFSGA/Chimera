@@ -32,7 +32,15 @@ pub enum StateChanged {
 #[derive(Debug, Clone, Serialize, Deserialize, specta::Type, tauri_specta::Event)]
 pub struct StateChangedEvent(pub StateChanged);
 
+/// Ref-style rich routing status event. Its payload is the authoritative
+/// CoreActor projection rather than the legacy Running/Stopped tuple.
+#[derive(Debug, Clone, serde::Serialize, specta::Type, tauri_specta::Event)]
+#[serde(transparent)]
+pub struct CoreStatusChangedEvent(pub chimera_core::actor_v2::router::CoreStatusInfo);
+
 pub(crate) trait UiEventSink: Send + Sync + 'static {
+    fn core_status_changed(&self, _status: chimera_core::actor_v2::router::CoreStatusInfo) {}
+
     fn state_changed(&self, state: StateChanged) {
         crate::log_err!(Handle::emit_state_changed(state));
     }
@@ -107,6 +115,10 @@ impl<R: Runtime> TauriUiEventSink<R> {
 }
 
 impl<R: Runtime> UiEventSink for TauriUiEventSink<R> {
+    fn core_status_changed(&self, status: chimera_core::actor_v2::router::CoreStatusInfo) {
+        crate::log_err!(CoreStatusChangedEvent(status).emit(&self.app_handle));
+    }
+
     fn state_changed(&self, state: StateChanged) {
         crate::log_err!(StateChangedEvent(state).emit(&self.app_handle));
     }

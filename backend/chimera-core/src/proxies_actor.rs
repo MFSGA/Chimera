@@ -29,6 +29,17 @@ pub trait ProxyApiClientSource: Send + Sync {
     async fn api_client(&self) -> Result<ApiClient>;
 }
 
+/// Proxy mutations and cache reads use exactly the same ref CoreActor lease
+/// as streams, including revocation after host handoff or core replacement.
+#[async_trait::async_trait]
+impl ProxyApiClientSource for crate::actor_v2::CoreClient {
+    async fn api_client(&self) -> Result<ApiClient> {
+        crate::actor_v2::CoreClient::api_client(self)
+            .await
+            .map_err(Into::into)
+    }
+}
+
 /// Small authority handle copied from ref's CoreClient role. It never owns
 /// endpoint lifecycle; it only asks the host adapter for the current lease.
 #[derive(Clone)]

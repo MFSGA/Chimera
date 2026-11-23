@@ -109,7 +109,7 @@ fn startup_recovery_evidence_changed(
 }
 
 #[allow(unused_imports)]
-pub(crate) use adapters::{LegacyCoreBridge, LegacyRunningConfigBridge, LegacyServiceBridge};
+pub(crate) use adapters::{ActorRunningConfigBridge, LegacyCoreBridge, LegacyServiceBridge};
 #[allow(unused_imports)]
 pub(crate) use ports::{
     BinaryInstallProgress, CoreLifecyclePort, CoreStatusSnapshot, PreparedCoreBinary,
@@ -2508,6 +2508,10 @@ impl CoreLifecycleClient {
 
 impl ChimeraClient {
     pub(crate) async fn core_status(&self) -> anyhow::Result<CoreStatusSnapshot> {
+        // Legacy frontend IPC only has Running/Stopped. Do not collapse ref's
+        // Starting/Switching/Degraded projections into a fake Stopped result;
+        // keep this compatibility endpoint until the UI consumes the typed
+        // CoreActor projection directly.
         self.inner.core.status().await
     }
 

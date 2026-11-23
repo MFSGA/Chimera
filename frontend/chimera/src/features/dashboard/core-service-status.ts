@@ -1,4 +1,9 @@
-import type { CoreState, RunType, ServiceStatus } from '@chimera/interface';
+import type {
+  CoreState,
+  CoreStatusInfo,
+  RunType,
+  ServiceStatus,
+} from '@chimera/interface';
 import * as m from '@/paraglide/messages';
 
 export function getServiceStatusMessage(status?: ServiceStatus): string {
@@ -11,6 +16,89 @@ export function getServiceStatusMessage(status?: ServiceStatus): string {
     default:
       return m.dashboard_widget_core_service_not_installed();
   }
+}
+
+/** Ref CoreActor status takes precedence when available. Transitional and
+ * degraded owners are NOT collapsed into the legacy "Stopped" state. */
+export function isRoutedCoreRunning(status: CoreStatusInfo): boolean {
+  return (
+    status.connectivity.kind === 'connected' &&
+    status.healthy !== false &&
+    status.state !== null &&
+    'Running' in status.state
+  );
+}
+
+/** Advisory UI admission only. The ref CoreActor mailbox still owns
+ * authoritative mutation admission and generation fencing across WebViews.
+ * A degraded host can require manual recovery, so leave recovery actions
+ * available instead of disabling all operations on health errors. */
+export function isCoreLifecycleTransitioning(
+  status?: CoreStatusInfo | null,
+): boolean {
+  if (!status) return false;
+  if (
+    status.connectivity.kind === 'handing_off' ||
+    status.connectivity.kind === 'shut_down'
+  ) {
+    return true;
+  }
+  if (status.connectivity.kind === 'degraded' || !status.state) {
+    return false;
+  }
+  return (
+    'Starting' in status.state ||
+    'Switching' in status.state ||
+    'Stopping' in status.state ||
+    'Restarting' in status.state
+  );
+}
+
+/** The previous RunType used `normal` for the ref Local execution host.
+ * A handoff is not yet a committed destination, so do not label it as one. */
+export function getRoutedCoreHostLabel(status: CoreStatusInfo): string {
+  if (status.connectivity.kind === 'handing_off') {
+    const { from, to } = status.connectivity;
+    return `${from === 'local' ? 'normal' : 'service'} → ${to === 'local' ? 'normal' : 'service'}`;
+  }
+  return status.host === 'local' ? 'normal' : 'service';
+}
+
+export function getRoutedCoreStatusMessage(status: CoreStatusInfo): string {
+  switch (status.connectivity.kind) {
+    case 'degraded':
+      return status.connectivity.reason
+        ? `${m.common_error()}: ${status.connectivity.reason}`
+        : m.common_error();
+    case 'handing_off':
+      return m.dashboard_widget_core_status_switching();
+    case 'shut_down':
+      return m.dashboard_widget_core_status_stopped();
+    case 'connected':
+      break;
+  }
+
+  const state = status.state;
+  if (!state) return m.common_loading();
+  if ('Running' in state) {
+    if (status.healthy === false) return m.common_error();
+    return getRunningCoreMessage({
+      coreType: status.host === 'service' ? 'service' : 'normal',
+    });
+  }
+  if ('Stopped' in state && state.Stopped) {
+    const reason = state.Stopped.reason;
+    return reason
+      ? m.dashboard_widget_core_stopped_with_message({ message: reason })
+      : m.dashboard_widget_core_status_stopped();
+  }
+  if ('Restarting' in state) {
+    return m.settings_clash_core_manager_card_restarting();
+  }
+  if ('Starting' in state) return m.dashboard_widget_core_status_starting();
+  if ('Switching' in state) return m.dashboard_widget_core_status_switching();
+  if ('Stopping' in state) return m.dashboard_widget_core_status_stopping();
+  return m.common_loading();
 }
 
 export function getStoppedCoreReason(state?: CoreState): string | null {

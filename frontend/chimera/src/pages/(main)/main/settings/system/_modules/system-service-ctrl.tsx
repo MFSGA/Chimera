@@ -1,4 +1,4 @@
-import { useCoreStatus } from '@chimera/interface';
+import { useCoreActorStatus, useCoreStatus } from '@chimera/interface';
 import { Button } from '@chimera/ui/button';
 import { Card, CardContent, CardFooter, CardHeader } from '@chimera/ui/card';
 import {
@@ -13,6 +13,10 @@ import {
   ServerManualPromptDialogWrapper,
   useServerManualPromptDialog,
 } from '@/components/setting/modules/service-manual-prompt-dialog';
+import {
+  getRoutedCoreHostLabel,
+  getRoutedCoreStatusMessage,
+} from '@/features/dashboard/core-service-status';
 import {
   getAppCoreStatusLabel,
   getServiceCoreTypeLabel,
@@ -63,7 +67,8 @@ const DetailsButton = ({ details }: { details: Detail[] }) => (
 );
 
 export default function SystemServiceCtrl() {
-  const coreStatusQuery = useCoreStatus();
+  const actorStatusQuery = useCoreActorStatus();
+  const coreStatusQuery = useCoreStatus({ enabled: !actorStatusQuery.data });
   const promptDialog = useServerManualPromptDialog();
   const {
     query,
@@ -81,15 +86,19 @@ export default function SystemServiceCtrl() {
   const runtimeInfos = serviceServer?.runtime_infos;
   const serviceCoreInfos = serviceServer?.core_infos;
   const serviceCoreType = getServiceCoreTypeLabel(serviceCoreInfos?.type);
+  const actorStatus = actorStatusQuery.data;
+  const currentCoreStatus = actorStatus
+    ? getRoutedCoreStatusMessage(actorStatus)
+    : getAppCoreStatusLabel(coreStatusQuery.data?.status);
+  const currentHost = actorStatus
+    ? getRoutedCoreHostLabel(actorStatus)
+    : coreStatusQuery.data?.type;
   const details: Detail[] = [
     [m.settings_service_name_label(), query.data?.name],
     [m.settings_service_version_label(), query.data?.version],
     [m.settings_server_version_label(), serviceServer?.version],
-    [
-      m.settings_app_core_status_label(),
-      getAppCoreStatusLabel(coreStatusQuery.data?.status),
-    ],
-    [m.settings_run_type_label(), coreStatusQuery.data?.type],
+    [m.settings_app_core_status_label(), currentCoreStatus],
+    [m.settings_run_type_label(), currentHost],
     [m.settings_core_type_label(), serviceCoreType],
     [m.settings_core_config_path_label(), serviceCoreInfos?.config_path],
     [m.settings_service_config_dir_label(), runtimeInfos?.service_config_dir],
@@ -158,7 +167,11 @@ export default function SystemServiceCtrl() {
             disabled={isBusy}
             onClick={() =>
               startRefresh(async () => {
-                await Promise.all([query.refetch(), coreStatusQuery.refetch()]);
+                await Promise.all([
+                  query.refetch(),
+                  coreStatusQuery.refetch(),
+                  actorStatusQuery.refetch(),
+                ]);
               })
             }
           >
