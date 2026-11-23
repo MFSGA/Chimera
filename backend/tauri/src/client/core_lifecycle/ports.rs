@@ -269,6 +269,11 @@ pub(crate) trait CoreLifecyclePort: Send + Sync {
     }
     async fn discard_profile_runtime(&self, _operation_id: OperationId) {}
     async fn stop(&self) -> anyhow::Result<()>;
+    /// Drain the full Core Actor and its in-process executor at application
+    /// exit. Unlike Stop Core, this is terminal for the current session.
+    async fn finish_shutdown(&self) -> anyhow::Result<()> {
+        Ok(())
+    }
     async fn change_core(&self, clash_core: ClashCore) -> anyhow::Result<()>;
     async fn status(&self) -> anyhow::Result<CoreStatusSnapshot>;
     /// Select an already proven execution host without applying a runtime.

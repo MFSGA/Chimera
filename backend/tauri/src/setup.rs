@@ -19,6 +19,10 @@ use crate::{
 #[path = "setup_tests.rs"]
 mod tests;
 
+#[cfg(test)]
+#[path = "setup_actor_tests.rs"]
+mod actor_tests;
+
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 use crate::client::hotkey::{
     HotkeyArgs, HotkeyClient,
@@ -122,7 +126,23 @@ pub fn setup(
         migrations.backup_info(),
         Some(startup_failure_capture),
     )?;
-    startup_owners.core = Some(local_control.clone());
+    startup_owners.legacy_core = Some(local_control.clone());
+    // Match ref: the Core router is spawned over the local endpoint before
+    // the Service actor. A failure while spawning retains the legacy executor
+    // for the partial-startup cleanup path.
+    let core_router = crate::startup_failure::report_boundary_with_backup_and_capture(
+        tauri::async_runtime::block_on(chimera_core::actor_v2::CoreClient::spawn(Arc::new(
+            crate::core::actor_v2::control_endpoint::LocalEndpoint::new(local_control.clone()),
+        )))
+        .context("failed to spawn ref Core Actor"),
+        crate::startup_failure::StartupStage::CoreHost,
+        &paths,
+        migrations.backup_info(),
+        Some(startup_failure_capture),
+    )?;
+    startup_owners.legacy_core = None;
+    startup_owners.core = Some(core_router.clone());
+    startup_owners.core_executor = Some(local_control.clone());
     // Match ref/backend/tauri/src/setup.rs: inject the original resolver from
     // the process entry point. Never re-discover paths through Tauri globals.
     let service_binary =
@@ -135,10 +155,44 @@ pub fn setup(
     // Only the legacy IPC health-check notification remains a Tauri adapter.
     let service_process: Arc<dyn chimera_contracts::service::ServiceProcessControl> =
         Arc::new(crate::core::service::control::HealthMonitorStopAdapter::new(os_service_process));
+
+    // Ref-first production Service ownership: the ref ServiceActor is the
+    // only process-control executor. The legacy facade now delegates its
+    // transition API to this typed mailbox, not a second command actor.
+    let service_actor = crate::startup_failure::report_boundary_with_backup_and_capture(
+        tauri::async_runtime::block_on(
+            chimera_core::actor_v2::service_actor::ServiceClient::spawn(
+                service_process,
+                Arc::new(
+                    crate::core::actor_v2::service_endpoint_factory::default_service_endpoint_factory(),
+                ),
+                3,
+            ),
+        )
+        .context("failed to start ref Service Actor"),
+        crate::startup_failure::StartupStage::CoreHost,
+        &paths,
+        migrations.backup_info(),
+        Some(startup_failure_capture),
+    )?;
+    // Tauri calls setup on its synchronous main thread. The ref
+    // ServiceClient::drain_on_shutdown uses TaskTracker::spawn and therefore
+    // requires an entered Tokio runtime, just like ServiceClient::spawn.
+    // Register it inside Tauri's runtime instead of panicking during GUI
+    // startup ("there is no reactor running").
+    register_service_drain_on_tauri_runtime(&service_actor, &tasks, shutdown.child_token());
+    let service_commands: Arc<
+        dyn chimera_core::actor_v2::service_command_port::ServiceCommandPort,
+    > = Arc::new(
+        chimera_core::actor_v2::service_command_port::ServiceClientCommandPort::new(
+            service_actor.clone(),
+        ),
+    );
     let core_facade = Arc::new(crate::core::actor_v2::CoreFacade::new_local_with_control(
         local_control,
         runtime_paths.clone(),
-        service_process,
+        core_router.clone(),
+        service_commands,
         shutdown.child_token(),
         &tasks,
     ));
@@ -279,6 +333,8 @@ pub fn setup(
             app_update_events,
             changelog_http,
             bridges,
+            core_v2: core_router,
+            service_v2: service_actor,
             core: core_bridge,
             service: Arc::new(crate::client::core_lifecycle::LegacyServiceBridge::new(
                 core_facade,
@@ -314,6 +370,7 @@ pub fn setup(
     );
     app.manage(client);
     startup_owners.core = None;
+    startup_owners.core_executor = None;
     core_facade_monitor.start_service_api_monitor(shutdown.child_token(), &tasks);
     Ok(())
 }
@@ -322,7 +379,67 @@ pub fn setup(
 pub(crate) struct StartupOwners {
     pub(crate) shutdown: tokio_util::sync::CancellationToken,
     pub(crate) tasks: tokio_util::task::TaskTracker,
-    core: Option<chimera_core_manager::CoreControl>,
+    // Same partial-construction ownership as ref: the new Core Actor is
+    // retained here until the composed Client has accepted it.
+    core: Option<chimera_core::actor_v2::CoreClient>,
+    // The routed actor proves the core stopped; the separate CoreControl
+    // executor still needs to be drained after the actor terminates.
+    core_executor: Option<chimera_core_manager::CoreControl>,
+    // Temporary compatibility owner for the current LegacyCoreBridge path.
+    // A composition must choose exactly one core owner, never both.
+    legacy_core: Option<chimera_core_manager::CoreControl>,
+}
+
+/// Register the ref ServiceActor's shutdown watcher from Tauri's synchronous
+/// setup callback. Keep the actor's upstream TaskTracker semantics intact
+/// while entering the application's async runtime for the spawn.
+fn register_service_drain_on_tauri_runtime(
+    service: &chimera_core::actor_v2::service_actor::ServiceClient,
+    tasks: &tokio_util::task::TaskTracker,
+    shutdown: tokio_util::sync::CancellationToken,
+) {
+    tauri::async_runtime::block_on(async {
+        service.drain_on_shutdown(tasks, shutdown);
+    });
+}
+
+/// The ref composition path: Core Actor is born first, then the Service
+/// Actor, each retaining a shutdown owner before the next fallible operation.
+/// This helper is ready for the Client/Runtime cutover; it must not be invoked
+/// alongside the legacy CoreFacade, which still submits directly to CoreControl.
+///
+/// No daemon process operations are performed by this helper itself; the
+/// ServiceActor's `pre_start` probes compatibility as in ref (and may update
+/// an incompatible daemon), so production must use this only after retiring
+/// the legacy service command owner.
+#[allow(dead_code)]
+pub(crate) async fn start_runtime_owners(
+    owners: &mut StartupOwners,
+    local: chimera_core::actor_v2::endpoint::EndpointHandle,
+    process_control: Arc<dyn chimera_contracts::service::ServiceProcessControl>,
+    endpoint_factory: Arc<dyn chimera_core::actor_v2::service_router::ServiceEndpointFactory>,
+) -> anyhow::Result<(
+    chimera_core::actor_v2::CoreClient,
+    chimera_core::actor_v2::service_actor::ServiceClient,
+)> {
+    anyhow::ensure!(
+        owners.core.is_none() && owners.legacy_core.is_none() && owners.core_executor.is_none(),
+        "runtime owners cannot be spawned while another Core owner is active"
+    );
+    let core = chimera_core::actor_v2::CoreClient::spawn(local)
+        .await
+        .context("failed to spawn ref Core Actor")?;
+    owners.core = Some(core.clone());
+
+    let service = chimera_core::actor_v2::service_actor::ServiceClient::spawn(
+        process_control,
+        endpoint_factory,
+        3,
+    )
+    .await
+    .context("failed to spawn ref Service Actor")?;
+    service.drain_on_shutdown(&owners.tasks, owners.shutdown.child_token());
+    Ok((core, service))
 }
 
 /// Keeps startup failures out of Tauri's setup error wrapper, then transfers
@@ -387,7 +504,27 @@ impl StartupOwners {
 
     pub(crate) async fn wait_shutdown(&self) {
         self.tasks.wait().await;
+        // The construction guard refuses two owners; still fail closed on
+        // shutdown if a future caller violates that invariant. Never panic in
+        // the exit path or send two independent stop requests to one runtime.
+        if self.core.is_some() && self.legacy_core.is_some() {
+            tracing::error!(
+                "both core owners were retained after startup; draining only the routed Core Actor"
+            );
+        }
         if let Some(core) = &self.core {
+            core.finish_shutdown().await;
+        }
+        if let Some(executor) = &self.core_executor {
+            if let Err(error) = executor.shutdown().await {
+                tracing::error!(%error, "failed to stop the routed CoreControl executor");
+            }
+            if executor.until_closed().await == chimera_core_manager::ExecutorExit::Died {
+                tracing::error!("routed CoreControl executor exited unexpectedly");
+            }
+        } else if self.core.is_none()
+            && let Some(core) = &self.legacy_core
+        {
             if let Err(error) = core.shutdown().await {
                 tracing::error!(%error, "failed to shut down the partially initialized core host");
             }

@@ -36,7 +36,13 @@ use chimera_config::profile::{
 use chimera_contracts::{
     bundle_metadata::BundleMetadata, net::ChangelogHttp, system_dns::SystemDnsCache,
 };
-use chimera_core::client::app_update::{self, AppUpdateArgs, AppUpdateClient, AppUpdateSettings};
+use chimera_core::{
+    actor_v2::{
+        CoreClient as CoreClientV2, router::CoreStatusProjection, service_actor::ServiceClient,
+        service_router::ServiceHostStatus,
+    },
+    client::app_update::{self, AppUpdateArgs, AppUpdateClient, AppUpdateSettings},
+};
 use struct_patch::Patch as _;
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -84,6 +90,10 @@ pub(crate) struct ClientSetupArgs {
     pub(crate) app_update_events: Arc<dyn app_update::AppUpdateEventSink>,
     pub(crate) changelog_http: Arc<dyn ChangelogHttp>,
     pub(crate) bridges: LegacyBridgeSet,
+    /// The ref Core/Service Actor handles from the composition root.
+    /// Legacy lifecycle ports remain compatibility adapters, not owners.
+    pub(crate) core_v2: CoreClientV2,
+    pub(crate) service_v2: ServiceClient,
     pub(crate) core: Arc<dyn CoreLifecyclePort>,
     pub(crate) service: Arc<dyn core_lifecycle::ServiceLifecyclePort>,
 
@@ -177,6 +187,8 @@ struct ChimeraClientInner {
     changelog_http: Option<Arc<dyn ChangelogHttp>>,
     bundle_metadata: Option<BundleMetadata>,
     core_lifecycle: CoreLifecycleClient,
+    core_api: Option<CoreClientV2>,
+    service_actor: Option<ServiceClient>,
     core: Arc<dyn CoreLifecyclePort>,
     shutdown: tokio_util::sync::CancellationToken,
     tasks: tokio_util::task::TaskTracker,
@@ -234,6 +246,8 @@ impl ChimeraClient {
             app_update_events,
             changelog_http,
             bridges,
+            core_v2,
+            service_v2,
             core,
             service,
             profile_service,
@@ -352,6 +366,8 @@ impl ChimeraClient {
             typed,
             core_lifecycle,
             core,
+            Some(core_v2),
+            Some(service_v2),
             streams,
             streams_shutdown,
             proxies,
@@ -471,6 +487,8 @@ impl ChimeraClient {
             typed,
             core_lifecycle,
             core,
+            None,
+            None,
             streams,
             streams_shutdown,
             proxies,
@@ -499,6 +517,8 @@ impl ChimeraClient {
         typed: TypedConfigClients,
         core_lifecycle: CoreLifecycleClient,
         core: Arc<dyn CoreLifecyclePort>,
+        core_api: Option<CoreClientV2>,
+        service_actor: Option<ServiceClient>,
         streams: chimera_core::clash::ws::StreamsClient,
         streams_shutdown: tokio_util::sync::CancellationToken,
         proxies: chimera_core::proxies_actor::ProxiesClient,
@@ -532,6 +552,8 @@ impl ChimeraClient {
             changelog_http,
             bundle_metadata,
             core_lifecycle,
+            core_api,
+            service_actor,
             core,
             shutdown,
             tasks,
@@ -581,6 +603,19 @@ impl ChimeraClient {
 }
 
 impl ChimeraClient {
+    /// Read the ref Core Actor's authoritative host and generation projection.
+    /// The legacy CoreLifecyclePort remains a Chimera runtime-config adapter,
+    /// not the owner of Core routing state.
+    pub(crate) fn routed_core_status(&self) -> Option<CoreStatusProjection> {
+        self.inner.core_api.as_ref().map(CoreClientV2::status)
+    }
+
+    /// Read the ref Service Actor directly, without asking the old Facade to
+    /// reconstruct its own Service phase from a separate IPC status cache.
+    pub(crate) fn service_actor_status(&self) -> Option<ServiceHostStatus> {
+        self.inner.service_actor.as_ref().map(ServiceClient::status)
+    }
+
     pub(crate) fn shutdown_child_token(&self) -> tokio_util::sync::CancellationToken {
         self.inner.shutdown.child_token()
     }
@@ -1257,6 +1292,78 @@ mod tests {
         assert!(matches!(snapshot.state, CoreState::Stopped(None)));
         assert_eq!(snapshot.state_changed_at, 7);
         assert_eq!(snapshot.run_type, RunType::Normal);
+    }
+
+    /// The production Client owns the same ref CoreClient as its compatibility
+    /// facade. Keep test-only injected legacy ports possible without creating
+    /// a second router, and verify the typed projection is not synthesized
+    /// from the legacy CoreLifecyclePort's state.
+    struct StoppedRoutedHost;
+
+    #[async_trait]
+    impl chimera_core::actor_v2::endpoint::ControlEndpoint for StoppedRoutedHost {
+        fn host(&self) -> chimera_core::actor_v2::endpoint::ExecutionHost {
+            chimera_core::actor_v2::endpoint::ExecutionHost::Local
+        }
+
+        async fn submit(
+            &self,
+            _: chimera_core::actor_v2::endpoint::CoreSubmission,
+        ) -> Result<chimera_ipc::api::core::v2::OperationInfo, chimera_core_manager::CoreError>
+        {
+            unreachable!("the stopped test host must not admit a command")
+        }
+
+        async fn wait_operation(
+            &self,
+            _: chimera_core_manager::OperationId,
+            _: std::time::Duration,
+        ) -> Option<chimera_ipc::api::core::v2::OperationInfo> {
+            unreachable!("the stopped test host must have no pending command")
+        }
+
+        async fn status(
+            &self,
+        ) -> Result<
+            chimera_core::actor_v2::endpoint::CoreStatusSnapshot,
+            chimera_core_manager::CoreError,
+        > {
+            Ok(chimera_core::actor_v2::endpoint::CoreStatusSnapshot {
+                instance_id: None,
+                controller: None,
+                state: Some(chimera_ipc::api::status::CoreStateDetail::Stopped { reason: None }),
+                state_changed_at: 17,
+                revision: None,
+                source_hash: None,
+                healthy: Some(true),
+                applied_kind: None,
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn direct_ref_core_handle_has_independent_routing_projection() {
+        let (mut client, _) = recording_client(false).await;
+        assert!(client.routed_core_status().is_none());
+
+        let core_api = CoreClientV2::spawn(Arc::new(StoppedRoutedHost))
+            .await
+            .unwrap();
+        Arc::get_mut(&mut client.inner)
+            .expect("the fixture has one Client owner")
+            .core_api = Some(core_api.clone());
+
+        let routed = client
+            .routed_core_status()
+            .expect("the typed Client owns its Core Actor");
+        assert_eq!(
+            routed.host,
+            chimera_core::actor_v2::endpoint::ExecutionHost::Local
+        );
+        assert_eq!(routed.generation, 0);
+        // The old runtime adapter still reports its independent fixture time.
+        assert_eq!(client.core_status().await.unwrap().state_changed_at, 7);
+        core_api.finish_shutdown().await;
     }
 
     #[tokio::test]

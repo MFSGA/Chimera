@@ -297,6 +297,10 @@ impl CoreLifecyclePort for LegacyCoreBridge {
         self.facade().stop().await
     }
 
+    async fn finish_shutdown(&self) -> anyhow::Result<()> {
+        self.facade().finish_shutdown().await
+    }
+
     async fn change_core(&self, clash_core: ClashCore) -> anyhow::Result<()> {
         self.facade().change_core(clash_core).await
     }

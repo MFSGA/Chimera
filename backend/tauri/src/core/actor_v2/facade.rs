@@ -5,7 +5,10 @@
 //! protocol. The legacy manager remains only as a compatibility path for
 //! facades constructed without the production `LocalRuntimeHost`.
 
-use chimera_core::actor_v2::{service_actor::ServiceCommandActor, service_process::ServiceCommand};
+use chimera_core::actor_v2::{
+    routed_endpoint::RoutedEndpoint, router::CoreClient, service_actor::ServiceCommandActor,
+    service_command_port::ServiceCommandPort, service_process::ServiceCommand,
+};
 
 use std::{
     collections::{HashMap, VecDeque},
@@ -68,17 +71,30 @@ use chimera_core::actor_v2::service_policy::{
     ServiceRestartDecision, ServiceRestartPolicySnapshot, service_restart_decision,
 };
 
-#[derive(Debug)]
 pub(crate) struct CoreFacade {
     manager: Arc<CoreManager>,
     local_runtime: Option<Arc<super::local_runtime::LocalRuntimeHost>>,
+    core_router: Option<CoreClient>,
     service_endpoint: super::service_endpoint::ServiceEndpoint,
     api_client: tokio::sync::Mutex<Option<ApiLease>>,
     outcome_uncertain: Arc<AtomicBool>,
     local_operations: Arc<LocalOperationRegistry>,
     service_restart_attempts: Arc<AtomicU8>,
     service_restart_exhausted: Arc<AtomicBool>,
-    service_commands: Arc<ServiceCommandActor>,
+    service_commands: Arc<dyn ServiceCommandPort>,
+}
+
+impl std::fmt::Debug for CoreFacade {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("CoreFacade")
+            .field(
+                "service_unsettled",
+                &self.service_commands.has_unsettled_outcome(),
+            )
+            .field("outcome_uncertain", &self.outcome_uncertain())
+            .finish_non_exhaustive()
+    }
 }
 
 pub(crate) struct ServiceTransition {
@@ -86,7 +102,7 @@ pub(crate) struct ServiceTransition {
     outcome_uncertain: Arc<AtomicBool>,
     restart_attempts: Arc<AtomicU8>,
     restart_exhausted: Arc<AtomicBool>,
-    service_commands: Arc<ServiceCommandActor>,
+    service_commands: Arc<dyn ServiceCommandPort>,
 }
 
 struct MutationReplyGuard {
@@ -262,6 +278,7 @@ impl CoreFacade {
         Self {
             manager: Arc::new(CoreManager::new()),
             local_runtime: None,
+            core_router: None,
             service_endpoint: super::service_endpoint::ServiceEndpoint::service_default(),
             api_client: tokio::sync::Mutex::new(None),
             outcome_uncertain: Arc::new(AtomicBool::new(false)),
@@ -287,7 +304,8 @@ impl CoreFacade {
     pub(crate) fn new_local_with_control(
         control: chimera_core_manager::CoreControl,
         runtime_paths: crate::client::RuntimePaths,
-        service_process: Arc<dyn chimera_contracts::service::ServiceProcessControl>,
+        core_router: CoreClient,
+        service_commands: Arc<dyn ServiceCommandPort>,
         shutdown: CancellationToken,
         tasks: &TaskTracker,
     ) -> Self {
@@ -301,13 +319,48 @@ impl CoreFacade {
                     tasks,
                 ),
             )),
+            core_router: Some(core_router),
             service_endpoint: super::service_endpoint::ServiceEndpoint::service_default(),
             api_client: tokio::sync::Mutex::new(None),
             outcome_uncertain: Arc::new(AtomicBool::new(false)),
             local_operations: Arc::new(LocalOperationRegistry::new()),
             service_restart_attempts: Arc::new(AtomicU8::new(0)),
             service_restart_exhausted: Arc::new(AtomicBool::new(false)),
-            service_commands: Arc::new(ServiceCommandActor::new(service_process)),
+            service_commands,
+        }
+    }
+
+    /// Production operations go through the ref CoreClient mailbox. Tests
+    /// that explicitly build the manager-only facade continue using their
+    /// pre-migration endpoints. A routed operation is scoped to one host and
+    /// retains its admission ticket only for its own wait.
+    fn endpoint_for(
+        &self,
+        host: super::control_endpoint::ExecutionHost,
+    ) -> Arc<dyn ControlEndpoint> {
+        if let Some(router) = &self.core_router {
+            return Arc::new(RoutedEndpoint::new(router.clone(), host));
+        }
+        match host {
+            super::control_endpoint::ExecutionHost::Local => Arc::new(
+                self.local_runtime
+                    .as_ref()
+                    .expect("local runtime exists when selecting a core endpoint")
+                    .local_endpoint(),
+            ),
+            super::control_endpoint::ExecutionHost::Service => {
+                Arc::new(self.service_endpoint.clone())
+            }
+        }
+    }
+
+    fn endpoint_for_run_type(&self, run_type: RunType) -> anyhow::Result<Arc<dyn ControlEndpoint>> {
+        match run_type {
+            RunType::Normal => Ok(self.endpoint_for(super::control_endpoint::ExecutionHost::Local)),
+            RunType::Service => {
+                Ok(self.endpoint_for(super::control_endpoint::ExecutionHost::Service))
+            }
+            RunType::Elevated => anyhow::bail!("elevated core execution is not implemented"),
         }
     }
 
@@ -441,6 +494,9 @@ impl CoreFacade {
             .local_runtime
             .as_ref()
             .context("the compatibility core manager cannot validate a typed Profile runtime")?;
+        // Config validation is advisory and does not submit any Core command.
+        // It may target the *prospective* host before S2 commits a handoff,
+        // so it must not require the Core Actor to have selected that host.
         let endpoint: Arc<dyn ControlEndpoint> = match run_type {
             RunType::Normal => Arc::new(local_runtime.local_endpoint()),
             RunType::Service => Arc::new(self.service_endpoint.clone()),
@@ -476,23 +532,34 @@ impl CoreFacade {
             "the compatibility core manager cannot hold a Profile runtime until source commit",
         )?;
         let previous_run_type = local_runtime.run_type();
-        let endpoint: Arc<dyn ControlEndpoint> = match run_type {
-            RunType::Normal => Arc::new(local_runtime.local_endpoint()),
-            RunType::Service => Arc::new(self.service_endpoint.clone()),
-            RunType::Elevated => anyhow::bail!("elevated core execution is not implemented"),
-        };
+        let endpoint = self.endpoint_for_run_type(run_type)?;
+        let core_router = self.core_router.clone();
         let service_endpoint = self.service_endpoint.clone();
         let stop_uncertain = self.outcome_uncertain.clone();
         let candidate_slot = Arc::new(tokio::sync::Mutex::new(None));
         let future_slot = candidate_slot.clone();
         self.run_local_mutation("Profile runtime prepare", async move {
-            match (previous_run_type, run_type) {
-                (RunType::Service, RunType::Normal) => {
-                    stop_service_core(service_endpoint, stop_uncertain, None).await?;
+            if let Some(router) = core_router {
+                let target: Arc<dyn ControlEndpoint> = match run_type {
+                    RunType::Normal => Arc::new(local_runtime.local_endpoint()),
+                    RunType::Service => Arc::new(service_endpoint.clone()),
+                    RunType::Elevated => {
+                        anyhow::bail!("elevated core execution is not implemented")
+                    }
+                };
+                router.change_host_from(target, false).await?;
+                local_runtime.select_execution_host(endpoint.host())?;
+            } else {
+                match (previous_run_type, run_type) {
+                    (RunType::Service, RunType::Normal) => {
+                        stop_service_core(service_endpoint, stop_uncertain, None).await?;
+                    }
+                    (RunType::Normal, RunType::Service) => local_runtime.stop_core().await?,
+                    _ => {}
                 }
-                (RunType::Normal, RunType::Service) => local_runtime.stop_core().await?,
-                _ => {}
             }
+            // A routed Profile mutation refuses an unselected host at the
+            // CoreActor mailbox; it cannot carry out its own handoff.
             let candidate = local_runtime
                 .prepare_profile_runtime(
                     clash,
@@ -555,30 +622,43 @@ impl CoreFacade {
         if let Some(local_runtime) = self.local_runtime.as_ref() {
             let local_runtime = local_runtime.clone();
             let previous_run_type = local_runtime.run_type();
+            let core_router = self.core_router.clone();
             let service_endpoint = self.service_endpoint.clone();
             let stop_uncertain = self.outcome_uncertain.clone();
-            let endpoint: Arc<dyn ControlEndpoint> = match run_type {
-                RunType::Normal => Arc::new(local_runtime.local_endpoint()),
-                RunType::Service => Arc::new(service_endpoint.clone()),
-                RunType::Elevated => {
-                    anyhow::bail!("elevated core execution is not implemented")
-                }
-            };
+            let endpoint = self.endpoint_for_run_type(run_type)?;
             let result = self
                 .run_local_mutation("core reconcile", async move {
-                    match (previous_run_type, run_type) {
-                        (RunType::Service, RunType::Normal) => {
-                            if service_owner_released {
-                                local_runtime.invalidate_ports();
-                            } else {
-                                stop_service_core(service_endpoint, stop_uncertain, None).await?;
-                                local_runtime.invalidate_ports();
+                    if let Some(router) = core_router {
+                        let target: Arc<dyn ControlEndpoint> = match run_type {
+                            RunType::Normal => Arc::new(local_runtime.local_endpoint()),
+                            RunType::Service => Arc::new(service_endpoint.clone()),
+                            RunType::Elevated => {
+                                anyhow::bail!("elevated core execution is not implemented")
                             }
+                        };
+                        // Ordinary user changes and initial startup follow
+                        // the same generation-fenced handoff. The workflow
+                        // may have already proven Service released.
+                        router
+                            .change_host_from(target, service_owner_released)
+                            .await?;
+                        local_runtime.select_execution_host(endpoint.host())?;
+                    } else {
+                        match (previous_run_type, run_type) {
+                            (RunType::Service, RunType::Normal) => {
+                                if service_owner_released {
+                                    local_runtime.invalidate_ports();
+                                } else {
+                                    stop_service_core(service_endpoint, stop_uncertain, None)
+                                        .await?;
+                                    local_runtime.invalidate_ports();
+                                }
+                            }
+                            (RunType::Normal, RunType::Service) => {
+                                local_runtime.stop_core().await?;
+                            }
+                            _ => {}
                         }
-                        (RunType::Normal, RunType::Service) => {
-                            local_runtime.stop_core().await?;
-                        }
-                        _ => {}
                     }
                     match profile_source {
                         Some((profiles, app, staged_content)) => {
@@ -623,6 +703,31 @@ impl CoreFacade {
     }
 
     pub(crate) async fn stop(&self) -> anyhow::Result<()> {
+        if let (Some(router), Some(local_runtime)) = (
+            self.core_router.clone(),
+            self.local_runtime.as_ref().cloned(),
+        ) {
+            let uncertain = self.outcome_uncertain.clone();
+            return self
+                .run_local_mutation("routed core stop", async move {
+                    let projection = router.refresh_status().await?;
+                    if matches!(
+                        projection
+                            .snapshot
+                            .as_ref()
+                            .and_then(|snapshot| snapshot.state.as_ref()),
+                        Some(chimera_ipc::api::status::CoreStateDetail::Stopped { .. })
+                    ) {
+                        local_runtime.invalidate_ports();
+                        return Ok(());
+                    }
+                    let endpoint = RoutedEndpoint::new(router, projection.host);
+                    stop_service_core(endpoint, uncertain, None).await?;
+                    local_runtime.invalidate_ports();
+                    Ok(())
+                })
+                .await;
+        }
         if let Some(local_runtime) = self.local_runtime.as_ref() {
             match local_runtime.run_type() {
                 RunType::Normal => {
@@ -674,13 +779,7 @@ impl CoreFacade {
     pub(crate) async fn change_core(&self, clash_core: ClashCore) -> anyhow::Result<()> {
         if let Some(local_runtime) = self.local_runtime.as_ref() {
             let local_runtime = local_runtime.clone();
-            let endpoint: Arc<dyn ControlEndpoint> = match local_runtime.run_type() {
-                RunType::Normal => Arc::new(local_runtime.local_endpoint()),
-                RunType::Service => Arc::new(self.service_endpoint.clone()),
-                RunType::Elevated => {
-                    anyhow::bail!("elevated core execution is not implemented")
-                }
-            };
+            let endpoint = self.endpoint_for_run_type(local_runtime.run_type())?;
             let result = self
                 .run_local_mutation("local core selection", async move {
                     Config::verge().draft().clash_core = Some(clash_core);
@@ -778,7 +877,22 @@ impl CoreFacade {
             return Ok(());
         };
 
+        let core_router = self.core_router.clone();
+        let service_endpoint = self.service_endpoint.clone();
         self.run_local_mutation("startup execution host selection", async move {
+            if let Some(router) = core_router {
+                let target: Arc<dyn ControlEndpoint> = match host {
+                    super::control_endpoint::ExecutionHost::Local => {
+                        Arc::new(local_runtime.local_endpoint())
+                    }
+                    super::control_endpoint::ExecutionHost::Service => Arc::new(service_endpoint),
+                };
+                // The ref router proves the old host stopped and fences its
+                // generation before LocalRuntimeHost adopts the new host.
+                // Never infer that a previous Service retirement succeeded;
+                // let the router's stop proof handle an already-stopped host.
+                router.change_host_from(target, false).await?;
+            }
             local_runtime.select_execution_host(host)
         })
         .await?;
@@ -848,11 +962,7 @@ impl CoreFacade {
 
     pub(crate) async fn observe_runtime_baseline(&self) -> anyhow::Result<KnownRuntimeState> {
         if let Some(local_runtime) = self.local_runtime.as_ref() {
-            let endpoint: Arc<dyn ControlEndpoint> = match local_runtime.run_type() {
-                RunType::Normal => Arc::new(local_runtime.local_endpoint()),
-                RunType::Service => Arc::new(self.service_endpoint.clone()),
-                RunType::Elevated => anyhow::bail!("elevated core execution is not implemented"),
-            };
+            let endpoint = self.endpoint_for_run_type(local_runtime.run_type())?;
             let status = endpoint.status().await?;
             return match status.state.as_ref() {
                 Some(chimera_ipc::api::status::CoreStateDetail::Stopped { .. }) => {
@@ -891,23 +1001,33 @@ impl CoreFacade {
             super::control_endpoint::ExecutionHost::Local => RunType::Normal,
             super::control_endpoint::ExecutionHost::Service => RunType::Service,
         };
-        let endpoint: Arc<dyn ControlEndpoint> = match destination {
-            RunType::Normal => Arc::new(local_runtime.local_endpoint()),
-            RunType::Service => Arc::new(self.service_endpoint.clone()),
-            RunType::Elevated => anyhow::bail!("elevated core execution is not implemented"),
-        };
+        let endpoint = self.endpoint_for_run_type(destination)?;
         let previous = local_runtime.run_type();
         let runtime_for_invalidation = local_runtime.clone();
+        let router = self.core_router.clone();
         let service_endpoint = self.service_endpoint.clone();
         let stop_uncertain = self.outcome_uncertain.clone();
         let result = self
             .run_local_mutation("runtime receipt restore", async move {
-                match (previous, destination) {
-                    (RunType::Service, RunType::Normal) => {
-                        stop_service_core(service_endpoint, stop_uncertain, None).await?;
+                if let Some(router) = router {
+                    let target: Arc<dyn ControlEndpoint> = match receipt.host {
+                        super::control_endpoint::ExecutionHost::Local => {
+                            Arc::new(local_runtime.local_endpoint())
+                        }
+                        super::control_endpoint::ExecutionHost::Service => {
+                            Arc::new(service_endpoint)
+                        }
+                    };
+                    router.change_host_from(target, false).await?;
+                    local_runtime.select_execution_host(receipt.host)?;
+                } else {
+                    match (previous, destination) {
+                        (RunType::Service, RunType::Normal) => {
+                            stop_service_core(service_endpoint, stop_uncertain, None).await?;
+                        }
+                        (RunType::Normal, RunType::Service) => local_runtime.stop_core().await?,
+                        _ => {}
                     }
-                    (RunType::Normal, RunType::Service) => local_runtime.stop_core().await?,
-                    _ => {}
                 }
                 local_runtime
                     .restore_runtime_receipt(endpoint.as_ref(), receipt)
@@ -1000,11 +1120,7 @@ impl CoreFacade {
             .local_runtime
             .as_ref()
             .context("the compatibility core manager has no instance-bound API endpoint")?;
-        let endpoint: Arc<dyn ControlEndpoint> = match local_runtime.run_type() {
-            RunType::Normal => Arc::new(local_runtime.local_endpoint()),
-            RunType::Service => Arc::new(self.service_endpoint.clone()),
-            RunType::Elevated => anyhow::bail!("elevated core execution is not implemented"),
-        };
+        let endpoint = self.endpoint_for_run_type(local_runtime.run_type())?;
         let connection = endpoint
             .api_connection()
             .await?
@@ -1050,11 +1166,7 @@ impl CoreFacade {
         let Some(local_runtime) = self.local_runtime.as_ref() else {
             return Ok(None);
         };
-        let endpoint: Arc<dyn ControlEndpoint> = match local_runtime.run_type() {
-            RunType::Normal => Arc::new(local_runtime.local_endpoint()),
-            RunType::Service => Arc::new(self.service_endpoint.clone()),
-            RunType::Elevated => anyhow::bail!("elevated core execution is not implemented"),
-        };
+        let endpoint = self.endpoint_for_run_type(local_runtime.run_type())?;
         let status = endpoint.status().await?;
         if !matches!(
             status.state.as_ref(),
@@ -1075,10 +1187,9 @@ impl CoreFacade {
         let Some(local_runtime) = self.local_runtime.as_ref() else {
             return Ok(None);
         };
-        let endpoint: Arc<dyn ControlEndpoint> = match local_runtime.run_type() {
-            RunType::Normal => Arc::new(local_runtime.local_endpoint()),
-            RunType::Service => Arc::new(self.service_endpoint.clone()),
+        let endpoint = match local_runtime.run_type() {
             RunType::Elevated => return Ok(None),
+            run_type => self.endpoint_for_run_type(run_type)?,
         };
         let before = endpoint.status().await?;
         let Some(receipt) = local_runtime.accepted_runtime_receipt() else {
@@ -1114,6 +1225,36 @@ impl CoreFacade {
         local_runtime
             .confirmed_runtime_receipt()
             .filter(|receipt| receipt.host == expected_host)
+    }
+
+    /// Shutdown boundary: stop the routed Core once, drain its mailbox and
+    /// pump, then shut down the local manager executor. This is separate
+    /// from the user's ordinary Stop Core command, which retains the actor.
+    pub(crate) async fn finish_shutdown(&self) -> anyhow::Result<()> {
+        let mut result = Ok(());
+        if let Some(router) = &self.core_router {
+            // Even when shutdown fails, the local executor must still get
+            // its own close request. Preserve the first unconfirmed stop as
+            // the error returned to the updater.
+            match router.shutdown().await {
+                Ok(report) => {
+                    if let Err(error) = report.stop {
+                        result = Err(anyhow::Error::new(error));
+                    }
+                }
+                Err(error) => result = Err(anyhow::Error::new(error)),
+            }
+            router.finish_shutdown().await;
+        }
+        if let Some(local_runtime) = &self.local_runtime {
+            let closed = local_runtime.shutdown().await;
+            if result.is_ok() {
+                result = closed;
+            } else if let Err(error) = closed {
+                tracing::warn!(%error, "local executor shutdown also failed");
+            }
+        }
+        result
     }
 
     pub(crate) fn start_service_api_monitor(
@@ -1346,8 +1487,23 @@ impl CoreFacade {
         expected_owner: CoreOwner,
     ) -> anyhow::Result<()> {
         let endpoint = self.service_endpoint.clone();
+        let core_router = self.core_router.clone();
         let outcome_uncertain = self.outcome_uncertain.clone();
         self.run_local_mutation("startup Service Core retirement", async move {
+            if let Some(router) = core_router
+                && router.status().host == super::control_endpoint::ExecutionHost::Service
+            {
+                // Already adopted Service: every Core stop is serialized by
+                // the same actor that owns the host handoff generation.
+                return stop_service_core(
+                    RoutedEndpoint::new(router, super::control_endpoint::ExecutionHost::Service),
+                    outcome_uncertain,
+                    Some(expected_owner),
+                )
+                .await;
+            }
+            // An old Service owner found while the current router still owns
+            // Local is a separate, stale-installation cleanup operation.
             stop_service_core(endpoint, outcome_uncertain, Some(expected_owner)).await
         })
         .await?;
