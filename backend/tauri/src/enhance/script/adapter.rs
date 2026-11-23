@@ -4,7 +4,7 @@
 use chimera_config::{
     profile::ScriptRuntime,
     runtime::{
-        executor::{PortError, ScriptRunOutcome, ScriptRunner, StepLogEntry, StepLogLevel},
+        executor::{PortError, ScriptRunner, StepLogEntry, StepLogLevel},
         value::ConfigValue,
     },
 };
@@ -89,17 +89,16 @@ fn run_legacy_script(
 }
 
 impl ScriptRunner for EnhanceScriptRunner {
-    fn run(&self, runtime: ScriptRuntime, source: &str, config: &ConfigValue) -> ScriptRunOutcome {
-        match run_legacy_script(&self.runtime, runtime, source, config) {
-            Ok(output) => ScriptRunOutcome {
-                result: mapping_to_config(output.config),
-                logs: to_step_logs(output.logs),
-            },
-            Err(error) => ScriptRunOutcome {
-                result: Err(error),
-                logs: Vec::new(),
-            },
-        }
+    fn run(
+        &self,
+        runtime: ScriptRuntime,
+        source: &str,
+        config: &ConfigValue,
+        logs: &mut Vec<StepLogEntry>,
+    ) -> Result<ConfigValue, PortError> {
+        let output = run_legacy_script(&self.runtime, runtime, source, config)?;
+        logs.extend(to_step_logs(output.logs));
+        mapping_to_config(output.config)
     }
 
     fn eval_item_predicate(&self, expr: &str, item: &ConfigValue) -> Result<bool, PortError> {

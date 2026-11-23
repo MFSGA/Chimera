@@ -237,3 +237,26 @@ cargo clippy --manifest-path backend/Cargo.toml --all-targets --all-features
 - 影响的入口：主窗口 navbar、proxies、rules 代理图标及 provider 代理列表；legacy UI 和 agent 继续读共享接口。`rules-main-proxy-icon.e2e.ts` 先挂载旧 Profile 查询，再通过测试 fixture 激活新 Profile，验证当前 UI 跟随运行时数据更新。
 - 实际验证：`pnpm typecheck:chimera`、E2E TypeScript typecheck、`pnpm lint:frontend-boundaries`、前端 build 和 E2E harness unit（25/25）通过；`test:main` 14/14 specs 通过，其中该回归用例先挂载旧 Profile 查询再切换到 fixture Profile；`test:smoke` 4/4 specs（9 条用例）通过。该用例使用 IPC fixture 准备并由桌面 UI 观察，不代表真实网络流量验证。`test:settings` 整套 12/16，失败项和已知限制见 `DIFF-MAIN-SCROLL-VIEWPORT` 验证记录。
 - 收敛、移除或重新评估条件：迁移到 ref 的 query/event 架构后，重新核对 Profile 事件的代理快照失效语义；只有新架构在“缓存旧 Profile 后切换”的回归场景仍能更新时，才移除此兼容修正。
+
+### DIFF-RUNTIME-STORED-GRAPH：Runtime Pipeline 压缩快照与按需 Inspection
+
+- ref commit：c4b35e04870a9caa53f21d10af6fcfde4a6f4c01（固定本地 ref，未修改）。
+- ref 路径与符号：backend/nyanpasu-config/src/runtime/snapshot.rs 中的 StoredConfigSnapshotsGraph、StoredConfigSnapshotState.changed_fields、KeyframePolicy、apply_patch、ConfigSnapshotsBuilder.push_delta、restore / restore_with_parent；runtime/executor/{builtin,artifact,mod}.rs 中的 filter_fields、RuntimeArtifact.graph / final_node 和快照记录。
+- Chimera 路径与符号：backend/chimera-config/src/runtime/{snapshot,executor}/；backend/chimera-core/src/client/{artifact_snapshot,runtime_build,runtime_inspection}.rs；backend/tauri/src/client/runtime_inspection.rs 和既有 runtime build 调用方。
+- 类别：临时迁移 / legacy UI 兼容。Shared executor 现已向上游返回压缩存储图及确定性的 final_node，字段过滤和 Guard/TUN 已知变更直接写入 Delta；序列化版本升级为 v3，旧 v2 快照缓存按版本拒绝后需要从源配置重建。此缓存不属于用户 Profile 文档。
+- 保留差异：Chimera 的 RuntimeInspectionData 已沿用 ref 的 StoredConfigSnapshotsGraph，RuntimeArtifact → Inspection 不再整图展开，而是使用 restore / restore_with_parent 按需恢复；主界面、legacy UI 和 agent 继续共用原有 inspection DTO/IPC，未修改外部协议或用户 Profile 持久化。Chimera 的 Finalizing、TUN 分阶段处理、Chimera Client MMDB、可选监听器及 DNS/TUN 策略仍与 ref 的执行顺序或字段所有权存在差异；不将这一阶段误认为 Runtime Pipeline 全量完成对齐。
+- 验证边界：配置层单元测试（含 snapshot-persistence feature）271/271 通过；Core runtime build 7/7、artifact snapshot 3/3、Tauri Runtime Builder 11/11 通过。已覆盖顺序保持、负零符号、显式补丁重放、压缩图恢复、最终节点与配置一致、v2 缓存版本拒绝。编译警告仍存在；未执行真实桌面、内核、Service 或主机网络 E2E。
+- 本轮补充验证：Core 的 Runtime Inspection 4/4、Artifact Snapshot 4/4、Runtime Build 7/7 通过；Tauri Runtime Inspection 7/7 通过。新增快照 Delta 恢复、敏感配置脱敏、补丁损坏错误返回、产物与最终节点不一致时拒绝发布等回归用例。
+- 风险与回退：L2，共享 Inspector 的图表示和按需读取路径发生变化，未修改前端 RPC wire、Profile/订阅数据、Core/Service 配置所有权或宿主网络。若发生 Inspection 回归，回退本轮 Inspection/Artifact 适配提交即可恢复前一轮的完整图映射；若涉及旧快照缓存，按版本拒绝并从持久化源重建，绝不重写用户配置。独立审查与真机桌面/网络 E2E 仍是后续验证项。
+- 收敛条件：下轮继续对齐 ref 的单次字段所有权计划与执行顺序，并评估可移除的旧完整图 materialize 兼容方法。保留 legacy UI 的展示能力和 Chimera Client/Service 兼容层，不复制新的平行运行时状态实现。
+
+### DIFF-RUNTIME-OWNERSHIP-ORDER：ref 单一字段所有权计划与执行顺序
+
+- ref commit：c4b35e04870a9caa53f21d10af6fcfde4a6f4c01（固定只读基线）。
+- ref 路径与符号：backend/nyanpasu-config/src/runtime/executor/{plan,mod,builtin}.rs 中的 ownership / guard_ownership / tun_ownership、ManagedSettings、Defaults 和内建脚本顺序；post_process/OwnershipEntries；tests/orders.rs 的 #5678 未配置 HTTP/SOCKS 监听端口回归。
+- Chimera 路径与符号：backend/chimera-config/src/runtime/executor/{plan,mod,builtin}.rs 及对应 tests/{orders,builtin}.rs。仍使用 ref 的 post_process apply_settings / apply_defaults / keep_inherited 语义。
+- 类别：共通业务对齐 + Chimera Client 狭窄兼容。生产 Pipeline 改为一次构造 Guard+TUN+DNS+profile 缓存的所有权计划；过滤后一次恢复 Inherited，再执行 ManagedSettings、Defaults，随后才执行内建脚本。未启用的 port/socks-port 必须移除订阅所带的端口，不能与 mixed-port 争用；启用端口由 caller 已确认绑定值写入。Standard TUN stack 沿 ref 改为强制写入所选栈，防止订阅覆盖；DNS 的缺省值不覆盖既有 nameserver/enhanced-mode。去掉两段式 Guard/TUN 中间处理及已无人使用的旧测试 oracle。
+- 保留差异：Chimera Client/Alpha 的 TUN 特有字段（route-all、dns-hijack bool、so-mark、device-id）和 nameserver/default-nameserver 缺省值由 TunFlavor::ChimeraClient 显式适配，未引入其不支持的 Mihomo stack/auto-route。ref 的 TunStackWrite 能力探测、Mips 拥塞控制器、降级告警及产品-specific Core feature matrix 尚未对齐；当前仍由 Core builder 的旧 derive_tun_flavor 决定目标栈。Chimera 的第二次按 Core 过滤、Finalizing 排序节点和 mmdb 兼容仍保留在内建脚本之后，目的是现有 Client Core 及检查界面兼容；这不等于完整复制 ref。
+- 本轮验证：chimera-config（含 snapshot-persistence）271/271、chimera-core 完整 lib 429/429、Core Runtime Build 7/7、Tauri Runtime Builder 11/11 通过；Tauri lib cargo check 通过；针对 ref #5678 新增禁用监听端口回归，并验证 Defaults 前置、内建脚本覆盖次序、Chimera Client TUN/DNS 特殊字段及 Snapshot 最终节点一致性。已有编译 warning，未运行系统级 E2E、真实代理/TUN 和跨平台验收。
+- 风险及回退：L2，可能改变生成配置的 TUN 栈、默认值时序、脚本输入及代理监听端口。若在特定平台/内核实测失败，回退本轮 config executor/plan 变更并重建配置快照，切勿改变用户订阅或进行宿主网络修改。真机 Core/TUN/DNS 和桌面 UI E2E 尚需验证。
+- 收敛条件：迁移 ref 的 TunStackWrite + core capability matrix 到纯 Runtime Builder 并补充降级/unsupported 参数告警、适配 Chimera Client 特性；待平台回归稳定，再判断可否删除尾部重复过滤/Finalizing 兼容节点。主界面、legacy UI 和 agent 继续使用同一业务 API。

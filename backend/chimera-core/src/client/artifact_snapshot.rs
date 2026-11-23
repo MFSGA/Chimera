@@ -1,6 +1,6 @@
 //! Pure RuntimeArtifact mapping following ref client/artifact_snapshot.rs.
-//! Chimera keeps the legacy output layout and Mapping document until its
-//! RuntimeBuild and snapshot storage representation move together.
+//! The runtime artifact and shared inspection retain the reference
+//! keyframe/delta graph; legacy UI output stays a separate projection.
 
 use anyhow::{Context, Result};
 use chimera_config::{
@@ -132,6 +132,7 @@ pub fn artifact_to_snapshot_data(
     let RuntimeArtifact {
         final_config,
         graph,
+        final_node,
         step_logs,
         applied_fields,
         ..
@@ -142,6 +143,27 @@ pub fn artifact_to_snapshot_data(
         .as_mapping()
         .cloned()
         .context("final runtime config is not a mapping")?;
+    anyhow::ensure!(
+        matches!(
+            graph.nodes.get(final_node as usize).map(|node| &node.tag),
+            Some(
+                chimera_config::runtime::snapshot::OperatorTag::BuiltinStep {
+                    step: chimera_config::runtime::snapshot::BuiltinStepKind::Finalizing,
+                    ..
+                }
+            )
+        ),
+        "runtime inspection graph has no finalizing step"
+    );
+    // Keep ref's compact graph in the shared inspection model.
+    // Validate the promoted final node against the generated configuration.
+    let restored = graph
+        .restore(final_node)
+        .context("runtime inspection final config cannot be restored")?;
+    anyhow::ensure!(
+        restored == final_config.to_json(),
+        "runtime inspection final node differs from the generated config"
+    );
     let output = map_postprocessing(&step_logs, profiles, builtin_names);
     let exists_keys = applied_fields.into_iter().collect();
     Ok(ArtifactSnapshotData {
@@ -149,20 +171,7 @@ pub fn artifact_to_snapshot_data(
         exists_keys,
         postprocessing_output: output,
         inspection: RuntimeInspectionData {
-            final_node: graph
-                .nodes
-                .iter()
-                .rposition(|node| {
-                    matches!(
-                        &node.tag,
-                        chimera_config::runtime::snapshot::OperatorTag::BuiltinStep {
-                            step: chimera_config::runtime::snapshot::BuiltinStepKind::Finalizing,
-                            ..
-                        }
-                    )
-                })
-                .context("runtime inspection graph has no finalizing step")?
-                as u32,
+            final_node,
             graph,
             step_logs,
         },
@@ -264,7 +273,7 @@ mod tests {
                 final_config.clone(),
             )
             .unwrap();
-        let graph = builder.build().unwrap();
+        let (graph, final_node) = builder.build_stored_with_current().unwrap();
         let fields: IndexSet<String> = ["mixed-port", "tun", "dns"]
             .into_iter()
             .map(str::to_owned)
@@ -273,6 +282,7 @@ mod tests {
             RuntimeArtifact {
                 final_config,
                 graph,
+                final_node,
                 step_logs: Vec::new(),
                 applied_fields: fields,
                 transform_failures: Vec::new(),
@@ -292,15 +302,55 @@ mod tests {
     }
 
     #[test]
+    fn a_finalizing_node_mismatched_with_runtime_yaml_cannot_be_published() {
+        let root = Arc::new(ConfigValue::try_from(serde_json::json!({"mode": "rule"})).unwrap());
+        let selected =
+            Arc::new(ConfigValue::try_from(serde_json::json!({"mode": "global"})).unwrap());
+        let mut builder = ConfigSnapshotsBuilder::new_root(root, OperatorTag::BareRoot);
+        builder
+            .push(
+                OperatorTag::BuiltinStep {
+                    selected_profile_id: None,
+                    step: BuiltinStepKind::Finalizing,
+                },
+                selected,
+            )
+            .unwrap();
+        let (graph, final_node) = builder.build_stored_with_current().unwrap();
+        let incorrect_final =
+            Arc::new(ConfigValue::try_from(serde_json::json!({"mode": "direct"})).unwrap());
+        let error = artifact_to_snapshot_data(
+            RuntimeArtifact {
+                final_config: incorrect_final,
+                graph,
+                final_node,
+                step_logs: Vec::new(),
+                applied_fields: IndexSet::new(),
+                transform_failures: Vec::new(),
+            },
+            &Profiles::default(),
+            &[],
+        )
+        .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("differs from the generated config")
+        );
+    }
+
+    #[test]
     fn an_artifact_without_finalizing_node_fails_instead_of_publishing() {
         let config = Arc::new(ConfigValue::try_from(serde_json::json!({"mode": "rule"})).unwrap());
-        let graph = ConfigSnapshotsBuilder::new_root(config.clone(), OperatorTag::BareRoot)
-            .build()
-            .unwrap();
+        let (graph, final_node) =
+            ConfigSnapshotsBuilder::new_root(config.clone(), OperatorTag::BareRoot)
+                .build_stored_with_current()
+                .unwrap();
         let error = artifact_to_snapshot_data(
             RuntimeArtifact {
                 final_config: config,
                 graph,
+                final_node,
                 step_logs: Vec::new(),
                 applied_fields: IndexSet::new(),
                 transform_failures: Vec::new(),

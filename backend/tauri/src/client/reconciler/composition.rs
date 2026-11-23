@@ -235,7 +235,7 @@ mod tests {
         application::ClashCore,
         profile::{ManagedProfilePath, Profiles, ScriptRuntime},
         runtime::{
-            executor::{PortError, ScriptRunOutcome, ScriptRunner},
+            executor::{PortError, ScriptRunner, StepLogEntry},
             value::ConfigValue,
         },
     };
@@ -252,11 +252,14 @@ mod tests {
     }
     struct EchoScript;
     impl ScriptRunner for EchoScript {
-        fn run(&self, _: ScriptRuntime, _: &str, config: &ConfigValue) -> ScriptRunOutcome {
-            ScriptRunOutcome {
-                result: Ok(config.clone()),
-                logs: vec![],
-            }
+        fn run(
+            &self,
+            _: ScriptRuntime,
+            _: &str,
+            config: &ConfigValue,
+            _: &mut Vec<StepLogEntry>,
+        ) -> Result<ConfigValue, PortError> {
+            Ok(config.clone())
         }
         fn eval_item_predicate(&self, _: &str, _: &ConfigValue) -> Result<bool, PortError> {
             Ok(true)

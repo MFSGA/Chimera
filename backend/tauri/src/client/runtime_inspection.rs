@@ -234,9 +234,9 @@ mod tests {
             Arc::new(ConfigValue::try_from(serde_json::json!({"mode": "rule"})).unwrap()),
             OperatorTag::BareRoot,
         )
-        .build()
+        .build_stored()
         .unwrap();
-        let key = graph.nodes[0].key.clone();
+        let key = graph.nodes[0].tag.node_key();
         RuntimeInspectionData {
             final_node: graph.root_id,
             graph,
@@ -404,7 +404,7 @@ mod tests {
             ConfigValue::try_from(serde_json::json!({"mode": "rule", "secret": "old"})).unwrap(),
         );
         let graph = ConfigSnapshotsBuilder::new_root(parent_config, OperatorTag::BareRoot)
-            .build()
+            .build_stored()
             .unwrap();
         snapshot.inspection = Arc::new(RuntimeInspectionData {
             final_node: graph.root_id,
@@ -524,8 +524,7 @@ mod tests {
             .unwrap();
 
         let mut snapshot = snapshot();
-        let graph = builder.build().unwrap();
-        let final_node = graph.nodes.len() as u32 - 1;
+        let (graph, final_node) = builder.build_stored_with_current().unwrap();
         snapshot.inspection = Arc::new(RuntimeInspectionData {
             graph,
             final_node,

@@ -13,8 +13,8 @@ use crate::{
     runtime::{
         executor::{
             BuiltinTransform, ExecutionTarget, GuardInputs, ResolvedPortBindings,
-            RuntimePipelineError, RuntimePipelineInputs, StepLogLevel, TunFlavor, TunParams,
-            execute,
+            RuntimePipelineError, RuntimePipelineInputs, ScriptExecutionError, ScriptOperation,
+            StepLogLevel, TunFlavor, TunParams, execute,
         },
         snapshot::{BuiltinStepKind, ConfigExecutionRole, OperatorTag},
     },
@@ -73,7 +73,7 @@ fn overrides_with_patch(yaml: &str) -> ClashGuardOverrides {
 
 #[test]
 fn selected_file_config_records_canonical_mainline() {
-    // §7.1：root → scoped → global → filter → guard/TUN inheritance and settings → builtin → finalizing
+    // Ref §7.1: scoped → global → filter → inherited → managed → defaults → builtin.
     let profiles = profiles_with(
         Some("sub-a"),
         &["global-fix"],
@@ -106,8 +106,9 @@ fn selected_file_config_records_canonical_mainline() {
     );
 
     let artifact = execute(&inputs, &content, &FakeScriptRunner::default()).unwrap();
+    let graph = artifact.graph.materialize().unwrap();
 
-    let tags: Vec<_> = artifact.graph.nodes.iter().map(|node| &node.tag).collect();
+    let tags: Vec<_> = graph.nodes.iter().map(|node| &node.tag).collect();
     assert!(matches!(
         tags[0],
         OperatorTag::FileConfigRoot {
@@ -130,36 +131,35 @@ fn selected_file_config_records_canonical_mainline() {
             ..
         }
     ));
-    for (offset, kind) in [
+    for (index, kind) in [
         BuiltinStepKind::KeepUnmanaged,
         BuiltinStepKind::ManagedSettings,
-        BuiltinStepKind::TunKeepUnmanaged,
-        BuiltinStepKind::TunManagedSettings,
+        BuiltinStepKind::Defaults,
     ]
     .into_iter()
     .enumerate()
     {
         assert!(matches!(
-            tags[4 + offset],
+            tags[4 + index],
             OperatorTag::BuiltinStep { step, .. } if *step == kind
         ));
     }
     assert!(matches!(
-        tags[8],
+        tags[7],
         OperatorTag::BuiltinTransform { step_index: 0, .. }
     ));
     for (index, kind) in [
         BuiltinStepKind::FinalFieldFilter,
-        BuiltinStepKind::Defaults,
         BuiltinStepKind::IncludeAllExpansion,
         BuiltinStepKind::Finalizing,
     ]
     .into_iter()
     .enumerate()
     {
-        assert!(matches!(tags[9 + index], OperatorTag::BuiltinStep { step, .. } if *step == kind));
+        assert!(matches!(tags[8 + index], OperatorTag::BuiltinStep { step, .. } if *step == kind));
     }
-    assert_eq!(artifact.graph.nodes.len(), 13);
+    assert_eq!(graph.nodes.len(), 11);
+    assert_eq!(artifact.final_node, 10);
 
     // 语义断言：scoped + global 追加都生效，guard 覆盖 mode。
     let config = artifact.final_config.to_json();
@@ -244,9 +244,7 @@ fn managed_guard_fields_override_profile_values() {
 
 #[cfg(feature = "default-meta")]
 #[test]
-fn staged_ownership_matches_legacy_builtin_input_exactly() {
-    use crate::runtime::{executor::builtin, value::ConfigValue};
-
+fn unified_ownership_restores_unmanaged_fields_before_managed_and_defaults() {
     let profiles = profiles_with(
         Some("sub-a"),
         &[],
@@ -255,57 +253,58 @@ fn staged_ownership_matches_legacy_builtin_input_exactly() {
     );
     let content = MapContentSource::from_pairs(&[(
         "sub-a.yaml",
-        "proxies: []
-unified-delay: false
-tun: { auto-route: false, stack: system }
-",
+        "proxies: []\nunified-delay: false\ntun: { auto-route: false, stack: system }\n",
     )]);
-    let ov = overrides_with_patch(
-        "unified-delay: { kind: unmanaged }
-",
-    );
+    let ov = overrides_with_patch("unified-delay: { kind: unmanaged }\n");
     let mut inputs = base_inputs(&profiles, ExecutionTarget::Selected(pid("sub-a")), &ov, &[]);
     inputs.tun.enable = true;
     inputs.tun.overrides.auto_route = ManageableField::Unmanaged;
+
     let artifact = execute(&inputs, &content, &FakeScriptRunner::default()).unwrap();
-    let root = &artifact.graph.nodes[0].snapshot.config;
-    let filtered = artifact
-        .graph
-        .nodes
-        .iter()
-        .find(|node| {
-            matches!(
-                node.tag,
-                OperatorTag::BuiltinStep {
-                    step: BuiltinStepKind::WhitelistFieldFilter,
-                    ..
-                }
-            )
-        })
-        .unwrap();
-    let managed_tun = artifact
-        .graph
-        .nodes
-        .iter()
-        .find(|node| {
-            matches!(
-                node.tag,
-                OperatorTag::BuiltinStep {
-                    step: BuiltinStepKind::TunManagedSettings,
-                    ..
-                }
-            )
-        })
-        .unwrap();
-    let root = ConfigValue::from_json_value(root.clone());
-    let filtered = ConfigValue::from_json_value(filtered.snapshot.config.clone());
-    let original_guard = builtin::apply_guard_with_source(&filtered, &root, &inputs.guard).unwrap();
-    let original = builtin::apply_tun_overrides_with_source(&original_guard, &root, &inputs.tun);
+    let graph = artifact.graph.materialize().unwrap();
+    let at =
+        |kind| {
+            graph.nodes.iter().find(|node| {
+        matches!(node.tag, OperatorTag::BuiltinStep { step, .. } if step == kind)
+    }).unwrap()
+        };
+    let filtered = at(BuiltinStepKind::WhitelistFieldFilter);
+    let inherited = at(BuiltinStepKind::KeepUnmanaged);
+    let managed = at(BuiltinStepKind::ManagedSettings);
+    let defaults = at(BuiltinStepKind::Defaults);
+
+    assert!(filtered.snapshot.config.get("tun").is_none());
+    assert_eq!(inherited.snapshot.config["tun"]["auto-route"], json!(false));
+    assert_eq!(inherited.snapshot.config["unified-delay"], json!(false));
+    assert_eq!(managed.snapshot.config["tun"]["enable"], json!(true));
+    assert_eq!(managed.snapshot.config["tun"]["stack"], json!("gvisor"));
+    assert_eq!(managed.snapshot.config["dns"]["enable"], json!(true));
+    assert_eq!(defaults.snapshot.config["tun"]["auto-route"], json!(false));
     assert_eq!(
-        serde_json::to_string(&original.to_json()).unwrap(),
-        serde_json::to_string(&managed_tun.snapshot.config).unwrap(),
-        "staging must preserve even field insertion order seen by builtin transforms"
+        defaults.snapshot.config["dns"]["enhanced-mode"],
+        json!("fake-ip")
     );
+    assert_eq!(
+        defaults.snapshot.config["profile"]["store-selected"],
+        json!(true)
+    );
+
+    let inherited_id = graph
+        .nodes
+        .iter()
+        .position(|node| node.tag.node_key() == inherited.key)
+        .unwrap();
+    let managed_id = graph
+        .nodes
+        .iter()
+        .position(|node| node.tag.node_key() == managed.key)
+        .unwrap();
+    let defaults_id = graph
+        .nodes
+        .iter()
+        .position(|node| node.tag.node_key() == defaults.key)
+        .unwrap();
+    assert!(inherited_id < managed_id && managed_id < defaults_id);
 }
 
 #[test]
@@ -327,9 +326,9 @@ extra: ignored
     let mut inputs = base_inputs(&profiles, ExecutionTarget::Selected(pid("sub-a")), &ov, &[]);
     inputs.tun.enable = true;
     let artifact = execute(&inputs, &content, &FakeScriptRunner::default()).unwrap();
+    let graph = artifact.graph.materialize().unwrap();
     let find = |kind| {
-        artifact
-            .graph
+        graph
             .nodes
             .iter()
             .find(|node| {
@@ -354,37 +353,45 @@ extra: ignored
     assert!(
         defaults.snapshot.config["proxy-groups"][0]
             .get("include-all")
-            .is_some(),
-        "the defaults step must not consume include-all early"
+            .is_some()
     );
     assert!(
         expansion.snapshot.config["proxy-groups"][0]
             .get("include-all")
-            .is_none(),
-        "only the dedicated include-all stage may consume the flag"
+            .is_none()
     );
     assert_eq!(
         serde_json::to_string(&finalizer.snapshot.config).unwrap(),
         serde_json::to_string(&artifact.final_config.to_json()).unwrap(),
     );
-    assert_eq!(
-        serde_json::to_string(&artifact.final_config.to_json()).unwrap(),
-        serde_json::to_string(
-            &super::super::builtin::finalize_for_core(
-                &crate::runtime::value::ConfigValue::from_json_value(
-                    find(BuiltinStepKind::TunManagedSettings)
-                        .snapshot
-                        .config
-                        .clone()
-                ),
-                &inputs.tun,
-                inputs.whitelist_enabled,
-                inputs.core_supports_mmdb,
+    let tags: Vec<_> = graph.nodes.iter().map(|node| &node.tag).collect();
+    let default_position = tags
+        .iter()
+        .position(|tag| {
+            matches!(
+                tag,
+                OperatorTag::BuiltinStep {
+                    step: BuiltinStepKind::Defaults,
+                    ..
+                }
             )
-            .to_json()
-        )
-        .unwrap(),
-        "split steps must preserve the finalizing output and key order"
+        })
+        .unwrap();
+    let final_filter_position = tags
+        .iter()
+        .position(|tag| {
+            matches!(
+                tag,
+                OperatorTag::BuiltinStep {
+                    step: BuiltinStepKind::FinalFieldFilter,
+                    ..
+                }
+            )
+        })
+        .unwrap();
+    assert!(
+        default_position < final_filter_position,
+        "defaults must run before the final core filter"
     );
 }
 
@@ -409,6 +416,7 @@ fn composition_with_base_matches_recording_contract() {
     let inputs = base_inputs(&profiles, ExecutionTarget::Selected(pid("all")), &ov, &[]);
 
     let artifact = execute(&inputs, &content, &FakeScriptRunner::default()).unwrap();
+    let graph = artifact.graph.materialize().unwrap();
     let config = artifact.final_config.to_json();
 
     // 11 条规则：只提取 proxies、按序追加、不合并其他字段、不去重。
@@ -423,8 +431,8 @@ fn composition_with_base_matches_recording_contract() {
     assert!(config.get("extra").is_none());
 
     // 图形状（对齐 snapshot.rs composition 测试期望形态）。
-    let nodes = &artifact.graph.nodes;
-    let root = artifact.graph.root_id as usize;
+    let nodes = &graph.nodes;
+    let root = graph.root_id as usize;
     assert!(matches!(
         &nodes[root].tag,
         OperatorTag::CompositionRoot { base: Some(_), .. }
@@ -474,16 +482,14 @@ fn composition_without_base_starts_from_clean_seed() {
     let inputs = base_inputs(&profiles, ExecutionTarget::Selected(pid("clean")), &ov, &[]);
 
     let artifact = execute(&inputs, &content, &FakeScriptRunner::default()).unwrap();
+    let graph = artifact.graph.materialize().unwrap();
 
-    let root = artifact.graph.root_id as usize;
+    let root = graph.root_id as usize;
     assert!(matches!(
-        &artifact.graph.nodes[root].tag,
+        &graph.nodes[root].tag,
         OperatorTag::CompositionRoot { base: None, .. }
     ));
-    assert_eq!(
-        artifact.graph.nodes[root].snapshot.config,
-        json!({ "proxies": [] })
-    );
+    assert_eq!(graph.nodes[root].snapshot.config, json!({ "proxies": [] }));
     let final_config = artifact.final_config.to_json();
     let names: Vec<&str> = final_config["proxies"]
         .as_array()
@@ -508,8 +514,9 @@ fn bare_target_reuses_shared_tail_with_none_selected() {
     let inputs = base_inputs(&profiles, ExecutionTarget::Bare, &ov, &[]);
 
     let artifact = execute(&inputs, &content, &FakeScriptRunner::default()).unwrap();
+    let graph = artifact.graph.materialize().unwrap();
 
-    let tags: Vec<_> = artifact.graph.nodes.iter().map(|node| &node.tag).collect();
+    let tags: Vec<_> = graph.nodes.iter().map(|node| &node.tag).collect();
     assert!(matches!(tags[0], OperatorTag::BareRoot));
     assert!(matches!(
         tags[1],
@@ -555,14 +562,15 @@ fn script_transform_failure_is_lenient_with_anchored_error_log() {
     let inputs = base_inputs(&profiles, ExecutionTarget::Selected(pid("sub-a")), &ov, &[]);
 
     let artifact = execute(&inputs, &content, &runner).unwrap();
+    let graph = artifact.graph.materialize().unwrap();
 
     // 透传：scoped 节点值 == root 值。
     assert_eq!(
-        artifact.graph.nodes[1].snapshot.config,
-        artifact.graph.nodes[0].snapshot.config
+        graph.nodes[1].snapshot.config,
+        graph.nodes[0].snapshot.config
     );
     // error 日志锚定在该 ScopedTransform 节点键上。
-    let scoped_key = artifact.graph.nodes[1].key.clone();
+    let scoped_key = graph.nodes[1].key.clone();
     let log = artifact
         .step_logs
         .iter()
@@ -581,6 +589,135 @@ fn script_transform_failure_is_lenient_with_anchored_error_log() {
     );
 }
 
+// Unit contract: a selected file with a JavaScript transform and an unavailable
+// engine must reject construction. The former lenient implementation returned
+// an artifact, silently leaving the transform unexecuted.
+#[test]
+fn missing_transform_engine_rejects_runtime_instead_of_keeping_the_old_config() {
+    let profiles = profiles_with(
+        Some("sub-a"),
+        &[],
+        &[],
+        vec![
+            config_file_item("sub-a", "sub-a.yaml", &["script"]),
+            script_item("script", "script.js", ScriptRuntime::JavaScript),
+        ],
+    );
+    let content = MapContentSource::from_pairs(&[
+        ("sub-a.yaml", "proxies: []\n"),
+        ("script.js", "script-source"),
+    ]);
+    let mut runner = FakeScriptRunner::default();
+    runner.runs.insert(
+        "script-source".to_string(),
+        RunReply::MissingEngine(ScriptOperation::Transform),
+    );
+    let ov = overrides();
+    let inputs = base_inputs(&profiles, ExecutionTarget::Selected(pid("sub-a")), &ov, &[]);
+
+    assert!(matches!(
+        execute(&inputs, &content, &runner),
+        Err(RuntimePipelineError::ExecuteScript {
+            source: ScriptExecutionError::StartEngine {
+                runtime: ScriptRuntime::JavaScript,
+                operation: ScriptOperation::Transform
+            }
+        })
+    ));
+}
+
+// Unit contract: an unavailable engine also stops the built-in transform path.
+// This guards against swallowing the error after the user profile has built.
+#[test]
+fn missing_builtin_engine_rejects_runtime_instead_of_logging_and_continuing() {
+    let profiles = Profiles::default();
+    let content = MapContentSource::from_pairs(&[]);
+    let mut runner = FakeScriptRunner::default();
+    runner.runs.insert(
+        "builtin-source".to_string(),
+        RunReply::MissingEngine(ScriptOperation::Transform),
+    );
+    let builtins = [BuiltinTransform {
+        name: "builtin".to_string(),
+        runtime: ScriptRuntime::JavaScript,
+        source: "builtin-source".to_string(),
+    }];
+    let ov = overrides();
+    let inputs = base_inputs(&profiles, ExecutionTarget::Bare, &ov, &builtins);
+
+    assert!(matches!(
+        execute(&inputs, &content, &runner),
+        Err(RuntimePipelineError::ExecuteScript {
+            source: ScriptExecutionError::StartEngine {
+                runtime: ScriptRuntime::JavaScript,
+                operation: ScriptOperation::Transform
+            }
+        })
+    ));
+}
+
+// Unit contract: the executor publishes a compact, parent-relative graph,
+// not an expanded copy. Every node must restore byte-equivalent ordered JSON
+// and the last main-line node must be the configuration actually built.
+// This would fail when direct ownership patches replay with reordered keys.
+#[test]
+fn runtime_pipeline_stored_graph_restores_every_node_and_its_final_config() {
+    let profiles = profiles_with(
+        Some("sub-a"),
+        &[],
+        &["tun", "dns"],
+        vec![config_file_item("sub-a", "sub-a.yaml", &[])],
+    );
+    let content = MapContentSource::from_pairs(&[(
+        "sub-a.yaml",
+        "mode: global\nunknown: removed\ntun: { stack: system }\nproxies: []\nrules: [MATCH,DIRECT]\n",
+    )]);
+    let ov = overrides();
+    let mut inputs = base_inputs(&profiles, ExecutionTarget::Selected(pid("sub-a")), &ov, &[]);
+    inputs.tun.enable = true;
+    let artifact = execute(&inputs, &content, &FakeScriptRunner::default()).unwrap();
+    crate::runtime::snapshot::assert_restore_matches_materialize(&artifact.graph);
+
+    let final_node = &artifact.graph.nodes[artifact.final_node as usize];
+    assert!(matches!(
+        final_node.tag,
+        OperatorTag::BuiltinStep {
+            step: BuiltinStepKind::Finalizing,
+            ..
+        }
+    ));
+    assert_eq!(
+        serde_json::to_string(&artifact.graph.restore(artifact.final_node).unwrap()).unwrap(),
+        serde_json::to_string(&artifact.final_config.to_json()).unwrap(),
+        "the stored final node must be the exact ordered generated config"
+    );
+
+    let filtered = artifact
+        .graph
+        .nodes
+        .iter()
+        .find(|node| {
+            matches!(
+                node.tag,
+                OperatorTag::BuiltinStep {
+                    step: BuiltinStepKind::WhitelistFieldFilter,
+                    ..
+                }
+            )
+        })
+        .unwrap();
+    assert!(matches!(
+        filtered.snapshot.payload,
+        crate::runtime::snapshot::SnapshotPayload::Delta(_)
+    ));
+    assert!(
+        filtered
+            .changed_fields
+            .as_ref()
+            .unwrap()
+            .contains("unknown")
+    );
+}
 #[test]
 fn missing_selected_content_is_strict_error() {
     let profiles = profiles_with(
@@ -595,6 +732,127 @@ fn missing_selected_content_is_strict_error() {
 
     let error = execute(&inputs, &content, &FakeScriptRunner::default()).unwrap_err();
     assert!(matches!(error, RuntimePipelineError::ContentSource { .. }));
+}
+
+/// Ref #5678: unfiltered subscriptions must not reopen disabled proxy
+/// listeners or steal the port from the configured mixed listener.
+// Contract: the built-in script sees the postprocessed Defaults node as
+// input and is not silently overwritten by a second ownership pass. This
+// detects the previous Chimera order even if final YAML happens to parse.
+#[test]
+fn builtin_transform_runs_after_unified_defaults_without_late_rewrites() {
+    let profiles = profiles_with(
+        Some("sub-a"),
+        &[],
+        &["tun", "dns"],
+        vec![config_file_item("sub-a", "sub-a.yaml", &[])],
+    );
+    let content = MapContentSource::from_pairs(&[("sub-a.yaml", "proxies: []\n")]);
+    let builtins = [BuiltinTransform {
+        name: "builtin-override".to_owned(),
+        runtime: ScriptRuntime::JavaScript,
+        source: "override-source".to_owned(),
+    }];
+    let mut runner = FakeScriptRunner::default();
+    runner.runs.insert(
+        "override-source".to_owned(),
+        RunReply::Replace(
+            json!({
+                "mode": "direct",
+                "mixed-port": 8123,
+                "tun": {"enable": false},
+                "dns": {"enable": false},
+                "profile": {"store-selected": false},
+                "proxies": []
+            }),
+            vec![],
+        ),
+    );
+    let ov = overrides();
+    let mut inputs = base_inputs(
+        &profiles,
+        ExecutionTarget::Selected(pid("sub-a")),
+        &ov,
+        &builtins,
+    );
+    inputs.tun.enable = true;
+    let artifact = execute(&inputs, &content, &runner).unwrap();
+    let graph = artifact.graph.materialize().unwrap();
+    let node = |kind| {
+        graph
+            .nodes
+            .iter()
+            .position(|node| {
+                matches!(
+                    node.tag, OperatorTag::BuiltinStep { step, .. } if step == kind
+                )
+            })
+            .unwrap()
+    };
+    let defaults_id = node(BuiltinStepKind::Defaults);
+    let builtin_id = graph
+        .nodes
+        .iter()
+        .position(|node| matches!(node.tag, OperatorTag::BuiltinTransform { .. }))
+        .unwrap();
+    assert_eq!(builtin_id, defaults_id + 1);
+    assert_eq!(
+        graph.nodes[defaults_id].snapshot.config["tun"]["enable"],
+        json!(true)
+    );
+    assert_eq!(
+        graph.nodes[defaults_id].snapshot.config["dns"]["enable"],
+        json!(true)
+    );
+    assert_eq!(
+        graph.nodes[defaults_id].snapshot.config["mixed-port"],
+        json!(7890)
+    );
+
+    let config = artifact.final_config.to_json();
+    assert_eq!(config["mixed-port"], json!(8123));
+    assert_eq!(config["tun"]["enable"], json!(false));
+    assert_eq!(config["dns"]["enable"], json!(false));
+    assert_eq!(config["profile"]["store-selected"], json!(false));
+    assert_eq!(
+        serde_json::to_string(&artifact.graph.restore(artifact.final_node).unwrap()).unwrap(),
+        serde_json::to_string(&config).unwrap()
+    );
+}
+
+#[test]
+fn unfiltered_profile_cannot_open_managed_proxy_ports() {
+    let profiles = profiles_with(
+        Some("sub-a"),
+        &[],
+        &[],
+        vec![config_file_item("sub-a", "sub-a.yaml", &[])],
+    );
+    let content = MapContentSource::from_pairs(&[(
+        "sub-a.yaml",
+        "port: 7890\nsocks-port: 7891\ncustom-unknown: 1\nproxies: []\n",
+    )]);
+    let ov = overrides();
+    let mut inputs = base_inputs(&profiles, ExecutionTarget::Selected(pid("sub-a")), &ov, &[]);
+    inputs.whitelist_enabled = false;
+
+    let unset = execute(&inputs, &content, &FakeScriptRunner::default())
+        .unwrap()
+        .final_config
+        .to_json();
+    assert!(unset.get("port").is_none());
+    assert!(unset.get("socks-port").is_none());
+    assert_eq!(unset["mixed-port"], json!(7890));
+    assert_eq!(unset["custom-unknown"], json!(1));
+
+    inputs.guard.ports.port = Some(7892);
+    inputs.guard.ports.socks_port = Some(7893);
+    let configured = execute(&inputs, &content, &FakeScriptRunner::default())
+        .unwrap()
+        .final_config
+        .to_json();
+    assert_eq!(configured["port"], json!(7892));
+    assert_eq!(configured["socks-port"], json!(7893));
 }
 
 #[test]
