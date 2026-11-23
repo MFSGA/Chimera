@@ -4,22 +4,20 @@
 //! values in, and get one [`EffectStatus`] per effect back.
 
 mod actor;
-pub mod adapters;
 mod error;
-pub mod ports;
 
 #[cfg(test)]
 mod tests;
 
 use std::time::Duration;
 
+use chimera_contracts::system_proxy::OsProxyConfig;
 use ractor::{Actor, ActorRef, rpc::CallResult};
 use tokio_util::task::TaskTracker;
 
 use self::{
     actor::{Message, SystemProxyActor, requested_kinds},
     error::SystemProxyError,
-    ports::OsProxyConfig,
 };
 use crate::client::effects::{
     plan::{ProxyGuardDesired, SystemProxyDesired},

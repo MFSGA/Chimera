@@ -253,7 +253,14 @@ impl CoreFacade {
             service_restart_attempts: Arc::new(AtomicU8::new(0)),
             service_restart_exhausted: Arc::new(AtomicBool::new(false)),
             service_commands: Arc::new(ServiceCommandActor::new(Arc::new(
-                crate::core::service::control::ServiceOsProcess,
+                chimera_os::service::OsServiceProcessControl::new(
+                    std::path::PathBuf::from("chimera-service-test-only"),
+                    chimera_paths::PathResolver::with_base_dirs(
+                        "/no-config".into(),
+                        "/no-data".into(),
+                    ),
+                    Arc::new(chimera_os::elevation::RefuseElevation),
+                ),
             ))),
         }
     }
@@ -264,6 +271,7 @@ impl CoreFacade {
     pub(crate) fn new_local_with_control(
         control: chimera_core_manager::CoreControl,
         runtime_paths: crate::client::RuntimePaths,
+        service_process: Arc<dyn chimera_contracts::service::ServiceProcessControl>,
     ) -> Self {
         Self {
             manager: Arc::new(CoreManager::new()),
@@ -277,9 +285,7 @@ impl CoreFacade {
             local_operations: Arc::new(LocalOperationRegistry::new()),
             service_restart_attempts: Arc::new(AtomicU8::new(0)),
             service_restart_exhausted: Arc::new(AtomicBool::new(false)),
-            service_commands: Arc::new(ServiceCommandActor::new(Arc::new(
-                crate::core::service::control::ServiceOsProcess,
-            ))),
+            service_commands: Arc::new(ServiceCommandActor::new(service_process)),
         }
     }
 

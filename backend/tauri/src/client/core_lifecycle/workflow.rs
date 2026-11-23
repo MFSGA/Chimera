@@ -34,7 +34,7 @@ pub(super) enum Command {
         expected_port: u16,
         expected_core_state_changed_at: i64,
         desired_before: bool,
-        original: crate::client::system_proxy::ports::OsProxyConfig,
+        original: chimera_contracts::system_proxy::OsProxyConfig,
         notifications: Arc<dyn crate::client::effects::ports::CommitNotifications>,
         persist_legacy_mirror: Arc<dyn Fn() -> anyhow::Result<()> + Send + Sync>,
     },
@@ -131,7 +131,7 @@ impl CoreLifecycleWorkflow {
         expected_port: u16,
         expected_core_state_changed_at: i64,
         desired_before: bool,
-        original: crate::client::system_proxy::ports::OsProxyConfig,
+        original: chimera_contracts::system_proxy::OsProxyConfig,
         notifications: Arc<dyn crate::client::effects::ports::CommitNotifications>,
         persist_legacy_mirror: Arc<dyn Fn() -> anyhow::Result<()> + Send + Sync>,
     ) -> Result<(), crate::client::system_proxy::SystemProxyActionError> {
@@ -282,7 +282,7 @@ impl CoreLifecycleWorkflow {
     async fn recover_stale_proxy_action(
         &self,
         system_proxy: &crate::client::system_proxy::SystemProxyClient,
-        original: crate::client::system_proxy::ports::OsProxyConfig,
+        original: chimera_contracts::system_proxy::OsProxyConfig,
         desired_before: bool,
         notifications: &dyn crate::client::effects::ports::CommitNotifications,
         error: crate::client::system_proxy::SystemProxyActionError,
@@ -755,7 +755,17 @@ impl CoreLifecycleWorkflow {
             self.core.stop().await?;
         }
 
-        self.installer.install(&artifact).await?;
+        let request = chimera_contracts::core_install::CoreBinaryInstallRequest {
+            target: artifact.target,
+            source: artifact.source.clone(),
+            destination: artifact.destination.clone(),
+            staging: artifact.staging.clone(),
+            // Chimera's currently distributed core archives contain no companion
+            // directory. Keep the upstream optional contract without inventing
+            // Meow-specific or unsupported release contents.
+            companion: None,
+        };
+        self.installer.install(&request).await?;
         if restart {
             artifact.progress.restarting();
             self.reconcile().await?;
@@ -767,7 +777,7 @@ impl CoreLifecycleWorkflow {
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 async fn rollback_stale_proxy_action(
     system_proxy: &crate::client::system_proxy::SystemProxyClient,
-    original: crate::client::system_proxy::ports::OsProxyConfig,
+    original: chimera_contracts::system_proxy::OsProxyConfig,
     error: String,
 ) -> crate::client::system_proxy::SystemProxyActionError {
     match system_proxy.restore_after_failed_action(original).await {
