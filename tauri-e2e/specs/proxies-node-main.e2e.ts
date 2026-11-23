@@ -297,6 +297,9 @@ describe('main proxy node reference layout', () => {
 
     const initial = await readProfiles();
     previousCurrent = initial.current ?? null;
+    // Creating the first Config auto-activates it (ref facade semantics).
+    // Register recovery before creation, not after a redundant activation.
+    selectionMayHaveChanged = true;
     const created = await createProfile(
       localConfigProfileRequest(profileName),
       fixture,
@@ -309,11 +312,54 @@ describe('main proxy node reference layout', () => {
     )?.uid;
     assert.ok(profileUid, 'The isolated proxy node profile was not created.');
 
-    selectionMayHaveChanged = true;
-    appliedValue(
-      await invoke('activate_profile', { uid: profileUid }),
-      'proxy-node Profile activation',
-    );
+    if (profiles.current === profileUid) {
+      // Ref automatically selects the first Config. When Core was stopped,
+      // both creation receipts can correctly be `unchanged`; reselecting
+      // this same UID would be another document-only commit, not an apply.
+      const applied = created.commits.some(
+        (receipt) =>
+          receipt.domain === 'profiles' && receipt.runtime === 'applied',
+      );
+      if (!applied) {
+        assert.ok(
+          created.commits.every(
+            (receipt) =>
+              receipt.runtime === 'unchanged' ||
+              receipt.runtime === 'saved_inactive',
+          ),
+          `Unexpected automatic Profile activation receipts: ${JSON.stringify(created.commits)}`,
+        );
+        // Test preparation only: make the selected Config actually run via
+        // the production lifecycle. Do not fake an applied receipt.
+        await invoke('restart_sidecar');
+      }
+    } else {
+      appliedValue(
+        await invoke('activate_profile', { uid: profileUid }),
+        'proxy-node Profile activation',
+      );
+    }
+
+    let lastCoreState: unknown;
+    try {
+      await browser.waitUntil(
+        async () => {
+          const [state] =
+            await invoke<[unknown, number, string]>('get_core_status');
+          lastCoreState = state;
+          return state === 'Running';
+        },
+        {
+          timeout: 30_000,
+          timeoutMsg: 'The synthetic Profile Core did not start.',
+        },
+      );
+    } catch (error) {
+      throw new Error(
+        `Synthetic Profile Core is not running: ${JSON.stringify(lastCoreState)}`,
+        { cause: error },
+      );
+    }
 
     await browser.waitUntil(
       async () => {
@@ -340,6 +386,22 @@ describe('main proxy node reference layout', () => {
     await proxiesLink.waitForExist({ timeout: 30_000 });
     const proxiesPath = await proxiesLink.getAttribute('href');
     assert.ok(proxiesPath, 'The proxy group route was not available.');
+    assert.match(
+      proxiesPath,
+      /^\/main\/proxies\/group\/[^/?]+/,
+      'The visible group link must use the canonical ref route.',
+    );
+    // Navigate through the actual sidebar link, not a test-only URL jump.
+    await proxiesLink.click();
+    await browser.waitUntil(
+      async () => new URL(await browser.getUrl()).pathname === proxiesPath,
+      {
+        timeout: 15_000,
+        timeoutMsg: 'The visible group link did not navigate.',
+      },
+    );
+    // The href is already canonical. This does not navigate again; it waits
+    // for the nested animated outlet to finish before any hit-testing/hover.
     await openMainRoute(proxiesPath);
     await browser.waitUntil(
       async () =>
@@ -423,6 +485,14 @@ describe('main proxy node reference layout', () => {
       JSON.stringify(state, null, 2),
     );
     assert.ok(state.chips.includes('UDP'), JSON.stringify(state, null, 2));
+
+    // Ref GroupMeta mounts a hidden measuring copy before the visible row.
+    // Assert the real, user-visible status rather than the aria-hidden clone.
+    const groupStatus = await $(
+      '[data-slot="proxies-group-meta"] > div:not([aria-hidden]) [data-slot="proxies-group-status"]',
+    );
+    await groupStatus.waitForDisplayed({ timeout: 15_000 });
+    assert.ok((await groupStatus.getText()).trim().length > 0);
     assert.equal(state.hasDelay, false, JSON.stringify(state, null, 2));
     assert.ok(state.scrollViewportFound, JSON.stringify(state, null, 2));
     assert.ok(state.nodeVisible, JSON.stringify(state, null, 2));
@@ -443,6 +513,69 @@ describe('main proxy node reference layout', () => {
   // waitForDisplayed reported it hidden; check rendered geometry and hit
   // testing representative points inside its rounded edge, then assert the
   // action's enabled, idle state.
+  it('shows one shared latency-history tooltip when hovering a node card', async () => {
+    const card = await $(
+      '[data-slot="proxies-virtual-item"] button[data-selectable]',
+    );
+    await card.waitForDisplayed({ timeout: 15_000 });
+    // The embedded driver sometimes starts with the pointer over the
+    // focused sidebar link after navigation. Make two genuine W3C pointer
+    // moves within the card so its React pointermove handler is exercised.
+    await browser
+      .action('pointer', { parameters: { pointerType: 'mouse' } })
+      .move({ origin: card, x: -25, y: 0 })
+      .move({ origin: card, x: 0, y: 0 })
+      .perform();
+
+    const history = await $('[data-slot="proxy-delay-history"]');
+    await history.waitForDisplayed({ timeout: 15_000 });
+    assert.ok((await history.getText()).trim().length > 0);
+    const visibleTooltips = await $$('[data-slot="proxy-delay-history"]');
+    assert.equal(visibleTooltips.length, 1);
+  });
+
+  it('selects a proxy through the visible card and restores the previous selection', async () => {
+    const readSelected = async () => {
+      const selected = await $$(
+        '[data-slot="proxies-virtual-item"][data-active="true"] [data-slot="proxy-node-card"]',
+      );
+      return (await selected.length) > 0
+        ? selected[0].getAttribute('data-proxy-name')
+        : null;
+    };
+
+    const previous = await readSelected();
+    assert.ok(
+      previous === nodeName || previous === 'DIRECT',
+      `Unexpected initial selected proxy: ${previous}`,
+    );
+    const next = previous === nodeName ? 'DIRECT' : nodeName;
+    const nextCard = await $(
+      `[data-slot="proxy-node-card"][data-proxy-name="${next}"]`,
+    );
+    await nextCard.waitForDisplayed({ timeout: 15_000 });
+    assert.equal(await nextCard.getAttribute('data-selectable'), 'true');
+    assert.equal(await nextCard.getAttribute('aria-disabled'), 'false');
+
+    try {
+      await nextCard.click();
+      await browser.waitUntil(async () => (await readSelected()) === next, {
+        timeout: 15_000,
+        timeoutMsg: `Clicking ${next} did not change the selected proxy.`,
+      });
+    } finally {
+      const previousCard = await $(
+        `[data-slot="proxy-node-card"][data-proxy-name="${previous}"]`,
+      );
+      await previousCard.waitForDisplayed({ timeout: 15_000 });
+      await previousCard.click();
+      await browser.waitUntil(async () => (await readSelected()) === previous, {
+        timeout: 15_000,
+        timeoutMsg: 'The original selected proxy was not restored.',
+      });
+    }
+  });
+
   it('renders an available, idle group delay trigger', async () => {
     let lastState: DelayTriggerState | null = null;
     try {
@@ -480,6 +613,164 @@ describe('main proxy node reference layout', () => {
     assert.equal(state.loadingState, 'false', JSON.stringify(state, null, 2));
   });
 
+  it('completes a real group delay action with visible success or localized error', async () => {
+    const catalog = await readAppMessageCatalog();
+    const failureText = catalog.error_clash_read_delay_test_failed;
+    assert.equal(typeof failureText, 'string');
+
+    const groupAction = await $('[data-slot="delay-test-button"]');
+    const groupTrigger = await $('[data-slot="delay-test-button-trigger"]');
+    await groupTrigger.waitForDisplayed({ timeout: 15_000 });
+    assert.equal(await groupAction.getAttribute('data-loading'), 'false');
+    assert.equal(await groupAction.getAttribute('data-completed'), 'false');
+    assert.equal(await groupAction.getAttribute('data-error'), 'false');
+
+    // This invokes the live Core's native group delay action through the
+    // visible UI in an isolated namespace; no injected success or fake sample.
+    await groupTrigger.click();
+    await browser.waitUntil(
+      async () =>
+        (await groupAction.getAttribute('data-completed')) === 'true' ||
+        (await groupAction.getAttribute('data-error')) === 'true',
+      {
+        timeout: 30_000,
+        timeoutMsg:
+          'Group delay action did not report a completed test or an error.',
+      },
+    );
+    assert.equal(await groupAction.getAttribute('data-loading'), 'false');
+    const errored = (await groupAction.getAttribute('data-error')) === 'true';
+    console.info('GROUP_DELAY_UI_RESULT', errored ? 'error' : 'completed');
+    if (errored) {
+      assert.equal(await groupAction.getAttribute('data-completed'), 'false');
+      assert.equal(await groupAction.getAttribute('data-success'), 'false');
+      await browser.waitUntil(
+        async () =>
+          browser.execute(
+            (message) => document.body.innerText.includes(message),
+            failureText as string,
+          ),
+        {
+          timeout: 5_000,
+          timeoutMsg: 'A rejected group delay had no localized visible error.',
+        },
+      );
+      // Avoid mistaking this group error for the next node action's notice.
+      await browser.waitUntil(
+        async () =>
+          browser.execute(
+            (message) => !document.body.innerText.includes(message),
+            failureText as string,
+          ),
+        {
+          timeout: 10_000,
+          timeoutMsg: 'The group failure notice did not close.',
+        },
+      );
+    } else {
+      assert.equal(await groupAction.getAttribute('data-completed'), 'true');
+    }
+  });
+
+  it('tests a real offline node without selecting it and reports the result', async () => {
+    const catalog = await readAppMessageCatalog();
+    const failureText = catalog.error_clash_read_delay_test_failed;
+    assert.equal(typeof failureText, 'string');
+
+    const activeBefore = await $(
+      '[data-slot="proxies-virtual-item"][data-active="true"] [data-slot="proxy-node-card"]',
+    );
+    const nameBefore = await activeBefore.getAttribute('data-proxy-name');
+    const card = await $(
+      `[data-slot="proxy-node-card"][data-proxy-name="${nodeName}"]`,
+    );
+    const delayTrigger = await card.$(
+      '[data-slot="proxy-node-delay-test-trigger"]',
+    );
+    await delayTrigger.waitForDisplayed({ timeout: 15_000 });
+    assert.equal(await delayTrigger.getAttribute('data-error'), 'false');
+
+    // Prove that the nested delay action does not select a *different* node.
+    // Otherwise clicking the already-selected SOCKS node could hide a bubble
+    // into its parent card's select handler.
+    if (nameBefore === nodeName) {
+      const directCard = await $(
+        '[data-slot="proxy-node-card"][data-proxy-name="DIRECT"]',
+      );
+      await directCard.click();
+      await browser.waitUntil(
+        async () =>
+          (await $(
+            '[data-slot="proxies-virtual-item"][data-active="true"] [data-slot="proxy-node-card"]',
+          ).getAttribute('data-proxy-name')) === 'DIRECT',
+        {
+          timeout: 15_000,
+          timeoutMsg:
+            'Could not select DIRECT before testing nested delay click.',
+        },
+      );
+    }
+
+    try {
+      // The fixture's SOCKS5 port is deliberately closed in this isolated
+      // network, so the native probe cannot reach a live external endpoint.
+      await delayTrigger.click();
+      await browser.waitUntil(
+        async () =>
+          (await delayTrigger.getAttribute('data-error')) === 'true' ||
+          (await delayTrigger.getAttribute('data-success')) === 'true',
+        {
+          timeout: 30_000,
+          timeoutMsg: 'Node delay action remained pending with no result.',
+        },
+      );
+      const nodeErrored =
+        (await delayTrigger.getAttribute('data-error')) === 'true';
+      console.info('NODE_DELAY_UI_RESULT', nodeErrored ? 'error' : 'completed');
+      assert.equal(
+        nodeErrored,
+        true,
+        'The isolated SOCKS5 endpoint is closed; the native node probe must report a rejected request.',
+      );
+      if (nodeErrored) {
+        await browser.waitUntil(
+          async () =>
+            browser.execute(
+              (message) => document.body.innerText.includes(message),
+              failureText as string,
+            ),
+          {
+            timeout: 5_000,
+            timeoutMsg: 'A rejected node delay had no localized visible error.',
+          },
+        );
+      }
+
+      const activeAfter = await $(
+        '[data-slot="proxies-virtual-item"][data-active="true"] [data-slot="proxy-node-card"]',
+      );
+      assert.equal(
+        await activeAfter.getAttribute('data-proxy-name'),
+        nameBefore === nodeName ? 'DIRECT' : nameBefore,
+        'Clicking the nested delay control should not change the selected proxy.',
+      );
+    } finally {
+      if (nameBefore === nodeName) {
+        await card.click();
+        await browser.waitUntil(
+          async () =>
+            (await $(
+              '[data-slot="proxies-virtual-item"][data-active="true"] [data-slot="proxy-node-card"]',
+            ).getAttribute('data-proxy-name')) === nodeName,
+          {
+            timeout: 15_000,
+            timeoutMsg: 'The original selected node could not be restored.',
+          },
+        );
+      }
+    }
+  });
+
   it('filters the native node list through the ref search UI and restores it', async () => {
     const navigation = await $('[data-slot="proxies-navigate"]');
     await navigation.waitForDisplayed({ timeout: 15_000 });
@@ -506,8 +797,10 @@ describe('main proxy node reference layout', () => {
       { timeout: 15_000, timeoutMsg: 'Proxy search did not update the URL.' },
     );
 
-    const close = await $('[data-slot="proxies-node-search-close"]');
-    await close.click();
+    const clear = await $('[data-slot="search-field-clear"]');
+    await clear.waitForDisplayed({ timeout: 15_000 });
+    await clear.click();
+    await browser.keys('Escape');
     await browser.waitUntil(
       async () =>
         browser.execute(() => !new URLSearchParams(location.search).has('q')),
@@ -533,6 +826,40 @@ describe('main proxy node reference layout', () => {
     await sort.waitForDisplayed({ timeout: 15_000 });
     const locate = await $('[data-slot="proxies-locate-current-node"]');
     await locate.waitForExist({ timeout: 15_000 });
+  });
+
+  it('opens a full-width search overlay on narrow screens and closes it visibly', async () => {
+    await browser.setWindowSize(420, 740);
+    try {
+      const open = await $('[data-slot="proxies-node-search-button"]');
+      await open.waitForDisplayed({ timeout: 15_000 });
+      await open.click();
+
+      const overlay = await $('[data-slot="proxies-node-search-overlay"]');
+      await overlay.waitForDisplayed({ timeout: 15_000 });
+      const field = await $('[data-slot="proxies-node-search-field"]');
+      await field.waitForDisplayed({ timeout: 15_000 });
+      await field.setValue('nonexistent-proxy-for-small-screen');
+      await $('[data-slot="proxies-node-no-match"]').waitForDisplayed({
+        timeout: 15_000,
+      });
+
+      const close = await $('[data-slot="proxies-node-search-close"]');
+      await close.click();
+      await browser.waitUntil(
+        async () =>
+          !(await overlay.isExisting()) &&
+          (await browser.execute(
+            () => !new URLSearchParams(location.search).has('q'),
+          )),
+        {
+          timeout: 15_000,
+          timeoutMsg: 'Narrow proxy search was not dismissed.',
+        },
+      );
+    } finally {
+      await browser.setWindowSize(1240, 638);
+    }
   });
 
   // Acceptance: the ref folder controls must be functional, not merely
@@ -626,7 +953,13 @@ describe('main proxy node reference layout', () => {
         .move({ origin: firstGroup })
         .down()
         .pause(90)
+        // The upstream pointer sensor requires 8px of movement. Activate it
+        // while still over the source before approaching the destination.
+        .move({ origin: firstGroup, x: 22, y: 10, duration: 180 })
+        .pause(90)
         .move({ origin: secondHeading, duration: 350 })
+        .pause(100)
+        .move({ origin: secondHeading, x: 0, y: 3, duration: 90 })
         .pause(100)
         .up()
         .perform();
@@ -660,6 +993,27 @@ describe('main proxy node reference layout', () => {
         stored?.folders.find((f) => f.name === secondName)?.members,
         [groupName],
       );
+    } catch (error) {
+      // The global afterTest snapshot runs after this fixture's restoration.
+      // Capture the actual drag failure *before* cleanup changes the page.
+      const dir = process.env.CHIMERA_E2E_ARTIFACT_DIR;
+      if (dir) {
+        const base = path.join(
+          dir,
+          `proxy-group-drag-before-cleanup-${process.pid}-${Date.now()}`,
+        );
+        try {
+          fs.mkdirSync(dir, { recursive: true });
+          await browser.saveScreenshot(`${base}.png`);
+          fs.writeFileSync(`${base}.html`, await browser.getPageSource());
+        } catch (captureError) {
+          console.warn(
+            'Could not capture drag failure before cleanup:',
+            captureError,
+          );
+        }
+      }
+      throw error;
     } finally {
       // The active fixture is isolated, but always restore its layout even if
       // the drag failed or the UI disappeared after a mutation.
@@ -680,5 +1034,39 @@ describe('main proxy node reference layout', () => {
       }
       await openMainRoute('/main/proxies');
     }
+  });
+
+  it('redirects an existing direct group bookmark to the ref route and keeps its search', async () => {
+    const canonicalPath = `/main/proxies/group/${encodeURIComponent(groupName)}`;
+    const legacyPath = `/main/proxies/${encodeURIComponent(groupName)}?q=SOCKS`;
+
+    // Direct URL entry is the user-facing action for backwards-compatible
+    // bookmarks. The redirect must preserve both group identity and filtering.
+    // Open the actual bookmark URL, not openMainRoute(): that helper must
+    // observe the *input* path and would intentionally reject a redirect.
+    await browser.url(new URL(legacyPath, await browser.getUrl()).href);
+    await browser.waitUntil(
+      async () => {
+        const location = new URL(await browser.getUrl());
+        return (
+          location.pathname === canonicalPath &&
+          location.searchParams.get('q') === 'SOCKS'
+        );
+      },
+      {
+        timeout: 15_000,
+        timeoutMsg:
+          'The previous group URL did not redirect to ref with its search.',
+      },
+    );
+    const selectedNode = await $(
+      `[data-slot="proxies-virtual-item"]:has([data-proxy-name="${nodeName}"])`,
+    );
+    await selectedNode.waitForDisplayed({ timeout: 15_000 });
+    assert.equal(
+      (await $$('[data-slot="proxies-virtual-item"]')).length,
+      1,
+      'The preserved search should filter the actual visible node list.',
+    );
   });
 });

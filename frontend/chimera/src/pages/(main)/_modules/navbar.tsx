@@ -107,7 +107,10 @@ export const DefaultNavbar = () => {
       </NavbarButton>
 
       {fristGroup ? (
-        <NavbarButton to="/main/proxies/$name" params={{ name: fristGroup }}>
+        <NavbarButton
+          to="/main/proxies/group/$name"
+          params={{ name: fristGroup }}
+        >
           <Public />
           <NavbarLabel>{m.navbar_label_proxies()}</NavbarLabel>
         </NavbarButton>

@@ -93,6 +93,10 @@
 | LESSON-20261116-005 | 2026-11-16 | Development / test workflow | 新增 actor 回归后才补读测试规范；随后按 T01/T02 复核并明确真实 actor 边界 | Mitigated |
 | LESSON-20261116-008 | 2026-11-16 | Startup / Service readiness | ready 与 unavailable 的 readiness 变化都要触发 owner follow-up；同代探测恢复断言需同步覆盖新语义 | Mitigated |
 | LESSON-20261119-001 | 2026-11-19 | CI / Signature | Daily Manifest bot 未签名提交被 GH013 拒绝；GitHub Verified GraphQL 修复待 CI 复验 | Mitigated |
+| LESSON-20261119-002 | 2026-11-19 | E2E / Linux viewport | 外窗 1240px 实际 WebKit 内窗 1189px；维持 ≥1200px 内窗断言，增加请求的窗口尺寸并重跑 WebKit 2/2 | Verified |
+| LESSON-20261119-003 | 2026-11-19 | E2E / Runtime / Proxies | 隔离 UID=root 让 Service probe 变 Unknown；首个 Config 自动激活后重选只产生 unchanged；真实 Core+13 项 WebKit E2E 复验通过 | Verified |
+| LESSON-20261119-004 | 2026-11-19 | E2E / Router | 点击导航后漏等嵌套动画导致几何和 Tooltip 误失败；旧路径重定向不能用 pathname 恒等辅助函数验证 | Verified |
+| LESSON-20261120-001 | 2026-11-20 | Proxies / Delay UI | Native Core 已解析实时测试参数；UI 漏捕获延迟请求失败，沿 ref 五语文案补可见反馈并由真实 WebKitGTK 验证 | Verified |
 
 ### LESSON-20261113-001/002：架构迁移要覆盖原生运行时与稀疏配置
 
@@ -1342,3 +1346,35 @@ backend/Cargo.toml -p chimera --lib core::clash::proxies::tests:: -- --nocapture
 - 与上游比较：本地 `ref/` 为 `c4b35e04870a9caa53f21d10af6fcfde4a6f4c01`。上游 Daily 使用 Release App token 和普通 `git commit`，但这个提交方式不能保证满足 Chimera 的 Verified 签名规则，故不能直接复制来修复。
 - 修正与验证：`master` Daily 改为 `scripts/ci/commit-manifest-verified.sh` 调用 GitHub GraphQL `createCommitOnBranch`，只发布 `manifest/version.json`；不自定义 author/committer，让 GitHub 自动签名，校验 `signature.isValid`，并使用 `expectedHeadOid` 阻止过期定时任务覆盖较新提交。保留 Prettier 格式化和无变化跳过；`dev` 检出独立历史，不强行调用只存在于 master 的脚本。mock GitHub API 测试 **4/4**、Manifest Node 全套 **8/8** 及 Manifest 类型检查、Prettier 均通过。
 - 验证边界与防复发：本地测试只证明 GraphQL 参数、内容编码、正确分支、失败反馈和跳过策略，**不证明 GitHub 实际返回 Verified 或允许受保护分支写入**；需提交后使用新 Daily workflow_dispatch/schedule 检查真实 commit 的 `verification.verified` 和远端 SHA。不要以禁用签名规则、忽略失败、使用未知 GPG 私钥或跳过检查来变绿；修改 workflow 与权限属 L3，须按仓库治理审查。
+
+### LESSON-20261119-002：桌面 E2E 设置外窗尺寸不等于 WebKit 内容视口宽度
+
+- **证据**：2026-11-19 NixOS 独立 user/net/pid namespace + Xvfb 的 `proxies-main-layout.e2e.ts` 首次运行，截图在失败时直接捕获并实际打开：页面已经展示 Proxies 空态、图标与 Profile 跳转按钮；`browser.setWindowSize(1240, 638)` 后 `window.innerWidth === 1189`、`innerHeight === 611`，使 line 86 `>= 1200` 断言失败。真实 WebKitGTK 截图和失败前的 DOM 几何一致，其他页面功能尚未在该断言后检验。
+- **修正和证据**：测试只把外窗请求调到 1270×700，**不调整任何被测 viewport、容器、字体、空态、溢出或导航断言**。同一隔离 WebKitGTK driver 重跑真实 `proxies-main-layout.e2e.ts` **2/2 通过**，包括点击 Profile 跳转。Rules 实机 `rules-main-layout.e2e.ts` **4/4 通过**；独立 `proxies-node-main.e2e.ts` 被 Profile activation 的 Runtime applied receipt 检查拦截，真实应用日志明确 Service probe `Unknown` / 未确认 owner，不能声称节点点击失败或通过。
+- **防复发与边界**：必须以 `window.innerWidth/innerHeight` 校验目标内容尺寸，外窗请求尺寸需预留 GTK/OS chrome 的空间；不要降低布局阈值或跳过失败的 UI 用例来变绿。对于依赖 Runtime 的测试，`committed` 不等于 `runtime:applied`，当 Service 状态 Unknown 时保持 fail-closed 而非伪造 applied receipt。测试运行时仍有辅助桌面服务 glibc 不兼容警告，未观察到它影响已通过的布局测试。
+
+### LESSON-20261119-003：隔离桌面 E2E 的 Service 身份与自动激活回执必须真实验证
+
+- **证据与根因**：2026-11-19 在 NixOS 的专用 user/net/pid namespace + Xvfb 运行 `proxies-node-main.e2e.ts`。最初 `unshare --map-root-user` 把测试用户映射为 namespace 内 UID 0，`chimera-service status --json` 通过 `service_manager::ServiceManager::native()` 查询系统 Service 返回 exit 1；应用日志明确 `ServiceActor` 状态 `Unknown`，启动安全门禁拒绝并行启动 Core。改为 `unshare --user --map-current-user --keep-caps --net --pid --fork --kill-child --mount-proc` 后保留原 UID1000，既能只在隔离 namespace 启用 loopback，又让**真实** CLI 返回 `not_installed`，并通过 CoreLifecycle 正常启动，不是伪造服务状态。
+- **参考实现与测试缺陷**：固定 `ref@c4b35e04870a9caa53f21d10af6fcfde4a6f4c01` 的 `client/mod.rs::create_profile` 在 `current=None` 时自动调用 `set_current_if_none`，而 `client/profiles.rs::set_current_commits_without_runtime_work_when_reselected` 明确同 UID 再选择只变更文档、不触发 Runtime；当 Core 尚未启动，实际 `create_profile` 返回两个 `runtime:unchanged` receipt，原 E2E 却对重选操作强制要求 `applied`，误判为激活故障。现按真实 `profiles.current` 判断自动激活路径，检查初始真实 receipts，使用生产 `restart_sidecar` 协调已选配置，并验证 `get_core_status === Running` 及 `get_proxies` 可读到本次合成节点后才执行 UI 交互。**没有放宽已运行 Core 的实际验收条件，也没有跳过失败断言。**
+- **失败时截图与修正**：首次达到真实节点页面的 E2E 为 4/7 通过。失败当时的 screenshot 和 WebDriver HTML 显示组状态确实可见，但 `GroupMeta` 同时包含 `aria-hidden` 的隐藏布局测量行，测试误选全局第一个 `proxies-group-status`；将测试定位到可见行。新 `proxy-node-card` 标记未进入旧的原生 E2E 程序（Rust binary 内嵌的是较旧 Vite build），改为严格先 `web:build` 再编译 e2e-feature Rust 产物。拖拽测试按上游 `Distance(8)` 先在源节点内移动超过激活阈值，再以 WebDriver W3C pointer 移动到目标文件夹标题，只有布局确实持久化并在刷新后保持才通过；另外增加拖拽失败时**清理前**截图/HTML，避免 after hook 恢复布局导致证据失真。
+- **真实复验及边界**：在快进到 `master@bc97e3e3` 且固定 `ref@c4b35e04` 后完整执行 `pnpm e2e:tauri:build` 成功（前端构建随后 Rust E2E），隔离 WebKitGTK 605.1.15 中节点详情 7/7、Rules 4/4、Proxies 空态 2/2，**共 13/13 通过**，包含点击切换代理、共享历史 Tooltip、查询、窄屏搜索、菜单移动及指针拖拽持久化与恢复。embedded WebDriver 的 pointer event 不是可信的实体鼠标输入；结果不覆盖物理输入、生产 TUN、联网传输、其他 OS 或未来 `proxy:write` 远程授权。独立 Xvfb 的 DBus 桌面辅助服务仍出现 glibc 2.42/2.43 警告，但没有阻断目标 E2E。
+- **预防**：对桌面隔离环境先真实探测 Service 和用户身份；把 `committed`、`runtime:unchanged`、`runtime:applied` 和 `Core Running` 区分清楚；E2E 必须确保最新前端资源已打包进当前 native binary；包含隐藏测量 DOM 的组件应断言可见控件；DnD 应证明真实目标及持久化，而非只看合成事件已发送。
+
+- **追加的最新 SHA 复验**：远端先后快进 `bc97e3e3` 到 `ac0d4e04`，新提交仅调整 Runtime/设计文档；完整重新构建包含最新前端的 native E2E 后，三套 Linux WebKitGTK 实际运行再次分别 **7/7、4/4、2/2**，合计 **13/13**。保留原始失败及旧 SHA 的测试证据，不能跨 SHA 直接继承结果。UI 源码仍在本地未提交。
+
+### LESSON-20261119-004：测试点击导航必须等待嵌套过渡动画稳定；重定向不能用旧路径恒等断言
+
+- **真实问题**：2026-11-19 Proxies 详情路由迁到上游的 `/main/proxies/group/$name` 后，E2E 从侧栏 WebDriver 点击进入新页面，但仅等待 `location.pathname` 和页面文字。首次失败截图中 `AnimatedOutletPreset` 正在混合前后两层内容，导致 `buttonInViewport=false`，后续延迟历史 Tooltip 也未显示。此前用 `openMainRoute` 辅助跳转时会等待动画，但单纯改成真实用户点击漏掉了这一步。
+- **修复及反例**：保持真实侧栏点击，在 URL 进入目标路径后调用现有 `openMainRoute(sameCanonicalPath)` 检查嵌套 outlet 的稳定性；**输入路径已是目标路径，因此它只等待不再次导航**。测试仍严格断言卡片尺寸/点击可达/历史悬浮，不删测试不加无理由固定 sleep。兼容旧路径验证初次使用 `openMainRoute(oldPath)`，该辅助函数本就拒绝路径变化；改用浏览器直接打开旧书签 URL，再断言 redirect 最终 pathname、新页面及保留下来的 `?q=SOCKS` 真实过滤效果。
+- **复验**：`master@ac0d4e04`，固定 `ref@c4b35e04`，先完整重构前端 + E2E Rust，再在独立命名空间的真实 WebKitGTK/Mihomo 中执行 8 个 Proxies 节点用例，**8/8 通过**。链接兼容无需后端变更，也不涉及用户配置。保留前几轮失败截图与日志；Windows/macOS 真机深链接和 OS 级协议处理尚未在本轮验证。
+
+- **最新 Runtime 重建复验**：远端又增加 `4f28cbc7`、`deaca068`（仅 Backend Runtime/设计文档），完成无交叉的主线快进并恢复 UI 工作区；在 `master@deaca068` 上重新执行完整前端 + E2E 原生构建后，隔离 WebKitGTK 真实测试再次取得 **8/8 + 4/4 + 2/2 = 14/14**，无系统代理/TUN/Service 的宿主改动。未将上一 SHA 的通过结果直接移植到当前 SHA。
+
+### LESSON-20261120-001：延迟测试要区分请求失败和测试完成但延迟为零
+
+- **事实与参考**：`ref` 的 Proxies 延迟测试逻辑将错误交给全局 IPC 翻译层 `error_clash_read_delay_test_failed`；Chimera 新 Main UI 的 Native Core API 本身已经处理实时 group URL、expectedStatus、provider、成员权限和固定组并发，若前端再复写这些参数会造成与后端失配。用户真正遇到的缺口是两条延迟测试 `useBlockTask.execute()` 失败时没有 UI 捕获、会留下未处理异步异常和不可见失败。
+- **修正**：保持 Core 的实时判定，按上游五语同名键添加本地化错误提示；分组测试成功完成才发出短暂成功状态，异常会保留 error task 状态而非显示绿灯；单节点按钮捕获并显示同一错误，阻止事件传播到父级节点卡片以免误选。**区分测试接口成功（哪怕延迟为 0）与网络请求/IPC 真正失败（throw）**，不能凭 `delay===0` 推断调用失败。
+- **真实 E2E 证据**：在网络命名空间隔离的 WebKitGTK 与真实 Mihomo 上，合成不可达的 SOCKS5 节点导致整组及单节点真实 native 测试均返回 error；两项 E2E 检查通知可见、不显示成功、节点选中没有被内部按钮点击改动并恢复原选择。首次增强套件节点 10/10、相邻 Rules 4/4、Proxies 空态 2/2 全部通过；收紧为离线节点必须返回 error 后，重新执行节点 E2E 10/10 成功，连同同版相邻 6 项合计 16/16。Linux 测试不覆盖外网成功分支或 Windows/macOS 平台，Core 安全约束与 IPC 接口均未修改。
+
+- **2026-11-20 最新基线独立重测**：快进 `fc50370d` 至 `5bbeec75`（只变动 Runtime 启动流程与文档）后，完整重建 E2E native binary、再次独立运行 Linux WebKitGTK 套件，结果 Proxies 10/10、Rules 4/4、Proxies 空态 2/2，**最新 SHA 总计 16/16**。本轮 Proxies 套件用时 1m03.8s，上一基线约 20.2s，另有 mixed port 未确认一次警告；因 Core 后续 Running、UI 测试全过，记录为待排查的启动时序/性能线索，而非凭时长推断 Runtime 必然有错误。严格区分跨 SHA 测试证据。

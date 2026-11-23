@@ -1,16 +1,25 @@
 import { useQuery } from '@tanstack/react-query';
 import type { NativeProxies_Serialize } from './bindings.js';
+import {
+  collectDelayKeys,
+  type DelayKeyedProxies,
+} from './native-proxy-delay.js';
 import { queries } from './query-bindings.js';
 import { unwrapQueryOptions } from './query-options.js';
 
 /** The native wire graph keeps a single node record even if groups share it. */
 export const selectVisibleNativeProxies = (
   graph: NativeProxies_Serialize,
-): NativeProxies_Serialize => {
+): DelayKeyedProxies => {
   const visibleGroups = graph.groups.filter((group) => !group.hidden);
   return visibleGroups.length === graph.groups.length
     ? graph
-    : { ...graph, groups: visibleGroups };
+    : {
+        ...graph,
+        groups: visibleGroups,
+        // Preserve hidden groups' source keys for nested member resolution.
+        delayKeys: collectDelayKeys(graph),
+      };
 };
 
 /**

@@ -122,6 +122,7 @@ export function useTrafficUsageByKeys(
   query: TrafficQuery,
   dimension: Dimension,
   keys: string[],
+  options?: { refetchInterval?: number | false },
 ) {
   return useQuery<UsageGroup[]>({
     queryKey: ['traffic-usage-by-keys', query, dimension, keys],
@@ -129,5 +130,6 @@ export function useTrafficUsageByKeys(
       unwrapResult(
         await commands.queryTrafficUsageByKeys(query, dimension, keys),
       ),
+    ...options,
   });
 }
