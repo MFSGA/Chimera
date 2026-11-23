@@ -915,13 +915,22 @@ pub async fn get_proxies(
 }
 
 /// Additive native proxy view for typed consumers. The legacy `get_proxies`
-/// command remains unchanged for both Chimera UIs and Agent integrations.
+/// wire shape remains available to existing UI/Agent consumers, but credential-
+/// bearing icon URLs are omitted and read through `get_proxy_group_icons`.
 #[tauri::command]
 #[specta::specta]
 pub async fn get_native_proxies(
     client: State<'_, ChimeraClient>,
 ) -> Result<crate::core::clash::proxies::NativeProxies> {
     Ok(client.clash_native_proxies().await?)
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn get_proxy_group_icons(
+    client: State<'_, ChimeraClient>,
+) -> Result<IndexMap<clash_api::ProxyName, String>> {
+    Ok(client.clash_proxy_group_icons().await?)
 }
 
 #[tauri::command]
@@ -1140,11 +1149,10 @@ pub async fn update_core(
 pub async fn change_clash_core(
     client: State<'_, ChimeraClient>,
     clash_core: Option<chimera::ClashCore>,
-) -> Result {
+) -> Result<MutationOutcome<()>> {
     log::debug!("change_clash_core: {clash_core:?}");
     let clash_core = clash_core.ok_or_else(|| anyhow!("clash core is null"))?;
-    client.change_core(clash_core).await?;
-    Ok(())
+    Ok(client.change_core(clash_core).await?)
 }
 
 /// restart the sidecar
@@ -1656,6 +1664,31 @@ pub async fn clash_api_get_group_delay(
         .into_iter()
         .map(|(name, delay)| (name.to_string(), u32::from(delay)))
         .collect())
+}
+
+/// Test one member using its live group's own URL or the app default.
+/// The URL is never accepted from or returned to the native UI.
+#[tauri::command]
+#[specta::specta]
+pub async fn test_native_proxy_node_delay(
+    group: String,
+    name: String,
+    client: State<'_, ChimeraClient>,
+) -> Result<u16> {
+    let default_url = client.get_app_config()?.default_latency_test;
+    let api = client.clash_api_client().await?;
+    let result = chimera_core::proxies::test_group_node_delay(
+        &api,
+        &group,
+        &name,
+        &default_url,
+        std::time::Duration::from_secs(10),
+    )
+    .await;
+    // A timed-out IPC reply may still have recorded a sample. Queue a real
+    // snapshot refresh before either outcome reaches the frontend.
+    client.request_proxy_refresh();
+    Ok(result?)
 }
 
 /// One instance-bound group delay operation. All member requests share the

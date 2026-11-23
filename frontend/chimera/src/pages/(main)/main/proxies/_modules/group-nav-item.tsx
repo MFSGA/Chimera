@@ -1,7 +1,8 @@
-import type {
-  FolderId,
-  NativeProxies_Serialize,
-  ProxyGroup,
+import {
+  useProxyGroupIcons,
+  type FolderId,
+  type NativeProxies_Serialize,
+  type ProxyGroup,
 } from '@chimera/interface';
 import { ContextMenuItem } from '@chimera/ui/context-menu';
 import { ModalAnchor } from '@chimera/ui/modal';
@@ -108,6 +109,7 @@ const GroupNavItem = memo(function GroupNavItem({
   const place = layout ? locateGroup(layout, group.name) : undefined;
 
   const glyph = GLYPHS[group.type] ?? FALLBACK_GLYPH;
+  const icon = useProxyGroupIcons()[group.name];
 
   // The whole item is the drag source; a click still opens the group, so a
   // mouse drag starts only after the pointer moved.
@@ -141,10 +143,10 @@ const GroupNavItem = memo(function GroupNavItem({
               data-group-name={group.name}
               search={(previous) => ({ q: previous.q })}
             >
-              {group.icon ? (
+              {group.iconConfigured && icon ? (
                 <NavigationListItemIcon image>
                   <CacheImage
-                    icon={group.icon}
+                    icon={icon}
                     className="size-full"
                     // The picture is never clipped, but its placeholder stays round.
                     loadingClassName="rounded-full"

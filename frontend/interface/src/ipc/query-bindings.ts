@@ -74,6 +74,12 @@ export const queries = {
       queryKey: [NATIVE_PROXIES_QUERY_KEY, ...args],
       queryFn: () => commands.getNativeProxies(...args),
     }),
+  /** Icon URLs are loaded separately from the ordinary native graph. */
+  getProxyGroupIcons: () =>
+    queryOptions({
+      queryKey: ['getProxyGroupIcons'],
+      queryFn: async () => unwrapResult(await commands.getProxyGroupIcons()),
+    }),
   clashApiGetProxyDelay: (
     ...args: Parameters<typeof commands.clashApiGetProxyDelay>
   ) =>
@@ -134,6 +140,11 @@ export const mutations = {
       commands.clearProxyFixed(...input),
   }),
   /** One native group operation on one bound core, even for pinned members. */
+  testNativeProxyNodeDelay: mutationOptions({
+    mutationKey: ['testNativeProxyNodeDelay'],
+    mutationFn: (input: Parameters<typeof commands.testNativeProxyNodeDelay>) =>
+      commands.testNativeProxyNodeDelay(...input),
+  }),
   testNativeProxyGroupDelay: mutationOptions({
     mutationKey: ['testNativeProxyGroupDelay'],
     mutationFn: (

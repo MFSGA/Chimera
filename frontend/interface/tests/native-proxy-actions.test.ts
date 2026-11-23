@@ -13,7 +13,7 @@ function graph(): NativeProxies_Serialize {
     udp: true,
     history: [{ time: 'old', delay: 12 }],
     extra: {
-      'https://example.test/': {
+      GroupA: {
         alive: true,
         history: [{ time: 'older', delay: 17 }],
       },
@@ -37,7 +37,7 @@ function graph(): NativeProxies_Serialize {
 
 test('native latency result updates one indexed node without copying shared group membership', () => {
   const previous = graph();
-  const updated = withNativeDelaySample(previous, 'Shared', 48, null)!;
+  const updated = withNativeDelaySample(previous, 'Shared', 48, '')!;
   assert.notStrictEqual(updated, previous);
   assert.notStrictEqual(updated.nodes, previous.nodes);
   assert.notStrictEqual(updated.nodes.Shared, previous.nodes.Shared);
@@ -56,20 +56,21 @@ test('native latency result updates one indexed node without copying shared grou
     previous.nodes.Shared.history.map((item) => item.delay),
     [12],
   );
-  assert.strictEqual(updated.nodes.Shared.extra, previous.nodes.Shared.extra);
+  assert.equal(updated.nodes.Shared.extra?.['']?.history.at(-1)?.delay, 48);
+  assert.equal(previous.nodes.Shared.extra?.[''], undefined);
 });
 
-test('native latency result updates URL-specific history and marks zero latency unavailable', () => {
+test('native latency result updates opaque group source and marks zero latency unavailable', () => {
   const previous = graph();
-  const url = 'https://example.test/';
-  const updated = withNativeDelaySample(previous, 'Shared', 0, url)!;
-  assert.equal(updated.nodes.Shared.extra?.[url]?.alive, false);
+  const delayKey = 'GroupA';
+  const updated = withNativeDelaySample(previous, 'Shared', 0, delayKey)!;
+  assert.equal(updated.nodes.Shared.extra?.[delayKey]?.alive, false);
   assert.deepEqual(
-    updated.nodes.Shared.extra?.[url]?.history.map((item) => item.delay),
+    updated.nodes.Shared.extra?.[delayKey]?.history.map((item) => item.delay),
     [17, 0],
   );
   assert.equal(
-    previous.nodes.Shared.extra?.[url]?.history.length,
+    previous.nodes.Shared.extra?.[delayKey]?.history.length,
     1,
     'the cached previous graph must remain immutable',
   );
@@ -79,8 +80,8 @@ test('native latency result updates URL-specific history and marks zero latency 
 test('missing native node or missing snapshot preserves identity', () => {
   const previous = graph();
   assert.strictEqual(
-    withNativeDelaySample(previous, 'not-in-snapshot', 42, null),
+    withNativeDelaySample(previous, 'not-in-snapshot', 42, ''),
     previous,
   );
-  assert.equal(withNativeDelaySample(undefined, 'Shared', 42, null), undefined);
+  assert.equal(withNativeDelaySample(undefined, 'Shared', 42, ''), undefined);
 });

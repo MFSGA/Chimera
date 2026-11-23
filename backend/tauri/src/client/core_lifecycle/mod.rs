@@ -57,6 +57,7 @@ fn is_source_only_application_patch(command: &Command) -> bool {
         Command::PatchApplicationConfig {
             patch,
             service_connected,
+            ..
         }
             if !crate::client::application_workflow::impact::application_patch_requires_reconcile(
                 patch,
@@ -681,11 +682,18 @@ impl ApplicationWorkflowState {
         let id = request.response.id;
         let shutdown = matches!(&request.command, Command::Shutdown);
         let deferred_retry = request.deferred_retry.clone();
+        let runtime_converged = match &request.command {
+            Command::PatchApplicationConfig {
+                runtime_converged, ..
+            } => Some(Arc::clone(runtime_converged)),
+            _ => None,
+        };
         let application_runtime_reconcile = matches!(
             &request.command,
             Command::PatchApplicationConfig {
                 patch,
                 service_connected,
+                ..
             }
                 if crate::client::application_workflow::impact::application_patch_requires_reconcile(
                     patch,
@@ -702,9 +710,10 @@ impl ApplicationWorkflowState {
                 | Command::RetryDeferredProfiles { .. }
                 | Command::ReconcileProfiles { .. }
                 | Command::RecoverCore
-                | Command::SelectCore(_)
                 | Command::ReplaceCoreBinary(_)
         ) || application_runtime_reconcile;
+        #[cfg(test)]
+        let reconciled = reconciled || matches!(&request.command, Command::SelectCore(_));
         let service_phase = match &request.command {
             Command::InstallService(_) => Some(ServicePhase::Installing),
             Command::StartService { .. } => Some(ServicePhase::StartingDaemon),
@@ -841,7 +850,10 @@ impl ApplicationWorkflowState {
                     shutdown,
                     request_runtime_rebuild,
                     deferred_retry,
-                    reconciled,
+                    reconciled: reconciled
+                        && runtime_converged
+                            .as_ref()
+                            .is_none_or(|converged| converged.load(Ordering::Acquire)),
                 })
                 .is_err()
             {
@@ -2581,6 +2593,9 @@ impl CoreLifecycleClient {
         }
     }
 
+    // Only legacy actor tests exercise the original direct-core adapter.
+    // Production selects through ChimeraClient::patch_app_config instead.
+    #[cfg(test)]
     pub(super) async fn select_core(
         &self,
         core: crate::config::chimera::ClashCore,
@@ -2591,12 +2606,18 @@ impl CoreLifecycleClient {
     pub(super) async fn patch_application_config(
         &self,
         patch: chimera_config::application::ChimeraAppConfigPatch,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<Vec<crate::client::runtime::Degradation>> {
+        let (degradations, settled) = tokio::sync::oneshot::channel();
         self.execute(Command::PatchApplicationConfig {
             patch,
             service_connected: false,
+            degradations,
+            runtime_converged: Arc::new(AtomicBool::new(true)),
         })
-        .await
+        .await?;
+        settled
+            .await
+            .map_err(|_| anyhow::anyhow!("application runtime result was not delivered"))
     }
 
     pub(super) async fn replace_core_binary(
@@ -2716,11 +2737,18 @@ impl ChimeraClient {
         self.inner.core.promoted_runtime_snapshot()
     }
 
+    /// Ref: selecting a core is an Application source transaction, not a
+    /// second mutating CoreLifecycle command. Preserve the commit receipt
+    /// and post-commit runtime degradations for the UI.
     pub(crate) async fn change_core(
         &self,
         clash_core: crate::config::chimera::ClashCore,
-    ) -> anyhow::Result<()> {
-        self.inner.core_lifecycle.select_core(clash_core).await
+    ) -> anyhow::Result<crate::client::runtime::MutationOutcome<()>> {
+        self.patch_app_config(chimera_config::application::ChimeraAppConfigPatch {
+            core: Some(clash_core),
+            ..Default::default()
+        })
+        .await
     }
 
     #[cfg(test)]
@@ -3820,6 +3848,7 @@ mod tests {
     struct ApplicationPatchRecordingCore {
         application: ApplicationClient,
         observations: Arc<Mutex<Vec<(bool, bool)>>>,
+        reject_check: bool,
     }
 
     struct TestApplicationBridge;
@@ -5876,6 +5905,27 @@ mod tests {
 
     #[async_trait]
     impl CoreLifecyclePort for ApplicationPatchRecordingCore {
+        async fn validate_profile_runtime(
+            &self,
+            _clash: ClashConfig,
+            _target_core: ClashCore,
+            _run_type: RunType,
+            _profiles: Arc<chimera_config::profile::Profiles>,
+            app: chimera_config::application::ChimeraAppConfig,
+            _staged_content: std::collections::BTreeMap<String, String>,
+        ) -> anyhow::Result<crate::client::application_workflow::mutation::CheckRecord> {
+            // A real advisory preflight must be read-only: the candidate is
+            // new, while the committed source stays at its previous value.
+            self.observations.lock().unwrap().push((
+                app.enable_builtin_enhanced,
+                self.application.get_typed().enable_builtin_enhanced,
+            ));
+            if self.reject_check {
+                anyhow::bail!("injected independent runtime candidate rejection");
+            }
+            Ok(crate::client::application_workflow::mutation::CheckRecord::Passed)
+        }
+
         async fn reconcile(
             &self,
             _clash: ClashConfig,
@@ -5927,7 +5977,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn service_mode_config_patch_reconciles_before_persisting_candidate() {
+    async fn service_mode_config_patch_commits_before_runtime_reconcile() {
         let application = ApplicationClient::static_state(
             chimera_config::application::ChimeraAppConfig::default(),
         );
@@ -5967,14 +6017,14 @@ mod tests {
             [(
                 RunType::Service,
                 chimera_config::application::ChimeraAppConfig::default().core,
-                false
+                true
             )]
         );
         assert!(application.get_typed().enable_service_mode);
     }
 
     #[tokio::test]
-    async fn builtin_enhancement_patch_reconciles_candidate_before_persisting() {
+    async fn builtin_enhancement_patch_checks_before_commit_and_applies_after() {
         let application = ApplicationClient::static_state(
             chimera_config::application::ChimeraAppConfig::default(),
         );
@@ -5998,6 +6048,7 @@ mod tests {
             Arc::new(ApplicationPatchRecordingCore {
                 application: application.clone(),
                 observations: observations.clone(),
+                reject_check: false,
             }),
             Arc::new(RecordingInstaller {
                 events: Arc::new(Mutex::new(Vec::new())),
@@ -6019,12 +6070,138 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(*observations.lock().unwrap(), [(false, true)]);
+        assert_eq!(
+            *observations.lock().unwrap(),
+            [(false, true), (false, false)],
+            "advisory check sees the old source; Core apply sees the committed source"
+        );
         assert!(!application.get_typed().enable_builtin_enhanced);
     }
 
     #[tokio::test]
-    async fn service_mode_config_patch_restores_latest_runtime_after_version_conflict() {
+    async fn rejected_advisory_application_check_does_not_commit_or_touch_core() {
+        let application = ApplicationClient::static_state(
+            chimera_config::application::ChimeraAppConfig::default(),
+        );
+        let dir = tempfile::tempdir().unwrap();
+        let path = camino::Utf8PathBuf::from_path_buf(dir.path().join("profiles.yaml")).unwrap();
+        let profiles = chimera_core::state::PersistentStateManagerSetup::<
+            chimera_config::profile::Profiles,
+            crate::core::migration::modules::profiles::ProfilesFormat,
+        >::builder()
+        .config_path(path)
+        .assemble()
+        .from_state(chimera_config::profile::Profiles::default())
+        .await
+        .unwrap();
+        let observations = Arc::new(Mutex::new(Vec::new()));
+        let workflow = CoreLifecycleWorkflow::new(
+            application.clone(),
+            ClashConfigClient::legacy().unwrap(),
+            Some(profiles.snapshot_handle()),
+            Arc::new(ApplicationPatchRecordingCore {
+                application: application.clone(),
+                observations: observations.clone(),
+                reject_check: true,
+            }),
+            Arc::new(RecordingInstaller {
+                events: Arc::new(Mutex::new(Vec::new())),
+            }),
+            RuntimePaths::from_config_root(std::path::PathBuf::from("test-runtime-root")),
+            Arc::new(RecordingService {
+                events: Arc::new(Mutex::new(Vec::new())),
+            }),
+        );
+        let result = workflow
+            .patch_application_config(
+                ChimeraAppConfigPatch {
+                    enable_builtin_enhanced: Some(false),
+                    ..Default::default()
+                },
+                false,
+            )
+            .await;
+        assert!(
+            format!("{:#}", result.unwrap_err())
+                .contains("injected independent runtime candidate rejection")
+        );
+        assert!(application.get_typed().enable_builtin_enhanced);
+        assert_eq!(
+            *observations.lock().unwrap(),
+            [(false, true)],
+            "preflight runs once against the old committed source, without Core apply"
+        );
+    }
+
+    #[tokio::test]
+    async fn application_persistence_failure_after_preflight_never_applies_core() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_dir = dir.path().join("application-config");
+        std::fs::create_dir(&config_dir).unwrap();
+        let application = ApplicationClient::new(
+            camino::Utf8PathBuf::from_path_buf(config_dir.join("application.yaml")).unwrap(),
+            chimera_config::application::ChimeraAppConfig::default(),
+            Arc::new(TestApplicationBridge),
+            chimera_config::application::ReleaseChannel::Stable,
+        )
+        .await
+        .unwrap();
+        let old = application.get().await.unwrap();
+        let profiles = chimera_core::state::PersistentStateManagerSetup::<
+            chimera_config::profile::Profiles,
+            crate::core::migration::modules::profiles::ProfilesFormat,
+        >::builder()
+        .config_path(camino::Utf8PathBuf::from_path_buf(dir.path().join("profiles.yaml")).unwrap())
+        .assemble()
+        .from_state(chimera_config::profile::Profiles::default())
+        .await
+        .unwrap();
+        let observations = Arc::new(Mutex::new(Vec::new()));
+        let workflow = CoreLifecycleWorkflow::new(
+            application.clone(),
+            ClashConfigClient::legacy().unwrap(),
+            Some(profiles.snapshot_handle()),
+            Arc::new(ApplicationPatchRecordingCore {
+                application: application.clone(),
+                observations: observations.clone(),
+                reject_check: false,
+            }),
+            Arc::new(RecordingInstaller {
+                events: Arc::new(Mutex::new(Vec::new())),
+            }),
+            RuntimePaths::from_config_root(std::path::PathBuf::from("test-runtime-root")),
+            Arc::new(RecordingService {
+                events: Arc::new(Mutex::new(Vec::new())),
+            }),
+        );
+        let moved = dir.path().join("hidden-application-config");
+        std::fs::rename(&config_dir, &moved).unwrap();
+        let result = workflow
+            .patch_application_config(
+                ChimeraAppConfigPatch {
+                    enable_builtin_enhanced: Some(false),
+                    ..Default::default()
+                },
+                false,
+            )
+            .await;
+        assert!(format!("{:#}", result.unwrap_err()).contains("commit"));
+        let now = application.get().await.unwrap();
+        assert_eq!(now.version, old.version);
+        assert_eq!(
+            now.state.enable_builtin_enhanced,
+            old.state.enable_builtin_enhanced
+        );
+        assert_eq!(
+            *observations.lock().unwrap(),
+            [(false, true)],
+            "successful advisory preflight must never apply Core if persistence fails"
+        );
+        std::fs::rename(moved, config_dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn app_commit_superseded_during_apply_defers_latest_reconcile() {
         let directory = tempfile::tempdir().unwrap();
         let config_path =
             camino::Utf8PathBuf::from_path_buf(directory.path().join("application.yaml")).unwrap();
@@ -6056,7 +6233,7 @@ mod tests {
             }),
         );
 
-        let error = workflow
+        let degradations = workflow
             .patch_application_config(
                 ChimeraAppConfigPatch {
                     enable_service_mode: Some(true),
@@ -6065,32 +6242,28 @@ mod tests {
                 true,
             )
             .await
-            .unwrap_err();
+            .unwrap();
 
-        assert!(
-            error
-                .to_string()
-                .contains("application config version conflict")
-        );
+        assert_eq!(degradations.len(), 1);
+        assert_eq!(degradations[0].code, "application_runtime_deferred");
+        assert!(degradations[0].message.contains("source advanced"));
+        assert!(degradations[0].retryable);
         assert_eq!(
             *observations.lock().unwrap(),
-            [
-                (
-                    RunType::Service,
-                    chimera_config::application::ChimeraAppConfig::default().core,
-                    false
-                ),
-                (RunType::Normal, ClashCore::ClashRsAlpha, false)
-            ]
+            [(
+                RunType::Service,
+                chimera_config::application::ChimeraAppConfig::default().core,
+                true
+            )]
         );
         let latest = application.get_typed();
-        assert!(!latest.enable_service_mode);
+        assert!(latest.enable_service_mode);
         assert!(!latest.enable_builtin_enhanced);
         assert_eq!(latest.core, ClashCore::ClashRsAlpha);
     }
 
     #[tokio::test]
-    async fn service_mode_config_patch_restores_latest_runtime_after_candidate_failure() {
+    async fn postcommit_runtime_failure_returns_degradation_without_rolling_back_source() {
         let directory = tempfile::tempdir().unwrap();
         let config_path =
             camino::Utf8PathBuf::from_path_buf(directory.path().join("application.yaml")).unwrap();
@@ -6122,7 +6295,7 @@ mod tests {
             }),
         );
 
-        let error = workflow
+        let degradations = workflow
             .patch_application_config(
                 ChimeraAppConfigPatch {
                     enable_service_mode: Some(true),
@@ -6131,22 +6304,24 @@ mod tests {
                 true,
             )
             .await
-            .unwrap_err();
+            .unwrap();
 
-        assert!(format!("{error:#}").contains("injected Service Mode reconcile failure"));
-        assert!(format!("{error:#}").contains("restored the latest persisted runtime"));
+        assert_eq!(degradations.len(), 1);
+        assert_eq!(degradations[0].code, "application_runtime_deferred");
+        assert!(
+            degradations[0]
+                .message
+                .contains("injected Service Mode reconcile failure")
+        );
         assert_eq!(
             *observations.lock().unwrap(),
-            [
-                (
-                    RunType::Service,
-                    chimera_config::application::ChimeraAppConfig::default().core,
-                    false
-                ),
-                (RunType::Normal, ClashCore::ClashRsAlpha, false)
-            ]
+            [(
+                RunType::Service,
+                chimera_config::application::ChimeraAppConfig::default().core,
+                true
+            )]
         );
-        assert!(!application.get_typed().enable_service_mode);
+        assert!(application.get_typed().enable_service_mode);
         assert!(!application.get_typed().enable_builtin_enhanced);
         assert_eq!(application.get_typed().core, ClashCore::ClashRsAlpha);
     }

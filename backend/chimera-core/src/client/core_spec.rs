@@ -87,7 +87,10 @@ mod tests {
             })
             .unwrap();
             assert_eq!(spec.kind, kind);
-            assert_eq!(spec.binary_path.file_name(), Some(core.binary_name()));
+            // CoreType::get_executable_name includes the host executable
+            // suffix, while ClashCore::binary_name is extension-free.
+            let expected = format!("{}{}", core.binary_name(), std::env::consts::EXE_SUFFIX);
+            assert_eq!(spec.binary_path.file_name(), Some(expected.as_str()));
             assert!(spec.version.is_none());
             assert!(spec.features.is_empty());
         }

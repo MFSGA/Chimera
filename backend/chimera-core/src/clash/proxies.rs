@@ -104,10 +104,13 @@ pub struct ProxyGroup {
     pub all: Vec<ProxyName>,
     pub now: Option<ProxyName>,
     pub fixed: Option<ProxyName>,
-    pub test_url: Option<String>,
+    /// Opaque history source key; raw test URLs never leave the native read view.
+    pub delay_key: String,
     pub expected_status: Option<String>,
     pub hidden: bool,
-    pub icon: Option<String>,
+    /// Icon presence only. The actual URL may include credentials and is
+    /// returned separately rather than being embedded in the native graph.
+    pub icon_configured: bool,
     pub capabilities: ProxyGroupCapabilities,
 }
 
@@ -124,13 +127,21 @@ impl ProxyGroup {
                 .fixed
                 .clone()
                 .filter(|name| !name.as_str().is_empty()),
-            test_url: record.test_url.clone().filter(|url| !url.is_empty()),
+            delay_key: if record
+                .test_url
+                .as_deref()
+                .is_some_and(|url| !url.is_empty())
+            {
+                record.name.as_str().to_owned()
+            } else {
+                DEFAULT_TEST_URL_KEY.to_owned()
+            },
             expected_status: record
                 .expected_status
                 .clone()
                 .filter(|status| !status.is_empty()),
             hidden: record.hidden.unwrap_or(false),
-            icon: record.icon.clone(),
+            icon_configured: record.icon.as_deref().is_some_and(|icon| !icon.is_empty()),
             capabilities,
         }
     }
@@ -307,6 +318,46 @@ impl NativeProxies {
         })
     }
 
+    /// Icon URLs from the live snapshot, keyed by group name. Kept out of
+    /// the ordinary native graph query, in line with ref's split API.
+    pub fn group_icons(&self) -> IndexMap<ProxyName, String> {
+        self.global
+            .iter()
+            .chain(&self.groups)
+            .filter_map(|group| {
+                let icon = self.nodes.get(&group.name)?.icon.as_deref()?;
+                (!icon.is_empty()).then(|| (group.name.clone(), icon.to_owned()))
+            })
+            .collect()
+    }
+
+    /// Redact icon URLs on a cloned IPC projection. The core's original
+    /// snapshot retains them for the dedicated icon query and legacy view.
+    pub fn without_group_icon_urls(mut self) -> Self {
+        for node in self.nodes.values_mut() {
+            node.icon = None;
+        }
+        self
+    }
+
+    /// The raw URL for a known group, held only in the core-owned snapshot.
+    pub fn group_test_url(&self, group: &str) -> Option<&str> {
+        self.nodes
+            .get(&ProxyName::from(group))?
+            .test_url
+            .as_deref()
+            .filter(|url| !url.is_empty())
+    }
+
+    /// An unknown group is rejected; a known group with no own URL uses the default.
+    pub fn group_own_test_url(&self, group: &str) -> Option<Option<&str>> {
+        self.global
+            .iter()
+            .chain(&self.groups)
+            .any(|known| known.name.as_str() == group)
+            .then(|| self.group_test_url(group))
+    }
+
     /// Keep only per-URL latency histories that the normalized proxy view
     /// can display. This mirrors ref's native-node filtering rather than
     /// filtering repeated legacy group member projections.
@@ -318,23 +369,130 @@ impl NativeProxies {
         }
     }
 
-    /// Preserve both raw and URL-parser-normalized spellings because core
-    /// implementations may use either spelling for the latency cache key.
+    /// Normalize source URLs into opaque keys, deduplicate equivalent
+    /// group URLs and redact every node's sensitive URL fields (as in ref).
     pub fn trim_for_frontend(mut self, default_url: &str) -> Self {
-        let mut urls = Vec::new();
-        for url in self
-            .global
-            .iter()
-            .chain(&self.groups)
-            .filter_map(|group| group.test_url.as_deref())
-            .chain([default_url])
-        {
-            urls.extend(url::Url::parse(url).map(|parsed| parsed.as_str().to_owned()));
-            urls.push(url.to_owned());
+        let mut sources = vec![(DEFAULT_TEST_URL_KEY.to_owned(), url_forms(default_url))];
+        let mut group_keys = Vec::new();
+        for group in self.global.iter().chain(&self.groups) {
+            let Some(url) = self.group_test_url(group.name.as_str()) else {
+                group_keys.push((group.name.clone(), DEFAULT_TEST_URL_KEY.to_owned()));
+                continue;
+            };
+            let forms = url_forms(url);
+            let key = match sources
+                .iter_mut()
+                .find(|(_, known)| known.iter().any(|form| forms.contains(form)))
+            {
+                Some((key, known)) => {
+                    for form in forms {
+                        if !known.contains(&form) {
+                            known.push(form);
+                        }
+                    }
+                    key.clone()
+                }
+                None => {
+                    let key = group.name.as_str().to_owned();
+                    sources.push((key.clone(), forms));
+                    key
+                }
+            };
+            group_keys.push((group.name.clone(), key));
         }
-        let keep: HashSet<&str> = urls.iter().map(String::as_str).collect();
-        self.retain_extra(&keep);
+        for group in self.global.iter_mut().chain(&mut self.groups) {
+            if let Some((_, key)) = group_keys.iter().find(|(name, _)| *name == group.name) {
+                group.delay_key.clone_from(key);
+            }
+        }
+        self.nodes = self
+            .nodes
+            .into_iter()
+            .map(|(name, node)| (name, public_node(node, &sources)))
+            .collect();
         self
+    }
+}
+
+/// The default delay source has the empty key, never a URL.
+pub const DEFAULT_TEST_URL_KEY: &str = "";
+
+fn url_forms(url: &str) -> Vec<String> {
+    url::Url::parse(url)
+        .map(|parsed| parsed.as_str().to_owned())
+        .into_iter()
+        .chain([url.to_owned()])
+        .collect()
+}
+
+/// Strict field-level projection of a native node; no future SDK field leaks
+/// into the ordinary read response without an explicit review.
+fn public_node(node: Proxy, sources: &[(String, Vec<String>)]) -> Proxy {
+    let Proxy {
+        name,
+        proxy_type,
+        history,
+        extra,
+        alive,
+        udp,
+        uot,
+        xudp,
+        tfo,
+        mptcp,
+        smux,
+        interface,
+        routing_mark,
+        provider_name,
+        dialer_proxy,
+        id,
+        now,
+        all,
+        test_url: _,
+        expected_status,
+        fixed,
+        hidden,
+        icon: _,
+        empty_fallback,
+        provider,
+    } = node;
+    let extra = extra.map(|extra| {
+        sources
+            .iter()
+            .filter_map(|(key, forms)| {
+                let newest = forms
+                    .iter()
+                    .filter_map(|form| extra.get(form))
+                    .max_by_key(|entry| entry.history.last().map(|sample| sample.time))?;
+                Some((key.clone(), newest.clone()))
+            })
+            .collect::<IndexMap<_, _>>()
+    });
+    Proxy {
+        name,
+        proxy_type,
+        history,
+        extra,
+        alive,
+        udp,
+        uot,
+        xudp,
+        tfo,
+        mptcp,
+        smux,
+        interface,
+        routing_mark,
+        provider_name,
+        dialer_proxy,
+        id,
+        now,
+        all,
+        test_url: None,
+        expected_status,
+        fixed,
+        hidden,
+        icon: None,
+        empty_fallback,
+        provider,
     }
 }
 #[cfg(test)]
@@ -401,15 +559,38 @@ mod tests {
         assert!(pinnable.capabilities.clear_fixed);
         assert!(pinnable.fixed.is_none());
         assert_eq!(pinnable.expected_status.as_deref(), Some("204"));
-        assert_eq!(
-            pinnable.test_url.as_deref(),
-            Some("https://example.test/generate_204")
-        );
+        assert_eq!(pinnable.delay_key, "auto");
 
         let unknown = ProxyGroup::from_record(&native("future", "NewCoreKind", None));
         assert_eq!(unknown.kind, ProxyGroupKind::Unknown("NewCoreKind".into()));
         assert!(!unknown.capabilities.select);
         assert!(!unknown.capabilities.clear_fixed);
+    }
+
+    #[test]
+    fn ordinary_native_view_redacts_icon_urls_but_preserves_presence() {
+        let credential = "https://user:secret@example.invalid/group.svg?token=secret";
+        let mut group = native("Streaming", "Selector", Some(vec!["DIRECT"]));
+        group.icon = Some(credential.into());
+        let native =
+            NativeProxies::from_responses(snapshot(vec![group]).proxies, &IndexMap::new(), None)
+                .unwrap();
+        assert!(native.groups[0].icon_configured);
+        assert_eq!(
+            native.group_icons()[&ProxyName::from("Streaming")],
+            credential
+        );
+        let public = native.clone().without_group_icon_urls();
+        assert!(public.groups[0].icon_configured);
+        assert!(public.nodes[&ProxyName::from("Streaming")].icon.is_none());
+        assert!(public.group_icons().is_empty());
+        let serialized = serde_json::to_string(&public).unwrap();
+        assert!(!serialized.contains("secret"));
+        assert!(!serialized.contains("icon\":\"https:"));
+        assert_eq!(
+            native.group_icons()[&ProxyName::from("Streaming")],
+            credential
+        );
     }
 
     #[test]
@@ -439,7 +620,7 @@ mod tests {
     }
 
     #[test]
-    fn native_trim_preserves_relevant_raw_and_normalized_latency_urls() {
+    fn native_trim_rekeys_latency_sources_without_exposing_urls() {
         let mut global = native("GLOBAL", "Selector", Some(vec!["G"]));
         global.test_url = Some("https://global".into());
         let mut group = native("G", "URLTest", Some(vec!["node"]));
@@ -477,16 +658,83 @@ mod tests {
             .keys()
             .map(String::as_str)
             .collect();
-        assert_eq!(
-            retained,
-            [
-                "https://global",
-                "https://global/",
-                "https://group/",
-                "https://default/"
-            ]
-        );
+        assert_eq!(retained, ["", "GLOBAL", "G"]);
+        assert_eq!(native.global.as_ref().unwrap().delay_key, "GLOBAL");
+        assert_eq!(native.groups[0].delay_key, "G");
+        assert!(native.nodes[&ProxyName::from("node")].test_url.is_none());
         assert!(native.nodes[&ProxyName::from("DIRECT")].extra.is_none());
+        let serialized = serde_json::to_string(&native).unwrap();
+        assert!(!serialized.contains("https://"));
+    }
+
+    #[test]
+    fn native_trim_merges_equivalent_urls_and_never_returns_credentials() {
+        let secret = "https://user:secret@latency.example/check?token=secret";
+        let mut first = native("First", "URLTest", Some(vec!["node"]));
+        first.test_url = Some(secret.into());
+        let mut same = native("Same", "URLTest", Some(vec!["node"]));
+        same.test_url = Some(secret.into());
+        let mut default = native("Default", "URLTest", Some(vec!["node"]));
+        default.test_url = Some("https://default.example/".into());
+        let no_url = native("NoUrl", "Selector", Some(vec!["node"]));
+        let mut node = native("node", "Vless", None);
+        node.extra = Some(
+            [
+                ("https://default.example/", 15),
+                (secret, 31),
+                ("https://discard.example/secret", 90),
+            ]
+            .into_iter()
+            .map(|(url, delay)| {
+                (
+                    url.to_owned(),
+                    clash_api::ProxyExtra {
+                        alive: true,
+                        history: vec![
+                            serde_json::from_value(json!({
+                                "time": "2026-11-17T00:00:00Z",
+                                "delay": delay,
+                            }))
+                            .unwrap(),
+                        ],
+                    },
+                )
+            })
+            .collect(),
+        );
+        let snapshot = snapshot(vec![first, same, default, no_url, node]);
+        let full =
+            NativeProxies::from_responses(snapshot.proxies, &snapshot.providers, snapshot.groups)
+                .unwrap();
+        assert_eq!(full.group_test_url("First"), Some(secret));
+        assert_eq!(full.group_own_test_url("Unknown"), None);
+        assert_eq!(full.group_own_test_url("NoUrl"), Some(None));
+        let public = full.trim_for_frontend("https://default.example");
+        let key = |name: &str| {
+            public
+                .groups
+                .iter()
+                .find(|group| group.name.as_str() == name)
+                .unwrap()
+                .delay_key
+                .as_str()
+        };
+        assert_eq!(key("First"), "First");
+        assert_eq!(key("Same"), "First");
+        assert_eq!(key("Default"), DEFAULT_TEST_URL_KEY);
+        assert_eq!(key("NoUrl"), DEFAULT_TEST_URL_KEY);
+        let extra = public.nodes[&ProxyName::from("node")]
+            .extra
+            .as_ref()
+            .unwrap();
+        assert_eq!(
+            extra.keys().map(String::as_str).collect::<Vec<_>>(),
+            ["", "First"]
+        );
+        assert_eq!(extra[""].history[0].delay, 15);
+        assert_eq!(extra["First"].history[0].delay, 31);
+        assert_eq!(public.nodes[&ProxyName::from("node")].test_url, None);
+        assert!(!serde_json::to_string(&public).unwrap().contains("secret"));
     }
 
     #[test]

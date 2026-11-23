@@ -45,6 +45,12 @@ pub(in crate::client) enum Command {
     PatchApplicationConfig {
         patch: ChimeraAppConfigPatch,
         service_connected: bool,
+        /// Reply after the source commit; runtime failures are degradations,
+        /// not evidence that the committed application.yaml rolled back.
+        degradations: tokio::sync::oneshot::Sender<Vec<crate::client::runtime::Degradation>>,
+        /// Captured by the old actor completion path until the ref single
+        /// Reconciler owns both source-version and applied-target status.
+        runtime_converged: Arc<AtomicBool>,
     },
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     DisableStaleSystemProxy {
@@ -56,6 +62,8 @@ pub(in crate::client) enum Command {
         notifications: Arc<dyn crate::client::effects::ports::CommitNotifications>,
         persist_legacy_mirror: Arc<dyn Fn() -> anyhow::Result<()> + Send + Sync>,
     },
+    /// Retired production entry. Legacy actor tests retain the old adapter.
+    #[cfg(test)]
     SelectCore(ClashCore),
     RecoverCore,
     /// Re-evaluate the runtime owner after Service readiness changes.
@@ -466,11 +474,13 @@ impl CoreLifecycleWorkflow {
             Command::Reconcile
             | Command::RecoverCore
             | Command::RetryDeferredProfiles { .. }
-            | Command::ReconcileProfiles { .. }
-            | Command::SelectCore(_) => true,
+            | Command::ReconcileProfiles { .. } => true,
+            #[cfg(test)]
+            Command::SelectCore(_) => true,
             Command::PatchApplicationConfig {
                 patch,
                 service_connected,
+                ..
             } => crate::client::application_workflow::impact::application_patch_requires_reconcile(
                 patch,
                 *service_connected,
@@ -549,10 +559,15 @@ impl CoreLifecycleWorkflow {
             Command::PatchApplicationConfig {
                 patch,
                 service_connected,
-            } => {
-                self.patch_application_config(patch, service_connected)
-                    .await
-            }
+                degradations,
+                runtime_converged,
+            } => self
+                .patch_application_config(patch, service_connected)
+                .await
+                .map(|result| {
+                    runtime_converged.store(result.is_empty(), Ordering::Release);
+                    let _ = degradations.send(result);
+                }),
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
             Command::DisableStaleSystemProxy {
                 system_proxy,
@@ -574,6 +589,7 @@ impl CoreLifecycleWorkflow {
                 )
                 .await
                 .map_err(anyhow::Error::new),
+            #[cfg(test)]
             Command::SelectCore(core) => self.select_core(core).await,
             Command::ReplaceCoreBinary(artifact) => self.replace_binary(artifact).await,
             Command::InstallService(mut transition) => transition.install_daemon().await,
@@ -1411,82 +1427,128 @@ impl CoreLifecycleWorkflow {
         (ServiceEvidence::from_status(&status), generation)
     }
 
+    /// The ref source transition: a checked target is persisted before any
+    /// running Core mutation. Only CoreLifecycle owns the later apply; no
+    /// independent actor or second runtime writer is spawned by this path.
     pub(super) async fn patch_application_config(
         &self,
         patch: ChimeraAppConfigPatch,
         service_connected: bool,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<Vec<crate::client::runtime::Degradation>> {
         if !crate::client::application_workflow::impact::application_patch_requires_reconcile(
             &patch,
             service_connected,
         ) {
             self.application.patch_typed(patch).await?;
-            return Ok(());
+            return Ok(Vec::new());
         }
 
         let previous = self.application.get().await?;
         let mut candidate = previous.state.clone();
         candidate.apply(patch);
-        let forward = self.application.prepare_replace(candidate.clone()).await?;
+        let prepared = self.application.prepare_replace(candidate.clone()).await?;
 
-        // Runtime-affecting application settings must be reconciled against
-        // their candidate before the source config commits. This keeps core,
-        // builtin enhancement, and Service Mode changes atomic with runtime.
-        if let Err(candidate_error) = self
-            .reconcile_application(candidate, service_connected)
-            .await
-        {
-            let latest = match self.application.get().await {
-                Ok(latest) => latest.state,
-                Err(read_error) => {
-                    return Err(anyhow::anyhow!(
-                        "{candidate_error:#}; failed to read the latest application config for runtime recovery: {read_error:#}"
-                    ));
-                }
-            };
-            return match self
-                .reconcile_application(latest, service_connected)
-                .await
-            {
-                Ok(()) => Err(candidate_error.context(
-                    "failed to reconcile application runtime candidate; restored the latest persisted runtime",
-                )),
-                Err(restore_error) => Err(anyhow::anyhow!(
-                    "{candidate_error:#}; failed to restore the latest persisted application runtime: {restore_error:#}"
-                )),
-            };
-        }
+        // Ref RuntimeGate::check: a preflight is read-only. Unlike the old
+        // application workflow, it cannot perform Reconcile/host handoff.
+        self.check_application_candidate(candidate.clone(), service_connected)
+            .await?;
 
-        let commit = self
+        let committed = self
             .application
-            .replace_prepared_if_version(previous.version, forward)
+            .replace_prepared_if_version(previous.version, prepared)
             .await;
-        let commit_error = match commit {
-            Ok(crate::state::ConditionalReplaceResult::Replaced(_)) => return Ok(()),
+        let committed_version = match committed {
+            Ok(crate::state::ConditionalReplaceResult::Replaced(snapshot)) => snapshot.version,
             Ok(crate::state::ConditionalReplaceResult::Conflict { actual_version }) => {
-                anyhow::anyhow!(
+                anyhow::bail!(
                     "application config version conflict: expected {}, actual {actual_version}",
                     previous.version
-                )
+                );
             }
-            Err(error) => error.context("failed to commit runtime-affecting application config"),
+            Err(error) => {
+                return Err(error.context("failed to commit checked application config"));
+            }
         };
 
-        let restore =
-            match self.application.get().await {
-                Ok(latest) => {
-                    self.reconcile_application(latest.state, service_connected)
-                        .await
-                }
-                Err(error) => Err(error
-                    .context("failed to read the latest application config for runtime recovery")),
-            };
-        if let Err(rollback_error) = restore {
-            return Err(anyhow::anyhow!(
-                "{commit_error:#}; failed to restore the latest persisted application runtime: {rollback_error:#}"
-            ));
+        // The source is now committed; a subsequent Core or Service failure
+        // must not be reported as a failed source write or roll it back.
+        let applied = self
+            .reconcile_application(candidate, service_connected)
+            .await;
+        // An independent source actor may commit a newer version while the
+        // endpoint operation awaits. Do not claim the outdated application
+        // target converged merely because that old operation returned success.
+        let latest = self.application.get().await?;
+        if latest.version != committed_version {
+            return Ok(vec![crate::client::runtime::Degradation {
+                phase: crate::client::runtime::DegradationPhase::RuntimeApply,
+                code: "application_runtime_deferred".into(),
+                message: format!(
+                    "application source advanced from version {committed_version} to {} during runtime apply; the latest committed target needs reconciliation{}",
+                    latest.version,
+                    applied.err().map_or_else(String::new, |error| format!(
+                        "; previous attempt failed: {error:#}"
+                    )),
+                ),
+                retryable: true,
+            }]);
         }
-        Err(commit_error)
+        match applied {
+            Ok(()) => Ok(Vec::new()),
+            Err(error) => {
+                tracing::warn!(
+                    %error,
+                    "application source committed; runtime reconcile deferred"
+                );
+                Ok(vec![crate::client::runtime::Degradation {
+                    phase: crate::client::runtime::DegradationPhase::RuntimeApply,
+                    code: "application_runtime_deferred".into(),
+                    message: format!(
+                        "application config was saved, but runtime reconciliation failed: {error:#}"
+                    ),
+                    retryable:
+                        crate::client::application_workflow::tcc::safe_to_retry_deferred_runtime(
+                            &error,
+                        ),
+                }])
+            }
+        }
+    }
+
+    /// Independent ref-style advisory check. The document and managed bytes
+    /// are frozen under the ProfileContentReader fence. An unsupported or
+    /// unavailable checker is not proof that the candidate is valid.
+    async fn check_application_candidate(
+        &self,
+        app: ChimeraAppConfig,
+        service_connected: bool,
+    ) -> anyhow::Result<()> {
+        let Some(_) = &self.profiles else {
+            // In compatibility-only tests no typed Profiles source is wired.
+            return Ok(());
+        };
+        let inputs = self
+            .capture_committed_profile_inputs_for(app, self.clash.get()?)
+            .await?;
+        let (app, clash, profiles, content) = inputs.into_parts()?;
+        let run_type = crate::core::RunType::classify(
+            app.enable_service_mode,
+            if service_connected {
+                crate::core::service::ipc::IpcState::Connected
+            } else {
+                crate::core::service::ipc::IpcState::Disconnected
+            },
+        );
+        let check = self
+            .core
+            .validate_profile_runtime(clash, app.core, run_type, profiles, app, content)
+            .await?;
+        match check {
+            crate::client::application_workflow::mutation::CheckRecord::Passed => Ok(()),
+            other => anyhow::bail!(
+                "independent application runtime candidate check did not pass: {other:?}"
+            ),
+        }
     }
 
     async fn reconcile_application(
@@ -1626,6 +1688,7 @@ impl CoreLifecycleWorkflow {
             .await
     }
 
+    #[cfg(test)]
     async fn select_core(&self, core: ClashCore) -> anyhow::Result<()> {
         let Some(profiles) = &self.profiles else {
             return self.core.change_core(core).await;

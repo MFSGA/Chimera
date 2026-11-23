@@ -36,7 +36,11 @@ use crate::{
     },
 };
 
-use super::{ChimeraClient, core_lifecycle::RunningConfigPort};
+use super::{
+    ChimeraClient,
+    core_lifecycle::RunningConfigPort,
+    runtime::{Degradation, DegradationPhase},
+};
 
 #[cfg(test)]
 struct TestRunningConfigBridge;
@@ -73,14 +77,19 @@ enum ClashConfigStateBackend {
     },
 }
 
+#[derive(Debug)]
+pub(super) struct ClashCommitReport {
+    pub(super) snapshot: ClashConfigSnapshot,
+    pub(super) reaches_runtime: bool,
+    pub(super) degradations: Vec<Degradation>,
+}
+
 struct ClashPatchPlan {
     mixed_port: Option<u16>,
     mixed_port_changed: bool,
-    external_controller: Option<String>,
     external_controller_changed: bool,
     mode_changed: bool,
     break_on_mode_change: bool,
-    requires_restart: bool,
 }
 
 impl ClashConfigClient {
@@ -301,19 +310,24 @@ impl ClashConfigClient {
         Ok(())
     }
 
-    async fn patch(&self, owner: &ChimeraClient, patch: Mapping) -> Result<()> {
+    async fn patch(&self, owner: &ChimeraClient, patch: Mapping) -> Result<ClashCommitReport> {
         let overrides = ClashConfigOverrides::from_mapping(&patch)?;
-        self.patch_with_overrides(owner, patch, overrides).await
+        self.patch_with_overrides(owner, patch, overrides, true)
+            .await
     }
 
+    /// Ref typed Clash source transition: read-only candidate validation,
+    /// source CAS and durable publication, then best-effort runtime apply.
+    /// Postcommit failures *never* roll back a persisted config version.
     pub(super) async fn patch_typed_config(
         &self,
         owner: &ChimeraClient,
         patch: ClashConfigPatch,
-    ) -> Result<ClashConfigSnapshot> {
+    ) -> Result<ClashCommitReport> {
         let candidate_patch = patch.clone();
         self.patch_typed_config_with(
             patch,
+            |candidate| owner.check_clash_runtime_candidate(candidate),
             || async {
                 if candidate_patch.enable_tun_mode.is_some() {
                     self.apply_legacy_patch_runtime(owner, &candidate_patch)
@@ -322,121 +336,157 @@ impl ClashConfigClient {
                     update_core_config(owner).await
                 }
             },
-            || async { update_core_config(owner).await },
             || {
                 Config::clash().data().save_config()?;
                 Config::verge().data().save_file()?;
                 Ok(())
             },
-            || {
-                let mut failures = Vec::new();
-                if let Err(error) = Config::clash().data().save_config() {
-                    failures.push(format!(
-                        "legacy clash rollback persistence failed: {error:#}"
-                    ));
-                }
-                if let Err(error) = Config::verge().data().save_file() {
-                    failures.push(format!(
-                        "legacy Verge rollback persistence failed: {error:#}"
-                    ));
-                }
-                failures
-            },
         )
         .await
     }
 
-    async fn patch_typed_config_with<
-        ApplyCandidate,
-        ApplyCandidateFuture,
-        ReconcileLatest,
-        ReconcileLatestFuture,
-        SaveCandidate,
-        SaveRollback,
-    >(
+    async fn patch_typed_config_with<Check, CheckFuture, Apply, ApplyFuture, Save>(
         &self,
         patch: ClashConfigPatch,
-        apply_candidate: ApplyCandidate,
-        reconcile_latest: ReconcileLatest,
-        save_candidate: SaveCandidate,
-        save_rollback: SaveRollback,
-    ) -> Result<ClashConfigSnapshot>
+        check: Check,
+        apply: Apply,
+        save_legacy: Save,
+    ) -> Result<ClashCommitReport>
     where
-        ApplyCandidate: FnOnce() -> ApplyCandidateFuture,
-        ApplyCandidateFuture: Future<Output = Result<()>>,
-        ReconcileLatest: FnOnce() -> ReconcileLatestFuture,
-        ReconcileLatestFuture: Future<Output = Result<()>>,
-        SaveCandidate: FnOnce() -> Result<()>,
-        SaveRollback: FnOnce() -> Vec<String>,
+        Check: FnOnce(ClashConfig) -> CheckFuture,
+        CheckFuture: Future<Output = Result<()>>,
+        Apply: FnOnce() -> ApplyFuture,
+        ApplyFuture: Future<Output = Result<()>>,
+        Save: FnOnce() -> Result<()>,
     {
-        let snapshot = self.get_snapshot().await?;
-        let mut next = snapshot.state.clone();
+        let before = self.get_snapshot().await?;
+        let mut next = before.state.clone();
         next.apply(patch.clone());
-        let reconcile_runtime = should_reconcile_clash_patch(&snapshot.state, &next, &patch);
+        let reaches_runtime = should_reconcile_clash_patch(&before.state, &next, &patch);
+        self.commit_candidate_with(
+            before,
+            next,
+            reaches_runtime,
+            reaches_runtime,
+            check,
+            apply,
+            save_legacy,
+        )
+        .await
+    }
 
-        let forward = self.prepare_replace(next).await?;
-        let rollback = self.prepare_replace(snapshot.state.clone()).await?;
-        let committed = match self
-            .replace_prepared_if_version(snapshot.version, forward)
+    async fn commit_candidate_with<Check, CheckFuture, Apply, ApplyFuture, Save>(
+        &self,
+        before: ClashConfigSnapshot,
+        next: ClashConfig,
+        reaches_runtime: bool,
+        reconcile_runtime: bool,
+        check: Check,
+        apply: Apply,
+        save_legacy: Save,
+    ) -> Result<ClashCommitReport>
+    where
+        Check: FnOnce(ClashConfig) -> CheckFuture,
+        CheckFuture: Future<Output = Result<()>>,
+        Apply: FnOnce() -> ApplyFuture,
+        ApplyFuture: Future<Output = Result<()>>,
+        Save: FnOnce() -> Result<()>,
+    {
+        let prepared = self.prepare_replace(next.clone()).await?;
+        if reaches_runtime && reconcile_runtime {
+            // No source file, running Core, or runtime product is mutated
+            // until the independent candidate checker accepts this document.
+            check(next).await?;
+        }
+        let snapshot = match self
+            .replace_prepared_if_version(before.version, prepared)
             .await?
         {
             ConditionalReplaceResult::Replaced(snapshot) => snapshot,
-            ConditionalReplaceResult::Conflict { actual_version } => {
-                bail!(
-                    "clash config version conflict: expected {}, actual {}",
-                    snapshot.version,
-                    actual_version
-                );
-            }
+            ConditionalReplaceResult::Conflict { actual_version } => bail!(
+                "clash config version conflict: expected {}, actual {actual_version}",
+                before.version,
+            ),
         };
 
-        let finalize = async {
-            if reconcile_runtime {
-                apply_candidate().await?;
+        let mut degradations = Vec::new();
+        if reaches_runtime && reconcile_runtime {
+            // Source is already committed. Even a failed Core operation must
+            // not turn this successful source mutation into a rollback.
+            if let Err(error) = apply().await {
+                let retryable =
+                    crate::client::application_workflow::tcc::safe_to_retry_deferred_runtime(
+                        &error,
+                    );
+                degradations.push(Degradation {
+                    phase: DegradationPhase::RuntimeApply,
+                    code: "clash_runtime_deferred".into(),
+                    message: format!(
+                        "Clash config was saved, but runtime reconciliation failed: {error:#}"
+                    ),
+                    retryable,
+                });
             }
-            save_candidate()?;
-            Ok::<_, anyhow::Error>(())
-        }
-        .await;
-
-        if let Err(primary) = finalize {
-            let mut failures = Vec::new();
-            match self
-                .replace_prepared_if_version(committed.version, rollback)
-                .await
-            {
-                Ok(ConditionalReplaceResult::Replaced(_)) => {}
-                Ok(ConditionalReplaceResult::Conflict { actual_version }) => {
-                    failures.push(format!(
-                        "clash rollback conflict: expected {}, actual {actual_version}",
-                        committed.version
-                    ));
+            // A second source actor write may advance Clash while the Core
+            // apply waits. Never label the superseded target as converged.
+            match self.get_snapshot().await {
+                Ok(latest) if latest.version != snapshot.version => {
+                    degradations.push(Degradation {
+                        phase: DegradationPhase::RuntimeApply,
+                        code: "clash_runtime_deferred".into(),
+                        message: format!(
+                            "Clash source advanced from version {} to {} during runtime apply; the latest committed target needs reconciliation",
+                            snapshot.version, latest.version,
+                        ),
+                        retryable: true,
+                    });
                 }
-                Err(error) => {
-                    failures.push(format!("clash rollback failed: {error:#}"));
-                }
+                Err(error) => degradations.push(Degradation {
+                    phase: DegradationPhase::RuntimeApply,
+                    code: "clash_runtime_deferred".into(),
+                    message: format!(
+                        "Clash source was saved, but latest version could not be verified after runtime apply: {error:#}"
+                    ),
+                    retryable: true,
+                }),
+                _ => {}
             }
-            failures.extend(save_rollback());
-
-            return Err(finish_typed_clash_compensation(
-                primary,
-                failures,
-                reconcile_runtime,
-                reconcile_latest,
-            )
-            .await);
         }
-
-        Ok(committed)
+        if let Err(error) = save_legacy() {
+            degradations.push(Degradation {
+                phase: DegradationPhase::LegacyMirror,
+                code: "legacy_clash_mirror_write_failed".into(),
+                message: format!(
+                    "Clash source was saved, but legacy mirror persistence failed: {error:#}"
+                ),
+                retryable: true,
+            });
+        }
+        Ok(ClashCommitReport {
+            snapshot,
+            reaches_runtime,
+            degradations,
+        })
     }
 
     async fn patch_overrides(
         &self,
         owner: &ChimeraClient,
         overrides: ClashConfigOverrides,
-    ) -> Result<()> {
+    ) -> Result<ClashCommitReport> {
         let patch = overrides.to_mapping();
-        self.patch_with_overrides(owner, patch, overrides).await
+        self.patch_with_overrides(owner, patch, overrides, true)
+            .await
+    }
+
+    async fn patch_overrides_after_running_apply(
+        &self,
+        owner: &ChimeraClient,
+        overrides: ClashConfigOverrides,
+    ) -> Result<ClashCommitReport> {
+        let patch = overrides.to_mapping();
+        self.patch_with_overrides(owner, patch, overrides, false)
+            .await
     }
 
     async fn patch_running_overrides(
@@ -465,7 +515,21 @@ impl ClashConfigClient {
                 move |_patch| {
                     let overrides = persist_overrides.clone();
                     let client = client.clone();
-                    async move { client.patch_clash_overrides(overrides).await }
+                    async move {
+                        let report = client
+                            .inner
+                            .clash_config
+                            .patch_overrides_after_running_apply(&client, overrides)
+                            .await?;
+                        for degradation in &report.degradations {
+                            tracing::warn!(
+                                code = %degradation.code,
+                                message = %degradation.message,
+                                "live Clash override source committed with degraded mirror"
+                            );
+                        }
+                        Ok(())
+                    }
                 },
             )
             .await
@@ -476,88 +540,82 @@ impl ClashConfigClient {
         owner: &ChimeraClient,
         patch: Mapping,
         overrides: ClashConfigOverrides,
-    ) -> Result<()> {
-        let snapshot = self.get_snapshot().await?;
-        let current = snapshot.state.clone();
+        reconcile_runtime: bool,
+    ) -> Result<ClashCommitReport> {
+        let before = self.get_snapshot().await?;
+        let current = before.state.clone();
         let next = apply_mapping_to_typed_clash(&current, &patch)?;
-        let plan = plan_clash_patch(&patch, &current)?;
+        let plan = plan_clash_patch(&patch, &current, &next)?;
         validate_mixed_port_change(&plan, &current)?;
-        validate_external_controller_change(owner, &plan, &current).await?;
+        validate_external_controller_change(owner, &plan, &current, &next).await?;
+        let reaches_runtime =
+            crate::client::application_workflow::impact::classify_clash(&current, &next)
+                != crate::client::application_workflow::impact::RuntimeImpact::None;
+        let mode_changed = plan.mode_changed;
+        let break_on_mode_change = plan.break_on_mode_change;
+        let report = self
+            .commit_candidate_with(
+                before,
+                next,
+                reaches_runtime,
+                reconcile_runtime,
+                |candidate| owner.check_clash_runtime_candidate(candidate),
+                || async {
+                    // RuntimeBuilder consumes the committed typed Clash
+                    // source. RuntimeLifecycle publishes the generated
+                    // mapping only after the candidate is accepted and applied.
+                    update_core_config(owner).await?;
+                    if mode_changed {
+                        let api = owner.clash_api_client().await?;
+                        log_err!(
+                            crate::core::connection_interruption::ConnectionInterruptionService::on_mode_change(
+                                &api,
+                                break_on_mode_change,
+                            )
+                            .await,
+                            "failed to interrupt connections after mode change"
+                        );
+                    }
+                    Ok(())
+                },
+                || {
+                    // The already-live-applied compatibility transaction
+                    // publishes its old runtime projection after source commit.
+                    // Normal reconciliation publishes this from RuntimeLifecycle.
+                    if !reconcile_runtime {
+                        Config::runtime().draft().patch_config(&overrides);
+                        Config::runtime().apply();
+                    }
+                    // These files are compatibility mirrors, not the
+                    // authoritative source; failures cannot roll it back.
+                    Config::clash().data().save_config()?;
+                    Config::verge().data().save_file()?;
+                    Ok(())
+                },
+            )
+            .await?;
 
-        let forward = self.prepare_replace(next).await?;
-        let rollback = self.prepare_replace(current).await?;
-        let committed = match self
-            .replace_prepared_if_version(snapshot.version, forward)
-            .await?
+        if !reconcile_runtime && mode_changed {
+            match owner.clash_api_client().await {
+                Ok(api) => log_err!(
+                    crate::core::connection_interruption::ConnectionInterruptionService::on_mode_change(
+                        &api,
+                        break_on_mode_change,
+                    )
+                    .await,
+                    "failed to interrupt connections after live mode change"
+                ),
+                Err(error) => tracing::warn!(%error, "mode change committed but connection interruption was unavailable"),
+            }
+        }
+        if report
+            .degradations
+            .iter()
+            .any(|item| item.code == "clash_runtime_deferred" && item.retryable)
         {
-            ConditionalReplaceResult::Replaced(snapshot) => snapshot,
-            ConditionalReplaceResult::Conflict { actual_version } => {
-                bail!(
-                    "clash config version conflict: expected {}, actual {}",
-                    snapshot.version,
-                    actual_version
-                );
-            }
-        };
-
-        let finalize = async {
-            apply_clash_runtime_change(owner, &plan).await?;
-            run_clash_patch_side_effects(owner, &plan);
-            Config::runtime().draft().patch_config(&overrides);
-            Config::runtime().apply();
-            Config::clash().data().save_config()?;
-            Config::verge().data().save_file()?;
-            Ok::<_, anyhow::Error>(())
+            owner.inner.core_lifecycle.request_runtime_rebuild();
         }
-        .await;
-
-        if let Err(primary) = finalize {
-            Config::runtime().discard();
-            let rollback_result = self
-                .replace_prepared_if_version(committed.version, rollback)
-                .await;
-            let mut failures = Vec::new();
-            match rollback_result {
-                Ok(ConditionalReplaceResult::Replaced(_)) => {}
-                Ok(ConditionalReplaceResult::Conflict { actual_version }) => {
-                    failures.push(format!(
-                        "clash rollback conflict: expected {}, actual {}",
-                        committed.version, actual_version
-                    ))
-                }
-                Err(error) => failures.push(format!("clash rollback failed: {error:#}")),
-            }
-            if let Err(error) = Config::clash().data().save_config() {
-                failures.push(format!(
-                    "legacy clash rollback persistence failed: {error:#}"
-                ));
-            }
-            if let Err(error) = Config::verge().data().save_file() {
-                failures.push(format!(
-                    "legacy verge rollback persistence failed: {error:#}"
-                ));
-            }
-            if failures.is_empty() {
-                return Err(primary);
-            }
-            bail!(
-                "{primary:#}; compensation failures: {}",
-                failures.join("; ")
-            );
-        }
-
-        if plan.mode_changed {
-            let api = owner.clash_api_client().await?;
-            log_err!(
-                crate::core::connection_interruption::ConnectionInterruptionService::on_mode_change(
-                    &api,
-                    plan.break_on_mode_change,
-                )
-                .await,
-                "failed to interrupt connections after mode change"
-            );
-        }
-        Ok(())
+        Ok(report)
     }
 }
 
@@ -572,6 +630,55 @@ impl Drop for ClashConfigStateBackend {
 }
 
 impl ChimeraClient {
+    /// Ref CandidateCheck: freeze the currently committed Profile document and
+    /// all managed-file content while the candidate Clash document is supplied
+    /// independently. The lower Core validator is read-only and does not
+    /// acquire the workflow's mutating Core/Service ownership.
+    pub(super) async fn check_clash_runtime_candidate(&self, candidate: ClashConfig) -> Result<()> {
+        let Some(profiles) = self.inner.typed_profiles.as_ref() else {
+            // Compatibility-only fixtures instantiate no Profiles source.
+            #[cfg(test)]
+            return Ok(());
+            #[cfg(not(test))]
+            bail!("runtime candidate check requires the typed Profiles source");
+        };
+        let directory = crate::utils::dirs::app_profiles_dir()?;
+        let source = crate::enhance::FsProfileContentSource::new(directory);
+        let (profiles, content) = profiles
+            .content_reader()
+            .committed(|snapshot| async move {
+                let profiles = Arc::new(snapshot.state.clone());
+                let frozen = crate::client::application_workflow::inputs::FrozenProfileContent::capture_content(
+                    &profiles,
+                    &source,
+                    Default::default(),
+                );
+                (profiles, frozen)
+            })
+            .await;
+        let app = self.get_app_config()?;
+        let inputs = crate::client::application_workflow::inputs::RuntimeInputs {
+            app: app.clone(),
+            clash: candidate,
+            profiles,
+            content,
+        };
+        let (app, clash, profiles, content) = inputs.into_parts()?;
+        let run_type = crate::core::RunType::classify(
+            app.enable_service_mode,
+            crate::core::service::ipc::get_ipc_state(),
+        );
+        let result = self
+            .inner
+            .core
+            .validate_profile_runtime(clash, app.core, run_type, profiles, app, content)
+            .await?;
+        match result {
+            crate::client::application_workflow::mutation::CheckRecord::Passed => Ok(()),
+            other => bail!("independent Clash runtime candidate check did not pass: {other:?}"),
+        }
+    }
+
     pub(crate) fn get_clash_config(&self) -> Result<ClashConfig> {
         self.inner.clash_config.get()
     }
@@ -587,7 +694,14 @@ impl ChimeraClient {
         } else {
             None
         };
-        self.inner.clash_config.patch(self, patch).await?;
+        let report = self.inner.clash_config.patch(self, patch).await?;
+        for degradation in &report.degradations {
+            tracing::warn!(
+                code = %degradation.code,
+                message = %degradation.message,
+                "Clash patch committed with degraded follow-up"
+            );
+        }
         self.refresh_stream_log_level().await;
         Ok(())
     }
@@ -596,10 +710,18 @@ impl ChimeraClient {
         &self,
         overrides: ClashConfigOverrides,
     ) -> Result<()> {
-        self.inner
+        let report = self
+            .inner
             .clash_config
             .patch_overrides(self, overrides)
             .await?;
+        for degradation in &report.degradations {
+            tracing::warn!(
+                code = %degradation.code,
+                message = %degradation.message,
+                "Clash overrides committed with degraded follow-up"
+            );
+        }
         self.refresh_stream_log_level().await;
         Ok(())
     }
@@ -694,7 +816,11 @@ fn patch_changes_mixed_port(patch: &Mapping) -> bool {
     get_non_null_patch_value(patch, "mixed-port").is_some()
 }
 
-fn plan_clash_patch(patch: &Mapping, current: &ClashConfig) -> Result<ClashPatchPlan> {
+fn plan_clash_patch(
+    patch: &Mapping,
+    current: &ClashConfig,
+    next: &ClashConfig,
+) -> Result<ClashPatchPlan> {
     let mixed_port = get_non_null_patch_value(patch, "mixed-port").and_then(|value| value.as_u64());
     let mixed_port = mixed_port
         .map(|port| u16::try_from(port).map_err(|_| anyhow::anyhow!("invalid mixed-port")))
@@ -703,29 +829,19 @@ fn plan_clash_patch(patch: &Mapping, current: &ClashConfig) -> Result<ClashPatch
         .map(|port| port != current.mixed_port.start_port)
         .unwrap_or(false);
 
-    let external_controller = get_non_null_patch_value(patch, "external-controller")
-        .map(|value| {
-            value
-                .as_str()
-                .map(str::to_owned)
-                .ok_or_else(|| anyhow::anyhow!("external-controller must be a string"))
-        })
-        .transpose()?;
-    let external_controller_changed = external_controller
-        .as_ref()
-        .map(|controller| controller != &Config::clash().data().get_client_info().server)
-        .unwrap_or(false);
+    let external_controller_requested =
+        get_non_null_patch_value(patch, "external-controller").is_some();
+    let external_controller_changed = external_controller_requested
+        && (current.external_controller.host != next.external_controller.host
+            || current.external_controller.port.start_port
+                != next.external_controller.port.start_port);
 
     Ok(ClashPatchPlan {
         mixed_port,
         mixed_port_changed,
-        external_controller,
         external_controller_changed,
-        mode_changed: get_non_null_patch_value(patch, "mode").is_some(),
+        mode_changed: current.overrides.mode() != next.overrides.mode(),
         break_on_mode_change: current.break_connection.on_mode_change,
-        requires_restart: get_non_null_patch_value(patch, "mixed-port").is_some()
-            || get_non_null_patch_value(patch, "secret").is_some()
-            || get_non_null_patch_value(patch, "external-controller").is_some(),
     })
 }
 
@@ -745,22 +861,15 @@ async fn validate_external_controller_change(
     client: &ChimeraClient,
     plan: &ClashPatchPlan,
     current: &ClashConfig,
+    next: &ClashConfig,
 ) -> Result<()> {
     if !plan.external_controller_changed {
         return Ok(());
     }
 
-    let external_controller = plan
-        .external_controller
-        .as_deref()
-        .ok_or_else(|| anyhow::anyhow!("missing external-controller"))?;
-    let (_, port) = external_controller
-        .split_once(':')
-        .ok_or_else(|| anyhow::anyhow!("external-controller must be host:port"))?;
-    let port = port.parse::<u16>()?;
     let strategy = PortStrategy {
         kind: current.external_controller.port.kind.clone(),
-        start_port: port,
+        start_port: next.external_controller.port.start_port,
     };
     let core_state = client.core_status().await?;
 
@@ -769,40 +878,6 @@ async fn validate_external_controller_change(
     }
 
     Ok(())
-}
-
-async fn finish_typed_clash_compensation<F, Fut>(
-    primary: anyhow::Error,
-    mut failures: Vec<String>,
-    reconcile_runtime: bool,
-    reconcile: F,
-) -> anyhow::Error
-where
-    F: FnOnce() -> Fut,
-    Fut: Future<Output = Result<()>>,
-{
-    if reconcile_runtime {
-        if let Err(error) = reconcile().await {
-            failures.push(format!("runtime rollback reconcile failed: {error:#}"));
-        }
-    }
-
-    if failures.is_empty() {
-        primary
-    } else {
-        anyhow::anyhow!(
-            "{primary:#}; compensation failures: {}",
-            failures.join("; ")
-        )
-    }
-}
-
-async fn apply_clash_runtime_change(client: &ChimeraClient, plan: &ClashPatchPlan) -> Result<()> {
-    if !plan.requires_restart {
-        return Ok(());
-    }
-
-    client.rebuild_running_config().await
 }
 
 async fn update_core_config(client: &ChimeraClient) -> Result<()> {
@@ -827,13 +902,6 @@ fn should_reconcile_clash_patch(
         != crate::client::application_workflow::impact::RuntimeImpact::None
         || crate::client::application_workflow::impact::RequestedRuntimeFields::of_clash(patch)
             .names_any()
-}
-
-fn run_clash_patch_side_effects(client: &ChimeraClient, plan: &ClashPatchPlan) {
-    if plan.mode_changed {
-        crate::feat::update_proxies_buff(client.clone(), None);
-        log::debug!("systray mode changed, update proxies buff");
-    }
 }
 
 #[cfg(test)]
@@ -1002,6 +1070,21 @@ mod tests {
     }
 
     #[test]
+    fn raw_mapping_plan_detects_actual_mode_changes_not_just_field_presence() {
+        let current = ClashConfig::default();
+        let mut patch = Mapping::new();
+        patch.insert("mode".into(), "global".into());
+        let next = apply_mapping_to_typed_clash(&current, &patch).unwrap();
+        let changed = plan_clash_patch(&patch, &current, &next).unwrap();
+        assert!(changed.mode_changed);
+
+        patch.insert("mode".into(), "rule".into());
+        let unchanged_next = apply_mapping_to_typed_clash(&current, &patch).unwrap();
+        let unchanged = plan_clash_patch(&patch, &current, &unchanged_next).unwrap();
+        assert!(!unchanged.mode_changed);
+    }
+
+    #[test]
     fn raw_mixed_port_patch_is_guarded_but_absent_or_null_is_not() {
         let mut patch = Mapping::new();
         assert!(!patch_changes_mixed_port(&patch));
@@ -1057,7 +1140,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn typed_clash_patch_restores_source_and_runtime_after_persistence_failure() {
+    async fn typed_clash_patch_checks_before_commit_and_preserves_source_on_mirror_failure() {
         let dir = tempfile::tempdir().unwrap();
         let path = Utf8PathBuf::from_path_buf(dir.path().join("clash-config.yaml")).unwrap();
         let mirrored_tun = Arc::new(Mutex::new(None));
@@ -1071,33 +1154,402 @@ mod tests {
         )
         .await
         .unwrap();
-        let reconciled_tun = Arc::new(Mutex::new(Vec::new()));
-        let candidate_client = client.clone();
-        let candidate_observations = reconciled_tun.clone();
-        let recovery_client = client.clone();
-        let recovery_observations = reconciled_tun.clone();
+        let observations = Arc::new(Mutex::new(Vec::new()));
+        let checking = client.clone();
+        let check_events = observations.clone();
+        let applying = client.clone();
+        let apply_events = observations.clone();
         let mut patch = ClashConfig::new_empty_patch();
         patch.enable_tun_mode = Some(true);
 
-        let error = client
+        let report = client
             .patch_typed_config_with(
                 patch,
-                move || async move {
-                    candidate_observations
-                        .lock()
-                        .unwrap()
-                        .push(candidate_client.get_typed().enable_tun_mode);
+                move |candidate| async move {
+                    check_events.lock().unwrap().push((
+                        "check",
+                        candidate.enable_tun_mode,
+                        checking.get_typed().enable_tun_mode,
+                    ));
                     Ok(())
                 },
                 move || async move {
-                    recovery_observations
-                        .lock()
-                        .unwrap()
-                        .push(recovery_client.get_typed().enable_tun_mode);
+                    apply_events.lock().unwrap().push((
+                        "apply",
+                        true,
+                        applying.get_typed().enable_tun_mode,
+                    ));
                     Ok(())
                 },
                 || anyhow::bail!("injected legacy persistence failure"),
-                || Vec::new(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            *observations.lock().unwrap(),
+            [("check", true, false), ("apply", true, true)]
+        );
+        assert!(report.reaches_runtime);
+        assert_eq!(report.degradations.len(), 1);
+        assert_eq!(
+            report.degradations[0].code,
+            "legacy_clash_mirror_write_failed"
+        );
+        assert!(client.get_typed().enable_tun_mode);
+        assert_eq!(*mirrored_tun.lock().unwrap(), Some(true));
+        let saved: ClashConfig = serde_yaml::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert!(saved.enable_tun_mode);
+        assert_eq!(
+            serde_yaml::to_value(&report.snapshot.state).unwrap(),
+            serde_yaml::to_value(&saved).unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn rejected_clash_candidate_keeps_source_and_never_applies_core() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = Utf8PathBuf::from_path_buf(dir.path().join("clash-config.yaml")).unwrap();
+        let mirrored_tun = Arc::new(Mutex::new(None));
+        let client = ClashConfigClient::new(
+            path.clone(),
+            ClashConfig::default(),
+            Arc::new(RecordingBridge {
+                mirrored_tun: mirrored_tun.clone(),
+            }),
+            Arc::new(TestRunningConfigBridge),
+        )
+        .await
+        .unwrap();
+        let before = client.get_snapshot().await.unwrap();
+        let mut patch = ClashConfig::new_empty_patch();
+        patch.enable_tun_mode = Some(true);
+        let error = client
+            .patch_typed_config_with(
+                patch,
+                |candidate| async move {
+                    assert!(candidate.enable_tun_mode);
+                    anyhow::bail!("injected candidate rejection")
+                },
+                || async {
+                    panic!("Core must not be applied for rejected candidate");
+                    #[allow(unreachable_code)]
+                    Ok(())
+                },
+                || panic!("no postcommit mirror write if candidate was rejected"),
+            )
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("injected candidate rejection"));
+        let after = client.get_snapshot().await.unwrap();
+        assert_eq!(after.version, before.version);
+        assert_eq!(
+            serde_yaml::to_value(&after.state).unwrap(),
+            serde_yaml::to_value(&before.state).unwrap()
+        );
+        assert_eq!(*mirrored_tun.lock().unwrap(), Some(false));
+    }
+
+    #[tokio::test]
+    async fn postcommit_core_failure_is_deferred_and_does_not_roll_back_source() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = Utf8PathBuf::from_path_buf(dir.path().join("clash-config.yaml")).unwrap();
+        let client = ClashConfigClient::new(
+            path.clone(),
+            ClashConfig::default(),
+            Arc::new(RecordingBridge {
+                mirrored_tun: Arc::new(Mutex::new(None)),
+            }),
+            Arc::new(TestRunningConfigBridge),
+        )
+        .await
+        .unwrap();
+        let mut patch = ClashConfig::new_empty_patch();
+        patch.enable_tun_mode = Some(true);
+        let report = client
+            .patch_typed_config_with(
+                patch,
+                |_candidate| async { Ok(()) },
+                || async { anyhow::bail!("injected Core refusal after commit") },
+                || Ok(()),
+            )
+            .await
+            .unwrap();
+        assert!(report.snapshot.state.enable_tun_mode);
+        assert!(client.get_typed().enable_tun_mode);
+        assert!(report.degradations.iter().any(|d| {
+            d.code == "clash_runtime_deferred" && d.message.contains("injected Core refusal")
+        }));
+        let persisted: ClashConfig =
+            serde_yaml::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert!(persisted.enable_tun_mode);
+    }
+
+    #[tokio::test]
+    async fn clash_version_conflict_after_preflight_never_applies_stale_candidate() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = Utf8PathBuf::from_path_buf(dir.path().join("clash-config.yaml")).unwrap();
+        let client = ClashConfigClient::new(
+            path,
+            ClashConfig::default(),
+            Arc::new(RecordingBridge {
+                mirrored_tun: Arc::new(Mutex::new(None)),
+            }),
+            Arc::new(TestRunningConfigBridge),
+        )
+        .await
+        .unwrap();
+        let writer = client.clone();
+        let mut patch = ClashConfig::new_empty_patch();
+        patch.enable_tun_mode = Some(true);
+        let error = client
+            .patch_typed_config_with(
+                patch,
+                move |_candidate| async move {
+                    let mut other = writer.get_typed();
+                    other.web_ui_list.push("https://concurrent.example".into());
+                    let expected = writer.get_snapshot().await?.version;
+                    let prepared = writer.prepare_replace(other).await?;
+                    assert!(matches!(
+                        writer
+                            .replace_prepared_if_version(expected, prepared)
+                            .await?,
+                        ConditionalReplaceResult::Replaced(_)
+                    ));
+                    Ok(())
+                },
+                || async {
+                    panic!("stale candidate must not apply Core");
+                    #[allow(unreachable_code)]
+                    Ok(())
+                },
+                || panic!("stale candidate must not persist a mirror"),
+            )
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("clash config version conflict"));
+        let latest = client.get_snapshot().await.unwrap();
+        assert!(!latest.state.enable_tun_mode);
+        assert_eq!(latest.state.web_ui_list, vec!["https://concurrent.example"]);
+    }
+
+    #[tokio::test]
+    async fn clash_persistence_failure_after_preflight_does_not_apply_core() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("config");
+        std::fs::create_dir(&root).unwrap();
+        let path = Utf8PathBuf::from_path_buf(root.join("clash-config.yaml")).unwrap();
+        let client = ClashConfigClient::new(
+            path,
+            ClashConfig::default(),
+            Arc::new(RecordingBridge {
+                mirrored_tun: Arc::new(Mutex::new(None)),
+            }),
+            Arc::new(TestRunningConfigBridge),
+        )
+        .await
+        .unwrap();
+        let before = client.get_snapshot().await.unwrap();
+        let moved = dir.path().join("hidden-config");
+        std::fs::rename(&root, &moved).unwrap();
+        let checks = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let observed = checks.clone();
+        let mut patch = ClashConfig::new_empty_patch();
+        patch.enable_tun_mode = Some(true);
+        let error = client
+            .patch_typed_config_with(
+                patch,
+                move |candidate| async move {
+                    assert!(candidate.enable_tun_mode);
+                    observed.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    Ok(())
+                },
+                || async {
+                    panic!("a failed source write cannot apply Core");
+                    #[allow(unreachable_code)]
+                    Ok(())
+                },
+                || panic!("legacy mirror save is not owed without a source commit"),
+            )
+            .await
+            .unwrap_err();
+        assert!(format!("{error:#}").contains("persist"));
+        assert_eq!(checks.load(std::sync::atomic::Ordering::Relaxed), 1);
+        let after = client.get_snapshot().await.unwrap();
+        assert_eq!(after.version, before.version);
+        assert!(!after.state.enable_tun_mode);
+        std::fs::rename(moved, root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_newer_clash_source_after_core_apply_requires_latest_reconcile() {
+        let dir = tempfile::tempdir().unwrap();
+        let client = ClashConfigClient::new(
+            Utf8PathBuf::from_path_buf(dir.path().join("clash-config.yaml")).unwrap(),
+            ClashConfig::default(),
+            Arc::new(RecordingBridge {
+                mirrored_tun: Arc::new(Mutex::new(None)),
+            }),
+            Arc::new(TestRunningConfigBridge),
+        )
+        .await
+        .unwrap();
+        let writer = client.clone();
+        let mut patch = ClashConfig::new_empty_patch();
+        patch.enable_tun_mode = Some(true);
+        let report = client
+            .patch_typed_config_with(
+                patch,
+                |_candidate| async { Ok(()) },
+                move || async move {
+                    let latest = writer.get_snapshot().await?;
+                    assert!(
+                        latest.state.enable_tun_mode,
+                        "Core must apply after source publication"
+                    );
+                    let mut advanced = latest.state;
+                    advanced.web_ui_list.push("https://newer.example".into());
+                    let prepared = writer.prepare_replace(advanced).await?;
+                    assert!(matches!(
+                        writer
+                            .replace_prepared_if_version(latest.version, prepared)
+                            .await?,
+                        ConditionalReplaceResult::Replaced(_)
+                    ));
+                    Ok(())
+                },
+                || Ok(()),
+            )
+            .await
+            .unwrap();
+        assert!(report.reaches_runtime);
+        assert!(report.degradations.iter().any(|d| {
+            d.code == "clash_runtime_deferred"
+                && d.retryable
+                && d.message.contains("source advanced")
+        }));
+        let current = client.get_snapshot().await.unwrap();
+        assert!(current.version > report.snapshot.version);
+        assert_eq!(current.state.web_ui_list, vec!["https://newer.example"]);
+    }
+
+    #[tokio::test]
+    async fn raw_mapping_override_checks_before_commit_and_defers_failed_apply_without_rollback() {
+        let dir = tempfile::tempdir().unwrap();
+        let client = ClashConfigClient::new(
+            Utf8PathBuf::from_path_buf(dir.path().join("clash-config.yaml")).unwrap(),
+            ClashConfig::default(),
+            Arc::new(RecordingBridge {
+                mirrored_tun: Arc::new(Mutex::new(None)),
+            }),
+            Arc::new(TestRunningConfigBridge),
+        )
+        .await
+        .unwrap();
+        let before = client.get_snapshot().await.unwrap();
+        let mut mapping = Mapping::new();
+        mapping.insert("mode".into(), "global".into());
+        let next = apply_mapping_to_typed_clash(&before.state, &mapping).unwrap();
+        let reaches_runtime =
+            crate::client::application_workflow::impact::classify_clash(&before.state, &next)
+                != crate::client::application_workflow::impact::RuntimeImpact::None;
+        assert!(reaches_runtime);
+        let check_client = client.clone();
+        let apply_client = client.clone();
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let check_events = events.clone();
+        let apply_events = events.clone();
+        let save_events = events.clone();
+
+        let report = client
+            .commit_candidate_with(
+                before,
+                next,
+                reaches_runtime,
+                true,
+                move |candidate| async move {
+                    assert_eq!(
+                        candidate.overrides.mode(),
+                        chimera_config::clash::config::overrides::Mode::Global
+                    );
+                    assert_eq!(
+                        check_client.get_typed().overrides.mode(),
+                        chimera_config::clash::config::overrides::Mode::Rule
+                    );
+                    check_events.lock().unwrap().push("check");
+                    Ok(())
+                },
+                move || async move {
+                    assert_eq!(
+                        apply_client.get_typed().overrides.mode(),
+                        chimera_config::clash::config::overrides::Mode::Global
+                    );
+                    apply_events.lock().unwrap().push("apply");
+                    anyhow::bail!("injected raw mapping Core failure")
+                },
+                move || {
+                    save_events.lock().unwrap().push("mirror");
+                    Ok(())
+                },
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(*events.lock().unwrap(), ["check", "apply", "mirror"]);
+        assert!(report.reaches_runtime);
+        assert_eq!(
+            report.snapshot.state.overrides.mode(),
+            chimera_config::clash::config::overrides::Mode::Global
+        );
+        assert_eq!(
+            client.get_typed().overrides.mode(),
+            chimera_config::clash::config::overrides::Mode::Global
+        );
+        assert!(report.degradations.iter().any(|item| {
+            item.code == "clash_runtime_deferred"
+                && item.message.contains("injected raw mapping Core failure")
+        }));
+    }
+
+    #[tokio::test]
+    async fn raw_mapping_candidate_rejection_preserves_source_and_skips_apply_and_mirror() {
+        let dir = tempfile::tempdir().unwrap();
+        let client = ClashConfigClient::new(
+            Utf8PathBuf::from_path_buf(dir.path().join("clash-config.yaml")).unwrap(),
+            ClashConfig::default(),
+            Arc::new(RecordingBridge {
+                mirrored_tun: Arc::new(Mutex::new(None)),
+            }),
+            Arc::new(TestRunningConfigBridge),
+        )
+        .await
+        .unwrap();
+        let before = client.get_snapshot().await.unwrap();
+        let mut mapping = Mapping::new();
+        mapping.insert("mode".into(), "direct".into());
+        let next = apply_mapping_to_typed_clash(&before.state, &mapping).unwrap();
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let check_events = events.clone();
+        let apply_events = events.clone();
+        let save_events = events.clone();
+        let error = client
+            .commit_candidate_with(
+                before.clone(),
+                next,
+                true,
+                true,
+                move |_candidate| async move {
+                    check_events.lock().unwrap().push("check");
+                    anyhow::bail!("injected raw mapping candidate rejection")
+                },
+                move || async move {
+                    apply_events.lock().unwrap().push("apply");
+                    Ok(())
+                },
+                move || {
+                    save_events.lock().unwrap().push("mirror");
+                    Ok(())
+                },
             )
             .await
             .unwrap_err();
@@ -1105,43 +1557,153 @@ mod tests {
         assert!(
             error
                 .to_string()
-                .contains("injected legacy persistence failure")
+                .contains("injected raw mapping candidate rejection")
         );
-        assert_eq!(*reconciled_tun.lock().unwrap(), [true, false]);
-        assert!(!client.get_typed().enable_tun_mode);
-        assert_eq!(*mirrored_tun.lock().unwrap(), Some(false));
-        let persisted: ClashConfig = serde_yaml::from_slice(&std::fs::read(path).unwrap()).unwrap();
-        assert!(!persisted.enable_tun_mode);
+        assert_eq!(*events.lock().unwrap(), ["check"]);
+        let after = client.get_snapshot().await.unwrap();
+        assert_eq!(after.version, before.version);
+        assert_eq!(after.state.overrides.mode(), before.state.overrides.mode());
     }
 
     #[tokio::test]
-    async fn typed_clash_compensation_reports_runtime_reconcile_failure() {
-        let error = finish_typed_clash_compensation(
-            anyhow::anyhow!("legacy mirror write failed"),
-            vec!["clash rollback conflict: expected 2, actual 3".into()],
-            true,
-            || async { anyhow::bail!("core stayed on the candidate") },
+    async fn live_applied_override_persistence_does_not_apply_core_twice() {
+        let dir = tempfile::tempdir().unwrap();
+        let client = ClashConfigClient::new(
+            Utf8PathBuf::from_path_buf(dir.path().join("clash-config.yaml")).unwrap(),
+            ClashConfig::default(),
+            Arc::new(RecordingBridge {
+                mirrored_tun: Arc::new(Mutex::new(None)),
+            }),
+            Arc::new(TestRunningConfigBridge),
         )
-        .await;
-
-        let message = format!("{error:#}");
-        assert!(message.contains("legacy mirror write failed"));
-        assert!(message.contains("clash rollback conflict: expected 2, actual 3"));
-        assert!(message.contains("runtime rollback reconcile failed"));
-        assert!(message.contains("core stayed on the candidate"));
+        .await
+        .unwrap();
+        let before = client.get_snapshot().await.unwrap();
+        let mut mapping = Mapping::new();
+        mapping.insert("mode".into(), "global".into());
+        let next = apply_mapping_to_typed_clash(&before.state, &mapping).unwrap();
+        let saves = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let save_counter = saves.clone();
+        let report = client
+            .commit_candidate_with(
+                before,
+                next,
+                true,
+                false,
+                |_candidate| async {
+                    panic!("live Core patch has already validated this target");
+                    #[allow(unreachable_code)]
+                    Ok(())
+                },
+                || async {
+                    panic!("live Core patch must not be applied a second time");
+                    #[allow(unreachable_code)]
+                    Ok(())
+                },
+                move || {
+                    save_counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    Ok(())
+                },
+            )
+            .await
+            .unwrap();
+        assert!(report.reaches_runtime);
+        assert!(report.degradations.is_empty());
+        assert_eq!(
+            client.get_typed().overrides.mode(),
+            chimera_config::clash::config::overrides::Mode::Global
+        );
+        assert_eq!(saves.load(std::sync::atomic::Ordering::Relaxed), 1);
     }
 
     #[tokio::test]
-    async fn typed_clash_compensation_skips_runtime_without_runtime_patch() {
-        let error = finish_typed_clash_compensation(
-            anyhow::anyhow!("legacy mirror write failed"),
-            Vec::new(),
-            false,
-            || async { anyhow::bail!("runtime should not be reconciled") },
+    async fn unchanged_raw_mapping_override_skips_runtime_check_and_apply() {
+        let dir = tempfile::tempdir().unwrap();
+        let client = ClashConfigClient::new(
+            Utf8PathBuf::from_path_buf(dir.path().join("clash-config.yaml")).unwrap(),
+            ClashConfig::default(),
+            Arc::new(RecordingBridge {
+                mirrored_tun: Arc::new(Mutex::new(None)),
+            }),
+            Arc::new(TestRunningConfigBridge),
         )
-        .await;
+        .await
+        .unwrap();
+        let before = client.get_snapshot().await.unwrap();
+        let mut mapping = Mapping::new();
+        mapping.insert("mode".into(), "rule".into());
+        let next = apply_mapping_to_typed_clash(&before.state, &mapping).unwrap();
+        let saves = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let save_counter = saves.clone();
+        let report = client
+            .commit_candidate_with(
+                before,
+                next,
+                crate::client::application_workflow::impact::classify_clash(
+                    &client.get_typed(),
+                    &apply_mapping_to_typed_clash(&client.get_typed(), &mapping).unwrap(),
+                ) != crate::client::application_workflow::impact::RuntimeImpact::None,
+                false,
+                |_candidate| async {
+                    panic!("unchanged override must not check Core");
+                    #[allow(unreachable_code)]
+                    Ok(())
+                },
+                || async {
+                    panic!("unchanged override must not apply Core");
+                    #[allow(unreachable_code)]
+                    Ok(())
+                },
+                move || {
+                    save_counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    Ok(())
+                },
+            )
+            .await
+            .unwrap();
+        assert!(!report.reaches_runtime);
+        assert!(report.degradations.is_empty());
+        assert_eq!(saves.load(std::sync::atomic::Ordering::Relaxed), 1);
+    }
 
-        assert_eq!(error.to_string(), "legacy mirror write failed");
+    #[tokio::test]
+    async fn source_only_clash_patch_neither_checks_nor_applies_core() {
+        let dir = tempfile::tempdir().unwrap();
+        let client = ClashConfigClient::new(
+            Utf8PathBuf::from_path_buf(dir.path().join("clash-config.yaml")).unwrap(),
+            ClashConfig::default(),
+            Arc::new(RecordingBridge {
+                mirrored_tun: Arc::new(Mutex::new(None)),
+            }),
+            Arc::new(TestRunningConfigBridge),
+        )
+        .await
+        .unwrap();
+        let mut patch = ClashConfig::new_empty_patch();
+        patch.web_ui_list = Some(vec!["https://dashboard.example".into()]);
+        let report = client
+            .patch_typed_config_with(
+                patch,
+                |_candidate| async {
+                    panic!("source-only update must not check Core");
+                    #[allow(unreachable_code)]
+                    Ok(())
+                },
+                || async {
+                    panic!("source-only update must not apply Core");
+                    #[allow(unreachable_code)]
+                    Ok(())
+                },
+                || Ok(()),
+            )
+            .await
+            .unwrap();
+        assert!(!report.reaches_runtime);
+        assert!(report.degradations.is_empty());
+        assert_eq!(
+            client.get_typed().web_ui_list,
+            vec!["https://dashboard.example"]
+        );
     }
 
     #[test]

@@ -42,7 +42,7 @@ pub async fn test_group_delay(
             anyhow::anyhow!("proxy group {group_name} is missing from the controller")
         })?;
     let query = delay_query(
-        group.test_url.as_deref(),
+        graph.group_test_url(group_name.as_str()),
         group.expected_status.as_deref(),
         default_url,
         timeout,
@@ -104,6 +104,66 @@ pub async fn test_group_delay(
     }
     api.check_binding().await?;
     Ok(delays)
+}
+
+/// A native node test names its group, never the group's credential-bearing URL.
+/// Resolve membership, provider and expected status from one live snapshot.
+pub fn group_node_delay_spec(
+    graph: &NativeProxies,
+    group_name: &str,
+    node_name: &str,
+    default_url: &str,
+    timeout: Duration,
+) -> Result<(clash_api::DelayQuery, Option<ProviderName>)> {
+    let group = graph
+        .global
+        .iter()
+        .chain(&graph.groups)
+        .find(|item| item.name.as_str() == group_name)
+        .ok_or_else(|| anyhow::anyhow!("unknown proxy group"))?;
+    anyhow::ensure!(
+        group.all.iter().any(|name| name.as_str() == node_name),
+        "node is not a member of this proxy group"
+    );
+    let node = graph
+        .nodes
+        .get(&ProxyName::from(node_name))
+        .ok_or_else(|| anyhow::anyhow!("proxy node is missing from the controller"))?;
+    let provider = node
+        .provider
+        .as_deref()
+        .filter(|name| !name.is_empty())
+        .or_else(|| {
+            node.provider_name
+                .as_deref()
+                .filter(|name| !name.is_empty())
+        })
+        .map(ProviderName::new);
+    let query = delay_query(
+        graph.group_test_url(group_name),
+        group.expected_status.as_deref(),
+        default_url,
+        timeout,
+    )?;
+    Ok((query, provider))
+}
+
+/// Binds the fresh graph read and the single node test to one controller.
+pub async fn test_group_node_delay(
+    api: &ApiClient,
+    group_name: &str,
+    node_name: &str,
+    default_url: &str,
+    timeout: Duration,
+) -> Result<u16> {
+    let graph = NativeProxies::fetch(api).await?;
+    let (query, provider) =
+        group_node_delay_spec(&graph, group_name, node_name, default_url, timeout)?;
+    let result = api
+        .proxy_delay(&ProxyName::from(node_name), provider.as_ref(), &query)
+        .await?;
+    api.check_binding().await?;
+    Ok(result.delay)
 }
 
 /// Core-owned generation, freshness and publish state shared by both proxy

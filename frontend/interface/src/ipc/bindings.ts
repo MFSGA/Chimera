@@ -271,11 +271,16 @@ export const commands = {
     typedError<Proxies_Serialize, string>(__TAURI_INVOKE('get_proxies')),
   /**
    *  Additive native proxy view for typed consumers. The legacy `get_proxies`
-   *  command remains unchanged for both Chimera UIs and Agent integrations.
+   *  wire shape remains available to existing UI/Agent consumers, but credential-
+   *  bearing icon URLs are omitted and read through `get_proxy_group_icons`.
    */
   getNativeProxies: () =>
     typedError<NativeProxies_Serialize, string>(
       __TAURI_INVOKE('get_native_proxies'),
+    ),
+  getProxyGroupIcons: () =>
+    typedError<{ [key in ProxyName]: string }, string>(
+      __TAURI_INVOKE('get_proxy_group_icons'),
     ),
   selectProxy: (group: string, name: string) =>
     typedError<null, string>(__TAURI_INVOKE('select_proxy', { group, name })),
@@ -300,7 +305,7 @@ export const commands = {
       | 'chimera-client-alpha'
       | null,
   ) =>
-    typedError<null, string>(
+    typedError<MutationOutcome<null>, string>(
       __TAURI_INVOKE('change_clash_core', { clashCore }),
     ),
   getCoreStatus: () =>
@@ -391,6 +396,14 @@ export const commands = {
   testNativeProxyGroupDelay: (group: string) =>
     typedError<{ [key in string]: number }, string>(
       __TAURI_INVOKE('test_native_proxy_group_delay', { group }),
+    ),
+  /**
+   *  Test one member using its live group's own URL or the app default.
+   *  The URL is never accepted from or returned to the native UI.
+   */
+  testNativeProxyNodeDelay: (group: string, name: string) =>
+    typedError<number, string>(
+      __TAURI_INVOKE('test_native_proxy_node_delay', { group, name }),
     ),
   clashApiDeleteConnections: (id: string | null) =>
     typedError<null, string>(
@@ -3048,10 +3061,15 @@ export type ProxyGroup = {
   all: ProxyName[];
   now: ProxyName | null;
   fixed: ProxyName | null;
-  testUrl: string | null;
+  /**  Opaque history source key; raw test URLs never leave the native read view. */
+  delayKey: string;
   expectedStatus: string | null;
   hidden: boolean;
-  icon: string | null;
+  /**
+   *  Icon presence only. The actual URL may include credentials and is
+   *  returned separately rather than being embedded in the native graph.
+   */
+  iconConfigured: boolean;
   capabilities: ProxyGroupCapabilities;
 };
 

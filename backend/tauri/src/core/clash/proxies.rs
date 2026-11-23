@@ -86,7 +86,9 @@ fn proxy_item(record: &Proxy) -> api::ProxyItem {
         now: record.now.as_ref().map(ToString::to_string),
         r#type: record.proxy_type.clone(),
         udp: record.udp,
-        icon: record.icon.clone(),
+        // Icon URLs may contain credentials. Keep them on the dedicated
+        // get_proxy_group_icons IPC instead of the legacy proxy payload.
+        icon: None,
     }
 }
 
@@ -338,6 +340,29 @@ mod tests {
             .expect("mock controller should finish")
             .expect("mock controller should not panic");
         assert_eq!(paths.len(), 3);
+    }
+
+    #[test]
+    fn legacy_proxy_projection_redacts_group_icon_urls() {
+        let mut data = snapshot(vec![
+            native("GLOBAL", "Selector", Some(vec!["Group"])),
+            native("Group", "Selector", Some(vec!["DIRECT"])),
+        ]);
+        data.proxies
+            .get_mut(&ProxyName::from("Group"))
+            .unwrap()
+            .icon = Some("https://user:secret@example.test/icon.svg".into());
+        let native = NativeProxies::from_responses(data.proxies, &data.providers, data.groups)
+            .expect("native graph should assemble");
+        assert_eq!(
+            native.group_icons()[&ProxyName::from("Group")],
+            "https://user:secret@example.test/icon.svg"
+        );
+        let legacy = Proxies::from_native(native);
+        assert_eq!(legacy.groups[0].icon, None);
+        let serialized = serde_json::to_string(&legacy).unwrap();
+        assert!(!serialized.contains("secret"));
+        assert!(!serialized.contains("icon.svg"));
     }
 
     #[test]

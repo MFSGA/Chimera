@@ -17,7 +17,7 @@ export const withNativeDelaySample = (
   graph: NativeProxies_Serialize | undefined,
   name: string,
   delay: number,
-  url: string | null,
+  delayKey: string,
 ): NativeProxies_Serialize | undefined => {
   const node = graph?.nodes[name];
   if (!graph || !node) return graph;
@@ -27,24 +27,18 @@ export const withNativeDelaySample = (
     delay,
   } satisfies DelayHistory;
 
-  let updated: Proxy_Serialize = {
+  const extra = node.extra?.[delayKey];
+  const updated: Proxy_Serialize = {
     ...node,
     history: [...node.history, sample],
-  };
-
-  if (url) {
-    const extra = node.extra?.[url];
-    updated = {
-      ...updated,
-      extra: {
-        ...node.extra,
-        [url]: {
-          alive: delay > 0,
-          history: [...(extra?.history ?? []), sample],
-        },
+    extra: {
+      ...node.extra,
+      [delayKey]: {
+        alive: delay > 0,
+        history: [...(extra?.history ?? []), sample],
       },
-    };
-  }
+    },
+  };
 
   return {
     ...graph,
@@ -102,31 +96,18 @@ export const useNativeProxyActions = () => {
   );
 
   const updateProxiesDelay = useMutation({
-    mutationFn: async ([name, url, provider, expected]: [
-      string,
-      string | null,
-      string | null,
-      string | null,
-    ]) => {
-      const result = unwrapResult(
-        await invokeQuery(
-          queries.clashApiGetProxyDelay(name, url, provider, expected),
-        ),
-      );
-      return {
-        name,
-        url,
-        delay: result?.delay ?? 0,
-      };
-    },
-    onSuccess: ({ name, url, delay }) => {
-      queryClient.setQueryData<NativeProxies_Serialize | undefined>(
-        nativeKey,
-        (graph) => withNativeDelaySample(graph, name, delay, url),
-      );
-      void queryClient
-        .invalidateQueries({ queryKey: legacyKey, exact: true })
-        .catch(console.error);
+    mutationKey: mutations.testNativeProxyNodeDelay.mutationKey,
+    mutationFn: async ([group, name]: [string, string]) =>
+      unwrapResult(
+        await invokeMutation(mutations.testNativeProxyNodeDelay, [group, name]),
+      ),
+    // The backend resolves the URL and checks membership against the live core.
+    // Re-read its real history even if the IPC reply was lost or timed out.
+    onSettled: async () => {
+      await Promise.allSettled([
+        queryClient.refetchQueries({ queryKey: nativeKey, exact: true }),
+        queryClient.invalidateQueries({ queryKey: legacyKey, exact: true }),
+      ]);
     },
   });
 

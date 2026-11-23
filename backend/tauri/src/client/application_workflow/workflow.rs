@@ -248,6 +248,7 @@ impl ApplicationWorkflow {
                 CoreCommand::PatchApplicationConfig {
                     patch,
                     service_connected,
+                    ..
                 } if !super::impact::application_patch_requires_reconcile(
                     patch,
                     *service_connected,
@@ -528,6 +529,7 @@ impl ApplicationWorkflow {
                     CoreCommand::PatchApplicationConfig {
                         patch,
                         service_connected,
+                        ..
                     } if !crate::client::application_workflow::impact::
                         application_patch_requires_reconcile(patch, *service_connected)
                 );
@@ -549,10 +551,13 @@ impl ApplicationWorkflow {
                     | CoreCommand::RecoverCore
                     | CoreCommand::RetryDeferredProfiles { .. }
                     | CoreCommand::ReconcileProfiles { .. }
-                    | CoreCommand::SelectCore(_) => true,
+                    => true,
+                    #[cfg(test)]
+                    CoreCommand::SelectCore(_) => true,
                     CoreCommand::PatchApplicationConfig {
                         patch,
                         service_connected,
+                        ..
                     } => crate::client::application_workflow::impact::
                         application_patch_requires_reconcile(patch, *service_connected),
                     _ => false,

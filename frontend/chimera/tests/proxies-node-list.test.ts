@@ -13,7 +13,7 @@ const group = {
   type: 'URLTest',
   all: ['node10', 'node2', 'Failed', 'Untested', 'node1'],
   now: 'Failed',
-  testUrl: 'https://latency.test/',
+  delayKey: 'Automatic',
 } as ProxyGroup;
 
 const proxies = {
@@ -106,13 +106,41 @@ describe('ref proxy group view over the native graph', () => {
         node2: {
           ...proxies.nodes.node2,
           extra: {
-            [group.testUrl!]: { history: [{ delay: 99 }] },
+            [group.delayKey]: { history: [{ delay: 99 }] },
           },
         },
       },
     } as NativeProxies_Serialize;
     assert.equal(memberDelay('node2', group, withSpecific), 99);
     assert.equal(memberDelay('Untested', group, proxies), undefined);
+  });
+
+  it('uses an opaque default or shared delay source instead of a URL', () => {
+    const withSources = {
+      ...proxies,
+      nodes: {
+        ...proxies.nodes,
+        node2: {
+          ...proxies.nodes.node2,
+          extra: {
+            '': { history: [{ delay: 77 }] },
+            Automatic: { history: [{ delay: 99 }] },
+          },
+        },
+      },
+    } as NativeProxies_Serialize;
+    assert.equal(
+      memberDelay('node2', { ...group, delayKey: '' }, withSources),
+      77,
+    );
+    assert.equal(
+      memberDelay('node2', { ...group, name: 'SameSource' }, withSources),
+      99,
+    );
+    assert.equal(
+      memberDelay('node2', { ...group, delayKey: 'Other' }, withSources),
+      35,
+    );
   });
 
   it('migrates invalid persisted view values to safe ref defaults', () => {
