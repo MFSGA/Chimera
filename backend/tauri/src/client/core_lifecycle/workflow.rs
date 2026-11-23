@@ -25,17 +25,30 @@ use crate::client::application_workflow::{
     workflow::ProfileRuntime,
 };
 use crate::config::chimera::ClashCore;
+use crate::core::actor_v2::control_endpoint::ExecutionHost;
 use crate::enhance::FsProfileContentSource;
+use tokio_util::sync::CancellationToken;
 
 use super::{
     super::{
         application::ApplicationClient, clash_config::ClashConfigClient, runtime::RuntimePaths,
     },
+    RECOVERY_INTERVAL,
     ports::{
         BinaryInstaller, CoreLifecyclePort, CoreStatusSnapshot, PreparedCoreBinary,
         ServiceLifecyclePort, ServiceTransitionLease,
     },
 };
+
+/// An older source generation became stale while the single runtime actor
+/// was building or applying it. The actor must schedule another latest-source
+/// round, but must not blindly retry arbitrary Core apply failures.
+#[derive(Debug, thiserror::Error)]
+#[error("Profiles source advanced while reconciling runtime: {before} -> {after}")]
+pub(crate) struct ProfilesSourceAdvanced {
+    before: u64,
+    after: u64,
+}
 
 pub(in crate::client) enum Command {
     ProfileMutation(Box<crate::client::application_workflow::mutation::MutationRequest>),
@@ -138,6 +151,68 @@ pub(in crate::client) struct CoreLifecycleWorkflow {
     startup_report: Arc<parking_lot::Mutex<Option<StartupReport>>>,
     service_failed_generation_shared: Arc<AtomicU64>,
     service_status: Option<watch::Receiver<ServiceHostStatus>>,
+    service_recovery: Arc<parking_lot::Mutex<ServiceRecovery>>,
+    service_recovery_reconnected: Arc<AtomicBool>,
+    shutdown: CancellationToken,
+}
+
+#[derive(Default)]
+struct ServiceRecovery {
+    attempts: u8,
+    suppressed: bool,
+    owner: Option<ExecutionHost>,
+    next_attempt: Option<tokio::time::Instant>,
+}
+
+const SERVICE_RECOVERY_BUDGET: u8 = 3;
+
+impl ServiceRecovery {
+    fn armed(&self) -> bool {
+        !self.suppressed && self.attempts < SERVICE_RECOVERY_BUDGET
+    }
+
+    fn rearm(&mut self) {
+        self.attempts = 0;
+        self.suppressed = false;
+        self.next_attempt = None;
+    }
+
+    fn suppress(&mut self) {
+        self.suppressed = true;
+    }
+
+    fn follow_host(&mut self, host: ExecutionHost) {
+        if self.owner == Some(host) {
+            return;
+        }
+        self.owner = Some(host);
+        match host {
+            ExecutionHost::Service => self.rearm(),
+            ExecutionHost::Local => self.suppress(),
+        }
+    }
+
+    fn due(&self, endpoint_degraded: bool, closing: bool) -> bool {
+        self.owner == Some(ExecutionHost::Service)
+            && !closing
+            && self.armed()
+            && endpoint_degraded
+            && self
+                .next_attempt
+                .is_none_or(|at| tokio::time::Instant::now() >= at)
+    }
+
+    fn finish_attempt(&mut self, failed: bool, terminal_error: bool, endpoint_degraded: bool) {
+        self.next_attempt = Some(tokio::time::Instant::now() + RECOVERY_INTERVAL);
+        if terminal_error {
+            self.suppressed = true;
+        }
+        if self.attempts >= SERVICE_RECOVERY_BUDGET && (failed || endpoint_degraded) {
+            tracing::warn!(
+                "service endpoint recovery budget spent; explicitly start Service to re-arm"
+            );
+        }
+    }
 }
 
 impl CoreLifecycleWorkflow {
@@ -163,7 +238,15 @@ impl CoreLifecycleWorkflow {
             startup_report: Arc::new(parking_lot::Mutex::new(None)),
             service_failed_generation_shared: Arc::new(AtomicU64::new(0)),
             service_status: None,
+            service_recovery: Arc::new(parking_lot::Mutex::new(ServiceRecovery::default())),
+            service_recovery_reconnected: Arc::new(AtomicBool::new(false)),
+            shutdown: CancellationToken::new(),
         }
+    }
+
+    pub(super) fn with_shutdown(mut self, shutdown: CancellationToken) -> Self {
+        self.shutdown = shutdown;
+        self
     }
 
     pub(super) fn with_profile_content_reader(
@@ -437,7 +520,9 @@ impl CoreLifecycleWorkflow {
         &self,
         host: crate::core::actor_v2::control_endpoint::ExecutionHost,
     ) -> anyhow::Result<()> {
-        self.core.select_execution_host(host).await
+        self.core.select_execution_host(host).await?;
+        self.follow_service_recovery_host(host);
+        Ok(())
     }
 
     pub(in crate::client) async fn startup_reconcile_application(
@@ -445,20 +530,122 @@ impl CoreLifecycleWorkflow {
         app: ChimeraAppConfig,
         service_connected: bool,
     ) -> anyhow::Result<()> {
-        self.reconcile_application(app, service_connected).await
+        let result = self.reconcile_application(app, service_connected).await;
+        self.refresh_service_recovery_host().await;
+        result
     }
 
     pub(in crate::client) async fn startup_reconcile_application_after_service_release(
         &self,
         app: ChimeraAppConfig,
     ) -> anyhow::Result<()> {
-        self.reconcile_application_after_service_release(app).await
+        let result = self.reconcile_application_after_service_release(app).await;
+        self.refresh_service_recovery_host().await;
+        result
     }
 
     pub(super) fn service_restart_policy(
         &self,
     ) -> chimera_core::actor_v2::service_policy::ServiceRestartPolicySnapshot {
         self.service.restart_policy()
+    }
+
+    fn follow_service_recovery_host(&self, host: ExecutionHost) {
+        self.service_recovery.lock().follow_host(host);
+    }
+
+    async fn refresh_service_recovery_host(&self) {
+        let Ok(status) = self.core.status().await else {
+            return;
+        };
+        let host = if status.run_type == crate::core::RunType::Service {
+            ExecutionHost::Service
+        } else {
+            ExecutionHost::Local
+        };
+        self.follow_service_recovery_host(host);
+    }
+
+    pub(in crate::client) async fn service_endpoint_recovery_due(&self) -> bool {
+        if !self.service_recovery_due_now() || !self.settle_service_recovery_action().await {
+            return false;
+        }
+        self.service_recovery_due_now()
+    }
+
+    fn service_recovery_due_now(&self) -> bool {
+        if !self.core.service_endpoint_recovery_supported() {
+            return false;
+        }
+        self.service_recovery.lock().due(
+            self.core.service_endpoint_degraded(),
+            self.shutdown.is_cancelled(),
+        )
+    }
+
+    pub(in crate::client) fn service_recovery_blocks_handoff(&self) -> bool {
+        let endpoint_degraded = self.core.service_endpoint_degraded();
+        let recovery = self.service_recovery.lock();
+        recovery.owner == Some(ExecutionHost::Service) && recovery.armed() && endpoint_degraded
+    }
+
+    pub(in crate::client) fn take_service_recovery_reconnected(&self) -> bool {
+        self.service_recovery_reconnected
+            .swap(false, Ordering::AcqRel)
+    }
+
+    async fn settle_service_recovery_action(&self) -> bool {
+        match self.core.settle_service_recovery_action().await {
+            Some(Ok(())) | None => true,
+            Some(Err(reason)) => {
+                tracing::debug!(%reason, "Service endpoint recovery deferred until the previous Core action settles");
+                false
+            }
+        }
+    }
+
+    async fn report_service_endpoint_down(
+        &self,
+        transition: &mut dyn ServiceTransitionLease,
+    ) -> anyhow::Result<bool> {
+        if !self.core.service_endpoint_recovery_supported() {
+            self.service.report_endpoint_down(transition).await?;
+            return Ok(false);
+        }
+        if !self.service_recovery_due_now() || !self.settle_service_recovery_action().await {
+            return Ok(false);
+        }
+        let endpoint_degraded = self.core.service_endpoint_degraded();
+        {
+            let mut recovery = self.service_recovery.lock();
+            if !recovery.due(endpoint_degraded, self.shutdown.is_cancelled()) {
+                return Ok(false);
+            }
+            recovery.attempts = recovery.attempts.saturating_add(1);
+        }
+
+        let result = self
+            .core
+            .recover_service_endpoint(&self.shutdown)
+            .await
+            .unwrap_or_else(|| {
+                Err(chimera_core_manager::CoreError::new(
+                    chimera_core_manager::CoreErrorKind::BackendUnavailable,
+                    "the shared Core router does not support Service endpoint recovery",
+                    true,
+                ))
+            });
+        let failed = result.is_err();
+        let terminal_error = result.as_ref().err().is_some_and(|error| !error.retryable);
+        let endpoint_degraded = self.core.service_endpoint_degraded();
+        self.service_recovery
+            .lock()
+            .finish_attempt(failed, terminal_error, endpoint_degraded);
+        if let Err(error) = result {
+            tracing::warn!(%error, "Service endpoint recovery attempt failed");
+            return Err(anyhow::anyhow!(error.to_string()));
+        }
+        Ok(true)
     }
 
     pub(in crate::client) async fn execute(
@@ -553,7 +740,10 @@ impl CoreLifecycleWorkflow {
                 profiles,
                 staged_content,
             } => self.reconcile_profiles(profiles, staged_content).await,
-            Command::Shutdown => self.core.stop().await,
+            Command::Shutdown => {
+                self.service_recovery.lock().suppress();
+                self.core.stop().await
+            }
             #[cfg(test)]
             Command::StopCore => self.core.stop().await,
             Command::PatchApplicationConfig {
@@ -613,9 +803,19 @@ impl CoreLifecycleWorkflow {
             }
             Command::StopService(mut transition) => self.stop_service(transition.as_mut()).await,
             Command::ServiceEndpointDown(mut transition) => {
-                self.service.report_endpoint_down(transition.as_mut()).await
+                match self.report_service_endpoint_down(transition.as_mut()).await {
+                    Ok(recovered) => {
+                        if recovered {
+                            self.service_recovery_reconnected
+                                .store(true, Ordering::Release);
+                        }
+                        Ok(())
+                    }
+                    Err(error) => Err(error),
+                }
             }
         };
+        self.refresh_service_recovery_host().await;
         #[cfg(test)]
         {
             if refresh_startup_target {
@@ -751,6 +951,7 @@ impl CoreLifecycleWorkflow {
     ) -> anyhow::Result<()> {
         use chimera_ipc::api::status::CoreState;
 
+        self.service_recovery.lock().suppress();
         transition.uninstall_daemon().await?;
         transition.confirm_stopped().await?;
         if !self.application.get_typed().enable_service_mode {
@@ -786,6 +987,7 @@ impl CoreLifecycleWorkflow {
         } else {
             transition.start_daemon().await?;
         }
+        self.service_recovery.lock().rearm();
         if !self.application.get_typed().enable_service_mode {
             return Ok(());
         }
@@ -816,6 +1018,7 @@ impl CoreLifecycleWorkflow {
     ) -> anyhow::Result<()> {
         use chimera_ipc::api::status::CoreState;
 
+        self.service_recovery.lock().suppress();
         transition.stop_daemon().await?;
         transition.confirm_stopped().await?;
         if !self.application.get_typed().enable_service_mode {
@@ -847,8 +1050,43 @@ impl CoreLifecycleWorkflow {
             crate::core::service::ipc::get_ipc_state(),
         );
         if let Some(profiles) = &self.profiles {
-            self.reconcile_profiles(Arc::new(profiles.load().state.clone()), Default::default())
-                .await
+            let before = *profiles.load().version.as_ref();
+            // Capture both the authoritative committed document and its managed
+            // file bytes under the same publication fence, as in ref.
+            let (target, app, clash, current, content) =
+                self.capture_reconcile_committed_target(app, clash).await?;
+            let captured = *profiles.load().version.as_ref();
+            if captured != before {
+                return Err(ProfilesSourceAdvanced {
+                    before,
+                    after: captured,
+                }
+                .into());
+            }
+            let applied = self
+                .core
+                .reconcile_profiles(
+                    clash,
+                    app.core,
+                    crate::core::RunType::classify(
+                        app.enable_service_mode,
+                        crate::core::service::ipc::get_ipc_state(),
+                    ),
+                    current,
+                    app,
+                    content,
+                    Some(target),
+                )
+                .await;
+            let after = *profiles.load().version.as_ref();
+            if after != captured {
+                return Err(ProfilesSourceAdvanced {
+                    before: captured,
+                    after,
+                }
+                .into());
+            }
+            applied
         } else {
             self.core.reconcile(clash, target_core, run_type).await
         }
@@ -1372,7 +1610,9 @@ impl CoreLifecycleWorkflow {
         let _transition = self.service.try_begin_transition().await.map_err(|error| {
             format!("could not acquire the Service transition lease: {error:#}")
         })?;
-        self.release_service_owner().await
+        let result = self.release_service_owner().await;
+        self.refresh_service_recovery_host().await;
+        result
     }
 
     pub(in crate::client) async fn try_begin_service_transition(
@@ -1470,48 +1710,26 @@ impl CoreLifecycleWorkflow {
             }
         };
 
-        // The source is now committed; a subsequent Core or Service failure
-        // must not be reported as a failed source write or roll it back.
-        let applied = self
-            .reconcile_application(candidate, service_connected)
-            .await;
-        // An independent source actor may commit a newer version while the
-        // endpoint operation awaits. Do not claim the outdated application
-        // target converged merely because that old operation returned success.
-        let latest = self.application.get().await?;
-        if latest.version != committed_version {
-            return Ok(vec![crate::client::runtime::Degradation {
-                phase: crate::client::runtime::DegradationPhase::RuntimeApply,
-                code: "application_runtime_deferred".into(),
-                message: format!(
-                    "application source advanced from version {committed_version} to {} during runtime apply; the latest committed target needs reconciliation{}",
-                    latest.version,
-                    applied.err().map_or_else(String::new, |error| format!(
-                        "; previous attempt failed: {error:#}"
-                    )),
-                ),
-                retryable: true,
-            }]);
-        }
-        match applied {
-            Ok(()) => Ok(Vec::new()),
-            Err(error) => {
-                tracing::warn!(
-                    %error,
-                    "application source committed; runtime reconcile deferred"
-                );
-                Ok(vec![crate::client::runtime::Degradation {
-                    phase: crate::client::runtime::DegradationPhase::RuntimeApply,
-                    code: "application_runtime_deferred".into(),
-                    message: format!(
-                        "application config was saved, but runtime reconciliation failed: {error:#}"
-                    ),
-                    retryable:
-                        crate::client::application_workflow::tcc::safe_to_retry_deferred_runtime(
-                            &error,
-                        ),
-                }])
-            }
+        // Source publication is complete. Ref's committed-target reconciler
+        // always consumes the latest version; until the full actor is ported,
+        // fence this compatibility apply before and after CoreLifecycle work.
+        // Failure to read the source after commit is deferred, not rolled back.
+        let degradation = crate::client::reconciler::committed::apply_committed(
+            "application",
+            committed_version,
+            || async { self.application.get().await.map(|latest| latest.version) },
+            || self.reconcile_application(candidate, service_connected),
+        )
+        .await;
+        if let Some(degradation) = degradation {
+            tracing::warn!(
+                code = %degradation.code,
+                message = %degradation.message,
+                "application source committed; runtime reconcile deferred"
+            );
+            Ok(vec![degradation])
+        } else {
+            Ok(Vec::new())
         }
     }
 
@@ -1530,25 +1748,13 @@ impl CoreLifecycleWorkflow {
         let inputs = self
             .capture_committed_profile_inputs_for(app, self.clash.get()?)
             .await?;
-        let (app, clash, profiles, content) = inputs.into_parts()?;
-        let run_type = crate::core::RunType::classify(
-            app.enable_service_mode,
-            if service_connected {
-                crate::core::service::ipc::IpcState::Connected
-            } else {
-                crate::core::service::ipc::IpcState::Disconnected
-            },
-        );
-        let check = self
-            .core
-            .validate_profile_runtime(clash, app.core, run_type, profiles, app, content)
-            .await?;
-        match check {
-            crate::client::application_workflow::mutation::CheckRecord::Passed => Ok(()),
-            other => anyhow::bail!(
-                "independent application runtime candidate check did not pass: {other:?}"
-            ),
-        }
+        let check = crate::client::reconciler::check::check_candidate(
+            self.core.as_ref(),
+            inputs,
+            service_connected,
+        )
+        .await?;
+        crate::client::reconciler::check::require_passed(check, "application")
     }
 
     async fn reconcile_application(
@@ -1887,20 +2093,12 @@ impl ProfileRuntime for CoreLifecycleWorkflow {
         &self,
         inputs: crate::client::application_workflow::inputs::RuntimeInputs,
     ) -> anyhow::Result<crate::client::application_workflow::mutation::CheckRecord> {
-        let (app, clash, profiles, profile_content) = inputs.into_parts().map_err(|error| {
-            anyhow::Error::new(
-                crate::client::application_workflow::mutation::RuntimeCheckFailure::
-                    candidate_unavailable(error.to_string()),
-            )
-        })?;
-        let target_core = app.core;
-        let run_type = crate::core::RunType::classify(
-            app.enable_service_mode,
-            crate::core::service::ipc::get_ipc_state(),
-        );
-        self.core
-            .validate_profile_runtime(clash, target_core, run_type, profiles, app, profile_content)
-            .await
+        crate::client::reconciler::check::check_candidate(
+            self.core.as_ref(),
+            inputs,
+            crate::core::service::ipc::get_ipc_state().is_connected(),
+        )
+        .await
     }
 
     async fn prepare_profile_runtime(

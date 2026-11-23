@@ -18,6 +18,7 @@ pub(crate) mod hotkey;
 pub(crate) mod jobs;
 pub(crate) mod ports;
 pub(crate) mod profiles;
+pub(crate) mod reconciler;
 pub mod runtime;
 pub(crate) mod runtime_inspection;
 mod service_status;
@@ -136,7 +137,6 @@ fn utf8_path(path: std::path::PathBuf) -> anyhow::Result<camino::Utf8PathBuf> {
 async fn new_typed_config_clients(
     paths: &PathResolver,
     bridges: &LegacyBridgeSet,
-    core_router: CoreClientV2,
     build_channel: ReleaseChannel,
 ) -> anyhow::Result<TypedConfigClients> {
     let application = ApplicationClient::new(
@@ -156,7 +156,6 @@ async fn new_typed_config_clients(
         utf8_path(paths.clash_config_path())?,
         bridges.clash.snapshot_legacy()?,
         bridges.clash.clone(),
-        Arc::new(core_lifecycle::ActorRunningConfigBridge::new(core_router)),
     )
     .await?;
 
@@ -275,7 +274,6 @@ impl ChimeraClient {
         let typed = tauri::async_runtime::block_on(new_typed_config_clients(
             &paths,
             &bridges,
-            core_v2.clone(),
             bundle_metadata.release_channel,
         ))?;
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -327,7 +325,15 @@ impl ChimeraClient {
                 shutdown.clone(),
                 &tasks,
             ))?;
-        tauri::async_runtime::block_on(mutations.connect(core_lifecycle.clone()))?;
+        let profile_gate = Arc::new(reconciler::check::CandidateCheck::new(
+            core.clone(),
+            typed.application.clone(),
+            typed.clash_config.clone(),
+            typed_profiles.content_reader(),
+        ));
+        tauri::async_runtime::block_on(
+            mutations.connect_with_runtime_gate(core_lifecycle.clone(), profile_gate),
+        )?;
         let streams_shutdown = shutdown.child_token();
         let streams =
             tauri::async_runtime::block_on(chimera_core::clash::ws::StreamsClient::spawn(

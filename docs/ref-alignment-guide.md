@@ -13,19 +13,20 @@
 ```text
 repository: https://github.com/libnyanpasu/clash-nyanpasu
 branch:     main
-commit:     518bf49843e1f735380e11da1ebe2a85eb8ce8c6
-verified:   2026-10-31; fetched origin/main; local SHA and submodule checkout checked
-previous gitlink: 1b5d73c53a7141d216a8a0a7751be38a295be059
-nested runtime: 90ac364c9c52ea05d62f18f00b53be80b3b32144
+commit:     c4b35e04870a9caa53f21d10af6fcfde4a6f4c01
+verified:   2026-11-18; checked origin/main with git ls-remote over SSH, fetched the commit, and verified the detached checkout and nested submodules
+previous gitlink: dd42ab212bcab4c61601a8c6922b26231609ba49
+nested runtime: 3854f2c06331be0b36bb69adc59708802f661e57
+enable-loopback: f1b9f8693a328ca0a6094951035b81fe302b0848
 ```
 
-The target is 17 commits ahead of the previous gitlink and was fetched from
-`origin/main`. The reference root and checked-out nested submodules are clean;
-no new GitHub API or signature verification was performed for this update.
-These commits include startup failure and corrupt-data recovery, jobs journal
-recovery, TUN stack capability changes, dependency updates, and the v2.0.1
-manifest. The pin records the reference implementation only; it does not
-automatically apply upstream dependencies or product code to Chimera. Each
+The target is 32 commits ahead of the previous gitlink. The reference root and
+checked-out nested submodules are clean. These commits include the RPC resource
+permission model, configuration sync setup, UI changes, and dependency updates.
+The startup reconciler and Service endpoint recovery sources used by this
+iteration are unchanged in this 32-commit range; the latest commit is still the
+baseline for review. The pin records the reference implementation only; it does
+not automatically apply upstream dependencies or product code to Chimera. Each
 shared feature still needs its own path and symbol review.
 
 每个迁移切片开始前执行：

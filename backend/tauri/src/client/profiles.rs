@@ -3435,6 +3435,171 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn metadata_and_order_commit_source_only_while_active_changes_request_runtime_reconcile()
+    {
+        let (client, dir) = seeded_client().await;
+        let selected = client
+            .set_current(Some(ProfileId("cfg1".into())))
+            .await
+            .unwrap();
+        assert!(
+            selected.receipt.operation_id.is_some(),
+            "explicit activation must notify the committed-target reconciler"
+        );
+        let initial_version = selected.receipt.source_version;
+        let reselected = client
+            .set_current(Some(ProfileId("cfg1".into())))
+            .await
+            .unwrap();
+        assert!(
+            reselected.receipt.operation_id.is_some(),
+            "reselecting the same active profile must request runtime reconciliation"
+        );
+
+        let mut patch = ProfileMetadata::new_empty_patch();
+        patch.name = Some("Active but renamed".into());
+        let metadata = client
+            .patch_metadata(ProfileId("cfg1".into()), patch)
+            .await
+            .unwrap();
+        assert_eq!(
+            metadata.receipt.runtime,
+            crate::client::runtime::RuntimeCommitStatus::Unchanged
+        );
+        assert!(
+            metadata.receipt.operation_id.is_none(),
+            "metadata is a direct source commit, not a runtime transaction"
+        );
+        assert!(metadata.receipt.source_version > initial_version);
+        assert!(!metadata.affects_current);
+
+        let reordered = client
+            .reorder(ReorderOp::Move {
+                active: ProfileId("cfg2".into()),
+                over: ProfileId("cfg1".into()),
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            reordered.receipt.runtime,
+            crate::client::runtime::RuntimeCommitStatus::Unchanged
+        );
+        assert!(reordered.receipt.operation_id.is_none());
+        assert!(reordered.receipt.source_version > metadata.receipt.source_version);
+
+        let persisted: Profiles =
+            serde_yaml_ng::from_slice(&std::fs::read(temp_profiles_path(&dir)).unwrap()).unwrap();
+        assert_eq!(
+            persisted.items[&ProfileId("cfg1".into())].metadata.name,
+            "Active but renamed"
+        );
+        assert_eq!(
+            profile_order(&persisted),
+            profile_order(&reordered.snapshot)
+        );
+
+        let definition = seeded_profiles().items[&ProfileId("cfg1".into())]
+            .definition
+            .clone();
+        let replaced = client
+            .replace_definition(ProfileId("cfg1".into()), definition)
+            .await
+            .unwrap();
+        assert!(
+            replaced.receipt.operation_id.is_some(),
+            "active definition still requests committed-target reconciliation"
+        );
+    }
+
+    struct RejectingRuntimeGate;
+
+    #[async_trait::async_trait]
+    impl crate::state::mutation::RuntimeGate for RejectingRuntimeGate {
+        async fn check(
+            &self,
+            candidate: crate::state::mutation::RuntimeCandidate,
+        ) -> anyhow::Result<()> {
+            assert_eq!(
+                candidate.staged.get("cfg1.yaml").map(String::as_str),
+                Some("proxies: []\n"),
+                "ref CandidateCheck must receive the frozen proposed bytes"
+            );
+            anyhow::bail!("Core rejected candidate");
+        }
+    }
+
+    #[tokio::test]
+    async fn candidate_rejection_precedes_file_preparation_and_source_publication() {
+        let dir = tempdir().unwrap();
+        let mutations = MutationCoordinator::isolated();
+        let mut materialization = MockProfileMaterializationPort::new();
+        materialization
+            .expect_reconcile()
+            .returning(|_| Ok(MaterializationReconcileReport::default()));
+        materialization.expect_prepare_file_first().never();
+        let client = ProfilesClient::new(
+            mutations.clone(),
+            temp_profiles_path(&dir),
+            Arc::new(MockProfileFsPort::new()),
+            Arc::new(MockSubscriptionFetcher::new()),
+            Arc::new(materialization),
+        )
+        .await
+        .unwrap();
+        client.replace(seeded_profiles()).await.unwrap();
+        client
+            .set_current(Some(ProfileId("cfg1".into())))
+            .await
+            .unwrap();
+        let before = client.snapshot();
+        let document = std::fs::read(temp_profiles_path(&dir)).unwrap();
+        mutations.install_test_runtime_gate(Arc::new(RejectingRuntimeGate));
+        let error = client
+            .save_file(ProfileId("cfg1".into()), "proxies: []\n".into())
+            .await
+            .unwrap_err();
+        assert!(matches!(error, ProfilesError::RuntimeCheck(_)));
+        assert!(error.to_string().contains("Core rejected candidate"));
+        assert_eq!(client.snapshot().revision(), before.revision());
+        assert_eq!(std::fs::read(temp_profiles_path(&dir)).unwrap(), document);
+    }
+
+    #[tokio::test]
+    async fn inactive_managed_file_is_source_only_while_active_file_requests_reconcile() {
+        let (client, dir) = seeded_client().await;
+        let selected = client
+            .set_current(Some(ProfileId("cfg1".into())))
+            .await
+            .unwrap();
+        let inactive = client
+            .save_file(ProfileId("cfg2".into()), "proxies: []\n".into())
+            .await
+            .unwrap();
+        assert!(inactive.receipt.operation_id.is_none());
+        assert_eq!(
+            inactive.receipt.runtime,
+            crate::client::runtime::RuntimeCommitStatus::Unchanged
+        );
+        assert!(inactive.receipt.source_version > selected.receipt.source_version);
+        assert!(!inactive.affects_current);
+        let persisted: Profiles =
+            serde_yaml_ng::from_slice(&std::fs::read(temp_profiles_path(&dir)).unwrap()).unwrap();
+        assert_eq!(persisted.revision(), inactive.snapshot.revision());
+
+        let active = client
+            .save_file(ProfileId("cfg1".into()), "proxies: []\n".into())
+            .await
+            .unwrap();
+        assert!(active.receipt.operation_id.is_some());
+        assert_eq!(
+            active.receipt.runtime,
+            crate::client::runtime::RuntimeCommitStatus::Unchanged,
+            "the source commit itself must not pretend Core apply has settled"
+        );
+        assert!(active.affects_current);
+    }
+
+    #[tokio::test]
     async fn patch_metadata_and_remote_options() {
         let (client, _dir) = seeded_client().await;
         let mut patch = ProfileMetadata::new_empty_patch();

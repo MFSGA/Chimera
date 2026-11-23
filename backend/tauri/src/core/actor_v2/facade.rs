@@ -870,6 +870,18 @@ impl CoreFacade {
         }
     }
 
+    pub(crate) fn service_endpoint_degraded(&self) -> bool {
+        self.core_router.as_ref().is_some_and(|router| {
+            matches!(
+                router.status().connectivity,
+                chimera_core::actor_v2::router::EndpointConnectivity::Degraded {
+                    desired: super::control_endpoint::ExecutionHost::Service,
+                    ..
+                }
+            )
+        })
+    }
+
     /// Select a host after startup has completed its S2 handoff. This only
     /// changes which already-proven endpoint the shared Core lifecycle uses;
     /// the caller still owns S3 retirement/receipt verification and S4 apply.

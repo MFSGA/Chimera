@@ -196,9 +196,14 @@ pub fn setup(
         shutdown.child_token(),
         &tasks,
     ));
+    let service_recovery_facade =
+        chimera_core::actor_v2::facade::CoreFacade::new(core_router.clone(), service_actor.clone());
     let core_facade_monitor = core_facade.clone();
     let core_bridge: Arc<dyn crate::client::core_lifecycle::CoreLifecyclePort> = Arc::new(
-        crate::client::core_lifecycle::LegacyCoreBridge::new(core_facade.clone()),
+        crate::client::core_lifecycle::LegacyCoreBridge::with_service_recovery(
+            core_facade.clone(),
+            service_recovery_facade,
+        ),
     );
     // Mirror ref's runtime-owner order: construct the local Core and Service
     // control plane before starting the Jobs owner. A failure below leaves

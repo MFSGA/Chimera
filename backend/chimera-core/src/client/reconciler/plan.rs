@@ -299,7 +299,7 @@ pub(super) fn serves_instance(server: &StatusResBody<'_>, instance_config_dir: &
 
 /// Who should own the runtime, and what it takes to prove it (§1.3, S2).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum OwnerPlan {
+pub enum OwnerPlan {
     Owned,
     /// Adopt the daemon, then hand back to Local: the handoff proves the
     /// daemon's core stopped.
@@ -318,7 +318,7 @@ pub(crate) enum OwnerPlan {
     },
 }
 
-pub(crate) fn plan_owner(
+pub fn plan_owner(
     desired: ExecutionHost,
     owner: ExecutionHost,
     service: &ServiceEvidence,

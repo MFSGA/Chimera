@@ -45,7 +45,9 @@ enum ApplicationClientInner {
     },
     #[cfg(test)]
     Static {
-        state: parking_lot::RwLock<ChimeraAppConfig>,
+        // Keep the test document and its version under the same lock so the
+        // compatibility backend exercises the real source actor's CAS fence.
+        state: parking_lot::RwLock<(ChimeraAppConfig, u64)>,
     },
 }
 
@@ -59,7 +61,7 @@ impl ApplicationClient {
     pub(crate) fn static_state(state: ChimeraAppConfig) -> Self {
         Self {
             inner: Arc::new(ApplicationClientInner::Static {
-                state: parking_lot::RwLock::new(state),
+                state: parking_lot::RwLock::new((state, 0)),
             }),
         }
     }
@@ -162,7 +164,7 @@ impl ApplicationClient {
         match self.inner.as_ref() {
             ApplicationClientInner::Actor { snapshot, .. } => snapshot.load().state.clone(),
             #[cfg(test)]
-            ApplicationClientInner::Static { state } => state.read().clone(),
+            ApplicationClientInner::Static { state } => state.read().0.clone(),
         }
     }
 
@@ -190,10 +192,13 @@ impl ApplicationClient {
                     .await
             }
             #[cfg(test)]
-            ApplicationClientInner::Static { state } => Ok(ApplicationSnapshot {
-                state: state.read().clone(),
-                version: 0,
-            }),
+            ApplicationClientInner::Static { state } => {
+                let source = state.read();
+                Ok(ApplicationSnapshot {
+                    state: source.0.clone(),
+                    version: source.1,
+                })
+            }
         }
     }
 
@@ -211,11 +216,16 @@ impl ApplicationClient {
             }
             #[cfg(test)]
             ApplicationClientInner::Static { state } => {
-                let mut state = state.write();
-                state.apply(patch);
+                let mut source = state.write();
+                let next_version = source
+                    .1
+                    .checked_add(1)
+                    .context("test application version overflow")?;
+                source.0.apply(patch);
+                source.1 = next_version;
                 Ok(ApplicationSnapshot {
-                    state: state.clone(),
-                    version: 0,
+                    state: source.0.clone(),
+                    version: source.1,
                 })
             }
         }
@@ -272,12 +282,25 @@ impl ApplicationClient {
             }
             #[cfg(test)]
             ApplicationClientInner::Static { state } => {
+                let mut source = state.write();
+                if source.1 != expected_version {
+                    return Ok(ConditionalReplaceResult::Conflict {
+                        actual_version: source.1,
+                    });
+                }
+                let next_version = source
+                    .1
+                    .checked_add(1)
+                    .context("test application version overflow")?;
                 let (next, mirror) = prepared.into_parts();
-                *state.write() = next.clone();
+                source.0 = next.clone();
+                source.1 = next_version;
+                let version = source.1;
+                drop(source);
                 mirror.apply();
                 Ok(ConditionalReplaceResult::Replaced(ApplicationSnapshot {
                     state: next,
-                    version: expected_version + 1,
+                    version,
                 }))
             }
         }
@@ -616,16 +639,17 @@ impl ChimeraClient {
                 self.inner.application.patch_typed(patch).await?;
                 Vec::new()
             };
-        // The one existing lifecycle actor retries a newly committed target;
-        // there is still no second runtime controller. Deterministic Core
-        // refusal remains deferred without consuming an automatic retry loop.
-        if degradations
-            .iter()
-            .any(|item| item.code == "application_runtime_deferred" && item.retryable)
-        {
-            self.inner.core_lifecycle.request_runtime_rebuild();
-        }
         let snapshot = self.inner.application.get().await?;
+        // Ref RuntimeGate::committed: durable source publication is observed
+        // by the one lifecycle mailbox. The successful inline apply is not
+        // replayed; only retryable postcommit failures request convergence.
+        self.inner.core_lifecycle.source_committed(
+            super::reconciler::committed::SourceDomain::Application,
+            snapshot.version,
+            degradations
+                .iter()
+                .any(|item| item.code == "application_runtime_deferred" && item.retryable),
+        );
         self.configure_app_update(&snapshot.state);
 
         // Keep the legacy Verge file current while existing service and agent
@@ -740,12 +764,13 @@ impl ChimeraClient {
         let runtime_deferred = degradations
             .iter()
             .any(|item| item.code == "clash_runtime_deferred");
-        if degradations
-            .iter()
-            .any(|item| item.code == "clash_runtime_deferred" && item.retryable)
-        {
-            self.inner.core_lifecycle.request_runtime_rebuild();
-        }
+        self.inner.core_lifecycle.source_committed(
+            super::reconciler::committed::SourceDomain::Clash,
+            snapshot.version,
+            degradations
+                .iter()
+                .any(|item| item.code == "clash_runtime_deferred" && item.retryable),
+        );
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
         {
             let app = self.get_app_config()?;
@@ -1314,6 +1339,33 @@ async fn patch_legacy_uncoordinated(client: &ChimeraClient, patch: IVerge) -> Re
             legacy_finalize_error(error.context("failed to finalize legacy verge patch")),
         )
         .await);
+    }
+
+    // Legacy multi-domain patches still have a compensating transaction.
+    // Notify only after every domain and the legacy finalize step succeeded;
+    // an aborted attempt must not advertise its rolled-back versions.
+    for domain in &committed {
+        match domain {
+            CommittedLegacyDomain::Application {
+                committed_version, ..
+            } => {
+                client.inner.core_lifecycle.source_committed(
+                    super::reconciler::committed::SourceDomain::Application,
+                    *committed_version,
+                    false,
+                );
+            }
+            CommittedLegacyDomain::Clash {
+                committed_version, ..
+            } => {
+                client.inner.core_lifecycle.source_committed(
+                    super::reconciler::committed::SourceDomain::Clash,
+                    *committed_version,
+                    false,
+                );
+            }
+            CommittedLegacyDomain::Session { .. } => {}
+        }
     }
 
     #[cfg(not(any(target_os = "android", target_os = "ios")))]

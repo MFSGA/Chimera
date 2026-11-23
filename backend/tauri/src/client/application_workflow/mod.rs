@@ -97,6 +97,30 @@ impl ApplicationWorkflowClient {
         Ok(Self(ApplicationWorkflowClientInner::TestActor(actor_ref)))
     }
 
+    /// Source-only changes publish a version but do not request a runtime round.
+    pub(crate) fn profiles_source_committed(&self, version: u64) {
+        self.profiles_committed(version, false);
+    }
+
+    /// A runtime-affecting Profiles source commit asks the *existing*
+    /// CoreLifecycle mailbox to reconcile the latest committed target.
+    /// No candidate or pre-commit transaction participant applies the Core.
+    pub(crate) fn profiles_runtime_committed(&self, version: u64) {
+        self.profiles_committed(version, true);
+    }
+
+    fn profiles_committed(&self, version: u64, reconcile: bool) {
+        match &self.0 {
+            ApplicationWorkflowClientInner::CoreLifecycle(core) => core.source_committed(
+                crate::client::reconciler::committed::SourceDomain::Profiles,
+                version,
+                reconcile,
+            ),
+            #[cfg(test)]
+            ApplicationWorkflowClientInner::TestActor(_) => {}
+        }
+    }
+
     pub(crate) fn begin_mutation(&self, request: MutationRequest) -> anyhow::Result<()> {
         match &self.0 {
             ApplicationWorkflowClientInner::CoreLifecycle(core) => {

@@ -10,8 +10,9 @@ use crate::{
     log_err,
 };
 
-/// Applies typed overrides to the running core and desired state through the
-/// shared transaction coordinator used by IPC and non-window entry points.
+/// Commits typed Clash overrides after candidate validation, then asks the
+/// lifecycle to reconcile the running core. A deferred runtime is reported
+/// separately from a rejected source mutation.
 pub async fn patch_running_clash_overrides(
     client: &ChimeraClient,
     overrides: ClashConfigOverrides,
@@ -52,7 +53,7 @@ pub fn change_clash_mode(app_handle: &AppHandle, mode: String) {
             .await
             .into_result()
         {
-            log::error!(target: "app", "failed to change clash mode transactionally: {error:#}");
+            log::error!(target: "app", "failed to commit clash mode change: {error:#}");
         }
     });
 }
