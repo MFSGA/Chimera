@@ -11,13 +11,13 @@ use chimera_core_manager::{
     ControlOptions, CoreControl, CoreManager, ExecutorExit, ManagerOptions,
 };
 
-use super::{AppShutdown, StartupFailureHost};
+use super::{StartupFailureHost, StartupOwners};
 
 #[derive(Default)]
 struct Host {
     events: RefCell<Vec<&'static str>>,
     report: RefCell<Option<Report>>,
-    owners: RefCell<Option<AppShutdown>>,
+    owners: RefCell<Option<StartupOwners>>,
 }
 
 impl StartupFailureHost for Host {
@@ -26,7 +26,7 @@ impl StartupFailureHost for Host {
         self.report.replace(Some(report));
     }
 
-    fn retain(&self, owners: AppShutdown) {
+    fn retain(&self, owners: StartupOwners) {
         self.events.borrow_mut().push("retain");
         self.owners.replace(Some(owners));
     }
@@ -37,7 +37,7 @@ impl StartupFailureHost for Host {
             self.owners
                 .borrow()
                 .as_ref()
-                .is_some_and(|owners| owners.shutdown.is_cancelled())
+                .is_some_and(|owners| !owners.shutdown.is_cancelled())
         );
         self.events.borrow_mut().push("exit");
     }
@@ -59,18 +59,19 @@ fn failure_report() -> Report {
 }
 
 #[test]
-fn setup_failure_cancels_and_retains_partial_owners_before_exit() {
+fn setup_failure_retains_partial_owners_for_the_exit_boundary() {
     let runtime = tokio::runtime::Runtime::new().unwrap();
     let _entered = runtime.enter();
     let host = Host::default();
     let task_finished = Arc::new(AtomicBool::new(false));
     let task_finished_in_owner = task_finished.clone();
 
-    // The owner is canceled before exit, and the tracked task must finish when
-    // the normal shutdown path drains it. Its completion flag is independent
-    // of the host's reported error.
+    // Initial: the failing setup retains an active owner for the event loop.
+    // Operation: exit boundary requests shutdown after the dialog and retain.
+    // Expected: the tracked task drains; eager cancellation in setup would
+    // cause the ownership assertion in Host::exit to fail.
     let result = super::run_setup(
-        AppShutdown::default(),
+        StartupOwners::default(),
         |owners| {
             let shutdown = owners.shutdown.clone();
             owners.tasks.spawn(async move {
@@ -91,7 +92,8 @@ fn setup_failure_cancels_and_retains_partial_owners_before_exit() {
     );
 
     let owners = host.owners.borrow_mut().take().unwrap();
-    assert!(owners.shutdown.is_cancelled());
+    assert!(!owners.shutdown.is_cancelled());
+    owners.request_shutdown();
     runtime.block_on(owners.wait_shutdown());
     assert!(task_finished.load(Ordering::SeqCst));
 }
@@ -100,7 +102,7 @@ fn setup_failure_cancels_and_retains_partial_owners_before_exit() {
 fn successful_setup_does_not_show_failure_or_request_exit() {
     let host = Host::default();
     let result = super::run_setup(
-        AppShutdown::default(),
+        StartupOwners::default(),
         |_| Ok(()),
         |_| failure_report(),
         &host,
@@ -137,9 +139,9 @@ fn partial_core_owner_shuts_down_after_tracked_tasks_drain() {
     // partial owner shutdown and drain it. Expected: the independent executor
     // completion signal reports a clean exit; skipping core shutdown leaves it
     // pending and fails the test.
-    let owners = AppShutdown {
+    let owners = StartupOwners {
         core: Some(control.clone()),
-        ..AppShutdown::default()
+        ..StartupOwners::default()
     };
 
     owners.request_shutdown();

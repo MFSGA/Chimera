@@ -11,6 +11,7 @@ use mutation::MutationRequest;
 use workflow::ApplicationWorkflow;
 pub(crate) use workflow::RecoveryContext;
 
+pub(crate) mod attempt;
 pub(crate) mod impact;
 pub(in crate::client) mod inputs;
 pub(crate) mod mutation;
@@ -18,6 +19,7 @@ pub(crate) mod participant;
 pub(crate) mod policy;
 pub(crate) mod ports;
 pub(in crate::client) mod profiles;
+pub(crate) mod startup;
 pub(in crate::client) mod tcc;
 pub(in crate::client) mod workflow;
 
@@ -38,11 +40,38 @@ impl ApplicationWorkflowClient {
         recovery_required: Arc<Mutex<Option<workflow::RecoveryContext>>>,
         notifications: Option<Arc<dyn crate::client::effects::ports::CommitNotifications>>,
     ) -> anyhow::Result<Self> {
-        core.connect_application_workflow(ApplicationWorkflow::new(
+        Self::spawn_inner(core, outcomes, recovery_required, notifications, None).await
+    }
+
+    #[cfg(test)]
+    pub(super) async fn spawn_with_registration(
+        core: CoreLifecycleClient,
+        outcomes: Arc<Mutex<HashMap<OperationId, mutation::MutationReceipt>>>,
+        recovery_required: Arc<Mutex<Option<workflow::RecoveryContext>>>,
+        notifications: Option<Arc<dyn crate::client::effects::ports::CommitNotifications>>,
+        registered: tokio::sync::oneshot::Sender<()>,
+    ) -> anyhow::Result<Self> {
+        Self::spawn_inner(
+            core,
             outcomes,
             recovery_required,
             notifications,
-        ))
+            Some(registered),
+        )
+        .await
+    }
+
+    async fn spawn_inner(
+        core: CoreLifecycleClient,
+        outcomes: Arc<Mutex<HashMap<OperationId, mutation::MutationReceipt>>>,
+        recovery_required: Arc<Mutex<Option<workflow::RecoveryContext>>>,
+        notifications: Option<Arc<dyn crate::client::effects::ports::CommitNotifications>>,
+        registered: Option<tokio::sync::oneshot::Sender<()>>,
+    ) -> anyhow::Result<Self> {
+        core.connect_application_workflow_with_registration(
+            ApplicationWorkflow::new(outcomes, recovery_required, notifications),
+            registered,
+        )
         .await?;
         Ok(Self(ApplicationWorkflowClientInner::CoreLifecycle(core)))
     }

@@ -9,7 +9,7 @@ use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
 };
-use std::{collections::HashMap, fmt};
+use std::{collections::HashMap, fmt, future::Future};
 
 use anyhow::{Context, bail};
 use chimera_config::clash::config::ClashConfig;
@@ -49,6 +49,7 @@ use crate::{
         clash::core::RunType,
     },
     enhance::PostProcessingOutput,
+    utils::task::spawn_tracked_on_tauri_runtime,
 };
 
 fn publish_transform_failure(
@@ -189,7 +190,7 @@ impl LocalRuntimeHost {
         let mut status = control.subscribe();
         let recovery_signal = recovery_notify.clone();
         let status_shutdown = shutdown.child_token();
-        tasks.spawn(async move {
+        spawn_tracked_on_tauri_runtime(tasks, async move {
             let mut previous = status.borrow().state.clone();
             loop {
                 let changed = tokio::select! {
@@ -230,6 +231,25 @@ impl LocalRuntimeHost {
         *self.run_type.read()
     }
 
+    /// Select the endpoint established by startup S2. This does not start,
+    /// stop, or reconcile a Core; callers must first prove the source host is
+    /// retired and then verify the destination owner before applying config.
+    pub(crate) fn select_execution_host(
+        &self,
+        host: super::control_endpoint::ExecutionHost,
+    ) -> anyhow::Result<()> {
+        let run_type = match host {
+            super::control_endpoint::ExecutionHost::Local => RunType::Normal,
+            super::control_endpoint::ExecutionHost::Service => RunType::Service,
+        };
+        let mut selected = self.run_type.write();
+        if *selected != run_type {
+            self.ports.invalidate();
+            *selected = run_type;
+        }
+        Ok(())
+    }
+
     pub(crate) fn local_endpoint(&self) -> super::control_endpoint::LocalEndpoint {
         super::control_endpoint::LocalEndpoint::new(self.control.clone())
     }
@@ -256,7 +276,7 @@ impl LocalRuntimeHost {
         target_core: ClashCore,
         endpoint: &dyn ControlEndpoint,
     ) -> anyhow::Result<()> {
-        self.reconcile_with_profile_source(clash, target_core, endpoint, None, None)
+        self.reconcile_with_profile_source(clash, target_core, endpoint, None, None, None)
             .await
             .map(|_| ())
     }
@@ -269,12 +289,14 @@ impl LocalRuntimeHost {
         profiles: Arc<chimera_config::profile::Profiles>,
         app: chimera_config::application::ChimeraAppConfig,
         staged_content: std::collections::BTreeMap<String, String>,
+        target: Option<String>,
     ) -> anyhow::Result<()> {
         self.reconcile_with_profile_source(
             clash,
             target_core,
             endpoint,
             Some((profiles, app, staged_content)),
+            target,
             None,
         )
         .await
@@ -289,6 +311,7 @@ impl LocalRuntimeHost {
         profiles: Arc<chimera_config::profile::Profiles>,
         app: chimera_config::application::ChimeraAppConfig,
         staged_content: std::collections::BTreeMap<String, String>,
+        target: Option<String>,
         operation_id: OperationId,
     ) -> anyhow::Result<(
         crate::client::application_workflow::mutation::AppliedCandidate,
@@ -299,6 +322,7 @@ impl LocalRuntimeHost {
             target_core,
             endpoint,
             Some((profiles, app, staged_content)),
+            target,
             Some(operation_id),
         )
         .await?
@@ -403,6 +427,7 @@ impl LocalRuntimeHost {
             chimera_config::application::ChimeraAppConfig,
             std::collections::BTreeMap<String, String>,
         )>,
+        target: Option<String>,
         profile_operation_id: Option<OperationId>,
     ) -> anyhow::Result<
         Option<(
@@ -647,6 +672,7 @@ impl LocalRuntimeHost {
             run_intent: crate::client::application_workflow::policy::CoreRunIntent::Running,
             local_ipc,
             applied_revision,
+            target,
             ports: candidate_ports,
             artifact: Some(snapshot.clone()),
         });
@@ -688,12 +714,41 @@ impl LocalRuntimeHost {
         operation_id: &OperationId,
         candidate: crate::client::application_workflow::mutation::AppliedCandidate,
     ) -> anyhow::Result<()> {
-        let candidate_file = self
+        anyhow::ensure!(
+            candidate.product.revision == candidate.receipt.revision
+                && candidate.product.target_core == candidate.receipt.target_core
+                && chimera_core_manager::payload_digest(candidate.product.product_bytes())
+                    == candidate.receipt.config_digest,
+            "committed Profile product does not match its confirmed runtime receipt"
+        );
+        let confirmed = self
+            .lifecycle
+            .accepted_confirmed_receipt()
+            .context("the prepared Profile runtime receipt is no longer confirmed")?;
+        anyhow::ensure!(
+            confirmed.revision == candidate.receipt.revision
+                && confirmed.config_digest == candidate.receipt.config_digest
+                && confirmed.target_core == candidate.receipt.target_core
+                && confirmed.host == candidate.receipt.host,
+            "the confirmed runtime no longer matches the committed Profile candidate"
+        );
+
+        let candidate_file = match self
             .pending_profile_candidates
             .lock()
             .await
             .remove(operation_id)
-            .context("held Profile runtime candidate is unavailable at Confirm")?;
+        {
+            Some(candidate_file) => candidate_file,
+            None => {
+                // A prior Confirm may have consumed its staged file before
+                // interruption. Recreate the same verified product so replay
+                // can safely finish promotion and snapshot publication.
+                self.runtime_paths
+                    .create_candidate(candidate.product.product_bytes())
+                    .await?
+            }
+        };
         self.publish_profile_candidate(candidate_file, candidate.receipt, candidate.product)
             .await
     }
@@ -897,6 +952,7 @@ impl LocalRuntimeHost {
             run_intent: receipt.run_intent,
             local_ipc: receipt.local_ipc,
             applied_revision,
+            target: receipt.target.clone(),
             ports: receipt.ports.clone(),
             artifact: Some(snapshot.clone()),
         });
@@ -1527,6 +1583,7 @@ mod tests {
                 source_hash: "baseline-digest".into(),
                 effective_hash: "old-effective".into(),
             },
+            target: None,
             ports: Default::default(),
             artifact: Some(artifact),
         })
@@ -1594,8 +1651,10 @@ mod tests {
         host.shutdown().await.unwrap();
     }
 
+    /// Contract: replay after Confirm consumed its staged file must recreate
+    /// and publish the same product; discard still removes an unconfirmed file.
     #[tokio::test]
-    async fn held_profile_candidate_is_published_only_by_confirm_and_discard_cleans_it() {
+    async fn held_profile_candidate_confirmation_replays_idempotently_and_discard_cleans_it() {
         let root = tempfile::TempDir::new().unwrap();
         let paths = crate::utils::path::PathResolver::with_base_dirs(
             root.path().join("config"),
@@ -1656,9 +1715,13 @@ mod tests {
                 source_hash: "candidate-source".into(),
                 effective_hash: "candidate-effective".into(),
             },
+            target: None,
             ports: Default::default(),
             artifact: Some(product.clone()),
         });
+        // Prepare publishes the Core-confirmed receipt before the source
+        // transaction reaches Confirm.
+        host.lifecycle.publish_confirmed(receipt.clone());
 
         host.confirm_profile_runtime(
             &operation_id,
@@ -1679,6 +1742,23 @@ mod tests {
         assert_eq!(
             host.confirmed_runtime_receipt().unwrap().config_digest,
             receipt.config_digest
+        );
+        assert!(host.lifecycle.snapshot().applied.is_some());
+
+        host.confirm_profile_runtime(
+            &operation_id,
+            crate::client::application_workflow::mutation::AppliedCandidate {
+                replaced: true,
+                receipt: receipt.clone(),
+                product: product.clone(),
+            },
+        )
+        .await
+        .expect("replayed confirmation should recreate the consumed candidate");
+        assert_eq!(
+            tokio::fs::read(runtime_paths.product()).await.unwrap(),
+            config_bytes,
+            "replay must keep the committed product bytes"
         );
         assert!(host.lifecycle.snapshot().applied.is_some());
 
@@ -1746,5 +1826,29 @@ mod tests {
         };
 
         assert!(accept_reconcile_outcome(&outcome).is_ok());
+    }
+
+    #[test]
+    fn tracked_status_task_can_start_from_synchronous_setup() {
+        let tasks = TaskTracker::new();
+        let (started, started_rx) = std::sync::mpsc::channel();
+        let (release, release_rx) = tokio::sync::oneshot::channel();
+        spawn_tracked_on_tauri_runtime(&tasks, async move {
+            started.send(()).expect("test receiver is alive");
+            let _ = release_rx.await;
+        });
+        started_rx.recv().expect("tracked task should start");
+        assert_eq!(tasks.len(), 1);
+        tasks.close();
+        let wait_is_pending = tauri::async_runtime::block_on(async {
+            let mut wait = Box::pin(tasks.wait());
+            std::future::poll_fn(|context| {
+                std::task::Poll::Ready(wait.as_mut().poll(context).is_pending())
+            })
+            .await
+        });
+        assert!(wait_is_pending, "tracker must wait for its in-flight task");
+        release.send(()).expect("tracked task is still waiting");
+        tauri::async_runtime::block_on(tasks.wait());
     }
 }

@@ -20,7 +20,9 @@ use std::{
 
 use anyhow::Context;
 use chimera_config::clash::config::ClashConfig;
-use chimera_core_manager::{CoreCommand, CoreCommandEnvelope, CoreErrorKind, OperationId};
+use chimera_core_manager::{
+    CoreCommand, CoreCommandEnvelope, CoreError, CoreErrorKind, CoreOwner, OperationId,
+};
 use futures::FutureExt;
 use tokio_util::{sync::CancellationToken, task::TaskTracker};
 
@@ -41,6 +43,7 @@ use crate::{
     },
     enhance::PostProcessingOutput,
     log_err,
+    utils::task::spawn_tracked_on_tauri_runtime,
 };
 
 const SERVICE_RESTART_BUDGET: u8 = 3;
@@ -124,7 +127,16 @@ enum MutationResult {
 #[derive(Debug, Clone)]
 enum MutationFailure {
     ProfileCheck(crate::client::application_workflow::mutation::RuntimeCheckFailure),
+    Core(CoreError),
     Other(String),
+}
+
+fn mutation_failure_error(failure: MutationFailure) -> anyhow::Error {
+    match failure {
+        MutationFailure::ProfileCheck(error) => anyhow::Error::new(error),
+        MutationFailure::Core(error) => anyhow::Error::new(error),
+        MutationFailure::Other(error) => anyhow::anyhow!(error),
+    }
 }
 
 impl MutationResult {
@@ -184,7 +196,10 @@ impl LocalOperationRegistry {
                         crate::client::application_workflow::mutation::RuntimeCheckFailure,
                     >() {
                         Ok(error) => MutationFailure::ProfileCheck(error),
-                        Err(error) => MutationFailure::Other(error.to_string()),
+                        Err(error) => match error.downcast::<CoreError>() {
+                            Ok(error) => MutationFailure::Core(error),
+                            Err(error) => MutationFailure::Other(error.to_string()),
+                        },
                     }
                 })),
                 Err(_) => {
@@ -326,6 +341,12 @@ impl CoreFacade {
             Some(MutationResult::Completed(Err(MutationFailure::ProfileCheck(error)))) => {
                 Err(anyhow::Error::new(error))
             }
+            Some(MutationResult::Completed(Err(MutationFailure::Core(error)))) => {
+                if self.outcome_uncertain() {
+                    self.invalidate_local_ports();
+                }
+                Err(anyhow::Error::new(error))
+            }
             Some(MutationResult::Completed(Err(MutationFailure::Other(error)))) => {
                 if self.outcome_uncertain() {
                     self.invalidate_local_ports();
@@ -353,7 +374,16 @@ impl CoreFacade {
         target_core: ClashCore,
         run_type: RunType,
     ) -> anyhow::Result<()> {
-        self.reconcile_with_profile_source(clash, target_core, run_type, None)
+        self.reconcile_with_profile_source(clash, target_core, run_type, None, None, false)
+            .await
+    }
+
+    pub(crate) async fn reconcile_after_service_release(
+        &self,
+        clash: ClashConfig,
+        target_core: ClashCore,
+    ) -> anyhow::Result<()> {
+        self.reconcile_with_profile_source(clash, target_core, RunType::Normal, None, None, true)
             .await
     }
 
@@ -365,12 +395,35 @@ impl CoreFacade {
         profiles: Arc<chimera_config::profile::Profiles>,
         app: chimera_config::application::ChimeraAppConfig,
         staged_content: std::collections::BTreeMap<String, String>,
+        target: Option<String>,
     ) -> anyhow::Result<()> {
         self.reconcile_with_profile_source(
             clash,
             target_core,
             run_type,
             Some((profiles, app, staged_content)),
+            target,
+            false,
+        )
+        .await
+    }
+
+    pub(crate) async fn reconcile_with_profiles_after_service_release(
+        &self,
+        clash: ClashConfig,
+        target_core: ClashCore,
+        profiles: Arc<chimera_config::profile::Profiles>,
+        app: chimera_config::application::ChimeraAppConfig,
+        staged_content: std::collections::BTreeMap<String, String>,
+        target: Option<String>,
+    ) -> anyhow::Result<()> {
+        self.reconcile_with_profile_source(
+            clash,
+            target_core,
+            RunType::Normal,
+            Some((profiles, app, staged_content)),
+            target,
+            true,
         )
         .await
     }
@@ -413,6 +466,7 @@ impl CoreFacade {
         profiles: Arc<chimera_config::profile::Profiles>,
         app: chimera_config::application::ChimeraAppConfig,
         staged_content: std::collections::BTreeMap<String, String>,
+        target: Option<String>,
         operation_id: OperationId,
     ) -> anyhow::Result<(
         crate::client::application_workflow::mutation::AppliedCandidate,
@@ -434,7 +488,7 @@ impl CoreFacade {
         self.run_local_mutation("Profile runtime prepare", async move {
             match (previous_run_type, run_type) {
                 (RunType::Service, RunType::Normal) => {
-                    stop_service_core(service_endpoint, stop_uncertain).await?;
+                    stop_service_core(service_endpoint, stop_uncertain, None).await?;
                 }
                 (RunType::Normal, RunType::Service) => local_runtime.stop_core().await?,
                 _ => {}
@@ -447,6 +501,7 @@ impl CoreFacade {
                     profiles,
                     app,
                     staged_content,
+                    target,
                     operation_id,
                 )
                 .await?;
@@ -494,6 +549,8 @@ impl CoreFacade {
             chimera_config::application::ChimeraAppConfig,
             std::collections::BTreeMap<String, String>,
         )>,
+        target: Option<String>,
+        service_owner_released: bool,
     ) -> anyhow::Result<()> {
         if let Some(local_runtime) = self.local_runtime.as_ref() {
             let local_runtime = local_runtime.clone();
@@ -511,8 +568,12 @@ impl CoreFacade {
                 .run_local_mutation("core reconcile", async move {
                     match (previous_run_type, run_type) {
                         (RunType::Service, RunType::Normal) => {
-                            stop_service_core(service_endpoint, stop_uncertain).await?;
-                            local_runtime.invalidate_ports();
+                            if service_owner_released {
+                                local_runtime.invalidate_ports();
+                            } else {
+                                stop_service_core(service_endpoint, stop_uncertain, None).await?;
+                                local_runtime.invalidate_ports();
+                            }
                         }
                         (RunType::Normal, RunType::Service) => {
                             local_runtime.stop_core().await?;
@@ -529,6 +590,7 @@ impl CoreFacade {
                                     profiles,
                                     app,
                                     staged_content,
+                                    target,
                                 )
                                 .await
                         }
@@ -546,7 +608,7 @@ impl CoreFacade {
         // The manager-only compatibility path predates typed Profiles and has
         // no candidate-input contract. Production uses LocalRuntimeHost, where
         // the ref-aligned Profiles snapshot reaches the shared RuntimeBuilder.
-        let _ = profile_source;
+        let _ = (profile_source, target);
         let manager = self.manager.clone();
         let result = self
             .run_local_mutation("core reconcile", async move {
@@ -576,7 +638,7 @@ impl CoreFacade {
                     let outcome_uncertain = self.outcome_uncertain.clone();
                     let result = self
                         .run_local_mutation("service core stop", async move {
-                            stop_service_core(endpoint, outcome_uncertain).await
+                            stop_service_core(endpoint, outcome_uncertain, None).await
                         })
                         .await;
                     if result.is_ok() {
@@ -596,7 +658,7 @@ impl CoreFacade {
             let outcome_uncertain = self.outcome_uncertain.clone();
             return self
                 .run_local_mutation("service core stop", async move {
-                    stop_service_core(endpoint, outcome_uncertain).await
+                    stop_service_core(endpoint, outcome_uncertain, None).await
                 })
                 .await;
         }
@@ -694,6 +756,34 @@ impl CoreFacade {
             state_changed_at,
             run_type,
         }
+    }
+
+    /// Select a host after startup has completed its S2 handoff. This only
+    /// changes which already-proven endpoint the shared Core lifecycle uses;
+    /// the caller still owns S3 retirement/receipt verification and S4 apply.
+    pub(crate) async fn select_execution_host(
+        &self,
+        host: super::control_endpoint::ExecutionHost,
+    ) -> anyhow::Result<()> {
+        let Some(local_runtime) = self.local_runtime.as_ref().cloned() else {
+            let (_, _, run_type) = self.manager.status().await;
+            let selected = match run_type {
+                RunType::Normal => super::control_endpoint::ExecutionHost::Local,
+                RunType::Service => super::control_endpoint::ExecutionHost::Service,
+                RunType::Elevated => {
+                    anyhow::bail!("elevated core execution is not implemented")
+                }
+            };
+            anyhow::ensure!(selected == host, "the Core manager cannot select {host:?}");
+            return Ok(());
+        };
+
+        self.run_local_mutation("startup execution host selection", async move {
+            local_runtime.select_execution_host(host)
+        })
+        .await?;
+        self.refresh_ws_binding().await;
+        Ok(())
     }
 
     pub(crate) async fn reconcile_transparent_proxy(
@@ -814,7 +904,7 @@ impl CoreFacade {
             .run_local_mutation("runtime receipt restore", async move {
                 match (previous, destination) {
                     (RunType::Service, RunType::Normal) => {
-                        stop_service_core(service_endpoint, stop_uncertain).await?;
+                        stop_service_core(service_endpoint, stop_uncertain, None).await?;
                     }
                     (RunType::Normal, RunType::Service) => local_runtime.stop_core().await?,
                     _ => {}
@@ -1036,7 +1126,7 @@ impl CoreFacade {
         }
         let facade = self.clone();
         let monitor_shutdown = shutdown.child_token();
-        tasks.spawn(async move {
+        spawn_tracked_on_tauri_runtime(tasks, async move {
             tokio::select! {
                 _ = monitor_shutdown.cancelled() => {},
                 _ = facade.monitor_service_api_binding() => {},
@@ -1220,6 +1310,65 @@ impl CoreFacade {
         })
     }
 
+    pub(crate) async fn try_begin_service_transition(&self) -> anyhow::Result<ServiceTransition> {
+        let guard = crate::core::service::HOST_TRANSITION_LOCK
+            .try_lock()
+            .map_err(|_| anyhow::anyhow!("another Service host transition is in progress"))?;
+        if self.service_commands.has_outstanding()
+            && !self.service_commands.try_reap_finished().await
+        {
+            anyhow::bail!(
+                "a previous elevated Service command is still running or awaiting recovery"
+            );
+        }
+        if self.outcome_uncertain() {
+            anyhow::bail!(
+                "previous lower core-host mutation has an uncertain outcome; restart the application before further mutations"
+            );
+        }
+        Ok(ServiceTransition {
+            _guard: guard,
+            outcome_uncertain: self.outcome_uncertain.clone(),
+            restart_attempts: self.service_restart_attempts.clone(),
+            restart_exhausted: self.service_restart_exhausted.clone(),
+            service_commands: self.service_commands.clone(),
+        })
+    }
+
+    pub(crate) async fn service_command_settled(&self) -> bool {
+        self.service_commands.command_settled().await
+    }
+
+    /// Stop a Service-owned Core while the caller holds the Service
+    /// transition lease and has already proved that this instance owns it.
+    pub(crate) async fn retire_service_core(
+        &self,
+        expected_owner: CoreOwner,
+    ) -> anyhow::Result<()> {
+        let endpoint = self.service_endpoint.clone();
+        let outcome_uncertain = self.outcome_uncertain.clone();
+        self.run_local_mutation("startup Service Core retirement", async move {
+            stop_service_core(endpoint, outcome_uncertain, Some(expected_owner)).await
+        })
+        .await?;
+        self.refresh_ws_binding().await;
+        Ok(())
+    }
+
+    pub(crate) async fn recover_service_quarantine(&self) -> anyhow::Result<()> {
+        let endpoint = self.service_endpoint.clone();
+        let outcome_uncertain = self.outcome_uncertain.clone();
+        self.run_local_mutation("Service Core quarantine recovery", async move {
+            recover_service_core(endpoint, outcome_uncertain).await
+        })
+        .await?;
+        if let Some(local_runtime) = self.local_runtime.as_ref() {
+            local_runtime.invalidate_ports();
+        }
+        self.refresh_ws_binding().await;
+        Ok(())
+    }
+
     pub(crate) async fn on_profile_change(&self, break_when: bool) {
         let result = match self.clash_api_client().await {
             Ok(api) => ConnectionInterruptionService::on_profile_change(&api, break_when).await,
@@ -1278,75 +1427,149 @@ fn project_service_status(status: HostStatusSnapshot, run_type: RunType) -> Core
     }
 }
 
-async fn stop_service_core(
-    endpoint: super::service_endpoint::ServiceEndpoint,
+async fn service_core_operation(
+    endpoint: impl ControlEndpoint,
+    command: CoreCommand,
     outcome_uncertain: Arc<AtomicBool>,
-) -> anyhow::Result<()> {
-    use chimera_ipc::api::core::v2::{OperationOutputInfo, OperationPhase};
+    operation: &'static str,
+) -> anyhow::Result<chimera_ipc::api::core::v2::OperationOutputInfo> {
+    use chimera_ipc::api::core::v2::OperationPhase;
 
     let operation_id = OperationId::generate();
     let submission = super::control_endpoint::CoreSubmission {
         expected_owner: None,
         envelope: CoreCommandEnvelope {
             operation_id,
-            command: CoreCommand::Stop,
+            command,
         },
         core_type: None,
     };
-    let mut operation =
-        match super::control_endpoint::ControlEndpoint::submit(&endpoint, submission).await {
-            Ok(operation) => operation,
-            Err(error) => {
-                if matches!(
-                    error.kind,
-                    Some(CoreErrorKind::BackendUnavailable | CoreErrorKind::Internal)
-                ) {
-                    outcome_uncertain.store(true, Ordering::Release);
-                }
-                anyhow::bail!("service core stop admission failed: {}", error.message);
-            }
-        };
+    let mut result = match endpoint.submit(submission).await {
+        Ok(result) => result,
+        Err(error) => {
+            mark_service_operation_uncertain(error.kind, &outcome_uncertain);
+            return Err(anyhow::Error::new(error)
+                .context(format!("service core {operation} admission failed")));
+        }
+    };
 
     if matches!(
-        operation.phase,
+        result.phase,
         OperationPhase::Queued | OperationPhase::Running
     ) {
-        operation = match super::control_endpoint::ControlEndpoint::wait_operation(
-            &endpoint,
-            operation_id,
-            Duration::from_secs(60),
-        )
-        .await
+        result = match endpoint
+            .wait_operation(operation_id, Duration::from_secs(60))
+            .await
         {
-            Some(operation) => operation,
+            Some(result) => result,
             None => {
                 outcome_uncertain.store(true, Ordering::Release);
-                anyhow::bail!("service core stop outcome could not be observed");
+                anyhow::bail!("service core {operation} outcome could not be observed");
             }
         };
     }
-    if operation.id != operation_id.to_string() {
+    if result.id != operation_id.to_string() {
         outcome_uncertain.store(true, Ordering::Release);
-        anyhow::bail!("service returned a different core stop operation id");
+        anyhow::bail!("service returned a different core {operation} operation id");
     }
 
-    match (operation.phase, operation.output) {
-        (OperationPhase::Succeeded, Some(OperationOutputInfo::Stopped)) => Ok(()),
-        (OperationPhase::Failed, _) => anyhow::bail!(
-            "service core stop failed: {}",
-            operation
-                .error
-                .map(|error| error.message)
-                .unwrap_or_else(|| "service returned no failure detail".into())
-        ),
+    match (result.phase, result.output) {
+        (OperationPhase::Succeeded, Some(output)) => Ok(output),
+        (OperationPhase::Failed, _) => Err(anyhow::Error::new(service_operation_error(
+            operation_id,
+            result.error,
+            &outcome_uncertain,
+            operation,
+        ))),
         (OperationPhase::Queued | OperationPhase::Running, _) => {
             outcome_uncertain.store(true, Ordering::Release);
-            anyhow::bail!("service core stop is still running; its outcome is uncertain");
+            anyhow::bail!("service core {operation} is still running; its outcome is uncertain");
         }
         (OperationPhase::Succeeded, _) => {
             outcome_uncertain.store(true, Ordering::Release);
-            anyhow::bail!("service core stop completed with an unexpected result");
+            anyhow::bail!("service core {operation} completed without a result");
         }
+    }
+}
+
+async fn stop_service_core(
+    endpoint: impl ControlEndpoint,
+    outcome_uncertain: Arc<AtomicBool>,
+    expected_owner: Option<CoreOwner>,
+) -> anyhow::Result<()> {
+    match service_core_operation(
+        endpoint,
+        expected_owner.map_or(CoreCommand::Stop, CoreCommand::StopIfOwner),
+        outcome_uncertain.clone(),
+        "stop",
+    )
+    .await?
+    {
+        chimera_ipc::api::core::v2::OperationOutputInfo::Stopped => Ok(()),
+        _ => {
+            outcome_uncertain.store(true, Ordering::Release);
+            anyhow::bail!("service core stop completed with an unexpected result")
+        }
+    }
+}
+
+async fn recover_service_core(
+    endpoint: impl ControlEndpoint,
+    outcome_uncertain: Arc<AtomicBool>,
+) -> anyhow::Result<()> {
+    match service_core_operation(
+        endpoint,
+        CoreCommand::Recover,
+        outcome_uncertain.clone(),
+        "quarantine recovery",
+    )
+    .await?
+    {
+        chimera_ipc::api::core::v2::OperationOutputInfo::Recovered => Ok(()),
+        _ => {
+            outcome_uncertain.store(true, Ordering::Release);
+            anyhow::bail!("service core quarantine recovery completed with an unexpected result")
+        }
+    }
+}
+
+fn mark_service_operation_uncertain(kind: Option<CoreErrorKind>, outcome_uncertain: &AtomicBool) {
+    if kind.is_none()
+        || matches!(
+            kind,
+            Some(
+                CoreErrorKind::StopUnconfirmed
+                    | CoreErrorKind::Quarantined
+                    | CoreErrorKind::Internal
+            )
+        )
+    {
+        outcome_uncertain.store(true, Ordering::Release);
+    }
+}
+
+fn service_operation_error(
+    operation_id: OperationId,
+    failure: Option<chimera_ipc::api::core::v2::OperationErrorInfo>,
+    outcome_uncertain: &AtomicBool,
+    operation: &'static str,
+) -> chimera_core_manager::CoreError {
+    let Some(failure) = failure else {
+        mark_service_operation_uncertain(None, outcome_uncertain);
+        return chimera_core_manager::CoreError {
+            kind: None,
+            message: format!("service core {operation} failed without failure detail"),
+            retryable: false,
+            operation_id: Some(operation_id),
+        };
+    };
+    let kind = failure.kind.as_deref().and_then(CoreErrorKind::from_wire);
+    mark_service_operation_uncertain(kind, outcome_uncertain);
+    chimera_core_manager::CoreError {
+        kind,
+        message: format!("service core {operation} failed: {}", failure.message),
+        retryable: failure.retryable,
+        operation_id: Some(operation_id),
     }
 }
 
@@ -1354,7 +1577,179 @@ async fn stop_service_core(
 mod tests {
     use super::*;
     use chimera_core::actor_v2::service_process::{ServiceCommandError, ServiceProcessControl};
+    use chimera_core_manager::CoreError;
     use std::sync::atomic::AtomicUsize;
+
+    struct FailedServiceStopEndpoint {
+        kind: Option<&'static str>,
+        retryable: bool,
+    }
+
+    struct SuccessfulServiceRecoveryEndpoint;
+
+    #[async_trait::async_trait]
+    impl ControlEndpoint for SuccessfulServiceRecoveryEndpoint {
+        fn host(&self) -> super::super::control_endpoint::ExecutionHost {
+            super::super::control_endpoint::ExecutionHost::Service
+        }
+
+        async fn submit(
+            &self,
+            submission: super::super::control_endpoint::CoreSubmission,
+        ) -> Result<chimera_ipc::api::core::v2::OperationInfo, CoreError> {
+            assert!(matches!(&submission.envelope.command, CoreCommand::Recover));
+            Ok(chimera_ipc::api::core::v2::OperationInfo {
+                id: submission.envelope.operation_id.to_string(),
+                phase: chimera_ipc::api::core::v2::OperationPhase::Succeeded,
+                output: Some(chimera_ipc::api::core::v2::OperationOutputInfo::Recovered),
+                error: None,
+            })
+        }
+
+        async fn wait_operation(
+            &self,
+            _id: OperationId,
+            _timeout: Duration,
+        ) -> Option<chimera_ipc::api::core::v2::OperationInfo> {
+            None
+        }
+
+        async fn status(&self) -> Result<HostStatusSnapshot, CoreError> {
+            Err(CoreError::new(
+                CoreErrorKind::BackendUnavailable,
+                "status is not used by this operation fixture",
+                true,
+            ))
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl ControlEndpoint for FailedServiceStopEndpoint {
+        fn host(&self) -> super::super::control_endpoint::ExecutionHost {
+            super::super::control_endpoint::ExecutionHost::Service
+        }
+
+        async fn submit(
+            &self,
+            submission: super::super::control_endpoint::CoreSubmission,
+        ) -> Result<chimera_ipc::api::core::v2::OperationInfo, CoreError> {
+            Ok(chimera_ipc::api::core::v2::OperationInfo {
+                id: submission.envelope.operation_id.to_string(),
+                phase: chimera_ipc::api::core::v2::OperationPhase::Failed,
+                output: None,
+                error: Some(chimera_ipc::api::core::v2::OperationErrorInfo {
+                    kind: self.kind.map(std::borrow::Cow::Borrowed),
+                    message: "injected Service stop failure".into(),
+                    retryable: self.retryable,
+                }),
+            })
+        }
+
+        async fn wait_operation(
+            &self,
+            _id: OperationId,
+            _timeout: Duration,
+        ) -> Option<chimera_ipc::api::core::v2::OperationInfo> {
+            None
+        }
+
+        async fn status(&self) -> Result<HostStatusSnapshot, CoreError> {
+            Err(CoreError::new(
+                CoreErrorKind::BackendUnavailable,
+                "status is not used by this operation fixture",
+                true,
+            ))
+        }
+    }
+
+    #[tokio::test]
+    async fn service_stop_unconfirmed_operation_latches_uncertain_and_keeps_error_kind() {
+        for kind in ["stop_unconfirmed", "quarantined"] {
+            let outcome_uncertain = Arc::new(AtomicBool::new(false));
+            let error = stop_service_core(
+                FailedServiceStopEndpoint {
+                    kind: Some(kind),
+                    retryable: false,
+                },
+                outcome_uncertain.clone(),
+                None,
+            )
+            .await
+            .expect_err("an unconfirmed Service stop must remain an error");
+
+            let core_error = error
+                .downcast_ref::<CoreError>()
+                .expect("the wire classification must remain typed");
+            assert_eq!(core_error.kind, CoreErrorKind::from_wire(kind));
+            assert!(!core_error.retryable);
+            assert!(outcome_uncertain.load(Ordering::Acquire));
+        }
+    }
+
+    #[tokio::test]
+    async fn service_quarantine_recovery_requires_a_recovered_terminal_output() {
+        let outcome_uncertain = Arc::new(AtomicBool::new(false));
+        recover_service_core(SuccessfulServiceRecoveryEndpoint, outcome_uncertain.clone())
+            .await
+            .unwrap();
+
+        assert!(!outcome_uncertain.load(Ordering::Acquire));
+    }
+
+    #[tokio::test]
+    async fn retryable_service_stop_errors_keep_their_retry_classification() {
+        for kind in ["queue_full", "backend_unavailable"] {
+            let outcome_uncertain = Arc::new(AtomicBool::new(false));
+            let error = stop_service_core(
+                FailedServiceStopEndpoint {
+                    kind: Some(kind),
+                    retryable: true,
+                },
+                outcome_uncertain.clone(),
+                None,
+            )
+            .await
+            .expect_err("the failed Service operation must be returned");
+
+            let core_error = error
+                .downcast_ref::<CoreError>()
+                .expect("the wire classification must remain typed");
+            assert_eq!(
+                core_error.kind,
+                CoreErrorKind::from_wire(kind),
+                "kind: {kind}"
+            );
+            assert!(core_error.retryable, "kind: {kind}");
+            assert!(!outcome_uncertain.load(Ordering::Acquire), "kind: {kind}");
+        }
+    }
+
+    #[tokio::test]
+    async fn local_operation_registry_preserves_core_stop_error_classification() {
+        for (kind, retryable) in [
+            (CoreErrorKind::NotStarted, false),
+            (CoreErrorKind::QueueFull, true),
+            (CoreErrorKind::BackendUnavailable, true),
+        ] {
+            let registry = LocalOperationRegistry::new();
+            let operation = registry.submit("injected core stop", async move {
+                Err(CoreError::new(kind, "injected typed stop failure", retryable).into())
+            });
+            let result = registry
+                .wait(operation, Duration::from_secs(1))
+                .await
+                .expect("the local operation should reach a terminal result");
+            let MutationResult::Completed(Err(failure)) = result else {
+                panic!("the injected operation must fail");
+            };
+            let error = mutation_failure_error(failure);
+            let core_error = error
+                .downcast_ref::<CoreError>()
+                .expect("the lower mutation registry must preserve the typed error");
+            assert_eq!(core_error.kind, Some(kind));
+            assert_eq!(core_error.retryable, retryable);
+        }
+    }
 
     struct HeldServiceProcess {
         started: tokio::sync::Notify,
@@ -1407,6 +1802,8 @@ mod tests {
         }
     }
 
+    /// Contract: a cancelled helper that later exits is reaped by the
+    /// transition try-path itself, without an external command-settled poll.
     #[tokio::test]
     async fn facade_refuses_new_service_transition_until_cancelled_helper_settles() {
         // A caller can abandon an elevated OS command without cancelling it.
@@ -1436,18 +1833,55 @@ mod tests {
             facade.begin_service_transition().await.is_err(),
             "the facade must not admit another elevated command while one remains running"
         );
+        assert!(
+            tokio::time::timeout(
+                Duration::from_millis(20),
+                facade.try_begin_service_transition(),
+            )
+            .await
+            .expect("nonblocking admission must not wait for an outstanding helper")
+            .is_err(),
+            "the actor-owned recovery path must refuse an outstanding helper without reaping it"
+        );
         assert_eq!(process.starts.load(Ordering::Acquire), 1);
 
         process.release.notify_one();
-        tokio::time::timeout(Duration::from_secs(2), async {
-            while !facade.service_commands.command_settled().await {
+        let transition = tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                if let Ok(transition) = facade.try_begin_service_transition().await {
+                    break transition;
+                }
                 tokio::task::yield_now().await;
             }
         })
         .await
-        .expect("the retained OS helper did not finish");
+        .expect("the try path did not reap the retained OS helper after it finished");
+        drop(transition);
         assert!(!facade.outcome_uncertain());
         let _transition = facade.begin_service_transition().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn facade_nonblocking_service_transition_refuses_a_busy_host_lease() {
+        let facade = CoreFacade::new_local();
+        let transition = facade.begin_service_transition().await.unwrap();
+
+        let result = tokio::time::timeout(
+            Duration::from_millis(20),
+            facade.try_begin_service_transition(),
+        )
+        .await
+        .expect("nonblocking lease admission must not wait behind an active transition");
+        assert!(result.is_err());
+        drop(transition);
+
+        let _transition = tokio::time::timeout(
+            Duration::from_secs(1),
+            facade.try_begin_service_transition(),
+        )
+        .await
+        .expect("the nonblocking lease should become available after release")
+        .expect("a settled, certain Service host should admit the lease");
     }
 
     #[tokio::test]

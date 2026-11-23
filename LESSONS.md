@@ -81,12 +81,28 @@
 | LESSON-20261111-001 | 2026-11-11 | Updater / mainline integration | 按旧分支拆批次 Rebase 后没有更新 `client/mod.rs` 构造依赖，lib check 11 处错误、test 另 3 处缺参；补齐 actor 启动注入与 Stable 测试参数，并重跑真实用例 | Mitigated |
 | LESSON-20261113-001 | 2026-11-13 | Tauri startup / Windows E2E | Push E2E run 43432488787: 原生 Tauri setup 线程调用 `TaskTracker::spawn` 触发 no reactor panic；改 `spawn_on(handle().inner())`，同步线程回归与 844 项 Rust lib 测试通过，待远端 E2E 复验 | Mitigated |
 | LESSON-20261113-002 | 2026-11-13 | Application config / CI | Push CI run 43432488898: 嵌套 `window_close` 新字段缺少顶层 patch 的 `serde(default)`，三平台 2 项稀疏 patch 测试失败；依 ref 补属性，233 项配置测试通过，待新 SHA CI 复验 | Mitigated |
+| LESSON-20261114-003 | 2026-11-14 | Service owner fencing / supervisor | 独立复核发现 CoreManager 锁不能阻止 Instance supervisor 自主 respawn；在 supervisor current-child 锁内校验 UUID/PID、恢复 DNS 并取消，Core Manager 全套 137 通过、2 忽略 | Mitigated |
+| LESSON-20261115-001 | 2026-11-15 | Startup retry / Rust tests | 退避测试将调用前采样时间误当调度基准，出现 1.000033459s 与 1s 的微小差异；为调度策略注入显式 Instant 后精确验证 ref 延迟 | Mitigated |
+| LESSON-20261115-002 | 2026-11-15 | Service owner fencing | `submit_v2` 仍将旧版无身份 `Recover` 直接送入 manager，可绕过新增 installation fence；拒绝旧命令并验证 config/data/无身份三种 admission 均失败关闭 | Mitigated |
+| LESSON-20261115-003 | 2026-11-15 | Rust test authoring | 新共享启动状态测试模块首次漏掉本地 `Arc`/`Mutex`/`HashMap` imports，测试编译时发现；补充显式 imports 后目标测试通过 | Mitigated |
+| LESSON-20261115-005 | 2026-11-15 | Tauri startup / local runtime | CI run 43720593308 显示 Local runtime 监视器在同步 setup 线程调用 `TaskTracker::spawn` 并 panic；同步线程回归覆盖该入口 | Mitigated |
+| LESSON-20261115-006 | 2026-11-15 | Tauri startup / Windows E2E | PR #638 run 43724729524 证明只修 Local runtime 漏了 `setup.rs:300` 快捷键泵、facade monitor 与 Clash setup forwarders；同步 setup 中的 tracked task 必须统一走 Tauri runtime scheduler | Mitigated |
+| LESSON-20261116-002 | 2026-11-16 | Startup recovery / Actor admission | LiveAttempt 隔离误挡纯设置保存，放行后又会覆盖未解决尝试；保留 source-only patch 并由生产 actor 回归覆盖 | Mitigated |
+| LESSON-20261116-003 | 2026-11-16 | Startup recovery / Actor admission | unresolved attempt 拒绝 deferred retry 时必须恢复 deadline；source / lifecycle recovery 需要从正常 reconcile 入口可达，shutdown 不覆盖原 attempt | Mitigated |
+| LESSON-20261116-004 | 2026-11-16 | Startup recovery / committed target | 成功的 Reconcile 已应用当前 Profiles 后，恢复不能再写回旧 baseline；需让实际 actor 回归确认最终运行配置 | Mitigated |
+| LESSON-20261116-005 | 2026-11-16 | Development / test workflow | 新增 actor 回归后才补读测试规范；随后按 T01/T02 复核并明确真实 actor 边界 | Mitigated |
 
 ### LESSON-20261113-001/002：架构迁移要覆盖原生运行时与稀疏配置
 
 - **Windows 启动证据**：GitHub Actions [Tauri E2E push 43432488787](https://github.com/MFSGA/Chimera/actions/runs/43432488787)，原生 setup 执行 `TaskTracker::spawn` 在 `resolve.rs:213` panic：`there is no reactor running`。该作业的诊断 ZIP 只有启动日志，没有失败时截图，因此结论限于日志所确定的 Tokio 上下文问题。修复使用已有 `core/storage.rs` 的 `spawn_on(..., tauri::async_runtime::handle().inner())` 调度方式，并新增普通线程中调度与排空的回归测试。当前本地 `chimera --lib` 844/844 通过、1 ignored；远端实际桌面 E2E 尚未重跑。
 - **配置 CI 证据**：GitHub Actions [CI push 43432488898](https://github.com/MFSGA/Chimera/actions/runs/43432488898)，Ubuntu、Windows、macOS 的 `chimera-config` 都有 2 项测试失败（`missing field window_close`）。原因是迁入 `#[patch(nesting)]` 后，Chimera 顶层 Patch 缺少 ref 的 `#[patch(attribute(serde(default)))]`。补齐后旧字段别名与发布渠道稀疏 Patch 回归通过，并新增嵌套覆盖不触碰其他字段的测试；配置全库 233/233 本地通过。尚未以新 SHA 重跑三平台 CI。
 - **防复发**：从原生应用启动回调安排 Tokio 任务必须明确运行时上下文；引入嵌套 `struct_patch` 字段时必须验证完全缺失的稀疏补丁以及仅更新一个子字段的场景。不要只凭 `cargo check` 认定操作系统 GUI 启动和配置兼容行为已验证。
+
+### LESSON-20261115-005/006：同步 setup 中所有跟踪任务必须显式选择 runtime
+
+- **证据**：PR #638 的 Windows Desktop run [43724729524](https://github.com/MFSGA/Chimera/actions/runs/43724729524) 在 WebDriver 就绪前退出。下载并打开失败附件 `tauri-e2e-diagnostics-43724729524` 后，三个启动尝试都在 `setup.rs:300` 报 `there is no reactor running`；无截图/视频，因为 app 未启动 WebDriver。首个修复只将 `LocalRuntimeHost` 监视器改为 Tauri runtime，未覆盖随后同步调用的快捷键 pump 与 Service API monitor。
+- **修正**：抽出 `utils::task::spawn_tracked_on_tauri_runtime`，供 `setup`、facade monitor、Local runtime、Clash event forwarders 和 window resolution 复用。此函数在 Tauri runtime handle 上调用 `TaskTracker::spawn_on`，同时保留统一 shutdown drain。
+- **防复发**：原生 Tauri `setup` 回调及其同步调用链不得使用裸 `TaskTracker::spawn`。逐项检查 setup 阶段所有 task tracker 调度点；在普通测试线程验证共享 helper 不依赖当前 Tokio context，并以 Windows desktop startup E2E 确认实际启动路径。
 
 ### LESSON-20261103-001：原生路径重写测试不能假定 Unix 分隔符
 
@@ -1181,3 +1197,133 @@ backend/Cargo.toml -p chimera --lib core::clash::proxies::tests:: -- --nocapture
 - 修复：在 `backend/tauri/src/client/mod.rs` 延续 ref 的 updater 初始化所有权，传入构建渠道、新增受启动/关闭任务管理的 `AppUpdateClient`、事件/HTTP 适配与 Bundle 元数据，保持测试客户端无真实 updater 副作用；三个 CoreLifecycle 夹具显式传 `ReleaseChannel::Stable`。保留原 `ref`/Service pin，不触碰原始 dirty updater 工作区。
 - 回归：修复后 backend lib cargo check 成功；Core app-update 27/27、应用配置 4/4、Tauri updater adapter 3/3、bundle 18/18、application client 12/12、application state 4/4、Specta bindings 1/1；TypeScript、前端生产构建与 E2E harness unit 44/44 通过。没有执行真实桌面 E2E、下载/签名安装与重启/回滚，不得把纯测试当作发布验收。
 - 防复发：跨分支迁移时必须从 `setup` 追踪到 `ClientSetupArgs`、typed state、actor spawn、业务命令和测试 fixture；编译 `--lib` 后还须编译/执行 `--lib` 测试，避免生产入口遗漏与测试夹具漏参。
+
+### LESSON-20261114-001：共享宿主锁必须在提交 actor mailbox 命令之前取得
+
+- 日期与时区：2026-11-14 US/Pacific。状态：Mitigated（独立复核在提交前发现 lock inversion；新增并运行并发回归测试）。
+- 证据与基线：分支 `codex/ref-startup-window-20261114`，父提交 `1a9c0b3f95c470b9dba0db76d1f00c0eee93dfcc`；ref `59724e85c34abb6995c22d101c876cc06dc16576`。`CoreLifecycleClient::execute_service_command` 在将 Service 请求放入 actor mailbox 之前取得共享 `HOST_TRANSITION_LOCK`；若 actor 正在执行的启动任务再于 actor 内等待同一锁，后提交的 Service 命令可能持锁等 actor，而启动持 actor 等锁。
+- 确认原因与影响：启动 owner 计划在 `RetireServiceThenLocal` 分支调用 `begin_transition()`，最初这段等待发生在 CoreLifecycle actor 命令内部。独立代码复核确认存在确定的交错等待顺序；未在共享分支推送该实现，也未把该推演表述为真实 Service 运行时故障。
+- 修复：由 `CoreLifecycleClient::startup_reconcile_with_timeout` 在 actor 入队前取得租约，并将租约随 `StartupReconcile` 命令传入 workflow；租约覆盖 owner 观测和必要 handoff，workflow 不再于 actor 内等待同一共享锁。
+- 防复发测试：`client::core_lifecycle::tests::startup_holds_service_transition_before_entering_lifecycle_actor` 阻塞启动 Service 探测并让另一条 Service 命令竞争租约，断言启动与排队命令都在时限内完成且命令次序正确。该测试 **1/1** 通过；`client::core_lifecycle::tests` **44/44** 通过。覆盖为模拟 Service lease/adapter，不是安装 Service、OS wrapper 或宿主网络实测。
+- 后续规则：任何会等待 actor mailbox 的调用，其共享宿主锁必须先在 mailbox 外取得并随请求持有；不要让 actor handler 等待一个可能由排队请求持有的锁。
+
+### LESSON-20261114-002：共享 Service Core 停止必须在 manager 内核对 owner
+
+- 日期与时区：2026-11-14 US/Pacific。状态：Mitigated（独立复核在推送前发现 probe→Stop 跨进程窗口；新增 IPC owner fence 和 manager 锁内回归测试）。
+- 证据与基线：分支 `codex/ref-startup-window-20261114`，父提交 `1a9c0b3f95c470b9dba0db76d1f00c0eee93dfcc`；ref `59724e85c34abb6995c22d101c876cc06dc16576`。启动先 probe Service status，再由另一个应用进程共享的 Service 执行 Stop；Tauri transition mutex 只在本进程生效，原 Stop IPC 不带 owner token。
+- 确认原因与影响：第二轮独立代码复核证明另一 Chimera 进程可以在 owner probe 后替换 Service Core，使启动任务的无条件 Stop 命中新 Core。未观察到生产环境实际发生的误停，不将静态交错推演写成运行事故。
+- 修复：新增 tagged `StopIfOwner` IPC，携带 Core 进程 UUID 与配置 revision；Service 转成 `CoreCommand::StopIfOwner` 后在 `CoreManager::ctrl` 同一锁内比对 active owner 并执行 Stop，所有 manager start / stop / reconcile 仍通过该锁串行。独立复核发现 manager 锁本身没有覆盖 `Instance` supervisor 的自主 respawn；因此还在 supervisor current-child 锁内按 UUID/PID 比对当前子进程，将 DNS pre-stop 放在同一条件取消临界区。旧 Service 拒绝未知命令时，客户端不会回退到无条件 Stop。对 foreign / unreadable Service evidence 分流，Local handback 不再经过通用 Service Stop。
+- 回归证据：`manager::tests::stop_if_owner_leaves_a_replacement_running` 覆盖错误 UUID 不触发 runtime stop、准确 UUID/revision 才停止；Manager 替换竞态测试使用 `FenceRuntimeInstance` 模拟。新增 `process::supervisor::tests::cancel_if_current_serializes_respawn_during_pre_stop` 运行真实测试子进程，在 pre-stop 持锁时等待它退出，并验证没有发布 respawn child；管理器全套 **137 通过、2 忽略**，真实 supervisor 用例 **1/1**。IPC 与 Tauri wire roundtrip 各 **1/1**；`startup_` 测试 **33/33**，包含 foreign handback 及 unreadable owner 不做本地启动。未覆盖 `Instance` owner closure 的端到端组合，也不是已安装 Service 的跨进程桌面 E2E。
+- 后续规则与范围：任何基于共享 daemon status 做的有副作用 host handoff，必须把观测到的 owner token 传入 server-side 原子 compare-and-mutate；本地 mutex 和事后探测不能封住跨进程 TOCTOU。普通主动 Stop 与其它非 startup 入口仍按各自 authorization/ownership 契约审核，不能据本条声称所有 Service stop 已 fenced。
+
+### LESSON-20261114-003：manager 锁之外还要围住 supervisor 自动 respawn
+
+- 日期与时区：2026-11-14 US/Pacific。状态：Mitigated（独立复核发现并修复；没有观察到生产误停）。
+- 基线：分支 `codex/ref-startup-window-20261114`；固定 ref `59724e85c34abb6995c22d101c876cc06dc16576`。Service 条件停止已在 `CoreManager::ctrl` 中比较 active UUID/revision 并调用 Stop。
+- 复核发现：CoreManager 的 ctrl 锁不能保护 `Instance` 内部 supervisor 自主处理的 child 退出和自动 respawn。交错顺序可能是 Stop 已校验旧 owner，Stop 开始 DNS pre-stop，旧 child 退出触发 supervisor 自动替换，之后 Stop 才取消当前 child；仅 manager 锁会留下该竞态。
+- 修复：`Supervisor::cancel_if_current` 持有当前 child 状态锁，确认 PID / owner 仍与预期一致，并在同一临界区执行 DNS pre-stop 和 child cancel。Supervisor spawn/respawn 发布 current process 与 Started 事件也在同一锁内；Core Manager 的 conditional stop 通过该 fence，冲突时恢复 Active 状态并保留替换 child。
+- 验证：Manager 合同测试 `stop_if_owner_does_not_stop_a_respawn_during_pre_stop_work` 通过 `FenceRuntimeInstance` 替身验证 owner 冲突处理；真实 Supervisor 测试 `process::supervisor::tests::cancel_if_current_serializes_respawn_during_pre_stop` 运行子进程并验证退出发生于取消临界区时没有 respawn，**1/1**；`cargo test --offline --locked --manifest-path backend/chimera-runtime/Cargo.toml -p chimera-core-manager --lib -- --test-threads=1` **137 通过、0 失败、2 忽略**；runtime `cargo check` 通过。未覆盖 `Instance::cancel_supervisor_if_owner` 的端到端 owner closure 组合，也不代表系统 Service wrapper 或跨进程桌面 E2E。
+- 防复发：共享进程的条件停止审查必须同时追踪 manager command serialization 和 manager 外部自主替换当前 child 的监督器；锁住业务 manager 不等于锁住全部执行 owner。该发现为代码审查推演，不是已确认运行事故。
+
+### LESSON-20261115-001：退避测试使用调度时钟而不是调用前时钟
+
+- 证据：新增启动重试策略测试首次运行 `cargo test --offline --locked --manifest-path backend/Cargo.toml -p chimera --lib client::application_workflow::startup::retry_tests:: -- --test-threads=1` 时，3 项中 1 项失败；断言把调度前采样的 `now` 当作计时起点，实际期限差为 `1.000033459s`，而预期固定写成 `1s`。
+- 修正：策略计算拆出接收显式 `Instant` 的内部方法，生产路径仍传入当前单调时钟，测试则用同一个基准精确断言 1/5/30 秒应用重试和 5/5/10/30/60 秒依赖退避；修复后 **3/3** 通过。
+- 防复发：对绝对 deadline 的测试必须断言与调度函数实际使用的同一时钟基准；不要把调用前采样、执行耗时和绝对 deadline 混成固定间隔断言。
+
+### LESSON-20261115-002：共享 Service 的恢复命令也必须携带安装身份
+
+- 日期与时区：2026-11-15 US/Pacific。状态：Mitigated（独立复核在变更推送前发现旧 wire 分支可绕过新的 owner fence）。
+- 基线：分支 `codex/ref-startup-window-20261114`，ref `59724e85c34abb6995c22d101c876cc06dc16576`；对应 `backend/chimera-runtime/chimera_service/src/server/manager_bridge.rs::CoreManagerService::submit_v2` 与 `chimera_ipc::api::core::v2::CoreCommandInfo::{Recover,RecoverIfServiceOwner}`。
+- 证据与影响：Service admission 原先仍将 `CoreCommandInfo::Recover` 无条件转换为 `CoreCommand::Recover`；该分支不经过新增的 config/data directory 身份比较，因此旧 IPC 客户端可触发共享 manager 的 quarantine recovery。审查确认的是可到达的静态旁路，没有证据表明实际安装 Service 曾因此回收其他实例的进程。
+- 修复与反例测试：保留旧 enum wire decoding 以明确报告不兼容，但在 `submit_v2` admission 前以 `OperationConflict` 拒绝所有无身份 Recover。Service 回归分别只修改 config dir、只修改 data dir、完全不携带身份，均断言 manager operation registry 未收到请求，定向测试 **3/3** 通过。
+- 防复发：增加 side-effect fence 时审阅 tagged enum 的每个 variant、legacy command 和兼容 fallback；拒绝路径必须在 `control.submit` 之前执行。任何旧客户端不能静默退回无 owner 的操作。
+
+### LESSON-20261115-003：测试模块需要显式导入自己的依赖
+
+- 日期与时区：2026-11-15 US/Pacific。状态：Mitigated（本轮测试编译阶段发现，未进入产品二进制）。
+- 证据：新增 `client::application_workflow::startup_state_tests::application_workflow_uses_the_lifecycle_startup_state` 后第一次运行定向测试时，编译器报告本地测试模块未导入 `Arc`、`Mutex` 和 `HashMap`。显式导入后相同定向测试 **1/1** 通过。
+- 防复发：独立 `#[cfg(test)]` 模块应声明自己使用的标准库与同步原语，不依赖父模块偶然的 `use`；修改后重新执行目标测试，而不能只依赖 `cargo check --lib`。
+
+### LESSON-20261115-004：Service admission 测试不能假设内部错误实现 Debug
+
+- 证据：新增匹配 Service 安装身份的正向 Recover 测试时，首次编译因 `OpError` 未实现 `Debug`，`Result::expect` 无法使用，定向 Service 测试退出 101。
+- 修正与验证：测试改为显式匹配 `submit_v2` 的结果，并在失败分支输出内部错误消息；修复后重新运行 `cargo test`。正向 admission 用例同时断言 operation ID 与 manager registry 记录。
+- 防复发：在领域错误类型不实现 `Debug` 时，测试按其稳定可读字段显式格式化，不为测试方便给产品错误类型添加无必要 trait；提交前执行实际目标测试。
+
+### LESSON-20261115-005：同步 Tauri setup 创建的 TaskTracker 任务必须指定 runtime
+
+- 证据：主仓库 push E2E run [43720593308](https://github.com/MFSGA/Chimera/actions/runs/43720593308) 的失败时附件 `tauri-e2e-diagnostics-43720593308/wdio-2026-11-15T13-51-04-234Z.log` 显示应用在 WebDriver 启动前退出，并在 `local_runtime.rs:192` panic `there is no reactor running`。附件只有后端日志，没有窗口截图或视频，因为 WebDriver 未就绪。新增的同步线程回归在修复前同样 panic。
+- 修正与验证：`LocalRuntimeHost::new_with_shutdown` 将状态监视任务改为 `TaskTracker::spawn_on(..., tauri::async_runtime::handle().inner())`；普通测试线程回归用 oneshot 保持任务在途，确认 tracker 的 `wait()` 在释放前保持 pending、释放后排空。修复后 LocalRuntime 测试 **7/7** 通过；远端 E2E 尚未在修复 SHA 上复验。
+- 防复发：从同步 Tauri setup 调用的构造函数不得裸用 `tokio::spawn` 或 `TaskTracker::spawn`；显式绑定 Tauri async runtime handle，并对普通线程入口运行回归。审核所有同步 setup 构造器的后台任务，而非只检查首次触发该类错误的调用点。
+
+### LESSON-20261115-006：启动状态假件必须实现被生产流程读取的权威证据
+
+- 日期与时区：2026-11-15 US/Pacific。状态：Mitigated（真实 actor 测试发现并修正测试替身，新增两项覆盖）。
+- 证据：在外置工作区对本轮迁移的生产 Actor 接线执行 `client::core_lifecycle::tests::application_workflow_connection_keeps_owner_and_runs_startup` 时，测试期望 `StartupOutcome::Ready`，实际为 `ReadyDegraded`。`ConfirmedStoppedCore` 提供 stopped 状态和非零 `state_changed_at`，却继承 `CoreLifecyclePort::observe_runtime_baseline` 的“不支持”默认错误；真实启动路径要求权威 baseline，故测试替身不符合所描述的 stopped owner。此前静态复核曾推断该调用不会发生，但实测否定了该推断。
+- 修正与验证：为该 mock 明确返回 `KnownRuntimeState::Stopped`；定向 actor 测试 **1/1**，Core Lifecycle 测试集合在后续 startup-report/cache 与 pending-connect 修改后 **79/79** 通过。另新增测试覆盖操作进行时延迟挂接/拒绝重复挂接，以及生产 `ApplicationWorkflowClient::begin_mutation` 路径上的 Profiles 持久化 TCC 事务。
+- 防复发：涉及 actor 装配、启动、权限或状态证据的静态结论，必须沿被测生产路径核对调用并实际运行可达性测试；测试替身要实现生产策略所需的权威证据端口，不以仅匹配表面状态快照代替。独立审查意见未运行测试时，记录为静态发现，不把它写成已验证的行为结论。
+
+### LESSON-20261115-007：延迟 Actor 连接必须检查请求接收端是否仍存活
+
+- 日期与时区：2026-11-15 US/Pacific。状态：Mitigated（独立审查发现潜在孤儿连接；增加 reply-channel 检查及取消回归，没有观察到生产故障）。
+- 证据与影响：`ConnectApplicationWorkflow` 在 Core lifecycle 操作执行期间会把 workflow 和 `RpcReplyPort` 暂存。`connect_application_workflow` 有有限等待；调用方超时或取消会丢弃接收端。若 Actor 完成时仍无条件 attach，就可能将已没有接收方的 workflow 标记为 `mutation_connected`，导致之后合法重试遭拒。review 确认的是可到达的生命周期缺口，不是已观察到的生产事故。
+- 修正与验证：Actor 完成时对 pending reply 调用依赖提供的 `RpcReplyPort::is_closed()`，在 reply 关闭或 shutdown 时拒绝并丢弃候选 workflow；仅在接收方仍有效时发送成功响应并于同一 handler 同步 attach。测试用登记回执确定首个连接已排队，再取消调用方；`cancelled_pending_application_workflow_does_not_poison_connection` **1/1**，完整 Core Lifecycle 集合 **79/79**。
+- 防复发：Actor mailbox 代为等待外部回执、事务确认或 connection 时，副作用前检查接收方/取消 token；shutdown 也必须消解挂起请求。并发测试需用明确的登记/ack 屏障确认请求已进入 Actor，再测试重复、取消和恢复，不能只依赖 `yield_now` 或不相关 mailbox barrier。
+
+### LESSON-20261115-008：Actor 暂借工作流时必须保留异步失败回执
+
+- 日期与时区：2026-11-15 US/Pacific。状态：Mitigated（在合并前由独立审查发现并修复；没有观察到生产故障）。
+- 证据：启动重试先将 target 置为 Pending，再在 Actor 外异步申请 Service transition lease。期间 Actor 可以处理其他请求并暂时取走 ApplicationWorkflow；lease 失败回执若在此时到达，直接检查 `workflow: Option<_>` 会静默丢弃失败。target 此时没有 `next_attempt`，所以后续也不会触发 retry。该缺口由独立审查沿可达 Actor 时序确认。
+- 修正与验证：Actor 暂存 workflow 缺席期间的 lease failure；Completed 归还 workflow 后应用 dependency wait 并从当前 target 安排下一次尝试。新增 Actor 级 `startup_retry_lease_failure_is_drained_after_actor_operation_returns`，实际阻塞 lease 与 Core Stop 以强制该交错；Core Lifecycle 测试集合 **82/82** 通过，`cargo check --tests`、Rustfmt 与 `git diff --check` 通过。真实系统 Service lease 并发时序仍没有桌面/系统服务 E2E 证据。
+- 防复发：Actor 把独占状态借给长时间异步任务时，外部 admission / lease / probe 的失败结果不能依赖该状态当时仍在 Option 内；要将结果排队至 owner 归还后处理，并测试“任务 in-flight、Actor 处理其他消息、外部失败后恢复”的时序。
+
+### LESSON-20261116-001：Service 启动失败回退要检查交接后的 Core owner
+
+- 日期与时区：2026-11-16 US/Pacific。状态：Mitigated（独立复审发现；新增真实 ApplicationWorkflow Actor 路径回归，修复前失败、修复后通过）。
+- 基线与根因：父提交 `b282c47c576ec9d231766e6d2dae0ce42112fed0`；ref `59724e85c34abb6995c22d101c876cc06dc16576`。启动逻辑在 owner plan 之前保存 `initial_owner`，但 `AdoptService` 会把选中 host 从 Local 改为 Service。首次 Service reconcile 失败后的 fallback 错误地仍要求 `initial_owner == Service`，因此 Local→Service 接管会漏掉 Service 失败后回退；ref `application_workflow/startup.rs::reestablish` 按失败后的当前 host 判断。
+- 可复现证据：新增 `client::core_lifecycle::tests::startup_adoption_falls_back_when_service_reconcile_fails`，起始状态为 Local stopped、Service ready，执行 AdoptService 后注入 Service reconcile 失败。修复前返回 `ReadyDegraded`（`startup Core reconciliation failed`），本地 host 没有完成 fallback。
+- 修复与验证：失败后重新读取 Core status，仅当当前 owner 可确认仍为 Service 且结果不确定标志未置位时，才走 `release_service_owner` 的 conditional owner fence、fresh Service probe 和 Local reconcile。修复后该回归 **1/1**、Core Lifecycle 集合 **83/83**、startup 规则集合 **8/8** 通过；`cargo check --tests --offline --locked`、Rustfmt、Markdown Prettier 和 `git diff --check` 通过。使用 fake Core/Service port；未运行真实 Service、TUN、桌面 E2E 或跨平台验证。
+- 防复发：每个 handoff 后若决定是否进行有副作用的 fallback，依据必须是交接完成后的新鲜 owner 证据，不能复用计划开始前的 owner 快照；给每个可改变 owner 的 plan 分支覆盖“交接后失败”路径。
+
+### LESSON-20261116-002：LiveAttempt 隔离必须保留纯设置写入和原尝试
+
+- 日期与时区：2026-11-16 US/Pacific。状态：Mitigated（完整 Client 首轮发现回归；修复后目标 actor 用例及完整 Client 集合通过）。
+- 证据与根因：初次运行 `cargo test --manifest-path backend/Cargo.toml -p chimera --tests --offline --locked client:: -- --test-threads=1` 时，389 项通过、`client::core_lifecycle::tests::preexisting_uncertain_runtime_blocks_startup_mutations` 失败。新增 LiveAttempt actor gate 虽阻止了运行时修改，也意外挡住 `reject_pending_for_uncertain` 既有放行的 source-only Service Mode patch；仅增加 gate 放行仍会让通用执行器创建新的 Lifecycle attempt 并覆盖原 unresolved attempt。
+- 修正与验证：actor gate 明确保留 `CacheStartupUnsettled` 和无需 runtime reconcile 的应用配置 patch；执行这种 patch 时保留原 unresolved attempt，不创建或结算 Lifecycle attempt。原生产 actor 回归 **1/1**，LiveAttempt 新增用例 **4/4**，最终完整 `client::` 集合 **392/392** 通过。
+- 防复发：加入新的 recovery admission gate 时，逐项沿用既有 actor gate 的例外，并验证被允许的 side effect 是否会替换当前 recovery owner。必须通过生产 actor 测试检查“运行时仍隔离、纯配置写入仍可用、原 unresolved attempt 仍保留”；只直接测试 gate predicate 不足以覆盖所有权回归。
+
+### LESSON-20261116-003：Actor 拒绝重试后要保留恢复入口和下一次 deadline
+
+- 日期与时区：2026-11-16 US/Pacific。状态：Mitigated（独立复核找到可达队列时序缺口；真实 ApplicationWorkflow actor 回归通过）。
+- 证据与根因：复核发现 deferred Profile timer 会先把 target 设为 Pending、清空 deadline，再进入 mailbox；若 source attempt 变为 unresolved，recovery gate 拒绝该命令会留下永不再调度的 Pending target。复核还确认 SourceDecision / Mutation 的显式 RecoverCore 只有内部通知入口，通用 CoreLifecycleClient reconcile 会被新 gate 拒绝。新增的 actor 回归又发现 shutdown 虽在 gate 中放行，却进入普通生命周期分支并触发“覆盖 unresolved attempt”的断言。第一次 retry 回归测试只注入 target、没有把 retry request 放进 actor queue，修正测试准备后才覆盖到真实拒绝路径。
+- 修正与验证：actor 在已有操作、排队操作或未解决 attempt 期间不启动 deferred retry；pending retry 被 recovery/startup-owner gate 拒绝时重新安排未来 deadline，不调用完成路径或扣减预算。匹配的 `Reconcile` 通过现有 `RecoverCore` + `recover_after_reconcile` 继续恢复；shutdown 允许排空但保留原 attempt。`explicit_reconcile_keeps_committed_profiles_active_after_deferred_retry_recovery` 验证真实 source 决策、pending retry 拒绝后 deadline 仍在未来；`unresolved_live_attempt_isolated_until_explicit_reconcile_recovery` 验证运行时命令隔离、纯设置 patch 保留原 attempt、常规 reconcile 清理 Lifecycle attempt。两项定向回归各 **1/1** 通过。
+- 防复发：异步 timer 触发的工作必须等 Actor admission 后再消耗重试状态；被隔离 gate 拒绝时要恢复调度，测试应把请求送进真实 mailbox。对每种 unresolved origin，沿用户可调用的 reconcile/recovery API 验证可达恢复；shutdown 既要被 gate 放行，也要在 workflow 执行层保留正在恢复的所有权状态。
+
+### LESSON-20261116-004：当前配置成功协调后不能再恢复旧运行时基线
+
+- 日期与时区：2026-11-16 US/Pacific。状态：Mitigated（独立复核发现；新增 actor 回归确认持久化 Profiles 仍是最终运行配置）。
+- 证据与根因：独立复核发现 CommittedTarget deferred Profile attempt 的普通 `Reconcile` 先将当前已提交 Profiles 应用到运行时，随后 `recover_previous` 却按旧 mutation baseline 回滚；actor 完成回调再清掉 retry target，运行时会与持久化 Profile 不一致且没有重试记录。
+- 修正与验证：区分“已成功协调当前配置”的恢复入口与 TCC 变更边界恢复。成功的 `RecoverCore` / unresolved `Reconcile` 只有在 source 决策达到 `Committed` 或 `Aborted { Restored }` 后才清除旧 live attempt 与 deferred target；`Undecided` 和 `Aborted { NeedsRecovery }` 保留恢复 owner。若新 mutation 边界遇到未解决的已提交目标，则要求先显式协调当前配置。实际 CoreLifecycle actor 测试注入持久化 Profiles snapshot，记录 Core 最终 active Profiles，并确认旧 `Stopped` baseline 没有触发 Stop；同时暂停持久化 owner，证明 source 决策仍未定时 reconcile 会失败并保留 attempt，source 提交后再次 reconcile 才应用新 Profiles；另通过注入 source 写入与资源恢复失败，确认 `Aborted { NeedsRecovery }` 在运行时 reconcile 后仍保留 attempt。`explicit_reconcile_keeps_committed_profiles_active_after_deferred_retry_recovery`、`reconcile_preserves_an_undecided_profile_source_attempt_until_commit` 与 `reconcile_preserves_a_profile_source_attempt_after_resource_recovery_failure` 定向回归各 **1/1** 通过。最终完整 `client::` 集合 **395/395** 通过，`cargo check --tests` 与 `cargo clippy --all-targets` 退出 0（包含仓库既有 warnings）。
+- 防复发：恢复前先明确当前运行时是 baseline、transaction candidate，还是刚成功应用的持久化目标；不能让后续 actor cleanup 掩盖错误回滚。测试应通过用户可达的 reconcile 入口同时检查 source snapshot 与实际运行目标，单看 live/deferred 状态清空不足以证明恢复正确。
+
+### LESSON-20261116-005：新增测试前先读项目测试规范
+
+- 日期与时区：2026-11-16 US/Pacific。状态：Mitigated（测试写入后发现流程顺序遗漏；已读规范并完成复核）。
+- 证据：Stage 4u 已先添加/改写 Core Lifecycle actor 回归并运行，之后才读取 `docs/testing/README.md`；这违反仓库要求在新增、修改或审查测试前先读规范。
+- 处理：随后按 T01/T02 检查测试契约与断言来源，测试通过实际 CoreLifecycle actor、持久化 Profiles snapshot 与 fake Core 观察最终 active Profiles；将测试名改为说明行为的 `explicit_reconcile_keeps_committed_profiles_active_after_deferred_retry_recovery`。测试**只证明 Rust actor/adapter fixture 边界**，不声称桌面 UI、冷启动或真实 Service 已覆盖。
+- 防复发：任务开始时先读取测试标准，再设计测试契约并编写用例；既有测试或之前的相似测试不能替代规范阅读。
+
+### LESSON-20261116-006：首次编译后再记录目标测试结果
+
+- 日期与时区：2026-11-16 US/Pacific。状态：Mitigated（首次定向编译失败，补齐导入后完整相关验证通过）。
+- 证据与根因：新增 AppliedVerdict 确认/恢复 helper 后，首次运行 `cargo test --manifest-path backend/Cargo.toml -p chimera --lib --offline --locked client::application_workflow::tcc::tests::failed_profile_confirmation_replays_the_committed_candidate_before_next_mutation -- --test-threads=1` 在编译阶段报告三个 `.context(...)` 调用不可用，原因是 `tcc.rs` 遗漏 `anyhow::Context` trait 导入；测试断言尚未执行。
+- 修正与验证：补充 `anyhow::Context` 导入，重新运行 TCC 集合 **13/13**、LocalRuntime replay **1/1**、完整 `client::` 集合 **396/396**、`cargo check --tests` 和 `cargo clippy --all-targets`，均退出 0。
+- 防复发：新增扩展结果类型的异步 helper 时，先执行对应目标测试的实际编译与断言；编译阶段错误必须单独标记，不能记作测试断言失败或通过。依赖扩展方法时检查 trait 导入。
+
+### LESSON-20261116-007：CoreLifecycle actor 内不能等待已排队的 host lease
+
+- 日期与时区：2026-11-16 US/Pacific。状态：Mitigated（独立复核确认存在并发缺口；改为非等待式 admission 并增加回归，没有观察到生产事故）。
+- 证据与根因：Stage 4v 首版在 Profile TCC 的 CoreLifecycle actor 命令内直接停止旧 Service owner；`CoreFacade::retire_service_core` 的调用约定要求持有 `HOST_TRANSITION_LOCK`，但 ProfileMutation 没有预先取得 lease。Service/health transition 可能先持有该锁并排队等待同一 actor，若 TCC 在 actor 内等待锁，会形成环形等待；单纯的 fresh probe 与 owner token 不能代替 host-transition 序列化。该缺口由独立静态复核确认，未有真实并发事故证据。
+- 修正与验证：TCC 改走 `ProfileRuntime::try_release_service_owner`，经 `ServiceLifecyclePort::try_begin_transition` 到 `CoreFacade::try_begin_service_transition` 用 `HOST_TRANSITION_LOCK.try_lock()` 非等待式获取 lease；若 Service helper 已结束，则 `ServiceCommandActor::try_reap_finished` 用 `Mutex::try_lock` 检查并只 join 已完成的 helper，不等待 Service actor 或额外运行 probe；若 helper 仍运行则保留 verdict 并报告可恢复失败。这样后续 TCC retry 无需依赖另一条 Service command 才能清除 stale `outstanding` 标志；启动路径继续使用进入 actor 前已取得的普通 lease。`timed_out_helper_refuses_overlapping_mutation_and_false_stop_proof` **1/1** 证明完成 helper 回收不额外 probe，完整 facade 集合 **12/12** 证明释放 helper 后 try-path 能自行重试成功；完整 `client::` 集合 **396/396**，TCC **13/13**，LocalRuntime replay **1/1**，`cargo check --tests` 和 `cargo clippy --all-targets` 均通过。
+- 防复发：CoreLifecycle actor 执行期间若需跨 Service/Local host transition，必须沿统一 lock/mailbox 顺序传入已有 lease；若无法预先取得，只能使用明确非等待式 try-acquire 并保留可恢复状态，不能在 actor 内等待一个可能由排队 actor 请求持有的 lease。测试应同时证明 lock busy 时快速失败和释放后可取得，不以单独 owner fence 代替 host-transition lease。

@@ -13,10 +13,11 @@ use tauri::{App, AppHandle, Emitter, Listener, Manager};
 use tracing::debug;
 
 use crate::{
+    client::application_workflow::startup::StartupOutcome,
     config::chimera::ClashCore,
     core::{handle, tray},
     log_err,
-    utils::{init, path::PathResolver},
+    utils::init,
     window::{
         WindowManager,
         kinds::{EditorWindow, EditorWindowType, LegacyWindow, MainWindow},
@@ -24,13 +25,6 @@ use crate::{
 };
 
 static FRONTEND_READY_WINDOWS: OnceLock<RwLock<HashSet<String>>> = OnceLock::new();
-
-fn spawn_tracked_on_tauri_runtime(
-    tasks: &tokio_util::task::TaskTracker,
-    task: impl std::future::Future<Output = ()> + Send + 'static,
-) {
-    tasks.spawn_on(task, tauri::async_runtime::handle().inner());
-}
 
 /// A GUI-only indicator for the initial startup orchestration, not an
 /// alternative core lifecycle authority. It is never used to control the core.
@@ -199,49 +193,14 @@ pub fn create_window(app_handle: &AppHandle) {
     create_window_for_type(app_handle, app_config_for_window(app_handle).window_type);
 }
 
-/// Await startup's Service preflight within its tracked owner. Once shutdown
-/// is requested, no later Core reconciliation is started from its result.
-async fn prepare_startup_while_active<T, E, F, Fut>(
-    shutdown: tokio_util::sync::CancellationToken,
-    prepare: F,
-) -> anyhow::Result<Option<T>>
-where
-    T: Send + 'static,
-    E: Into<anyhow::Error>,
-    F: FnOnce(tokio_util::sync::CancellationToken) -> Fut + Send + 'static,
-    Fut: std::future::Future<Output = Result<T, E>> + Send + 'static,
-{
-    if shutdown.is_cancelled() {
-        return Ok(None);
-    }
-
-    let result = prepare(shutdown.clone()).await.map_err(Into::into)?;
-    // Do not cancel an in-flight Service transition. It must finish before
-    // shutdown cleanup, and cancellation suppresses the later Core reconcile.
-    Ok((!shutdown.is_cancelled()).then_some(result))
-}
-
 /// handle something when start app
-pub fn resolve_setup(app: &mut App, paths: &PathResolver) {
+pub fn resolve_setup(app: &mut App) {
+    #[cfg(target_os = "macos")]
+    app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+
     handle::Handle::global().init(app.app_handle().clone());
     debug!("todo init handle for widget not tray");
     crate::consts::setup_app_handle(app.app_handle().clone());
-
-    let resources_dir = init::bundled_resources_dir(app)
-        .inspect_err(|error| tracing::error!(%error, "failed to locate the bundled resources"))
-        .ok();
-    log_err!(init::init_resources(
-        paths.app_data_dir(),
-        resources_dir.as_deref()
-    ));
-
-    // setup jobs
-    /* log::trace!("setup jobs");
-    {
-        let storage = app.state::<Storage>();
-        let storage = (*storage).clone();
-        log_err!(crate::core::tasks::setup(app, storage));
-    } */
 
     #[cfg(any(windows, target_os = "linux", target_os = "macos"))]
     {
@@ -255,84 +214,73 @@ pub fn resolve_setup(app: &mut App, paths: &PathResolver) {
                 );
             }));
         });
-        log_err!(app.emit("update_systray", ()));
     }
 
-    let app_config = app_config_for_window(app.app_handle());
-    if let Some(window_type) = initial_window_type(&app_config) {
-        create_window_for_type(app.app_handle(), window_type);
-    }
-
-    let app_shutdown = app.state::<crate::setup::AppShutdown>().clone();
+    let app_shutdown = app.state::<crate::setup::StartupOwners>().clone();
     crate::core::storage::register_web_storage_listener(
         app.app_handle(),
         app_shutdown.shutdown.child_token(),
         app_shutdown.tasks.clone(),
     );
 
-    // Window creation must not wait on service IPC or core reconciliation.
-    // Keep startup under the same AppShutdown tracker as the other owners:
-    // shutdown waits for any in-flight Service transition and Core
-    // reconciliation before cleanup shuts down the core.
+    // Match ref/backend/tauri/src/utils/resolve.rs: finish the initial
+    // service/runtime reconciliation before opening the first window. The
+    // Service compatibility check is Chimera-specific, but it precedes the
+    // same one-shot startup reconciliation boundary.
     let client = (*app.state::<crate::client::ChimeraClient>()).clone();
-    let app_handle = app.app_handle().clone();
-    let startup_shutdown = app_shutdown.shutdown.child_token();
-    // Tauri setup runs on the event-loop thread, not inside Tokio. Use its
-    // runtime explicitly so the tracked task can start without a current handle.
-    spawn_tracked_on_tauri_runtime(&app_shutdown.tasks, async move {
-        let prepared = prepare_startup_while_active(
-            startup_shutdown.clone(),
-            move |preparation_shutdown| async move {
-                if !preparation_shutdown.is_cancelled()
-                    && let Err(error) = init::init_service(client.clone()).await
-                {
-                    log::error!(target: "app", "Service startup preparation failed: {error:#}");
-                }
-                Ok::<_, anyhow::Error>(client)
-            },
-        )
-        .await;
-        match prepared {
-            Ok(None) => {
-                tracing::debug!("startup cancelled before core reconciliation");
+    let report = tracing::info_span!("startup_reconcile").in_scope(|| {
+        tauri::async_runtime::block_on(async {
+            if let Err(error) = init::init_service(client.clone()).await {
+                tracing::warn!(%error, "Service startup preparation failed");
             }
-            Ok(Some(client)) => {
-                // Port resolution writes the legacy mirror. Serialize it with
-                // user port changes and let shutdown cancel a task waiting for
-                // that transaction lock before any write begins.
-                let resolved = tokio::select! {
-                    _ = startup_shutdown.cancelled() => None,
-                    result = crate::client::ports::resolve_random_mixed_port(&client) => Some(result),
-                };
-                let Some(resolved) = resolved else {
-                    tracing::debug!("startup cancelled before port reconciliation");
-                    return;
-                };
-                log_err!(resolved);
-                if startup_shutdown.is_cancelled() {
-                    tracing::debug!("startup cancelled before core reconciliation");
-                    return;
-                }
-
-                log::trace!("launch core (background)");
-                // Once submitted to the lifecycle actor, reconciliation must
-                // reach a terminal reply before the tracked task completes.
-                // Dropping that future on cancellation could leave a queued
-                // start racing the subsequent shutdown_core() command.
-                match client.init_core().await {
-                    Ok(()) => app_handle.state::<AppStartupStatus>().finish(true),
-                    Err(error) => {
-                        log::error!(target: "app", "core initialization failed: {error:#}");
-                        app_handle.state::<AppStartupStatus>().finish(false);
-                    }
-                }
-            }
-            Err(error) => {
-                log::error!(target: "app", "startup worker failed: {error}");
-                app_handle.state::<AppStartupStatus>().finish(false);
-            }
-        }
+            log_err!(crate::client::ports::resolve_random_mixed_port(&client).await);
+            client.startup_reconcile().await
+        })
     });
+    if let Some(observation) = &report.observation {
+        tracing::info!(
+            operation_id = report.operation_id,
+            desired = ?observation.desired,
+            service = ?observation.service,
+            runtime = ?observation.runtime,
+            "startup reconciliation observation"
+        );
+    }
+    match &report.outcome {
+        StartupOutcome::Ready => {
+            app.state::<AppStartupStatus>().finish(true);
+            tracing::info!(
+                operation_id = report.operation_id,
+                "startup reconciliation ready"
+            );
+        }
+        outcome => {
+            app.state::<AppStartupStatus>().finish(false);
+            tracing::warn!(
+                operation_id = report.operation_id,
+                ?outcome,
+                "startup reconciliation did not reach ready"
+            );
+        }
+    }
+    // As in ref, a non-ready startup does not block background producers:
+    // any changes are serialized by the application workflow actor.
+    log_err!(tauri::async_runtime::block_on(
+        client.start_background_sources()
+    ));
+
+    // As in ref's setup_proxies, refresh the proxy view after the startup
+    // conclusion. The proxy owner retries if the core API is unavailable.
+    client.request_proxy_refresh();
+    #[cfg(any(windows, target_os = "linux", target_os = "macos"))]
+    log_err!(app.emit("update_systray", ()));
+
+    // Keep Chimera's additional Legacy UI selection at the presentation
+    // boundary; the shared startup lifecycle above is ref-first.
+    let app_config = app_config_for_window(app.app_handle());
+    if let Some(window_type) = initial_window_type(&app_config) {
+        create_window_for_type(app.app_handle(), window_type);
+    }
 }
 
 /// Resolve a sidecar version through the same typed OS reader as ref.
@@ -373,98 +321,6 @@ mod core_version_tests {
         assert_eq!(
             format_core_version(&ClashCore::ChimeraClient, "0.26.3"),
             "v0.26.3"
-        );
-    }
-}
-
-#[cfg(test)]
-mod startup_shutdown_tests {
-    use super::{prepare_startup_while_active, spawn_tracked_on_tauri_runtime};
-    use crate::setup::AppShutdown;
-    use std::sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    };
-    use tokio::sync::oneshot;
-    use tokio::time::{Duration, timeout};
-    use tokio_util::{sync::CancellationToken, task::TaskTracker};
-
-    #[test]
-    fn tracked_startup_uses_tauri_runtime_outside_tokio_context() {
-        // The real Tauri setup callback runs on the native event-loop thread.
-        // The production startup path uses this same scheduling helper.
-        assert!(tokio::runtime::Handle::try_current().is_err());
-        let tasks = TaskTracker::new();
-        let (done_tx, done_rx) = std::sync::mpsc::channel();
-        spawn_tracked_on_tauri_runtime(&tasks, async move {
-            done_tx.send(()).unwrap();
-        });
-        done_rx.recv_timeout(Duration::from_secs(2)).unwrap();
-        tasks.close();
-        tauri::async_runtime::block_on(tasks.wait());
-    }
-
-    #[tokio::test]
-    async fn cancelled_startup_does_not_start_service_preparation() {
-        let shutdown = CancellationToken::new();
-        shutdown.cancel();
-        let touched = Arc::new(AtomicBool::new(false));
-        let touched_in_worker = touched.clone();
-
-        let result = prepare_startup_while_active(shutdown, move |_| async move {
-            touched_in_worker.store(true, Ordering::SeqCst);
-            Ok::<_, anyhow::Error>(42)
-        })
-        .await
-        .unwrap();
-
-        assert_eq!(result, None);
-        assert!(!touched.load(Ordering::SeqCst));
-    }
-
-    #[tokio::test]
-    async fn shutdown_drains_service_preparation_before_core_cleanup() {
-        let boundary = AppShutdown::default();
-        let (entered_tx, entered_rx) = oneshot::channel();
-        let (release_tx, release_rx) = oneshot::channel();
-        let core_started = Arc::new(AtomicBool::new(false));
-        let core_started_in_task = core_started.clone();
-        let cancellation = boundary.shutdown.child_token();
-
-        // Simulate a Service transition that was already underway when the
-        // exit boundary requests shutdown.
-        boundary.tasks.spawn(async move {
-            let prepared = prepare_startup_while_active(cancellation, move |_| async move {
-                entered_tx.send(()).unwrap();
-                release_rx.await.unwrap();
-                Ok::<_, anyhow::Error>(42)
-            })
-            .await
-            .unwrap();
-            if prepared.is_some() {
-                core_started_in_task.store(true, Ordering::SeqCst);
-            }
-        });
-
-        timeout(Duration::from_secs(2), entered_rx)
-            .await
-            .unwrap()
-            .unwrap();
-        boundary.request_shutdown();
-        assert!(
-            timeout(Duration::from_millis(75), boundary.wait_shutdown())
-                .await
-                .is_err(),
-            "shutdown must not finish while Service preparation is in flight"
-        );
-
-        release_tx.send(()).unwrap();
-        timeout(Duration::from_secs(2), boundary.wait_shutdown())
-            .await
-            .unwrap();
-        assert!(
-            !core_started.load(Ordering::SeqCst),
-            "cancellation before preparation completes must suppress core startup"
         );
     }
 }

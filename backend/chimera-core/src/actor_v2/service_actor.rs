@@ -223,6 +223,27 @@ impl ServiceCommandActor {
         true
     }
 
+    /// Reap an already-finished helper without waiting for the helper or
+    /// probing Service. Actor-owned recovery uses this while it cannot await a
+    /// host transition or a potentially slow Service observation.
+    pub async fn try_reap_finished(&self) -> bool {
+        if !self.outstanding.load(Ordering::Acquire) {
+            return true;
+        }
+        let Ok(mut state) = self.state.try_lock() else {
+            return false;
+        };
+        match state.outstanding.as_ref() {
+            None => {
+                self.outstanding.store(false, Ordering::Release);
+                self.unsettled.store(false, Ordering::Release);
+                true
+            }
+            Some((_, helper)) if helper.is_finished() => self.reap(&mut state).await,
+            Some(_) => false,
+        }
+    }
+
     async fn daemon_not_running_inner(&self, state: &mut ServiceActorState) -> bool {
         if !self.reap(state).await {
             return false;
@@ -353,6 +374,7 @@ mod tests {
         pause_start: AtomicBool,
         keep_running_after_stop: AtomicBool,
         invalid_probe: AtomicBool,
+        probes: AtomicUsize,
         starts: AtomicUsize,
         started: Notify,
         release: Notify,
@@ -367,6 +389,7 @@ mod tests {
                 pause_start: AtomicBool::new(false),
                 keep_running_after_stop: AtomicBool::new(false),
                 invalid_probe: AtomicBool::new(false),
+                probes: AtomicUsize::new(0),
                 starts: AtomicUsize::new(0),
                 started: Notify::new(),
                 release: Notify::new(),
@@ -414,6 +437,7 @@ mod tests {
     #[async_trait::async_trait]
     impl ServiceProcessControl for FakeProcess {
         async fn probe(&self) -> std::result::Result<String, ServiceCommandError> {
+            self.probes.fetch_add(1, Ordering::AcqRel);
             Ok(if self.invalid_probe.load(Ordering::Acquire) {
                 "invalid JSON".into()
             } else {
@@ -462,6 +486,8 @@ mod tests {
         }
     }
 
+    /// Contract: a timed-out Service helper can be reaped after it finishes
+    /// without probing Service; its stale outstanding flag must not persist.
     #[tokio::test]
     async fn timed_out_helper_refuses_overlapping_mutation_and_false_stop_proof() {
         let fake = Arc::new(FakeProcess::new(ServiceStatus::Stopped, None));
@@ -480,16 +506,22 @@ mod tests {
             Err(ServiceCommandError::StillRunning { .. })
         ));
         assert_eq!(fake.calls(), [ServiceCommand::Start]);
+        let probes_before_reap = fake.probes.load(Ordering::Acquire);
         fake.release.notify_one();
 
         tokio::time::timeout(Duration::from_secs(2), async {
-            while !actor.command_settled().await {
+            while !actor.try_reap_finished().await {
                 tokio::task::yield_now().await;
             }
         })
         .await
         .unwrap();
         assert!(!actor.has_outstanding());
+        assert_eq!(
+            fake.probes.load(Ordering::Acquire),
+            probes_before_reap,
+            "reaping a finished helper must not run a Service probe"
+        );
         assert!(
             !actor.daemon_not_running().await,
             "completed Start reports Running"

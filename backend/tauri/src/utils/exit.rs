@@ -2,7 +2,11 @@
 //! the main thread, without blocking it. Shutdown runs separately and asks
 //! Tauri to exit again after application-owned work has finished.
 
+use std::future::Future;
+
 use tauri::{AppHandle, ExitRequestApi, Manager, RESTART_EXIT_CODE, process::current_binary};
+
+use crate::client::ChimeraClient;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExitIntent {
@@ -138,11 +142,12 @@ pub fn on_exit_requested(app_handle: &AppHandle, code: Option<i32>, api: &ExitRe
 }
 
 fn start_shutdown(app_handle: &AppHandle) {
-    let shutdown = request_shutdown(app_handle);
+    let (client, partial) = prepare_shutdown(app_handle);
+    let drain = drain_shutdown_owners(client, partial);
     let app_handle = app_handle.clone();
     tauri::async_runtime::spawn(async move {
-        if let Some(shutdown) = shutdown {
-            shutdown.wait_shutdown().await;
+        if let Err(error) = drain.await {
+            tracing::error!(%error, "application shutdown owner failed to stop the core");
         }
         unregister_hotkeys(&app_handle).await;
         if let Err(error) = crate::utils::help::cleanup_processes_async(&app_handle).await {
@@ -161,9 +166,8 @@ fn start_shutdown(app_handle: &AppHandle) {
 /// Drains application-owned work for a caller such as the updater installer,
 /// which may end the process without producing a Tauri exit event.
 pub async fn shutdown_before_exit(app_handle: &AppHandle) -> anyhow::Result<()> {
-    if let Some(shutdown) = request_shutdown(app_handle) {
-        shutdown.wait_shutdown().await;
-    }
+    let (client, partial) = prepare_shutdown(app_handle);
+    drain_shutdown_owners(client, partial).await?;
     unregister_hotkeys(app_handle).await;
     let result = crate::utils::help::cleanup_processes_async(app_handle).await;
     app_handle
@@ -195,12 +199,50 @@ pub fn has_shut_down(app_handle: &AppHandle) -> bool {
         .has_shut_down()
 }
 
-fn request_shutdown(app_handle: &AppHandle) -> Option<crate::setup::AppShutdown> {
-    let shutdown = app_handle
-        .try_state::<crate::setup::AppShutdown>()
-        .map(|state| state.inner().clone())?;
-    shutdown.request_shutdown();
-    Some(shutdown)
+/// Select the composed client after successful setup, or the partial owners
+/// retained by the composition root after a startup failure (as in ref).
+fn prepare_shutdown(
+    app_handle: &AppHandle,
+) -> (Option<ChimeraClient>, Option<crate::setup::StartupOwners>) {
+    let client = app_handle
+        .try_state::<ChimeraClient>()
+        .map(|state| state.inner().clone());
+    let partial = app_handle
+        .try_state::<crate::setup::StartupOwners>()
+        .map(|state| state.inner().clone());
+    (client, partial)
+}
+
+/// Cancel the selected owner synchronously; the event loop stays available
+/// while the returned future drains its work and confirms core shutdown.
+fn drain_shutdown_owners(
+    client: Option<ChimeraClient>,
+    partial: Option<crate::setup::StartupOwners>,
+) -> impl Future<Output = anyhow::Result<()>> + Send + 'static {
+    let owner = match client {
+        Some(client) => Some(ShutdownOwner::Client(client)),
+        None => partial.map(ShutdownOwner::Partial),
+    };
+    match &owner {
+        Some(ShutdownOwner::Client(client)) => client.request_shutdown(),
+        Some(ShutdownOwner::Partial(owners)) => owners.request_shutdown(),
+        None => {}
+    }
+    async move {
+        match owner {
+            Some(ShutdownOwner::Client(client)) => client.wait_shutdown().await,
+            Some(ShutdownOwner::Partial(owners)) => {
+                owners.wait_shutdown().await;
+                Ok(())
+            }
+            None => Ok(()),
+        }
+    }
+}
+
+enum ShutdownOwner {
+    Client(ChimeraClient),
+    Partial(crate::setup::StartupOwners),
 }
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -229,6 +271,31 @@ fn spawn_relauncher(app_handle: &AppHandle) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn partial_startup_owner_drains_after_exit_boundary_cancels_it() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicBool, Ordering},
+        };
+
+        // Initial: no composed client exists; a partial owner has a tracked
+        // task. Operation: the ref-style exit boundary selects that owner.
+        // Expected: cancellation occurs before the returned drain resolves.
+        let partial = crate::setup::StartupOwners::default();
+        let finished = Arc::new(AtomicBool::new(false));
+        let task_finished = finished.clone();
+        let shutdown = partial.shutdown.clone();
+        partial.tasks.spawn(async move {
+            shutdown.cancelled().await;
+            task_finished.store(true, Ordering::SeqCst);
+        });
+
+        let drain = drain_shutdown_owners(None, Some(partial.clone()));
+        assert!(partial.shutdown.is_cancelled());
+        drain.await.unwrap();
+        assert!(finished.load(Ordering::SeqCst));
+    }
 
     fn stopping() -> ExitGate {
         let mut gate = ExitGate::default();

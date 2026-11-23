@@ -74,6 +74,14 @@ pub(crate) trait ServiceTransitionLease: Send {
 #[async_trait]
 pub(crate) trait ServiceLifecyclePort: Send + Sync + 'static {
     async fn probe(&self) -> anyhow::Result<chimera_ipc::types::StatusInfo<'static>>;
+    fn runtime_owned(&self, info: &chimera_ipc::types::StatusInfo<'_>) -> bool {
+        crate::core::service::is_service_runtime_owned(info)
+    }
+    /// Whether a Service command from an earlier transition has reached a
+    /// terminal state. Startup must not make an owner decision while it runs.
+    async fn command_settled(&self) -> bool {
+        true
+    }
     async fn report_endpoint_down(
         &self,
         transition: &mut dyn ServiceTransitionLease,
@@ -89,6 +97,12 @@ pub(crate) trait ServiceLifecyclePort: Send + Sync + 'static {
         }
     }
     async fn begin_transition(&self) -> anyhow::Result<Box<dyn ServiceTransitionLease>>;
+    /// Try to acquire the host transition lease without waiting. This is for
+    /// work running inside the serialized CoreLifecycle actor: waiting here
+    /// could deadlock behind a transition caller queued on that same actor.
+    async fn try_begin_transition(&self) -> anyhow::Result<Box<dyn ServiceTransitionLease>> {
+        anyhow::bail!("this Service adapter does not support nonblocking transitions")
+    }
 }
 
 /// Narrow boundary around the running core's `/configs` API.
@@ -161,6 +175,30 @@ pub(crate) trait CoreLifecyclePort: Send + Sync {
         target_core: ClashCore,
         run_type: RunType,
     ) -> anyhow::Result<()>;
+    /// Stop a Service-hosted Core after startup evidence proved that this
+    /// instance owns it. The caller must re-probe before starting Local.
+    async fn retire_service_core(
+        &self,
+        _expected_owner: chimera_core_manager::CoreOwner,
+    ) -> anyhow::Result<()> {
+        anyhow::bail!("this core lifecycle adapter cannot retire a Service-hosted Core")
+    }
+    /// Ask the Service manager to recover any quarantined Core epochs. This
+    /// succeeds only after the manager proves those processes dead and cleans
+    /// their runtime artifacts.
+    async fn recover_service_quarantine(&self) -> anyhow::Result<()> {
+        anyhow::bail!("this core lifecycle adapter cannot recover Service quarantine")
+    }
+    /// Reconcile Local after fresh evidence established that this application
+    /// no longer owns the shared Service core. The production adapter skips
+    /// the generic Service Stop handoff here.
+    async fn reconcile_after_service_release(
+        &self,
+        clash: ClashConfig,
+        target_core: ClashCore,
+    ) -> anyhow::Result<()> {
+        self.reconcile(clash, target_core, RunType::Normal).await
+    }
     /// Candidate Profile input for the ref-aligned runtime builder. Existing
     /// lifecycle adapters can retain their compatibility behavior until they
     /// implement the typed snapshot path.
@@ -172,8 +210,29 @@ pub(crate) trait CoreLifecyclePort: Send + Sync {
         _profiles: Arc<chimera_config::profile::Profiles>,
         _app: chimera_config::application::ChimeraAppConfig,
         _staged_content: std::collections::BTreeMap<String, String>,
+        _target: Option<String>,
     ) -> anyhow::Result<()> {
         self.reconcile(clash, target_core, run_type).await
+    }
+    async fn reconcile_profiles_after_service_release(
+        &self,
+        clash: ClashConfig,
+        target_core: ClashCore,
+        profiles: Arc<chimera_config::profile::Profiles>,
+        app: chimera_config::application::ChimeraAppConfig,
+        staged_content: std::collections::BTreeMap<String, String>,
+        target: Option<String>,
+    ) -> anyhow::Result<()> {
+        self.reconcile_profiles(
+            clash,
+            target_core,
+            RunType::Normal,
+            profiles,
+            app,
+            staged_content,
+            target,
+        )
+        .await
     }
     async fn validate_profile_runtime(
         &self,
@@ -194,6 +253,7 @@ pub(crate) trait CoreLifecyclePort: Send + Sync {
         _profiles: Arc<chimera_config::profile::Profiles>,
         _app: chimera_config::application::ChimeraAppConfig,
         _staged_content: std::collections::BTreeMap<String, String>,
+        _target: Option<String>,
         _operation_id: OperationId,
     ) -> anyhow::Result<(AppliedCandidate, CheckRecord)> {
         anyhow::bail!(
@@ -211,6 +271,28 @@ pub(crate) trait CoreLifecyclePort: Send + Sync {
     async fn stop(&self) -> anyhow::Result<()>;
     async fn change_core(&self, clash_core: ClashCore) -> anyhow::Result<()>;
     async fn status(&self) -> anyhow::Result<CoreStatusSnapshot>;
+    /// Select an already proven execution host without applying a runtime.
+    /// Startup uses this between the host handoff (S2) and owner verification
+    /// (S3), matching the reference lifecycle's separate `move_execution_host`
+    /// and `apply_committed` operations.
+    async fn select_execution_host(
+        &self,
+        host: crate::core::actor_v2::control_endpoint::ExecutionHost,
+    ) -> anyhow::Result<()> {
+        use crate::core::actor_v2::control_endpoint::ExecutionHost;
+
+        let status = self.status().await?;
+        let selected = match status.run_type {
+            RunType::Normal => ExecutionHost::Local,
+            RunType::Service => ExecutionHost::Service,
+            RunType::Elevated => ExecutionHost::Local,
+        };
+        anyhow::ensure!(
+            selected == host,
+            "the lifecycle adapter cannot select {host:?}"
+        );
+        Ok(())
+    }
     async fn confirmed_runtime_receipt(&self) -> anyhow::Result<Option<Arc<RuntimeApplyReceipt>>> {
         Ok(None)
     }

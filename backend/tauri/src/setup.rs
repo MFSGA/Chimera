@@ -12,7 +12,7 @@ use tauri::Manager;
 use crate::{
     bridge::{clash::LegacyClashBridge, verge::LegacyVergeBridge, window::LegacyWindowBridge},
     client::{ChimeraClient, ClientSetupArgs, LegacyBridgeSet, RuntimePaths, TauriUiEventSink},
-    utils::path::PathResolver,
+    utils::{init, path::PathResolver, task::spawn_tracked_on_tauri_runtime},
 };
 
 #[cfg(test)]
@@ -47,7 +47,7 @@ pub fn setup(
     paths: PathResolver,
     resolved_paths: chimera_paths::PathResolver,
     bundle_metadata: chimera_contracts::bundle_metadata::BundleMetadata,
-    startup_owners: &mut AppShutdown,
+    startup_owners: &mut StartupOwners,
     startup_failure_capture: &parking_lot::Mutex<Option<crate::startup_failure::Report>>,
 ) -> anyhow::Result<()> {
     let shutdown = startup_owners.shutdown.clone();
@@ -84,21 +84,16 @@ pub fn setup(
         Some(startup_failure_capture),
     )?;
 
-    let traffic_store = open_traffic_store(&paths);
-    let jobs = crate::startup_failure::report_boundary_with_backup_and_capture(
-        tauri::async_runtime::block_on(crate::client::jobs::start(
-            paths.jobs_path(),
-            crate::utils::init::jobs_capture(),
-            shutdown.child_token(),
-            &tasks,
-        ))
-        .context("failed to start the jobs owner"),
-        crate::startup_failure::StartupStage::Jobs,
-        &paths,
-        migrations.backup_info(),
-        Some(startup_failure_capture),
-    )?;
+    // ref initializes bundled resources before constructing runtime owners.
+    let resources_dir = init::bundled_resources_dir(app)
+        .inspect_err(|error| tracing::error!(%error, "failed to locate the bundled resources"))
+        .ok();
+    crate::log_err!(init::init_resources(
+        paths.app_data_dir(),
+        resources_dir.as_deref()
+    ));
 
+    let traffic_store = open_traffic_store(&paths);
     let legacy_lock = Arc::new(parking_lot::Mutex::new(()));
     let bridges = LegacyBridgeSet {
         verge: Arc::new(LegacyVergeBridge::new(legacy_lock.clone())),
@@ -151,6 +146,22 @@ pub fn setup(
     let core_bridge: Arc<dyn crate::client::core_lifecycle::CoreLifecyclePort> = Arc::new(
         crate::client::core_lifecycle::LegacyCoreBridge::new(core_facade.clone()),
     );
+    // Mirror ref's runtime-owner order: construct the local Core and Service
+    // control plane before starting the Jobs owner. A failure below leaves
+    // the partial Core in StartupOwners for the exit boundary to drain.
+    let jobs = crate::startup_failure::report_boundary_with_backup_and_capture(
+        tauri::async_runtime::block_on(crate::client::jobs::start(
+            paths.jobs_path(),
+            init::jobs_capture(),
+            shutdown.child_token(),
+            &tasks,
+        ))
+        .context("failed to start the jobs owner"),
+        crate::startup_failure::StartupStage::Jobs,
+        &paths,
+        migrations.backup_info(),
+        Some(startup_failure_capture),
+    )?;
 
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     let main_thread_handoff = Arc::new(MainThreadHandoff::default());
@@ -297,11 +308,10 @@ pub fn setup(
     )?;
     rust_i18n::set_locale(client.get_app_config()?.language.as_str());
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
-    tasks.spawn(hotkey_action_pump(
-        hotkey_rx,
-        client.clone(),
-        shutdown.child_token(),
-    ));
+    spawn_tracked_on_tauri_runtime(
+        &tasks,
+        hotkey_action_pump(hotkey_rx, client.clone(), shutdown.child_token()),
+    );
     app.manage(client);
     startup_owners.core = None;
     core_facade_monitor.start_service_api_monitor(shutdown.child_token(), &tasks);
@@ -309,7 +319,7 @@ pub fn setup(
 }
 
 #[derive(Clone, Default)]
-pub(crate) struct AppShutdown {
+pub(crate) struct StartupOwners {
     pub(crate) shutdown: tokio_util::sync::CancellationToken,
     pub(crate) tasks: tokio_util::task::TaskTracker,
     core: Option<chimera_core_manager::CoreControl>,
@@ -318,8 +328,8 @@ pub(crate) struct AppShutdown {
 /// Keeps startup failures out of Tauri's setup error wrapper, then transfers
 /// partial owners to the normal event-loop shutdown path.
 pub(crate) fn run_setup(
-    mut owners: AppShutdown,
-    setup: impl FnOnce(&mut AppShutdown) -> anyhow::Result<()>,
+    mut owners: StartupOwners,
+    setup: impl FnOnce(&mut StartupOwners) -> anyhow::Result<()>,
     report_failure: impl FnOnce(&anyhow::Error) -> crate::startup_failure::Report,
     host: &impl StartupFailureHost,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -332,7 +342,9 @@ pub(crate) fn run_setup(
             detail = %report.failure.detail,
             "application startup failed"
         );
-        owners.request_shutdown();
+        // Match ref: retain the partially composed owners first. The exit
+        // boundary selects and cancels them while the event loop can still
+        // service their cleanup work.
         host.show(report);
         host.retain(owners);
         host.exit(1);
@@ -342,7 +354,7 @@ pub(crate) fn run_setup(
 
 pub(crate) trait StartupFailureHost {
     fn show(&self, report: crate::startup_failure::Report);
-    fn retain(&self, owners: AppShutdown);
+    fn retain(&self, owners: StartupOwners);
     fn exit(&self, code: i32);
 }
 
@@ -355,9 +367,9 @@ impl StartupFailureHost for TauriStartupFailureHost {
         crate::startup_failure::show_report(&report);
     }
 
-    fn retain(&self, owners: AppShutdown) {
+    fn retain(&self, owners: StartupOwners) {
         use tauri::Manager as _;
-        if self.handle.try_state::<AppShutdown>().is_none() {
+        if self.handle.try_state::<StartupOwners>().is_none() {
             self.handle.manage(owners);
         }
     }
@@ -367,7 +379,7 @@ impl StartupFailureHost for TauriStartupFailureHost {
     }
 }
 
-impl AppShutdown {
+impl StartupOwners {
     pub(crate) fn request_shutdown(&self) {
         self.shutdown.cancel();
         self.tasks.close();

@@ -602,7 +602,12 @@ impl ChimeraClient {
         if super::application_workflow::impact::application_patch_requires_reconcile(
             &patch,
             service_connected,
-        ) {
+        ) || patch.enable_service_mode.is_some()
+        {
+            // A disconnected Service Mode preference stays a source-only
+            // save, but it still changes the committed startup target. Route
+            // it through the lifecycle queue so an open startup retry is
+            // updated in the same order as the save.
             self.inner
                 .core_lifecycle
                 .patch_application_config(patch)
