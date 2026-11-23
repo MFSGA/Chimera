@@ -7,7 +7,9 @@ use std::sync::Arc;
 
 use chimera_core::{
     actor_v2::endpoint::ExecutionHost,
-    client::reconciler::plan::{Attempt, AttemptOutcome, RuntimeError, Trigger},
+    client::reconciler::plan::{
+        Attempt, AttemptOutcome, RuntimeError, Trigger, runtime_apply_error,
+    },
 };
 use chimera_core_manager::{CoreError, CoreErrorKind};
 
@@ -113,13 +115,13 @@ impl AttemptPolicy {
         let outcome = match result {
             Ok(()) => AttemptOutcome::Applied,
             Err(error) if uncertain => {
-                AttemptOutcome::Unknown(Arc::new(RuntimeError::new(error.to_string())))
+                AttemptOutcome::Unknown(Arc::new(runtime_apply_error(error, true)))
             }
             Err(error) if waiting_dependency(error) => {
                 self.last = None;
                 return;
             }
-            Err(error) => AttemptOutcome::Refused(Arc::new(RuntimeError::new(error.to_string()))),
+            Err(error) => AttemptOutcome::Refused(Arc::new(runtime_apply_error(error, false))),
         };
         self.last = Some(Attempt {
             target,
@@ -225,6 +227,34 @@ mod tests {
         policy
             .allow("current", ExecutionHost::Local, Trigger::SourceCommitted)
             .unwrap();
+    }
+
+    #[test]
+    fn refused_and_unobserved_core_errors_keep_their_original_typed_causes() {
+        let core_error =
+            CoreError::new(CoreErrorKind::ConfigCheckFailed, "bad runtime yaml", false);
+        let refusal = Err(anyhow::Error::new(core_error.clone()));
+        let mut policy = AttemptPolicy::default();
+        policy.record("same".into(), ExecutionHost::Local, &refusal, false);
+        let AttemptOutcome::Refused(cause) = &policy.snapshot().unwrap().outcome else {
+            panic!("an actually refused core apply must remain refused");
+        };
+        assert_eq!(cause.core_kind(), Some(CoreErrorKind::ConfigCheckFailed));
+        assert!(!cause.retryable());
+        assert_eq!(
+            serde_json::to_value(cause.as_ref()).unwrap()["kind"],
+            "apply_runtime"
+        );
+
+        policy.record("same".into(), ExecutionHost::Local, &refusal, true);
+        let AttemptOutcome::Unknown(cause) = &policy.snapshot().unwrap().outcome else {
+            panic!("an unobserved core apply must remain unknown");
+        };
+        assert_eq!(cause.core_kind(), Some(CoreErrorKind::ConfigCheckFailed));
+        assert_eq!(
+            serde_json::to_value(cause.as_ref()).unwrap()["kind"],
+            "submission_unobserved"
+        );
     }
 
     #[test]

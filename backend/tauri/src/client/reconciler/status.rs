@@ -6,7 +6,9 @@
 //! round, not copied from an unprocessed SourceCommitted message.
 use std::{collections::VecDeque, sync::Arc};
 
-use chimera_core::client::reconciler::plan::{Conclusion, RunIntent, RuntimeError};
+use chimera_core::client::reconciler::plan::{
+    Conclusion, RunIntent, RuntimeError, runtime_apply_error,
+};
 
 use super::mutation::RoundRecord;
 
@@ -99,16 +101,13 @@ impl ReconcilerStatus {
             self.conclusion.clone()
         } else if outcome_uncertain {
             Conclusion::Unknown {
-                cause: Arc::new(RuntimeError::new(
-                    result
-                        .as_ref()
-                        .err()
-                        .map(ToString::to_string)
-                        .unwrap_or_else(|| "core lifecycle outcome is uncertain".into()),
-                )),
+                cause: Arc::new(match result.as_ref() {
+                    Err(error) => runtime_apply_error(error, true),
+                    Ok(()) => RuntimeError::new("core lifecycle outcome is uncertain"),
+                }),
             }
         } else if let Err(error) = result {
-            let cause = Arc::new(RuntimeError::new(error.to_string()));
+            let cause = Arc::new(runtime_apply_error(error, false));
             if source_advanced || super::attempt::waiting_dependency(error) {
                 Conclusion::Waiting { cause }
             } else {

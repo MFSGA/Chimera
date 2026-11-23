@@ -303,7 +303,16 @@ async fn an_unpin_whose_interruption_fails_is_degraded_not_failed() {
         .await
         .unwrap();
     assert_eq!(outcome.degradations().len(), 1);
-    assert_eq!(outcome.degradations()[0].code, "proxy_interruption_failed");
+    assert_eq!(
+        outcome.degradations()[0].reason.code(),
+        "proxy_interruption_failed"
+    );
+    assert!(matches!(
+        outcome.degradations()[0].reason,
+        ProxyDegradationReason::ProxyInterruptionFailed {
+            cause: InterruptFailure::Protocol
+        }
+    ));
     assert!(
         outcome.degradations()[0]
             .message
@@ -543,7 +552,10 @@ async fn successful_mutation_with_failed_refresh_is_explicit_and_clears_cache() 
         .select(GROUP.into(), NODE.into(), ProxyChangeBreakMode::All)
         .await
         .unwrap();
-    assert_eq!(outcome.degradations()[0].code, "proxy_cache_refresh_failed");
+    assert_eq!(
+        outcome.degradations()[0].reason.code(),
+        "proxy_cache_refresh_failed"
+    );
     assert!(client.snapshot().nodes.is_empty());
     assert_eq!(
         fixture
@@ -687,7 +699,10 @@ async fn interruption_failure_preserves_selection_and_refreshes_cache() {
             .await
             .unwrap();
         assert_eq!(outcome.degradations().len(), 1);
-        assert_eq!(outcome.degradations()[0].code, "proxy_interruption_failed");
+        assert_eq!(
+            outcome.degradations()[0].reason.code(),
+            "proxy_interruption_failed"
+        );
         assert!(!outcome.degradations()[0].retryable);
         assert_eq!(*fixture.selected.lock().unwrap(), NODE);
         assert!(!client.snapshot().nodes.is_empty());
@@ -708,8 +723,11 @@ async fn replacement_during_chain_read_never_receives_closure_or_cache() {
     };
     fixture.entered.notified().await;
     source.rotate().await;
-    let outcome = waiting.await.unwrap().unwrap();
-    assert_eq!(outcome.degradations().len(), 2);
+    let error = waiting.await.unwrap().unwrap_err();
+    assert!(
+        error.to_string().contains("Core API lease retired"),
+        "a retired Core cannot report a successful route mutation: {error:#}"
+    );
     assert!(fixture.closed.lock().unwrap().is_empty());
     assert_eq!(*fixture.calls.lock().unwrap(), ["select", "connections"]);
     assert!(client.snapshot().nodes.is_empty());
@@ -952,4 +970,105 @@ async fn a_different_core_instance_notifies_subscribers_with_identical_proxy_gro
     );
     assert!(!client.snapshot().nodes.is_empty());
     server.abort();
+}
+
+#[tokio::test]
+async fn route_write_from_replaced_but_not_yet_revoked_core_does_not_report_success() {
+    let (client, _core, source, fixture, server) = setup().await;
+    fixture.hold_select.store(true, Ordering::SeqCst);
+    let pending = {
+        let client = client.clone();
+        tokio::spawn(async move {
+            client
+                .select(GROUP.into(), NODE.into(), ProxyChangeBreakMode::All)
+                .await
+        })
+    };
+    fixture.entered.notified().await;
+    // Model a pending CoreActor invalidation event: the old lease is still
+    // usable until its monitor catches up, but it is no longer authoritative.
+    *source.api.write().await = ApiClient::new_unbound(source.server.to_string(), None).unwrap();
+    fixture.hold_select.store(false, Ordering::SeqCst);
+    fixture.release.notify_one();
+    let error = pending.await.unwrap().unwrap_err();
+    assert!(
+        error.to_string().contains("Core instance changed"),
+        "{error:#}"
+    );
+    assert_eq!(*fixture.calls.lock().unwrap(), ["select"]);
+    assert!(fixture.closed.lock().unwrap().is_empty());
+    assert!(client.snapshot().nodes.is_empty());
+    server.abort();
+}
+
+#[tokio::test]
+async fn provider_write_from_replaced_but_not_yet_revoked_core_does_not_refresh() {
+    let (client, _core, source, fixture, server) = setup().await;
+    fixture.hold_provider.store(true, Ordering::SeqCst);
+    let pending = {
+        let client = client.clone();
+        tokio::spawn(async move { client.update_provider(PROVIDER.into()).await })
+    };
+    fixture.entered.notified().await;
+    *source.api.write().await = ApiClient::new_unbound(source.server.to_string(), None).unwrap();
+    fixture.hold_provider.store(false, Ordering::SeqCst);
+    fixture.release.notify_one();
+    let error = pending.await.unwrap().unwrap_err();
+    assert!(
+        error.to_string().contains("Core instance changed"),
+        "{error:#}"
+    );
+    assert_eq!(*fixture.calls.lock().unwrap(), ["update"]);
+    assert!(client.snapshot().nodes.is_empty());
+    server.abort();
+}
+
+#[test]
+fn streaming_proxy_fingerprint_matches_legacy_serialized_byte_hash() {
+    let sample = serde_json::json!({
+        "groups": ["DIRECT", "GLOBAL", "東京"],
+        "providers": {"test": {"nodes": 3, "lastUpdated": 42}},
+    });
+    let mut previous = DefaultHasher::new();
+    previous.write(&serde_json::to_vec(&sample).unwrap());
+    let mut streaming = DefaultHasher::new();
+    serde_json::to_writer(FingerprintSink(&mut streaming), &sample).unwrap();
+    assert_eq!(streaming.finish(), previous.finish());
+}
+
+#[tokio::test]
+async fn snapshot_from_replaced_but_not_yet_revoked_core_is_not_published() {
+    let (client, _core, source, fixture, server) = setup().await;
+    fixture.hold_read.store(true, Ordering::SeqCst);
+    let pending = {
+        let client = client.clone();
+        tokio::spawn(async move { client.get(true).await })
+    };
+    fixture.entered.notified().await;
+    // The former controller can still answer HTTP while CoreActor has
+    // already changed authority. Its queued revocation event is not proof.
+    *source.api.write().await = ApiClient::new_unbound(source.server.to_string(), None).unwrap();
+    fixture.hold_read.store(false, Ordering::SeqCst);
+    fixture.release.notify_one();
+    let error = pending.await.unwrap().unwrap_err();
+    assert!(
+        error.to_string().contains("Core instance changed"),
+        "{error:#}"
+    );
+    assert!(client.snapshot().nodes.is_empty());
+    server.abort();
+}
+
+#[test]
+fn proxy_interruption_causes_keep_the_upstream_classification() {
+    for (error, expected) in [
+        (ApiError::Stale, InterruptFailure::Stale),
+        (ApiError::Timeout, InterruptFailure::Timeout),
+        (
+            ApiError::Unavailable("disconnected".into()),
+            InterruptFailure::Unavailable,
+        ),
+    ] {
+        assert_eq!(interrupt_failure(&anyhow::Error::new(error)), expected);
+    }
 }

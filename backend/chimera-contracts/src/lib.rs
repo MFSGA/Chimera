@@ -6,6 +6,8 @@ pub mod core_version;
 pub mod elevation;
 pub mod net;
 pub mod profiles;
+pub mod runtime;
+pub mod runtime_error;
 pub mod service;
 pub mod system_dns;
 pub mod system_proxy;

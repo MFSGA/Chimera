@@ -11,7 +11,7 @@ use anyhow::Result;
 use super::ChimeraClient;
 #[cfg(test)]
 use super::core_lifecycle::CoreLifecyclePort;
-use crate::client::runtime::{Degradation, DegradationPhase, MutationOutcome};
+use crate::client::runtime::{Degradation, MutationOutcome};
 use crate::core::{
     actor_v2::api::ApiClient,
     clash::{
@@ -22,9 +22,9 @@ use crate::core::{
 #[cfg(test)]
 use chimera_core::clash::ws::ClashApiClientSource;
 use chimera_core::client::clash_api::{config_item, rule_provider_item};
+use chimera_core::proxies_actor::ProxyMutationOutcome;
 #[cfg(test)]
 use chimera_core::proxies_actor::{CoreClient as ProxyCoreClient, ProxyApiClientSource};
-use chimera_core::proxies_actor::{ProxyDegradationPhase, ProxyMutationOutcome};
 
 /// Only injected legacy test clients need a facade-based API source.
 #[cfg(test)]
@@ -44,19 +44,10 @@ pub(crate) fn proxy_core_client(core: Arc<dyn CoreLifecyclePort>) -> ProxyCoreCl
 }
 
 fn into_mutation_outcome(outcome: ProxyMutationOutcome) -> MutationOutcome<()> {
-    let degradations = outcome
-        .degradations
-        .into_iter()
-        .map(|degradation| Degradation {
-            phase: match degradation.phase {
-                ProxyDegradationPhase::SystemEffect => DegradationPhase::SystemEffect,
-                ProxyDegradationPhase::UiEffect => DegradationPhase::UiEffect,
-            },
-            code: degradation.code,
-            message: degradation.message,
-            retryable: degradation.retryable,
-        })
-        .collect();
+    // The shared core now returns ref's typed Committed/CommittedDegraded
+    // outcome. Only the existing Tauri legacy wire still needs a flat code.
+    let (_, typed) = outcome.into_parts();
+    let degradations = typed.into_iter().map(Degradation::from_shared).collect();
     MutationOutcome::from_parts((), degradations)
 }
 
@@ -233,5 +224,36 @@ impl ChimeraClient {
 
     pub(crate) fn notify_proxy_rearranged(&self) {
         self.inner.proxies.notify_rearranged();
+    }
+}
+
+#[cfg(test)]
+mod shared_proxy_outcome_tests {
+    use super::*;
+    use chimera_contracts::runtime::{
+        Degradation as SharedDegradation, DegradationPhase as SharedPhase,
+        DegradationReason as SharedReason, InterruptFailure,
+    };
+
+    #[test]
+    fn shared_typed_proxy_reason_keeps_the_existing_desktop_wire() {
+        let typed = ProxyMutationOutcome::from_parts(
+            (),
+            vec![SharedDegradation {
+                phase: SharedPhase::SystemEffect,
+                reason: SharedReason::ProxyInterruptionFailed {
+                    cause: InterruptFailure::Protocol,
+                },
+                message: "delete rejected".into(),
+                retryable: false,
+            }],
+        );
+        let projected = into_mutation_outcome(typed);
+        let json = serde_json::to_value(&projected).unwrap();
+        assert_eq!(json["status"], "committed_degraded");
+        assert_eq!(json["degradations"][0]["code"], "proxy_interruption_failed");
+        assert_eq!(json["degradations"][0]["phase"], "system_effect");
+        assert_eq!(json["degradations"][0]["retryable"], false);
+        assert!(json["degradations"][0].get("reason").is_none());
     }
 }

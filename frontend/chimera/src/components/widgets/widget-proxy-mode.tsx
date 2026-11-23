@@ -16,6 +16,7 @@ import RefreshRounded from '~icons/material-symbols/refresh-rounded';
 import RouteRounded from '~icons/material-symbols/route-rounded';
 import { useState } from 'react';
 import { isRoutedCoreRunning } from '@/features/dashboard/core-service-status';
+import { isWidgetQueryReconciled } from '@/features/dashboard/widget-query-reconciliation';
 import * as m from '@/paraglide/messages';
 import type { WidgetComponentProps } from './consts';
 import { useWidgetConfig } from './provider';
@@ -175,7 +176,8 @@ function ProxyModeLive({
         setActionState('unconfirmed');
         setCheckingStatus(true);
         try {
-          await proxyMode.query.refetch();
+          const result = await proxyMode.query.refetch();
+          setCheckFailed(!isWidgetQueryReconciled(result));
         } catch {
           setCheckFailed(true);
         } finally {
@@ -193,7 +195,7 @@ function ProxyModeLive({
     setCheckFailed(false);
     try {
       const result = await proxyMode.query.refetch();
-      if (result.isError || result.data == null) {
+      if (!isWidgetQueryReconciled(result)) {
         setCheckFailed(true);
         setCheckedAfterUnconfirmed(false);
       } else {

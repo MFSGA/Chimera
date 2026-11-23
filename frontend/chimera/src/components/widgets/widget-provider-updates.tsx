@@ -17,6 +17,8 @@ import CloudSyncRounded from '~icons/material-symbols/cloud-sync-rounded';
 import OpenInNewRounded from '~icons/material-symbols/open-in-new-rounded';
 import RefreshRounded from '~icons/material-symbols/refresh-rounded';
 import { useState } from 'react';
+import { providerUpdateGuard } from '@/features/dashboard/widget-operation-guard';
+import { isWidgetQueryReconciled } from '@/features/dashboard/widget-query-reconciliation';
 import * as m from '@/paraglide/messages';
 import { getLocale } from '@/paraglide/runtime';
 import { formatRelativeTime } from '@/utils/date';
@@ -207,23 +209,29 @@ function ProviderUpdatesLive({
     ) {
       return;
     }
-    clearFeedback(key);
-    try {
-      if (kind === 'proxy') await updateProxy.mutateAsync(name);
-      else await updateRule.mutateAsync(name);
-    } catch (error) {
+    await providerUpdateGuard.run(key, async () => {
+      clearFeedback(key);
       try {
-        if (kind === 'proxy') await proxies.refetch();
-        else await rules.refetch();
-      } catch {
-        // Keep the operation feedback visible even if the recheck fails.
+        if (kind === 'proxy') await updateProxy.mutateAsync(name);
+        else await updateRule.mutateAsync(name);
+      } catch (error) {
+        // Keep the lock until the reconciliation finishes, not merely until
+        // mutateAsync rejects. A second click must not race a lost reply.
+        try {
+          if (kind === 'proxy') await proxies.refetch();
+          else await rules.refetch();
+        } catch {
+          // The unconfirmed/failed state below still needs to be visible.
+        }
+        setFeedback((previous) => ({
+          ...previous,
+          [key]:
+            error instanceof MutationUnconfirmedError
+              ? 'unconfirmed'
+              : 'failed',
+        }));
       }
-      setFeedback((previous) => ({
-        ...previous,
-        [key]:
-          error instanceof MutationUnconfirmedError ? 'unconfirmed' : 'failed',
-      }));
-    }
+    });
   };
 
   const handleUpdate = (kind: ProviderKind, name: string) => {
@@ -231,11 +239,12 @@ function ProviderUpdatesLive({
   };
 
   const handleCheck = async (kind: ProviderKind, name: string) => {
-    const result =
-      kind === 'proxy' ? await proxies.refetch() : await rules.refetch();
-    if (!result.isError && result.data !== undefined) {
-      clearFeedback(providerKey(kind, name));
-    }
+    const key = providerKey(kind, name);
+    await providerUpdateGuard.run(key, async () => {
+      const result =
+        kind === 'proxy' ? await proxies.refetch() : await rules.refetch();
+      if (isWidgetQueryReconciled(result)) clearFeedback(key);
+    });
   };
 
   return (
@@ -348,9 +357,10 @@ function ProviderUpdatesLive({
                         : rules.data !== undefined;
                     const missing = !row && hasKindData;
                     const pending =
-                      kind === 'proxy'
+                      providerUpdateGuard.isPending(key) ||
+                      (kind === 'proxy'
                         ? pendingProxyNames.includes(name)
-                        : pendingRuleNames.includes(name);
+                        : pendingRuleNames.includes(name));
                     const kindHasError =
                       kind === 'proxy' ? proxies.isError : rules.isError;
                     const rowFeedback = feedback[key] ?? null;

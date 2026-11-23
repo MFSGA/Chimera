@@ -124,7 +124,11 @@ export const useCurrentProfileUid = () => {
   }).data;
 };
 
-export const useProfile = (options?: { without_helper_fn?: boolean }) => {
+export const useProfile = (options?: {
+  without_helper_fn?: boolean;
+  /** Optional low-frequency refresh for dashboard subscription summaries. */
+  refetchInterval?: number | false;
+}) => {
   const queryClient = useQueryClient();
   const profilesOptions = queries.getProfiles();
   const importProfile = mutations.importProfile;
@@ -149,6 +153,7 @@ export const useProfile = (options?: { without_helper_fn?: boolean }) => {
 
   const query = useQuery({
     queryKey: profilesOptions.queryKey,
+    refetchInterval: options?.refetchInterval,
     queryFn: async () => {
       const result = unwrapResult(await invokeQuery(profilesOptions));
       if (!result) return undefined;

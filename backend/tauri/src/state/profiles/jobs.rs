@@ -217,6 +217,14 @@ fn sync_error(error: &ProfilesError) -> JobError {
     use chimera_jobs::Error as JobsError;
 
     match error {
+        Error::FetchSubscription { .. } => JobError::new(
+            "subscription_download_failed",
+            "Could not download the subscription",
+        ),
+        Error::ProfileContentRejected { .. } => JobError::new(
+            "profile_content_rejected",
+            "Downloaded profile failed validation",
+        ),
         Error::RefreshFailed { message } if message.starts_with("download failed:") => {
             JobError::new(
                 "subscription_download_failed",
@@ -274,6 +282,28 @@ fn sync_error(error: &ProfilesError) -> JobError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn typed_subscription_errors_keep_existing_safe_job_codes() {
+        let source =
+            chimera_contracts::profiles::error::SubscriptionFetchError::SubscriptionHttpStatus {
+                status: 503,
+            };
+        let failure = ProfilesError::FetchSubscription {
+            url: url::Url::parse("https://secret.example/sub?token=private").unwrap(),
+            source,
+        };
+        let mapped = sync_error(&failure);
+        assert_eq!(mapped.code, "subscription_download_failed");
+        let serialized = serde_json::to_string(&mapped).unwrap();
+        assert!(!serialized.contains("secret.example"));
+        assert!(!serialized.contains("private"));
+        let content = ProfilesError::ProfileContentRejected {
+            source:
+                chimera_contracts::profiles::command_failure::ProfileContentError::MissingProxies,
+        };
+        assert_eq!(sync_error(&content).code, "profile_content_rejected");
+    }
 
     #[test]
     fn sync_errors_keep_safe_failure_categories() {

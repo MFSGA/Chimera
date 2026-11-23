@@ -15,6 +15,7 @@ import OpenInNewRounded from '~icons/material-symbols/open-in-new-rounded';
 import PublicRounded from '~icons/material-symbols/public-rounded';
 import { motion, useReducedMotion } from 'motion/react';
 import { memo, useDeferredValue, useMemo } from 'react';
+import { connectionWidgetStreamState } from '@/features/dashboard/active-connections-display';
 import * as m from '@/paraglide/messages';
 import { formatBytes } from '@/utils/format-bytes';
 import type { WidgetComponentProps } from './consts';
@@ -116,7 +117,7 @@ const ActiveConnectionsLive = memo(function ActiveConnectionsLive({
   const config = useWidgetConfig(id, WidgetId.ActiveConnections);
   const reducedMotion = useReducedMotion();
   const { data, status, connectorState, retry } = useClashConnectionDetails();
-  const isClashStatusLoading = connectorState === 'connecting';
+  const streamState = connectionWidgetStreamState(connectorState, status);
   const details = useDeferredValue(data);
   const { ref: listRef, height: listHeight } =
     useWidgetHeight<HTMLDivElement>();
@@ -211,13 +212,13 @@ const ActiveConnectionsLive = memo(function ActiveConnectionsLive({
             </Tooltip>
           </div>
 
-          {connectorState !== 'connected' ? (
+          {streamState === 'disconnected' || streamState === 'connecting' ? (
             <p className="text-on-surface-variant text-sm" role="status">
-              {isClashStatusLoading
+              {streamState === 'connecting'
                 ? m.dashboard_widget_active_connections_connecting()
                 : m.dashboard_widget_active_connections_disconnected()}
             </p>
-          ) : status === 'error' ? (
+          ) : streamState === 'error' ? (
             <div className="flex min-h-0 flex-1 flex-col justify-center gap-2">
               <p className="text-error text-sm" role="status">
                 {m.dashboard_widget_active_connections_stream_error()}
