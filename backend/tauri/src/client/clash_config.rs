@@ -555,16 +555,17 @@ impl ChimeraClient {
             .content_reader()
             .committed(|snapshot| async move {
                 let profiles = Arc::new(snapshot.state.clone());
-                let frozen = crate::client::application_workflow::inputs::FrozenProfileContent::capture_content(
-                    &profiles,
-                    &source,
-                    Default::default(),
-                );
+                let frozen =
+                    crate::client::reconciler::inputs::FrozenProfileContent::capture_content(
+                        &profiles,
+                        &source,
+                        Default::default(),
+                    );
                 (profiles, frozen)
             })
             .await;
         let app = self.get_app_config()?;
-        let inputs = crate::client::application_workflow::inputs::RuntimeInputs {
+        let inputs = crate::client::reconciler::inputs::RuntimeInputs {
             app: app.clone(),
             clash: candidate,
             profiles,

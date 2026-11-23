@@ -1266,5 +1266,15 @@
   "profile_chain_editor_leave_description": "The changes to this profile's transforms have not been applied and will be lost.",
   "profile_chain_editor_update_failed_title": "Update failed",
   "profile_chain_editor_update_failed": "Failed to update the transform chain:\n{error}",
-  "profile_create_transform_name_required": "A transform name is required."
+  "profile_create_transform_name_required": "A transform name is required.",
+  "dashboard_widget_config_follow_current": "Follow current profile",
+  "dashboard_widget_config_all_profiles": "All profiles",
+  "dashboard_widget_config_missing_reference": "Missing: {name}",
+  "dashboard_widget_config_profile": "Profile",
+  "dashboard_widget_config_references_failed": "Could not load choices",
+  "dashboard_widget_config_profile_attribution": "Connections keep the profile recorded when first observed.",
+  "dashboard_widget_config_resources": "Pinned resources · empty shows available resources",
+  "dashboard_widget_config_proxy_providers": "Proxy",
+  "dashboard_widget_config_rule_providers": "Rule",
+  "dashboard_widget_config_missing": "Missing"
 }

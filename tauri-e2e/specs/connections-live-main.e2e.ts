@@ -480,4 +480,114 @@ describe('Main Connections live native virtual table and row actions', () => {
     );
     assert.equal(new URL(await browser.getUrl()).pathname, '/main/connections');
   });
+
+  it('shows recorded real connections in Closed and All without destructive historical actions', async () => {
+    type Historical = { id: string; dimensions: { target: string } };
+    type Page = { connections: Historical[]; next: unknown };
+    let recorded: Historical[] = [];
+    await browser.waitUntil(
+      async () => {
+        const page = await invoke<Page>('query_traffic_closed_connections', {
+          range: 'all',
+          filters: [],
+          before: null,
+          limit: 100,
+        });
+        recorded = page.connections;
+        return recorded.some((row) =>
+          row.dimensions.target.includes('127.0.0.1'),
+        );
+      },
+      {
+        timeout: 25_000,
+        timeoutMsg:
+          'The native traffic store never recorded the closed HTTP streams.',
+      },
+    );
+
+    const closedTab = await $(
+      '[data-slot="connections-scope-tab"][data-scope="closed"]',
+    );
+    await closedTab.waitForClickable({ timeout: 10_000 });
+    await closedTab.click();
+    await browser.waitUntil(
+      async () =>
+        browser.execute(
+          (selector) =>
+            location.search.includes('scope=closed') &&
+            Array.from(
+              document.querySelectorAll<HTMLTableRowElement>(selector),
+            ).some((row) => row.innerText.includes('127.0.0.1')),
+          liveRowSelector,
+        ),
+      {
+        timeout: 20_000,
+        timeoutMsg: 'Closed tab did not show an actual stored connection.',
+      },
+    );
+
+    const historicalRow = await $(liveRowSelector);
+    await historicalRow.click({ button: 'right' });
+    const menu = await $('[role="menu"][data-state="open"]');
+    await menu.waitForDisplayed({ timeout: 10_000 });
+    const messages = await readAppMessageCatalog();
+    const viewLabel = messages.connections_view_details;
+    const closeLabel = messages.connections_close_connection;
+    if (typeof viewLabel !== 'string' || typeof closeLabel !== 'string') {
+      throw new Error(
+        'The current locale lacks connection detail action labels.',
+      );
+    }
+    const menuItems = await menu.$$('[role="menuitem"]');
+    const menuLabels: string[] = [];
+    for (const item of menuItems) {
+      menuLabels.push((await item.getText()).trim());
+    }
+    assert.ok(menuLabels.includes(viewLabel));
+    assert.ok(
+      !menuLabels.includes(closeLabel),
+      'Closed record offered a live Core action.',
+    );
+    await menuItems[menuLabels.indexOf(viewLabel)].click();
+
+    const modal = await $('[data-slot="modal-content"]');
+    await modal.waitForDisplayed({ timeout: 10_000 });
+    assert.match(await modal.getText(), /127\.0\.0\.1/);
+    const modalButtons = await modal.$$('button');
+    const buttonLabels: string[] = [];
+    for (const item of modalButtons) {
+      buttonLabels.push((await item.getText()).trim());
+    }
+    assert.ok(
+      !buttonLabels.includes(closeLabel),
+      'Historical detail offered Close Connection.',
+    );
+    const dismiss =
+      modalButtons[buttonLabels.indexOf(String(messages.common_close))];
+    assert.ok(dismiss, 'Historical detail cannot be dismissed.');
+    await dismiss.click();
+    await modal.waitForDisplayed({ reverse: true, timeout: 10_000 });
+
+    const allTab = await $(
+      '[data-slot="connections-scope-tab"][data-scope="all"]',
+    );
+    await allTab.waitForClickable({ timeout: 10_000 });
+    await allTab.click();
+    await browser.waitUntil(
+      async () =>
+        browser.execute(
+          (selector) =>
+            location.search.includes('scope=all') &&
+            Array.from(
+              document.querySelectorAll<HTMLTableRowElement>(selector),
+            ).some((row) => row.innerText.includes('127.0.0.1')),
+          liveRowSelector,
+        ),
+      {
+        timeout: 20_000,
+        timeoutMsg: 'All tab omitted the stored closed connection.',
+      },
+    );
+    assert.ok(recorded.length > 0);
+  });
 });

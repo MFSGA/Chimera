@@ -1,4 +1,13 @@
 import { Button } from '@chimera/ui/button';
+import {
+  LauncherMenu,
+  LauncherMenuChipButton,
+  LauncherMenuGroup,
+  LauncherMenuIconButton,
+  LauncherMenuRow,
+} from '@chimera/ui/launcher-menu';
+import { NumberStepper } from '@chimera/ui/number-stepper';
+import { Popover, PopoverContent, PopoverTrigger } from '@chimera/ui/popover';
 import { ScrollArea } from '@chimera/ui/scroll-area';
 import { Switch } from '@chimera/ui/switch';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@chimera/ui/tooltip';
@@ -6,7 +15,6 @@ import RestartAltRounded from '~icons/material-symbols/restart-alt-rounded';
 import SwapHorizRounded from '~icons/material-symbols/swap-horiz-rounded';
 import TuneRounded from '~icons/material-symbols/tune-rounded';
 import { motion, useReducedMotion } from 'motion/react';
-import { Popover } from 'radix-ui';
 import { useEffect, useId, useState } from 'react';
 import * as m from '@/paraglide/messages';
 import { useDashboardContext } from './provider';
@@ -18,6 +26,7 @@ import {
   type WidgetConfig,
 } from './widget-config';
 import { ConfigGroup, ConfigRow } from './widget-config-row';
+import { WidgetOptionSelect } from './widget-reference-fields';
 
 type ChoiceOption<T extends string> = { value: T; label: string };
 
@@ -43,9 +52,7 @@ function Choice<T extends string>({
     const other = options.find((option) => option.value !== value);
     return (
       <ConfigRow label={label}>
-        <Button
-          variant="flat"
-          className="h-8 max-w-36 gap-1 px-2 text-xs"
+        <LauncherMenuChipButton
           data-slot="widget-config-choice"
           data-config-field={field}
           aria-label={`${label}: ${selected?.label ?? value}`}
@@ -54,34 +61,23 @@ function Choice<T extends string>({
         >
           <span className="truncate">{selected?.label ?? value}</span>
           <SwapHorizRounded className="size-4 shrink-0" aria-hidden="true" />
-        </Button>
+        </LauncherMenuChipButton>
       </ConfigRow>
     );
   }
 
   return (
-    <ConfigRow label={label}>
-      <select
-        className="bg-surface-variant text-on-surface max-w-40 rounded-xl px-2 py-1.5 text-xs"
-        data-slot="widget-config-choice"
-        data-config-field={field}
-        aria-label={label}
-        value={value}
-        disabled={disabled}
-        onChange={(event) => {
-          const option = options.find(
-            (item) => item.value === event.target.value,
-          );
-          if (option) onChange(option.value);
-        }}
-      >
-        {options.map((option) => (
-          <option key={option.value} value={option.value}>
-            {option.label}
-          </option>
-        ))}
-      </select>
-    </ConfigRow>
+    <WidgetOptionSelect
+      label={label}
+      value={value}
+      field={field}
+      options={options}
+      disabled={disabled}
+      onChange={(next) => {
+        const option = options.find((item) => item.value === next);
+        if (option) onChange(option.value);
+      }}
+    />
   );
 }
 
@@ -98,15 +94,20 @@ function Toggle({
 }) {
   const id = useId();
   return (
-    <ConfigRow label={label} htmlFor={id}>
+    <div
+      className="flex items-center justify-between gap-3"
+      data-slot="widget-config-toggle"
+    >
+      <label htmlFor={id} className="text-sm">
+        {label}
+      </label>
       <Switch
         id={id}
-        className="h-6 w-11"
         checked={checked}
         disabled={disabled}
         onCheckedChange={onChange}
       />
-    </ConfigRow>
+    </div>
   );
 }
 
@@ -123,36 +124,21 @@ function Stepper({
   disabled: boolean;
   onChange: (value: number) => void;
 }) {
-  const [min, max] = range;
   return (
-    <ConfigRow label={label}>
-      <div
-        className="flex items-center gap-2"
-        data-slot="widget-config-stepper"
-      >
-        <Button
-          variant="flat"
-          className="size-7 min-w-0 p-0"
-          aria-label={`${m.dashboard_widget_config_decrease()} ${label}`}
-          disabled={disabled || value <= min}
-          onClick={() => onChange(Math.max(min, value - 1))}
-        >
-          −
-        </Button>
-        <span className="min-w-5 text-center text-sm tabular-nums">
-          {value}
-        </span>
-        <Button
-          variant="flat"
-          className="size-7 min-w-0 p-0"
-          aria-label={`${m.dashboard_widget_config_increase()} ${label}`}
-          disabled={disabled || value >= max}
-          onClick={() => onChange(Math.min(max, value + 1))}
-        >
-          +
-        </Button>
-      </div>
-    </ConfigRow>
+    <div data-slot="widget-config-stepper">
+      <NumberStepper
+        variant="filled"
+        layout="inline"
+        label={label}
+        value={value}
+        min={range[0]}
+        max={range[1]}
+        decrementLabel={`${m.dashboard_widget_config_decrease()} ${label}`}
+        incrementLabel={`${m.dashboard_widget_config_increase()} ${label}`}
+        disabled={disabled}
+        onChange={onChange}
+      />
+    </div>
   );
 }
 
@@ -356,10 +342,10 @@ export default function WidgetConfigMenu({
   }, [isActive]);
 
   return (
-    <Popover.Root open={isActive && open} onOpenChange={setOpen}>
+    <Popover open={isActive && open} onOpenChange={setOpen}>
       <Tooltip>
         <TooltipTrigger asChild>
-          <Popover.Trigger asChild>
+          <PopoverTrigger asChild>
             <motion.button
               type="button"
               aria-label={m.dashboard_widget_config_title()}
@@ -375,38 +361,42 @@ export default function WidgetConfigMenu({
             >
               <TuneRounded className="size-3.5" aria-hidden="true" />
             </motion.button>
-          </Popover.Trigger>
+          </PopoverTrigger>
         </TooltipTrigger>
         <TooltipContent>{m.dashboard_widget_config_title()}</TooltipContent>
       </Tooltip>
-      <Popover.Portal>
-        <Popover.Content
-          aria-labelledby={titleId}
-          side="top"
-          sideOffset={8}
-          className="bg-surface text-on-surface border-outline-variant/50 z-50 w-[min(20rem,calc(100vw-2rem))] overflow-hidden rounded-3xl border shadow-xl"
-          onPointerDown={(event) => event.stopPropagation()}
-          onKeyDown={(event) => event.stopPropagation()}
-          onClick={(event) => event.stopPropagation()}
+      <PopoverContent
+        aria-labelledby={titleId}
+        side="top"
+        sideOffset={8}
+        className="w-80 overflow-visible border-0 bg-transparent shadow-none"
+        onPointerDown={(event) => event.stopPropagation()}
+        onKeyDown={(event) => event.stopPropagation()}
+        onClick={(event) => event.stopPropagation()}
+      >
+        <LauncherMenu
+          className="min-h-0 flex-auto"
+          data-slot="widget-config-menu"
         >
-          <div className="border-outline-variant/30 flex items-center justify-between border-b px-4 py-3">
-            <h2 id={titleId} className="text-sm font-medium">
-              {m.dashboard_widget_config_title()}
-            </h2>
-            <Button
-              variant="flat"
-              className="size-8 min-w-0 p-0"
-              data-slot="widget-config-reset"
-              aria-label={m.dashboard_widget_config_reset()}
-              title={m.dashboard_widget_config_reset()}
-              disabled={disabled}
-              onClick={() => saveConfig(id, DEFAULT_WIDGET_CONFIGS[type])}
-            >
-              <RestartAltRounded className="size-5" aria-hidden="true" />
-            </Button>
-          </div>
+          <LauncherMenuGroup data-slot="widget-config-header">
+            <LauncherMenuRow className="justify-between">
+              <h2 id={titleId} className="text-sm font-medium">
+                {m.dashboard_widget_config_title()}
+              </h2>
+              <LauncherMenuIconButton
+                data-slot="widget-config-reset"
+                aria-label={m.dashboard_widget_config_reset()}
+                title={m.dashboard_widget_config_reset()}
+                disabled={disabled}
+                onClick={() => saveConfig(id, DEFAULT_WIDGET_CONFIGS[type])}
+              >
+                <RestartAltRounded className="size-5" aria-hidden="true" />
+              </LauncherMenuIconButton>
+            </LauncherMenuRow>
+          </LauncherMenuGroup>
+
           <ScrollArea
-            className="max-h-[min(24rem,65vh)]"
+            className="max-h-[min(24rem,65vh)] min-h-0 flex-auto rounded-3xl"
             data-slot="widget-config-scroll-area"
           >
             <div data-slot="widget-config-fields">
@@ -420,12 +410,14 @@ export default function WidgetConfigMenu({
           {(configLoading ||
             configReadError ||
             saveStatus.state !== 'saved') && (
-            <div className="border-outline-variant/30 border-t px-4 py-3">
-              <WidgetConfigSaveStatus />
-            </div>
+            <LauncherMenuGroup data-slot="widget-config-footer">
+              <LauncherMenuRow className="py-3">
+                <WidgetConfigSaveStatus />
+              </LauncherMenuRow>
+            </LauncherMenuGroup>
           )}
-        </Popover.Content>
-      </Popover.Portal>
-    </Popover.Root>
+        </LauncherMenu>
+      </PopoverContent>
+    </Popover>
   );
 }

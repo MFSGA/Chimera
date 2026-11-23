@@ -1272,5 +1272,15 @@
   "profile_chain_editor_leave_description": "Изменения преобразований этого профиля не применены и будут потеряны.",
   "profile_chain_editor_update_failed_title": "Не удалось обновить",
   "profile_chain_editor_update_failed": "Не удалось обновить цепочку преобразований:\n{error}",
-  "profile_create_transform_name_required": "Укажите название преобразования."
+  "profile_create_transform_name_required": "Укажите название преобразования.",
+  "dashboard_widget_config_follow_current": "Следовать текущему профилю",
+  "dashboard_widget_config_all_profiles": "Все профили",
+  "dashboard_widget_config_missing_reference": "Не найдено: {name}",
+  "dashboard_widget_config_profile": "Профиль",
+  "dashboard_widget_config_references_failed": "Не удалось загрузить варианты",
+  "dashboard_widget_config_profile_attribution": "Соединения относятся к профилю при первом наблюдении.",
+  "dashboard_widget_config_resources": "Закреплённые ресурсы · пустой список показывает доступные",
+  "dashboard_widget_config_proxy_providers": "Прокси",
+  "dashboard_widget_config_rule_providers": "Правила",
+  "dashboard_widget_config_missing": "Не найдено"
 }

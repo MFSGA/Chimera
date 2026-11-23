@@ -1240,5 +1240,15 @@
   "profile_chain_editor_leave_description": "此設定檔的轉換變更尚未套用，離開後將遺失。",
   "profile_chain_editor_update_failed_title": "更新失敗",
   "profile_chain_editor_update_failed": "更新轉換鏈失敗：\n{error}",
-  "profile_create_transform_name_required": "請輸入變換名稱。"
+  "profile_create_transform_name_required": "請輸入變換名稱。",
+  "dashboard_widget_config_follow_current": "跟隨目前設定檔",
+  "dashboard_widget_config_all_profiles": "全部設定檔",
+  "dashboard_widget_config_missing_reference": "所選項目不存在：{name}",
+  "dashboard_widget_config_profile": "設定檔",
+  "dashboard_widget_config_references_failed": "無法讀取可選項目",
+  "dashboard_widget_config_profile_attribution": "連線按首次觀察時的設定檔歸屬統計。",
+  "dashboard_widget_config_resources": "固定資源 · 留空顯示可用資源",
+  "dashboard_widget_config_proxy_providers": "Proxy",
+  "dashboard_widget_config_rule_providers": "路由規則",
+  "dashboard_widget_config_missing": "不存在"
 }

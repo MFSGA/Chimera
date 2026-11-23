@@ -1239,5 +1239,15 @@
   "profile_chain_editor_leave_description": "此配置的转换更改尚未应用，离开后将丢失。",
   "profile_chain_editor_update_failed_title": "更新失败",
   "profile_chain_editor_update_failed": "更新转换链失败：\n{error}",
-  "profile_create_transform_name_required": "请输入变换名称。"
+  "profile_create_transform_name_required": "请输入变换名称。",
+  "dashboard_widget_config_follow_current": "跟随当前配置",
+  "dashboard_widget_config_all_profiles": "全部配置",
+  "dashboard_widget_config_missing_reference": "所选对象不存在：{name}",
+  "dashboard_widget_config_profile": "配置",
+  "dashboard_widget_config_references_failed": "无法读取可选对象",
+  "dashboard_widget_config_profile_attribution": "连接按首次观察时的配置归属统计。",
+  "dashboard_widget_config_resources": "固定资源 · 留空显示可用资源",
+  "dashboard_widget_config_proxy_providers": "代理",
+  "dashboard_widget_config_rule_providers": "规则",
+  "dashboard_widget_config_missing": "不存在"
 }

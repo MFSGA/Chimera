@@ -15,13 +15,13 @@ use crate::client::core_lifecycle::{
 use super::mutation::{MutationDeferredContext, RetryableCause};
 use super::{
     attempt::{AttemptOrigin, AttemptStage, LiveAttempt},
-    inputs::RuntimeInputs,
     mutation::{
         AppliedCandidate, CheckRecord, ConfigDomain, DeferredTarget, KnownRuntimeState,
         MutationReceipt, MutationStage, TargetOrigin,
     },
     startup::{StartupOutcome, StartupReport, StartupWorkflowState},
 };
+use crate::client::reconciler::inputs::RuntimeInputs;
 use crate::client::runtime::RuntimeApplyReceipt;
 
 /// What recovery needs to restore one Profile mutation after its source

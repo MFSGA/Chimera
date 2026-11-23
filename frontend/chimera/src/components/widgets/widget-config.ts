@@ -16,6 +16,12 @@ type TrafficConfig = {
 
 type HistoryConfig = { showChart: boolean; samples: number };
 
+/** Reference targets for upcoming subscription/report dashboard widgets. */
+export type SubscriptionTarget =
+  { kind: 'current' } | { kind: 'fixed'; profileUid: string };
+
+export type ProviderReference = { kind: 'proxy' | 'rule'; name: string };
+
 export type WidgetConfigs = {
   [WidgetId.TrafficDown]: TrafficConfig & { type: WidgetId.TrafficDown };
   [WidgetId.TrafficUp]: TrafficConfig & { type: WidgetId.TrafficUp };

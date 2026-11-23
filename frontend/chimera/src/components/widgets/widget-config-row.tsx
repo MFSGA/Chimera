@@ -1,14 +1,15 @@
+import { LauncherMenuGroup } from '@chimera/ui/launcher-menu';
 import { cn } from '@chimera/utils';
 import type { PropsWithChildren, ReactNode } from 'react';
 
 export function ConfigGroup({ children }: PropsWithChildren) {
   return (
-    <div
-      className="border-outline-variant/30 flex flex-col gap-3 border-b px-4 py-3 last:border-b-0"
+    <LauncherMenuGroup
+      className="*:px-4 *:py-3"
       data-slot="widget-config-group"
     >
       {children}
-    </div>
+    </LauncherMenuGroup>
   );
 }
 
