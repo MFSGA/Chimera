@@ -76,3 +76,36 @@ export function calculateResize<T extends string>(
     h,
   };
 }
+
+/** A cancelled pointer gesture must never enqueue a new persistent layout. */
+export function committedResizeItems<T extends string>(
+  items: DndGridItemType<T>[],
+  preview: DndGridItemType<T> | null,
+  cancelled: boolean,
+): DndGridItemType<T>[] | null {
+  if (cancelled || !preview) return null;
+  const original = items.find((item) => item.id === preview.id);
+  if (!original || isUnchangedGridItem(original, preview)) return null;
+  return items.map((item) => (item.id === preview.id ? preview : item));
+}
+
+/** A drag rejected by the layout owner must not animate as if it committed.
+ * Legacy consumers without an explicit confirmation retain their behavior. */
+export function shouldAnimateGridDrop(result: boolean | void): boolean {
+  return result !== false;
+}
+
+/** No persistence or landing animation is needed when a drag/resize
+ * resolves to the item's existing grid cell and dimensions. */
+export function isUnchangedGridItem<T extends string>(
+  before: DndGridItemType<T>,
+  after: DndGridItemType<T>,
+): boolean {
+  return (
+    before.id === after.id &&
+    before.x === after.x &&
+    before.y === after.y &&
+    before.w === after.w &&
+    before.h === after.h
+  );
+}

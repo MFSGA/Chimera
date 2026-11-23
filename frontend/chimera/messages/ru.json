@@ -1489,5 +1489,9 @@
   "dashboard_widget_config_hide_names": "Скрыть названия",
   "dashboard_widget_core_shortcuts_config_channel": "Показывать канал управления",
   "settings_clash_control_channel_label": "Канал управления",
-  "error_transparent_proxy_tun_conflict": "Перехват прозрачного прокси нельзя использовать вместе с TUN"
+  "error_transparent_proxy_tun_conflict": "Перехват прозрачного прокси нельзя использовать вместе с TUN",
+  "dashboard_layout_loading": "Загрузка макета панели…",
+  "dashboard_layout_load_failed": "Не удалось загрузить макет панели",
+  "dashboard_layout_saving": "Сохранение макета панели…",
+  "dashboard_layout_save_failed": "Не удалось сохранить макет панели"
 }

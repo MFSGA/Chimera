@@ -30,6 +30,7 @@ test('editing, dropping and library dragging share strict loaded-state gates', (
     { isEditing: false },
     { layoutLoading: true },
     { layoutReadError: true },
+    { layoutSaveBlocked: true },
     { configLoading: true },
     { configReadError: true },
   ]) {

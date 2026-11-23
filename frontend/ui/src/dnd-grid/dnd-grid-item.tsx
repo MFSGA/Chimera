@@ -48,10 +48,12 @@ function ResizeKnob({
   onStart,
   onMove,
   onEnd,
+  onCancel,
 }: {
   onStart: (x: number, y: number) => void;
   onMove: (x: number, y: number) => void;
   onEnd: () => void;
+  onCancel: () => void;
 }) {
   const isPresent = useIsPresent();
   const reducedMotion = useReducedMotion();
@@ -97,7 +99,7 @@ function ResizeKnob({
         }
 
         e.currentTarget.releasePointerCapture(e.pointerId);
-        onEnd();
+        onCancel();
       }}
       initial={reducedMotion ? false : { scale: 0.85, opacity: 0 }}
       animate={{
@@ -150,6 +152,7 @@ function DndGridItemDraggable<T extends string>({
     onResizeStart,
     onResizeMove,
     onResizeEnd,
+    onResizeCancel,
   } = useDndGridContext();
 
   // Write constraints synchronously during render so they're always up-to-date
@@ -267,6 +270,7 @@ function DndGridItemDraggable<T extends string>({
             onStart={(x, y) => onResizeStart(id, 'bottom-right', x, y)}
             onMove={onResizeMove}
             onEnd={onResizeEnd}
+            onCancel={onResizeCancel}
           />
         )}
       </AnimatePresence>

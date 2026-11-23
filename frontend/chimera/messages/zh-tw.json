@@ -1457,5 +1457,9 @@
   "dashboard_widget_config_hide_names": "隱藏名稱",
   "dashboard_widget_core_shortcuts_config_channel": "顯示控制管道",
   "settings_clash_control_channel_label": "控制管道",
-  "error_transparent_proxy_tun_conflict": "透明代理接管不能與 TUN 同時啟用"
+  "error_transparent_proxy_tun_conflict": "透明代理接管不能與 TUN 同時啟用",
+  "dashboard_layout_loading": "正在載入儀表板版面配置…",
+  "dashboard_layout_load_failed": "無法載入儀表板版面配置",
+  "dashboard_layout_saving": "正在儲存儀表板版面配置…",
+  "dashboard_layout_save_failed": "無法儲存儀表板版面配置"
 }

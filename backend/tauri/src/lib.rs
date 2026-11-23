@@ -12,6 +12,10 @@ use crate::utils::{init, path::PathResolver, resolve};
 #[cfg(feature = "e2e")]
 mod e2e_test;
 mod ipc;
+// Mobile platforms cannot launch a copy of the desktop executable; they
+// retain the in-process Runner and do not compile the child-process entry.
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+pub mod migration_child;
 mod network_info;
 mod network_probe;
 
@@ -40,6 +44,9 @@ mod shutdown_hook;
 mod single_instance_activation;
 mod specta_export;
 mod startup_failure;
+// The reporter is a separate desktop process, not a Tauri window/owner.
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+pub mod startup_reporter;
 mod state;
 /// 4
 mod utils;

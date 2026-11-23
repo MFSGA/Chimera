@@ -18,6 +18,10 @@ import { AnimatePresence, motion } from 'motion/react';
 import { useDashboardContext } from '@/components/widgets/provider';
 import { WidgetConfigSaveStatus } from '@/components/widgets/widget-config-menu';
 import * as m from '@/paraglide/messages';
+import {
+  DashboardLayoutSaveStatus,
+  useDashboardLayoutPersistence,
+} from './layout-persistence';
 
 export default function EditAction() {
   const {
@@ -28,6 +32,19 @@ export default function EditAction() {
     configLoading,
     configReadError,
   } = useDashboardContext();
+
+  const {
+    loading: layoutLoading,
+    readError: layoutReadError,
+    saveState: layoutSaveState,
+  } = useDashboardLayoutPersistence();
+  const mayFinish =
+    !configLoading &&
+    !configReadError &&
+    saveStatus.state === 'saved' &&
+    !layoutLoading &&
+    !layoutReadError &&
+    layoutSaveState === 'saved';
 
   return (
     <AnimatePresence>
@@ -74,7 +91,7 @@ export default function EditAction() {
           {/* 保存按钮 - 退出编辑模式 */}
           <Button
             variant="flat"
-            disabled={configLoading || saveStatus.state !== 'saved'}
+            disabled={!mayFinish}
             className="flex h-8 items-center gap-1 px-3 text-sm text-nowrap"
             data-slot="dashboard-edit-save"
             onClick={() => setIsEditing(false)}
@@ -83,11 +100,12 @@ export default function EditAction() {
             <span>{m.common_save()}</span>
           </Button>
 
-          {(configLoading ||
-            configReadError ||
-            saveStatus.state !== 'saved') && (
+          {!mayFinish && (
             <div className="bg-surface absolute bottom-full left-1/2 mb-2 min-w-48 -translate-x-1/2 rounded-full px-3 py-1.5">
-              <WidgetConfigSaveStatus />
+              <div className="flex flex-col gap-1">
+                <WidgetConfigSaveStatus />
+                <DashboardLayoutSaveStatus />
+              </div>
             </div>
           )}
         </motion.div>

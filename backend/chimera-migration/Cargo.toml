@@ -13,6 +13,7 @@ test-support = []
 [dependencies]
 anyhow = "1"
 chimera-persistence = { path = "../chimera-persistence" }
+chimera-utils = { workspace = true, default-features = false, features = ["serde"] }
 chimera-contracts = { path = "../chimera-contracts" }
 chimera-config = { path = "../chimera-config" }
 serde_yaml = "0.9"
@@ -20,6 +21,7 @@ chimera-paths = { path = "../chimera-paths" }
 chrono = "0.4"
 semver = { version = "1", features = ["serde"] }
 serde.workspace = true
+serde_json = "1"
 serde_yaml_ng.workspace = true
 thiserror.workspace = true
 tracing.workspace = true

@@ -248,3 +248,56 @@ test('invalid v2 entries fall back to defaults without breaking the dashboard', 
   assert.equal(storage.entries.length, 1);
   assert.equal(storage.entries[0]?.id, 'legacy:4x5');
 });
+
+test('an acknowledged edit survives serialized storage reload and restores the preferred layout', () => {
+  const initial = normalizeLayoutStorage(
+    {
+      '6x4': [item(WidgetId.TrafficDown, 0, 0, 2, 2)],
+      '12x8': [item(WidgetId.TrafficUp, 0, 0, 2, 2)],
+    },
+    defaults,
+  );
+  const preferred = saveLayout(initial, 'legacy:12x8', [
+    item(WidgetId.TrafficUp, 0, 0, 4, 3),
+    item(WidgetId.Memory, 4, 0, 3, 2),
+  ]);
+  const restarted = normalizeLayoutStorage(
+    JSON.parse(JSON.stringify(preferred)),
+    defaults,
+  );
+  assert.deepEqual(restarted, preferred);
+  assert.equal(
+    selectLayoutEntry(restarted, { cols: 4, rows: 4 })?.id,
+    'legacy:12x8',
+  );
+  assert.equal(
+    selectLayoutEntry(restarted, { cols: 12, rows: 8 })?.id,
+    'legacy:12x8',
+  );
+  assert.deepEqual(
+    restarted.entries.find(({ id }) => id === 'legacy:6x4'),
+    initial.entries[0],
+  );
+});
+
+test('restarting after a rejected write loads only the last acknowledged snapshot', () => {
+  const acknowledged = normalizeLayoutStorage(
+    {
+      '6x4': [item(WidgetId.TrafficDown, 0, 0, 3, 2)],
+    },
+    defaults,
+  );
+  const failedDraft = saveLayout(acknowledged, 'legacy:6x4', [
+    item(WidgetId.TrafficDown, 0, 0, 2, 2),
+    item(WidgetId.TrafficUp, 2, 0, 2, 2),
+  ]);
+  assert.notDeepEqual(failedDraft, acknowledged);
+  const reloaded = normalizeLayoutStorage(
+    JSON.parse(JSON.stringify(acknowledged)),
+    defaults,
+  );
+  assert.deepEqual(reloaded, acknowledged);
+  assert.deepEqual(reloaded.entries[0]?.items, [
+    item(WidgetId.TrafficDown, 0, 0, 3, 2),
+  ]);
+});

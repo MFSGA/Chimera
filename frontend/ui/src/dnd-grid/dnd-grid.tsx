@@ -29,11 +29,18 @@ import type {
   ResizeHandle,
 } from './types';
 import { useGridLayout } from './use-grid-layout';
-import { calculateResize, hasOverlap } from './utils';
+import {
+  calculateResize,
+  committedResizeItems,
+  hasOverlap,
+  isUnchangedGridItem,
+  shouldAnimateGridDrop,
+} from './utils';
 
 export interface DndGridProps<T extends string = string> {
   items: DndGridItemType<T>[];
-  onLayoutChange?: (items: DndGridItemType<T>[]) => void;
+  /** Return false to reject a drop and suppress its committed-placement animation. */
+  onLayoutChange?: (items: DndGridItemType<T>[]) => boolean | void;
   minCellSize?: number;
   gap?: number;
   size?: GridSize;
@@ -132,6 +139,13 @@ export function DndGrid<T extends string = string>({
       }
 
       lastValidSnapRef.current = item;
+      // A prior drop has no animation state to carry into a new drag.
+      setDropInfoMap((prev) => {
+        if (!(item.id in prev)) return prev;
+        const next = { ...prev };
+        delete next[item.id];
+        return next;
+      });
       setActiveItem(item);
       setPreviewItem(item);
       setFrozenItems(items);
@@ -182,11 +196,34 @@ export function DndGrid<T extends string = string>({
       setActiveItem(null);
       setPreviewItem(null);
       setFrozenItems(null);
-      setDropInfoMap((prev) => ({
-        ...prev,
-        [id]: { left: dropLeft, top: dropTop },
-      }));
-      onLayoutChange?.(newItems);
+      if (isUnchangedGridItem(activeItem, finalItem)) {
+        // An invalid collision or release on the starting cell is not a
+        // layout change; avoid a redundant KV write and landing animation.
+        setDropInfoMap((prev) => {
+          if (!(id in prev)) return prev;
+          const next = { ...prev };
+          delete next[id];
+          return next;
+        });
+        onInteractionChange?.(false);
+        return;
+      }
+      const accepted = onLayoutChange?.(newItems);
+      if (shouldAnimateGridDrop(accepted)) {
+        setDropInfoMap((prev) => ({
+          ...prev,
+          [id]: { left: dropLeft, top: dropTop },
+        }));
+      } else {
+        // A rejected old-grid drop is a cancellation, not a successful
+        // placement. Clear any prior landing animation for this widget.
+        setDropInfoMap((prev) => {
+          if (!(id in prev)) return prev;
+          const next = { ...prev };
+          delete next[id];
+          return next;
+        });
+      }
       onInteractionChange?.(false);
     },
     [
@@ -204,6 +241,8 @@ export function DndGrid<T extends string = string>({
     setActiveItem(null);
     setPreviewItem(null);
     setFrozenItems(null);
+    // Cancelled previews must not replay old landing animations on recovery.
+    setDropInfoMap({});
     onInteractionChange?.(false);
   }, [onInteractionChange]);
 
@@ -260,20 +299,26 @@ export function DndGrid<T extends string = string>({
     [items, layout, gap],
   );
 
-  const onResizeEnd = useCallback(() => {
-    const preview = resizePreviewRef.current;
-    resizeStateRef.current = null;
-    resizePreviewRef.current = null;
-    setResizingItemId(null);
-    setResizePreview(null);
-    setFrozenItems(null);
+  const finishResize = useCallback(
+    (cancelled: boolean) => {
+      const committed = committedResizeItems(
+        items,
+        resizePreviewRef.current,
+        cancelled,
+      );
+      resizeStateRef.current = null;
+      resizePreviewRef.current = null;
+      setResizingItemId(null);
+      setResizePreview(null);
+      setFrozenItems(null);
+      if (committed) onLayoutChange?.(committed);
+      onInteractionChange?.(false);
+    },
+    [items, onLayoutChange, onInteractionChange],
+  );
 
-    if (preview) {
-      const newItems = items.map((i) => (i.id === preview.id ? preview : i));
-      onLayoutChange?.(newItems);
-    }
-    onInteractionChange?.(false);
-  }, [items, onLayoutChange, onInteractionChange]);
+  const onResizeEnd = useCallback(() => finishResize(false), [finishResize]);
+  const onResizeCancel = useCallback(() => finishResize(true), [finishResize]);
 
   const rootCtx = useDndGridRoot();
 
@@ -361,6 +406,7 @@ export function DndGrid<T extends string = string>({
       onResizeStart,
       onResizeMove,
       onResizeEnd,
+      onResizeCancel,
     }),
     [
       effectiveDisplayItems,
@@ -374,6 +420,7 @@ export function DndGrid<T extends string = string>({
       onResizeStart,
       onResizeMove,
       onResizeEnd,
+      onResizeCancel,
     ],
   );
 
@@ -447,6 +494,7 @@ export function DndGrid<T extends string = string>({
                     onResizeStart,
                     onResizeMove,
                     onResizeEnd,
+                    onResizeCancel,
                   }}
                 >
                   {children(activeItem)}

@@ -1483,5 +1483,9 @@
   "dashboard_widget_config_hide_names": "Hide names",
   "dashboard_widget_core_shortcuts_config_channel": "Show control channel",
   "settings_clash_control_channel_label": "Control Channel",
-  "error_transparent_proxy_tun_conflict": "Transparent proxy capture cannot be combined with TUN"
+  "error_transparent_proxy_tun_conflict": "Transparent proxy capture cannot be combined with TUN",
+  "dashboard_layout_loading": "Loading dashboard layout…",
+  "dashboard_layout_load_failed": "Could not load dashboard layout",
+  "dashboard_layout_saving": "Saving dashboard layout…",
+  "dashboard_layout_save_failed": "Could not save dashboard layout"
 }

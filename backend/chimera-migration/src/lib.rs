@@ -1,6 +1,7 @@
 //! Shared migration state and revision-selection policy, independent of Tauri.
 //! The application shell injects paths, backup, and module implementations.
 
+pub mod child_result;
 pub mod context;
 pub mod document;
 pub mod fs;

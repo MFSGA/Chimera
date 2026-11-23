@@ -27,6 +27,7 @@ const DndGridContext = createContext<{
   ) => void;
   onResizeMove: (currentX: number, currentY: number) => void;
   onResizeEnd: () => void;
+  onResizeCancel: () => void;
 } | null>(null);
 
 export const DndGridProvider = DndGridContext.Provider;

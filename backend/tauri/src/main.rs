@@ -5,6 +5,16 @@
 static ALLOC: dhat::Alloc = dhat::Alloc;
 
 fn main() -> std::process::ExitCode {
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    if let Some(result) = chimera_lib::startup_reporter::maybe_run_from_command_line() {
+        return result;
+    }
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    if let Some(result) = chimera_lib::migration_child::maybe_run_from_command_line() {
+        return result;
+    }
+
     #[cfg(windows)]
     if let Some(result) = chimera_utils::process::windows_shutdown_helper_entry() {
         if let Err(error) = result {

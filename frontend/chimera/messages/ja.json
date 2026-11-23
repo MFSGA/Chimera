@@ -1456,5 +1456,9 @@
   "dashboard_widget_config_hide_names": "名前を非表示",
   "dashboard_widget_core_shortcuts_config_channel": "制御チャネルを表示",
   "settings_clash_control_channel_label": "制御チャネル",
-  "error_transparent_proxy_tun_conflict": "透過プロキシの捕捉は TUN と併用できません"
+  "error_transparent_proxy_tun_conflict": "透過プロキシの捕捉は TUN と併用できません",
+  "dashboard_layout_loading": "ダッシュボードのレイアウトを読み込み中…",
+  "dashboard_layout_load_failed": "ダッシュボードのレイアウトを読み込めませんでした",
+  "dashboard_layout_saving": "ダッシュボードのレイアウトを保存中…",
+  "dashboard_layout_save_failed": "ダッシュボードのレイアウトを保存できませんでした"
 }

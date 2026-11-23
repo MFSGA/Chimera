@@ -1,10 +1,9 @@
 //! Structured, source-preserving startup diagnostics.
 //!
-//! Maps the same failure kinds/revision cases as ref startup_failure.rs and
-//! core/migration/child_result.rs, but Chimera has not migrated the independent
-//! crash-reporter process or subprocess migration protocol. This layer is
-//! deliberately read-only: it does not create backups, reset configurations,
-//! launch another process or display a GUI.
+//! Converts the shared migration child failure diagnostics into Chimera's
+//! existing startup report, while retaining platform-owned Core/Jobs, backup
+//! and user-config classifications. This module is deliberately read-only:
+//! it does not create backups, reset configuration or spawn a reporter.
 
 use std::{error::Error as StdError, path::PathBuf};
 
@@ -14,12 +13,15 @@ use crate::{
     core::{
         backup::{BackupError, BackupInfo},
         corrupt,
-        migration::{MigrationCheckError, runner::RevisionError, store::SchemaError},
+        migration::MigrationCheckError,
         session_state,
     },
     utils::{path::PathResolver, recovery_io::IoFailure},
 };
-use chimera_migration::runner::ExecutionError;
+use chimera_migration::{
+    child_result::{Failure as MigrationFailure, FailureStage},
+    runner::ExecutionError,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -55,71 +57,7 @@ pub(crate) enum StartupStage {
     TypedClient,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub(crate) enum RevisionFailure {
-    NewerStoreSchema {
-        path: PathBuf,
-        read: u64,
-        supported: u64,
-    },
-    OlderStoreSchema {
-        path: PathBuf,
-        read: u64,
-        supported: u64,
-    },
-    NewerDocument {
-        path: PathBuf,
-        read: u64,
-        supported: u64,
-    },
-    NewerAppliedModule {
-        path: PathBuf,
-        module: String,
-        read: u64,
-        supported: u64,
-    },
-    DocumentBehindState {
-        path: PathBuf,
-        state_path: PathBuf,
-        module: String,
-        read: u64,
-        applied: u64,
-    },
-    MissingDocumentStamp {
-        path: PathBuf,
-        state_path: PathBuf,
-    },
-    FilesBehindState {
-        state_path: PathBuf,
-        module: String,
-        applied: u64,
-        reason: String,
-    },
-}
-
-impl RevisionFailure {
-    fn path(&self) -> &PathBuf {
-        match self {
-            Self::NewerStoreSchema { path, .. }
-            | Self::OlderStoreSchema { path, .. }
-            | Self::NewerDocument { path, .. }
-            | Self::NewerAppliedModule { path, .. }
-            | Self::DocumentBehindState { path, .. }
-            | Self::MissingDocumentStamp { path, .. } => path,
-            Self::FilesBehindState { state_path, .. } => state_path,
-        }
-    }
-
-    fn is_newer(&self) -> bool {
-        matches!(
-            self,
-            Self::NewerStoreSchema { .. }
-                | Self::NewerDocument { .. }
-                | Self::NewerAppliedModule { .. }
-        )
-    }
-}
+pub(crate) use chimera_migration::child_result::RevisionFailure;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct Report {
@@ -146,93 +84,33 @@ impl StartupFailure {
             StartupStage::Storage | StartupStage::CoreHost => FailureKind::Internal,
             StartupStage::TypedClient => FailureKind::UserConfig,
         };
-        let mut path = None;
-        let mut revision = None;
+        // The shared migration failure collector owns the original error
+        // chain, typed revision and migration-owned path extraction. Tauri
+        // only augments it with host/backup paths and UI classification.
+        // Revision and path extraction is useful to every startup stage; the
+        // shared FailureStage is internal here and only reaches the child
+        // protocol for MigrationPrepare/MigrationRun reports.
+        let shared = MigrationFailure::from_error(
+            error,
+            if stage == StartupStage::MigrationPrepare {
+                FailureStage::RunnerConstruction
+            } else {
+                FailureStage::Migration
+            },
+            paths.app_config_dir().to_owned(),
+            paths.backups_dir(),
+            false,
+            corrupt::error_io(error),
+        );
+        let mut path = shared.paths.last().cloned();
+        let revision = shared.revision;
+
         let mut host_user_config = false;
         // RecordFailure exposes its independent persistence error as a field,
         // not a source (the original step failure remains the source).
-        let mut secondary_persistence_io = None;
-        let mut chain = Vec::new();
+        let chain = shared.chain;
         let mut current = Some(error);
         while let Some(error) = current {
-            chain.push(error.to_string());
-
-            if let Some(schema) = error.downcast_ref::<SchemaError>() {
-                revision = Some(match schema {
-                    SchemaError::Newer {
-                        path,
-                        read,
-                        supported,
-                    } => RevisionFailure::NewerStoreSchema {
-                        path: path.clone(),
-                        read: *read,
-                        supported: *supported,
-                    },
-                    SchemaError::Older {
-                        path,
-                        read,
-                        supported,
-                    } => RevisionFailure::OlderStoreSchema {
-                        path: path.clone(),
-                        read: *read,
-                        supported: *supported,
-                    },
-                });
-            }
-            if let Some(revision_error) = error.downcast_ref::<RevisionError>() {
-                revision = Some(match revision_error {
-                    RevisionError::NewerDocument {
-                        path,
-                        read,
-                        supported,
-                    } => RevisionFailure::NewerDocument {
-                        path: path.clone(),
-                        read: *read,
-                        supported: *supported,
-                    },
-                    RevisionError::NewerAppliedModule {
-                        path,
-                        module,
-                        read,
-                        supported,
-                    } => RevisionFailure::NewerAppliedModule {
-                        path: path.clone(),
-                        module: module.clone(),
-                        read: *read,
-                        supported: *supported,
-                    },
-                    RevisionError::DocumentBehindState {
-                        path,
-                        state_path,
-                        module,
-                        read,
-                        applied,
-                    } => RevisionFailure::DocumentBehindState {
-                        path: path.clone(),
-                        state_path: state_path.clone(),
-                        module: module.clone(),
-                        read: *read,
-                        applied: *applied,
-                    },
-                    RevisionError::MissingDocumentStamp { path, state_path } => {
-                        RevisionFailure::MissingDocumentStamp {
-                            path: path.clone(),
-                            state_path: state_path.clone(),
-                        }
-                    }
-                    RevisionError::FilesBehindState {
-                        state_path,
-                        module,
-                        applied,
-                        reason,
-                    } => RevisionFailure::FilesBehindState {
-                        state_path: state_path.clone(),
-                        module: module.clone(),
-                        applied: *applied,
-                        reason: reason.clone(),
-                    },
-                });
-            }
             if let Some(execution) = error.downcast_ref::<ExecutionError>() {
                 match execution {
                     ExecutionError::PersistState { path: actual, .. }
@@ -242,7 +120,6 @@ impl StartupFailure {
                         path = Some(actual.clone());
                     }
                     ExecutionError::RecordFailure { persistence, .. } => {
-                        secondary_persistence_io = corrupt::error_io(persistence.as_ref());
                         if let Some(ExecutionError::PersistState { path: actual, .. }) =
                             persistence.downcast_ref::<ExecutionError>()
                         {
@@ -314,12 +191,7 @@ impl StartupFailure {
         // Classify the first IO failure in the primary error chain. If the
         // original step failed without an IO cause, the independently failed
         // state flush still needs to surface permission/busy diagnostics.
-        let primary_io = corrupt::error_io(error);
-        let io = match primary_io {
-            Some(IoFailure::PermissionDenied | IoFailure::Transient) => primary_io,
-            _ => secondary_persistence_io.or(primary_io),
-        };
-        let kind = match io {
+        let kind = match migration_io_failure(error) {
             Some(IoFailure::PermissionDenied) => FailureKind::Permission,
             Some(IoFailure::Transient) => FailureKind::Busy,
             _ if revision.as_ref().is_some_and(RevisionFailure::is_newer) => {
@@ -347,7 +219,80 @@ impl StartupFailure {
     }
 }
 
+/// Preserve the original step IO classification when a later attempt to
+/// persist `Failed` also errors. The second failure is held outside `source()`
+/// by `ExecutionError::RecordFailure`, so normal error-chain scanning alone
+/// cannot detect its permission or lock status.
+pub(crate) fn migration_io_failure(error: &(dyn StdError + 'static)) -> Option<IoFailure> {
+    let primary = corrupt::error_io(error);
+    if matches!(
+        primary,
+        Some(IoFailure::PermissionDenied | IoFailure::Transient)
+    ) {
+        return primary;
+    }
+    let mut current = Some(error);
+    while let Some(cause) = current {
+        if let Some(ExecutionError::RecordFailure { persistence, .. }) =
+            cause.downcast_ref::<ExecutionError>()
+        {
+            if let Some(secondary) = corrupt::error_io(persistence.as_ref()) {
+                return Some(secondary);
+            }
+        }
+        current = cause.source();
+    }
+    primary
+}
+
 impl Report {
+    /// Convert a v2 migration-only Failure into the unchanged host-facing
+    /// startup report. Never trust the child-provided root or backup hint as
+    /// proof of recovery: the caller validates roots and the backup manifest.
+    pub(crate) fn from_migration_failure(
+        failure: MigrationFailure,
+        paths: &PathResolver,
+        backup: Option<&BackupInfo>,
+    ) -> Self {
+        let stage = match failure.stage {
+            FailureStage::RunnerConstruction => StartupStage::MigrationPrepare,
+            FailureStage::Backup | FailureStage::Migration => StartupStage::MigrationRun,
+        };
+        let kind = match failure.io_failure {
+            Some(IoFailure::PermissionDenied) => FailureKind::Permission,
+            Some(IoFailure::Transient) => FailureKind::Busy,
+            _ if failure
+                .revision
+                .as_ref()
+                .is_some_and(RevisionFailure::is_newer) =>
+            {
+                FailureKind::NewerVersion
+            }
+            _ => FailureKind::MigrationFailed,
+        };
+        let path = failure
+            .revision
+            .as_ref()
+            .map(|revision| revision.path().clone())
+            .or_else(|| failure.paths.last().cloned())
+            .or_else(|| Some(paths.app_config_dir().to_owned()));
+        let detail = failure.chain.join("\nCaused by: ");
+        Self {
+            failure: StartupFailure {
+                stage,
+                kind,
+                path,
+                detail,
+                revision: failure.revision,
+            },
+            version: env!("CARGO_PKG_VERSION").to_owned(),
+            logs_dir: paths.app_logs_dir(),
+            backups_dir: backup
+                .filter(|backup| backup.is_available())
+                .and_then(|backup| backup.path.parent().map(|path| path.to_owned())),
+        }
+    }
+
     pub(crate) fn from_error(
         error: &(dyn StdError + 'static),
         stage: StartupStage,
@@ -453,10 +398,21 @@ pub(crate) fn show_report(report: &Report) {
         "application startup failed during Tauri setup"
     );
     eprintln!("{message}");
+    // Upstream presents the startup failure from an independent command so
+    // Tauri Core/Service/Jobs remain out of the error UI lifecycle. Preserve
+    // the existing dialog as a last-resort fallback on spawn/protocol errors.
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    {
+        if let Err(error) = crate::startup_reporter::show_in_subprocess(report) {
+            eprintln!("standalone startup reporter unavailable: {error:#}");
+            crate::utils::dialog::error_dialog(message);
+        }
+    }
+    #[cfg(any(target_os = "android", target_os = "ios"))]
     crate::utils::dialog::error_dialog(message);
 }
 
-fn report_message(report: &Report) -> String {
+pub(crate) fn report_message(report: &Report) -> String {
     let failure = &report.failure;
     let location = failure
         .path
@@ -516,7 +472,10 @@ fn one_shot_message(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::migration::{runner::RevisionError, store::MigrationStore};
+    use crate::core::migration::{
+        runner::RevisionError,
+        store::{MigrationStore, SchemaError},
+    };
 
     fn fixture() -> (tempfile::TempDir, PathResolver) {
         let temp = tempfile::tempdir().unwrap();
