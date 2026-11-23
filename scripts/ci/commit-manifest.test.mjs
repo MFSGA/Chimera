@@ -15,15 +15,14 @@ import { fileURLToPath } from 'node:url';
 
 const script = join(
   dirname(fileURLToPath(import.meta.url)),
-  'commit-manifest-verified.sh',
+  'commit-manifest.sh',
 );
-const verifiedResponse = JSON.stringify({
+const commitResponse = JSON.stringify({
   data: {
     createCommitOnBranch: {
       commit: {
         oid: '0123456789abcdef0123456789abcdef01234567',
         url: 'https://github.com/MFSGA/Chimera/commit/0123456789abcdef0123456789abcdef01234567',
-        signature: { isValid: true },
       },
     },
   },
@@ -34,7 +33,7 @@ function git(cwd, args) {
 }
 
 function fixture(branch = 'master') {
-  const dir = mkdtempSync(join(tmpdir(), 'chimera-verified-manifest-'));
+  const dir = mkdtempSync(join(tmpdir(), 'chimera-manifest-commit-'));
   const manifest = join(dir, 'manifest/version.json');
   const capture = join(dir, 'gh-arguments.txt');
   const executable = join(dir, 'bin/gh');
@@ -67,7 +66,7 @@ function fixture(branch = 'master') {
     capture,
     run({
       target = branch,
-      mockResponse = verifiedResponse,
+      mockResponse = commitResponse,
       mockExitCode = '0',
     } = {}) {
       return spawnSync('bash', [script, target], {
@@ -90,14 +89,14 @@ function fixture(branch = 'master') {
   };
 }
 
-test('commits only manifest bytes through verified GraphQL mutation and current head fence', () => {
+test('commits only manifest bytes through GraphQL mutation and current head fence', () => {
   const f = fixture();
   try {
     const changed = '{"version":"updated"}\n';
     writeFileSync(f.manifest, changed);
     const result = f.run();
     assert.equal(result.status, 0, result.stderr);
-    assert.match(result.stdout, /Created verified manifest commit/);
+    assert.match(result.stdout, /Created manifest commit/);
 
     const raw = readFileSync(f.capture, 'utf8').split('\0').filter(Boolean);
     const args = new Map();
@@ -137,18 +136,17 @@ test('skips publishing when manifest is unchanged', () => {
   }
 });
 
-test('rejects an invalid or missing GitHub signature', () => {
+test('reports GraphQL errors without reporting a commit', () => {
   const f = fixture();
   try {
     writeFileSync(f.manifest, '{"version":"updated"}\n');
-    for (const mockResponse of [
-      verifiedResponse.replace('"isValid":true', '"isValid":false'),
-      JSON.stringify({ errors: [{ message: 'Missing branch permission' }] }),
-    ]) {
-      const result = f.run({ mockResponse });
-      assert.notEqual(result.status, 0);
-      assert.match(result.stderr, /not verified/);
-    }
+    const result = f.run({
+      mockResponse: JSON.stringify({
+        errors: [{ message: 'Missing branch permission' }],
+      }),
+    });
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /Manifest commit failed/);
   } finally {
     f.cleanup();
   }

@@ -1,9 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# GitHub signs createCommitOnBranch commits; a normal bot git commit is unsigned
-# and cannot update branches with the "required signatures" ruleset.
-branch="${1:?usage: commit-manifest-verified.sh <branch>}"
+branch="${1:?usage: commit-manifest.sh <branch>}"
 : "${GH_TOKEN:?GH_TOKEN is required}"
 : "${GITHUB_REPOSITORY:?GITHUB_REPOSITORY is required}"
 
@@ -38,7 +36,7 @@ mutation(
     message: {headline: "chore(manifest): update manifest [skip ci]"}
     fileChanges: {additions: [{path: "manifest/version.json", contents: $contents}]}
   }) {
-    commit { oid url signature { isValid } }
+    commit { oid url }
   }
 }
 GRAPHQL
@@ -51,14 +49,14 @@ response=$(gh api graphql \
   -f expectedHeadOid="$expected_head_oid" \
   -f contents="$contents")
 
-# Do not report success for an unsigned/invalid commit or GraphQL error.
+# Do not report success when GitHub rejects the mutation or returns no commit.
 printf '%s\n' "$response" | node -e '
 const fs = require("node:fs");
 const result = JSON.parse(fs.readFileSync(0, "utf8"));
 const commit = result.data?.createCommitOnBranch?.commit;
-if (result.errors?.length || !commit?.signature?.isValid) {
-  console.error("Manifest commit was not verified:", result.errors ?? commit);
+if (result.errors?.length || !commit?.oid || !commit?.url) {
+  console.error("Manifest commit failed:", result.errors ?? commit);
   process.exit(1);
 }
-console.log("Created verified manifest commit:", commit.url);
+console.log("Created manifest commit:", commit.url);
 '

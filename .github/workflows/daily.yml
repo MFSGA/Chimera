@@ -46,13 +46,13 @@ jobs:
           else
             echo "has-changes=false" >> "$GITHUB_OUTPUT"
           fi
-      # GitHub signs createCommitOnBranch commits; raw git commits are rejected
-      # by master's required-verified-signatures ruleset.
-      - name: Commit verified manifest
+      # Keep an expected-head fence so a stale scheduled run cannot overwrite
+      # a newer maintainer commit.
+      - name: Commit manifest
         if: steps.git-check.outputs.has-changes == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
-        run: bash scripts/ci/commit-manifest-verified.sh master
+        run: bash scripts/ci/commit-manifest.sh master
   generate_manifest_v1:
     name: Generate Manifest V1
     runs-on: ubuntu-latest

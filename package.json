@@ -58,7 +58,7 @@
     "generate:git-info": "tsx scripts/generate-git-info.ts",
     "generate:manifest": "run-p generate:manifest:*",
     "generate:manifest:latest-version": "node scripts/generate-latest-version.ts",
-    "test:manifest:node": "node --test scripts/manifest-node_test.ts scripts/ci/commit-manifest-verified.test.mjs",
+    "test:manifest:node": "node --test scripts/manifest-node_test.ts scripts/ci/commit-manifest.test.mjs",
     "typecheck:manifest": "tsc --noEmit -p scripts/tsconfig.manifest.json",
     "generate:data-slots": "node scripts/extract-data-slots.ts",
     "test:data-slots": "node --test scripts/extract-data-slots_test.ts",
