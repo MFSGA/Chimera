@@ -36,6 +36,25 @@ pub(in crate::client) trait CheckedCandidatePort: Send + Sync + 'static {
         core_spec: chimera_core_manager::CoreSpec,
     ) -> Result<(), Arc<RuntimeError>>;
     fn source_committed(&self, domain: ConfigDomain, version: Version);
+    /// Failed source CAS after an ACK must not leave a permanent proposal.
+    /// Until the ref operation token travels through every source actor,
+    /// conservatively abort the entire matching domain only.
+    fn abort_uncommitted(&self, domain: ConfigDomain);
+    /// A source-owned request can identify its exact prepared product without
+    /// evicting concurrent successful checks for the same domain.
+    async fn checked_for_request(
+        &self,
+        domain: ConfigDomain,
+        candidate: PreparedRuntime,
+        core_spec: chimera_core_manager::CoreSpec,
+        request: String,
+        /// Source-owned explicit mode transition, proven by the same Clash
+        /// patch plan that authorizes the durable CAS. The Core executor
+        /// must never re-infer this one-shot effect from current config.
+        interrupt_mode: bool,
+    ) -> Result<(), Arc<RuntimeError>>;
+    fn source_committed_for_request(&self, domain: ConfigDomain, version: Version, request: String);
+    fn abort_uncommitted_for_request(&self, domain: ConfigDomain, request: String);
 }
 
 pub(in crate::client) struct CandidateCheck {
@@ -80,9 +99,21 @@ impl CandidateCheck {
     }
 }
 
-#[async_trait::async_trait]
-impl RuntimeGate for CandidateCheck {
-    async fn check(&self, candidate: RuntimeCandidate) -> Result<(), Arc<RuntimeError>> {
+impl CandidateCheck {
+    /// The same strict ref preparation and Core validation shared by every
+    /// source. Only a production RuntimeGate check may admit the result into
+    /// the owner's Checked mailbox; legacy postcommit paths cannot do so.
+    async fn validate(
+        &self,
+        candidate: RuntimeCandidate,
+    ) -> Result<
+        (
+            ConfigDomain,
+            PreparedRuntime,
+            chimera_core_manager::CoreSpec,
+        ),
+        Arc<RuntimeError>,
+    > {
         let domain = match &candidate.change {
             DomainChange::Application { .. } => ConfigDomain::Application,
             DomainChange::Clash { .. } => ConfigDomain::Clash,
@@ -135,20 +166,87 @@ impl RuntimeGate for CandidateCheck {
             })
             .await
         {
-            RuntimeCheckOutcome::Passed => {
-                self.workflow.checked(domain, prepared, core_spec).await?
-            }
+            RuntimeCheckOutcome::Passed => Ok((domain, prepared, core_spec)),
             RuntimeCheckOutcome::Rejected { kind, message } => {
-                return Err(Arc::new(RuntimeError::CoreRejectedConfig {
+                Err(Arc::new(RuntimeError::CoreRejectedConfig {
                     core_kind: kind,
                     message,
-                }));
+                }))
             }
             RuntimeCheckOutcome::Unavailable(reason) => {
-                return Err(Arc::new(RuntimeError::CheckUnavailable { reason }));
+                Err(Arc::new(RuntimeError::CheckUnavailable { reason }))
             }
         }
-        Ok(())
+    }
+
+    /// Migration bridge for legacy postcommit Application/Clash workflows:
+    /// use the upstream candidate builder and validator, but do not enqueue
+    /// checked bytes that the old apply path cannot consume safely yet.
+    pub(in crate::client) async fn validate_only(
+        &self,
+        candidate: RuntimeCandidate,
+    ) -> Result<(), Arc<RuntimeError>> {
+        self.validate(candidate).await.map(|_| ())
+    }
+
+    /// Return a source-owned receipt only after the sole Core actor has ACKed
+    /// the specific checked bytes. The source must return this receipt on CAS
+    /// success or failure; no other same-domain proposal may be consumed.
+    pub(in crate::client) async fn check_with_receipt(
+        &self,
+        candidate: RuntimeCandidate,
+    ) -> Result<String, Arc<RuntimeError>> {
+        self.check_with_receipt_effect(candidate, false).await
+    }
+
+    /// Explicit one-shot mode interruption is attached to the exact checked
+    /// request *before* source CAS, and is discarded with that same request
+    /// on conflict. It is not a second postcommit Core writer.
+    pub(in crate::client) async fn check_with_receipt_effect(
+        &self,
+        candidate: RuntimeCandidate,
+        interrupt_mode: bool,
+    ) -> Result<String, Arc<RuntimeError>> {
+        let (domain, prepared, core_spec) = self.validate(candidate).await?;
+        if interrupt_mode && domain != ConfigDomain::Clash {
+            return Err(Arc::new(RuntimeError::CheckUnavailable {
+                reason: RuntimeCheckUnavailable::CandidateUnavailable {
+                    reason: "mode interruption is only valid for a committed Clash source patch"
+                        .into(),
+                },
+            }));
+        }
+        let request = chimera_core_manager::OperationId::generate().to_string();
+        self.workflow
+            .checked_for_request(domain, prepared, core_spec, request.clone(), interrupt_mode)
+            .await?;
+        Ok(request)
+    }
+
+    pub(in crate::client) fn committed_with_receipt(
+        &self,
+        domain: ConfigDomain,
+        version: Version,
+        request: String,
+    ) {
+        self.workflow
+            .source_committed_for_request(domain, version, request);
+    }
+
+    pub(in crate::client) fn abort_with_receipt(&self, domain: ConfigDomain, request: String) {
+        self.workflow.abort_uncommitted_for_request(domain, request);
+    }
+
+    pub(in crate::client) fn abort_uncommitted(&self, domain: ConfigDomain) {
+        self.workflow.abort_uncommitted(domain);
+    }
+}
+
+#[async_trait::async_trait]
+impl RuntimeGate for CandidateCheck {
+    async fn check(&self, candidate: RuntimeCandidate) -> Result<(), Arc<RuntimeError>> {
+        let (domain, prepared, core_spec) = self.validate(candidate).await?;
+        self.workflow.checked(domain, prepared, core_spec).await
     }
 
     fn committed(&self, domain: ConfigDomain, version: Version) {
@@ -282,6 +380,26 @@ mod tests {
         fn source_committed(&self, domain: ConfigDomain, version: Version) {
             self.committed.lock().unwrap().push((domain, version));
         }
+        fn abort_uncommitted(&self, _domain: ConfigDomain) {}
+        async fn checked_for_request(
+            &self,
+            domain: ConfigDomain,
+            candidate: PreparedRuntime,
+            core_spec: chimera_core_manager::CoreSpec,
+            _request: String,
+            _interrupt_mode: bool,
+        ) -> Result<(), Arc<RuntimeError>> {
+            self.checked(domain, candidate, core_spec).await
+        }
+        fn source_committed_for_request(
+            &self,
+            domain: ConfigDomain,
+            version: Version,
+            _request: String,
+        ) {
+            self.source_committed(domain, version);
+        }
+        fn abort_uncommitted_for_request(&self, _domain: ConfigDomain, _request: String) {}
     }
 
     async fn gate(
@@ -384,6 +502,67 @@ mod tests {
             inbox.committed.lock().unwrap().as_slice(),
             &[(ConfigDomain::Application, Version::new(7))]
         );
+    }
+
+    #[tokio::test]
+    async fn read_only_clash_validation_does_not_admit_checked_bytes() {
+        let (gate, builder, validator, inbox) = gate(RuntimeCheckOutcome::Passed, false).await;
+        let clash = RuntimeCandidate {
+            change: DomainChange::Clash {
+                candidate: Arc::new(ClashConfig::default()),
+            },
+            staged: BTreeMap::new(),
+        };
+        gate.validate_only(clash).await.unwrap();
+        assert_eq!(builder.prepared.lock().unwrap().len(), 1);
+        assert_eq!(validator.checked.lock().unwrap().len(), 1);
+        assert!(inbox.checked.lock().unwrap().is_empty());
+        assert!(inbox.domains.lock().unwrap().is_empty());
+        assert!(inbox.committed.lock().unwrap().is_empty());
+
+        // The real RuntimeGate path still admits a newly validated candidate;
+        // validation-only calls never populate or consume its Checked inbox.
+        gate.check(RuntimeCandidate {
+            change: DomainChange::Clash {
+                candidate: Arc::new(ClashConfig::default()),
+            },
+            staged: BTreeMap::new(),
+        })
+        .await
+        .unwrap();
+        assert_eq!(inbox.checked.lock().unwrap().len(), 1);
+        assert_eq!(
+            inbox.domains.lock().unwrap().as_slice(),
+            &[ConfigDomain::Clash]
+        );
+    }
+
+    #[tokio::test]
+    async fn application_validation_only_checks_core_without_queuing_a_runtime_apply() {
+        let (accepted_gate, builder, validator, inbox) =
+            gate(RuntimeCheckOutcome::Passed, false).await;
+        accepted_gate.validate_only(candidate()).await.unwrap();
+        assert_eq!(builder.prepared.lock().unwrap().len(), 1);
+        assert_eq!(validator.checked.lock().unwrap().len(), 1);
+        assert!(inbox.checked.lock().unwrap().is_empty());
+        assert!(inbox.committed.lock().unwrap().is_empty());
+
+        // A real Core rejection still prevents publication even though
+        // legacy Application postcommit execution remains separate.
+        let (rejected_gate, _builder, validator, inbox) = gate(
+            RuntimeCheckOutcome::Rejected {
+                kind: Some(CoreErrorKind::ConfigCheckFailed),
+                message: "invalid application candidate".into(),
+            },
+            false,
+        )
+        .await;
+        assert!(matches!(
+            rejected_gate.validate_only(candidate()).await,
+            Err(error) if matches!(error.as_ref(), RuntimeError::CoreRejectedConfig { .. })
+        ));
+        assert_eq!(validator.checked.lock().unwrap().len(), 1);
+        assert!(inbox.checked.lock().unwrap().is_empty());
     }
 
     #[tokio::test]

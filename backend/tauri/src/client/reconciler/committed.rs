@@ -13,13 +13,13 @@ use std::future::Future;
 use super::inputs::RuntimeInputs;
 use chimera_config::{clash::config::overrides::Mode, profile::ProfileId};
 
-#[derive(Clone)]
-pub(super) struct Selection {
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(in crate::client) struct Selection {
     mode: Mode,
     current: Option<ProfileId>,
 }
 impl Selection {
-    pub(super) fn of(inputs: &RuntimeInputs) -> Self {
+    pub(in crate::client) fn of(inputs: &RuntimeInputs) -> Self {
         Self {
             mode: inputs.clash.overrides.mode(),
             current: inputs.profiles.current.clone(),
@@ -27,22 +27,37 @@ impl Selection {
     }
 }
 
-#[derive(Clone, Copy)]
-pub(super) enum SelectionChange {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::client) enum SelectionChange {
     Mode,
     Profile,
 }
 
 impl Selection {
-    pub(super) fn interruption(
+    pub(in crate::client) fn interruption(
         &self,
         previous: Option<&Self>,
         clash: &chimera_config::clash::config::ClashConfig,
     ) -> Option<SelectionChange> {
+        self.interruption_with_policy(
+            previous,
+            clash.break_connection.on_mode_change,
+            clash.break_connection.on_profile_change,
+        )
+    }
+
+    /// A bounded source read can carry these two policies without returning
+    /// an unfenced Clash document to the Core executor.
+    pub(in crate::client) fn interruption_with_policy(
+        &self,
+        previous: Option<&Self>,
+        on_mode_change: bool,
+        on_profile_change: bool,
+    ) -> Option<SelectionChange> {
         let previous = previous?;
-        if previous.mode != self.mode && clash.break_connection.on_mode_change {
+        if previous.mode != self.mode && on_mode_change {
             Some(SelectionChange::Mode)
-        } else if previous.current != self.current && clash.break_connection.on_profile_change {
+        } else if previous.current != self.current && on_profile_change {
             Some(SelectionChange::Profile)
         } else {
             None

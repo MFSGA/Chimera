@@ -24,9 +24,13 @@ use crate::client::application_workflow::startup::{
 use crate::client::application_workflow::workflow::ApplicationWorkflow;
 use crate::client::application_workflow::workflow::ProfileRuntime;
 use crate::client::reconciler::attempt::{
-    AttemptPolicy, CommittedTargetAdvanced, ServiceFallbackDeferred, waiting_dependency,
+    AttemptPolicy, CommittedTargetAdvanced, ServiceFallbackDeferred,
 };
-use crate::client::reconciler::{inputs::RuntimeInputs, legacy_preparation::RuntimePreparation};
+use crate::client::reconciler::{
+    committed::{Selection, SelectionChange},
+    inputs::RuntimeInputs,
+    legacy_preparation::RuntimePreparation,
+};
 use crate::config::chimera::ClashCore;
 use crate::core::actor_v2::control_endpoint::ExecutionHost;
 use crate::enhance::FsProfileContentSource;
@@ -42,6 +46,68 @@ use super::{
         ServiceLifecyclePort, ServiceTransitionLease,
     },
 };
+
+/// The Source commit is final even when the runtime is still pending in the
+/// checked Core mailbox. Never report pending checked work as an inline apply.
+pub(in crate::client) struct ApplicationPatchResult {
+    pub(in crate::client) degradations: Vec<crate::client::runtime::Degradation>,
+    /// Exact CAS version associated with the ACKed checked bytes.
+    pub(in crate::client) checked_version: Option<u64>,
+}
+
+/// Use the ref checked-source handoff only for a local-host enhancement
+/// update. Core selection and Service ownership changes still require the
+/// specialized legacy handoff until their ref workflows migrate together.
+fn checked_application_patch_eligible(
+    patch: &ChimeraAppConfigPatch,
+    previous: &ChimeraAppConfig,
+    service_connected: bool,
+) -> bool {
+    patch.enable_builtin_enhanced.is_some()
+        && patch.core.is_none()
+        && patch.enable_service_mode.is_none()
+        && !previous.enable_service_mode
+        && !service_connected
+}
+
+#[cfg(test)]
+mod checked_application_route_tests {
+    use super::*;
+
+    #[test]
+    fn only_local_enhancement_requests_may_use_checked_apply() {
+        let mut previous = ChimeraAppConfig::default();
+        previous.enable_service_mode = false;
+        let mut patch = ChimeraAppConfigPatch {
+            enable_builtin_enhanced: Some(!previous.enable_builtin_enhanced),
+            ..Default::default()
+        };
+        assert!(checked_application_patch_eligible(&patch, &previous, false));
+        assert!(
+            !checked_application_patch_eligible(&patch, &previous, true),
+            "a connected Service host retains its dedicated handoff"
+        );
+        previous.enable_service_mode = true;
+        assert!(!checked_application_patch_eligible(
+            &patch, &previous, false
+        ));
+        previous.enable_service_mode = false;
+        patch.core = Some(previous.core);
+        assert!(!checked_application_patch_eligible(
+            &patch, &previous, false
+        ));
+        patch.core = None;
+        patch.enable_service_mode = Some(false);
+        assert!(!checked_application_patch_eligible(
+            &patch, &previous, false
+        ));
+        patch.enable_service_mode = None;
+        patch.enable_builtin_enhanced = None;
+        assert!(!checked_application_patch_eligible(
+            &patch, &previous, false
+        ));
+    }
+}
 
 /// An older source generation became stale while the single runtime actor
 /// was building or applying it. The actor must schedule another latest-source
@@ -64,7 +130,7 @@ pub(in crate::client) enum Command {
         service_connected: bool,
         /// Reply after the source commit; runtime failures are degradations,
         /// not evidence that the committed application.yaml rolled back.
-        degradations: tokio::sync::oneshot::Sender<Vec<crate::client::runtime::Degradation>>,
+        degradations: tokio::sync::oneshot::Sender<ApplicationPatchResult>,
         /// Captured by the old actor completion path until the ref single
         /// Reconciler owns both source-version and applied-target status.
         runtime_converged: Arc<AtomicBool>,
@@ -114,6 +180,7 @@ pub(in crate::client) enum Command {
         domain: super::super::reconciler::committed::SourceDomain,
         version: u64,
         authority: Arc<dyn crate::client::reconciler::authority::RuntimeSourceAuthority>,
+        interrupt_mode: bool,
     },
     /// One source notification requests a latest-committed-target round.
     ReconcileSource,
@@ -154,12 +221,111 @@ fn manager_core_kind(core: ClashCore) -> CoreKind {
     }
 }
 
+/// A one-shot post-Core connection effect waiting for the Actor's final
+/// source-mailbox fence and Running verification. This does not own Core and
+/// cannot be executed by the worker before Completed is accepted.
+pub(in crate::client) struct CheckedConnectionEffect {
+    change: SelectionChange,
+    replaced: Option<bool>,
+    prior: anyhow::Result<Option<crate::core::actor_v2::api::ApiClient>>,
+}
+
+impl CheckedConnectionEffect {
+    fn degradation(
+        change: SelectionChange,
+        message: String,
+        cause: chimera_contracts::runtime::InterruptFailure,
+    ) -> chimera_contracts::runtime::Degradation {
+        use chimera_contracts::runtime::{Degradation, DegradationPhase, DegradationReason};
+        Degradation {
+            phase: DegradationPhase::SystemEffect,
+            reason: match change {
+                SelectionChange::Mode => DegradationReason::ModeInterruptionFailed { cause },
+                SelectionChange::Profile => DegradationReason::ProfileInterruptionFailed { cause },
+            },
+            message,
+            retryable: false,
+        }
+    }
+
+    fn from_error(
+        change: SelectionChange,
+        error: anyhow::Error,
+    ) -> chimera_contracts::runtime::Degradation {
+        use chimera_contracts::runtime::InterruptFailure;
+        use chimera_core::actor_v2::api::ApiError;
+        // Keep REF's typed API failure identity; avoid parsing error strings.
+        let cause = match error.downcast_ref::<ApiError>() {
+            Some(ApiError::Stale) => InterruptFailure::Stale,
+            Some(ApiError::Unavailable(_)) => InterruptFailure::Unavailable,
+            Some(ApiError::Timeout) => InterruptFailure::Timeout,
+            Some(ApiError::Protocol(_)) => InterruptFailure::Protocol,
+            None => InterruptFailure::Unavailable,
+        };
+        Self::degradation(change, format!("{error:#}"), cause)
+    }
+
+    /// An obsolete or unverified Core result must never close the old API;
+    /// preserve its non-retryable one-shot effect as typed degradation.
+    pub(in crate::client) fn deferred(
+        self,
+        reason: &str,
+    ) -> chimera_contracts::runtime::Degradation {
+        Self::degradation(
+            self.change,
+            reason.to_owned(),
+            chimera_contracts::runtime::InterruptFailure::Unavailable,
+        )
+    }
+
+    pub(in crate::client) async fn finish(self) -> Option<chimera_contracts::runtime::Degradation> {
+        match (self.replaced, self.prior) {
+            (Some(true), _) => None, // Replaced Core already retired connections.
+            (Some(false), Ok(None)) => None, // No previous running Core instance.
+            (Some(false), Ok(Some(api))) => {
+                let result = match self.change {
+                    SelectionChange::Mode => {
+                        crate::core::connection_interruption::ConnectionInterruptionService::on_mode_change(&api, true).await
+                    }
+                    SelectionChange::Profile => {
+                        crate::core::connection_interruption::ConnectionInterruptionService::on_profile_change(&api, true).await
+                    }
+                };
+                result
+                    .err()
+                    .map(|error| Self::from_error(self.change, error))
+            }
+            (Some(false), Err(error)) => Some(Self::from_error(self.change, error)),
+            (None, _) => Some(Self::degradation(
+                self.change,
+                "Core replacement outcome is unknown; connection interruption not attempted".into(),
+                chimera_contracts::runtime::InterruptFailure::Unavailable,
+            )),
+        }
+    }
+}
+
 #[derive(Clone)]
 pub(in crate::client) struct CoreLifecycleWorkflow {
     application: ApplicationClient,
     clash: ClashConfigClient,
     profiles: Option<chimera_core::state::StateSnapshot<chimera_config::profile::Profiles>>,
     content_reader: Option<crate::state::mutation::ProfileContentReader>,
+    /// Installed once by the production Client after the canonical Core
+    /// session and Profiles gate have been assembled. Shared by clones of
+    /// the sole lifecycle workflow, not an independent runtime owner.
+    checked_gate: Arc<std::sync::OnceLock<Arc<crate::client::reconciler::check::CandidateCheck>>>,
+    /// A baseline exists only after an exact Checked apply and two successful
+    /// authoritative source reads. Legacy rebuilds invalidate it because they
+    /// do not yet hand back a confirmed applied selection.
+    applied_selection: Arc<parking_lot::Mutex<Option<Selection>>>,
+    /// A checked source's post-apply Mode effect is held by the same
+    /// workflow until its sole Actor has fenced the Completed message.
+    checked_connection_effect: Arc<parking_lot::Mutex<Option<CheckedConnectionEffect>>>,
+    /// The exact read-only source authority already used by Checked Apply.
+    /// Ordinary startup/reconcile may adopt selection only when an active
+    /// Core receipt and this authority agree on the full committed target.
+    source_authority: Option<Arc<dyn crate::client::reconciler::authority::RuntimeSourceAuthority>>,
     core: Arc<dyn CoreLifecyclePort>,
     installer: Arc<dyn BinaryInstaller>,
     service: Arc<dyn ServiceLifecyclePort>,
@@ -248,6 +414,10 @@ impl CoreLifecycleWorkflow {
             clash,
             profiles,
             content_reader: None,
+            checked_gate: Arc::new(std::sync::OnceLock::new()),
+            applied_selection: Arc::new(parking_lot::Mutex::new(None)),
+            checked_connection_effect: Arc::new(parking_lot::Mutex::new(None)),
+            source_authority: None,
             core,
             installer,
             service,
@@ -263,6 +433,15 @@ impl CoreLifecycleWorkflow {
         }
     }
 
+    pub(in crate::client) fn install_checked_gate(
+        &self,
+        gate: Arc<crate::client::reconciler::check::CandidateCheck>,
+    ) -> anyhow::Result<()> {
+        self.checked_gate
+            .set(gate)
+            .map_err(|_| anyhow::anyhow!("production candidate gate already installed"))
+    }
+
     pub(super) fn with_shutdown(mut self, shutdown: CancellationToken) -> Self {
         self.shutdown = shutdown;
         self
@@ -276,12 +455,99 @@ impl CoreLifecycleWorkflow {
         self
     }
 
+    pub(super) fn with_source_authority(
+        mut self,
+        authority: Option<Arc<dyn crate::client::reconciler::authority::RuntimeSourceAuthority>>,
+    ) -> Self {
+        self.source_authority = authority;
+        self
+    }
+
     pub(super) fn with_service_status(
         mut self,
         service_status: watch::Receiver<ServiceHostStatus>,
     ) -> Self {
         self.service_status = Some(service_status);
         self
+    }
+
+    pub(in crate::client) fn invalidate_applied_selection(&self) {
+        self.applied_selection.lock().take();
+    }
+
+    pub(in crate::client) fn take_checked_connection_effect(
+        &self,
+    ) -> Option<CheckedConnectionEffect> {
+        self.checked_connection_effect.lock().take()
+    }
+
+    /// Ref's applied_selection follows an *observed Core result*, not a
+    /// successfully saved document. The legacy startup/reconcile actor only
+    /// reports Result<()>; its already-confirmed live receipt and the same
+    /// bounded source authority used by Checked Apply can prove the selection.
+    /// Unknown, stopped, Service-handoff, or advanced sources clear the value.
+    pub(in crate::client) async fn recover_applied_selection_from_receipt(&self) {
+        let Some(authority) = self.source_authority.as_ref() else {
+            self.applied_selection.lock().take();
+            return;
+        };
+        let first = match self.core.active_runtime_receipt().await {
+            Ok(Some(receipt)) if receipt.target.is_some() => receipt,
+            Ok(_) => {
+                self.applied_selection.lock().take();
+                return;
+            }
+            Err(error) => {
+                tracing::debug!(%error, "cannot prove active Core for selection recovery");
+                self.applied_selection.lock().take();
+                return;
+            }
+        };
+        let target = first.target.as_deref().expect("checked above");
+        let selection = match authority.selection_for_applied_target(target).await {
+            Ok(selection) => selection,
+            Err(error) => {
+                tracing::debug!(%error, "cannot prove committed sources for selection recovery");
+                None
+            }
+        };
+        // Recheck the complete source target across the asynchronous Core
+        // observation. A source commit racing this read must not seed a
+        // selection that was never proven to match the running bytes.
+        let latest_selection = authority
+            .selection_for_applied_target(target)
+            .await
+            .ok()
+            .flatten();
+        // The source reads were asynchronous. Reject an intervening Core
+        // replacement or second apply even if its document target is equal.
+        let still_active = self
+            .core
+            .active_runtime_receipt()
+            .await
+            .ok()
+            .flatten()
+            .is_some_and(|latest| {
+                latest.target == first.target
+                    && latest.host == first.host
+                    && latest.applied_revision == first.applied_revision
+                    && latest.config_digest == first.config_digest
+            });
+        *self.applied_selection.lock() = if still_active && selection == latest_selection {
+            selection
+        } else {
+            None
+        };
+    }
+
+    #[cfg(test)]
+    pub(super) fn applied_selection_for_tests(&self) -> Option<Selection> {
+        self.applied_selection.lock().clone()
+    }
+
+    #[cfg(test)]
+    pub(super) fn set_applied_selection_for_tests(&self, selection: Selection) {
+        *self.applied_selection.lock() = Some(selection);
     }
 
     pub(in crate::client) fn startup_owner_unproven_handle(&self) -> Arc<AtomicBool> {
@@ -667,11 +933,87 @@ impl CoreLifecycleWorkflow {
         Ok(true)
     }
 
+    /// The sole Core owner's checked runtime execution. Carry the pre-apply
+    /// source-instance API and Core replacement verdict through this one
+    /// operation; never issue a second Core submit or interrupt a newly
+    /// started instance.
+    async fn apply_checked_runtime(
+        &self,
+        prepared: super::ports::PreparedRuntime,
+        core_spec: chimera_core_manager::CoreSpec,
+        domain: crate::client::reconciler::committed::SourceDomain,
+        version: u64,
+        authority: Arc<dyn crate::client::reconciler::authority::RuntimeSourceAuthority>,
+        interrupt_mode: bool,
+    ) -> anyhow::Result<()> {
+        let checked_target = prepared
+            .target
+            .as_deref()
+            .ok_or_else(|| anyhow::anyhow!("checked runtime has no source target identity"))?
+            .to_owned();
+        let previous = self.applied_selection.lock().clone();
+        let result = async {
+            let interruption = if interrupt_mode {
+                // Source-owned raw Clash patch has already proved that its
+                // durable transition changes mode and requests interruption.
+                // Do not depend on a possibly absent startup selection:
+                // the one-shot intent belongs to this exact Checked receipt.
+                authority.verify(domain, version, &checked_target).await?;
+                Some(SelectionChange::Mode)
+            } else {
+                authority
+                    .verify_interruption(domain, version, &checked_target, previous.as_ref())
+                    .await?
+            };
+            // Capture only the pre-apply instance-bound controller. A failed
+            // capture is a post-commit effect degradation, not a Core refusal.
+            let source = if interruption.is_some() {
+                Some(self.core.capture_interruption_source().await)
+            } else {
+                None
+            };
+            let applied = self
+                .core
+                .reconcile_prepared_outcome(prepared, core_spec)
+                .await?;
+            // No stale source may be promoted into applied_selection, and
+            // an obsolete Core result cannot settle current runtime effects.
+            let selection = authority
+                .verify_selection(domain, version, &checked_target)
+                .await?;
+            Ok::<_, anyhow::Error>((selection, interruption, source, applied.replaced))
+        }
+        .await;
+        match result {
+            Ok((selection, interruption, source, replaced)) => {
+                *self.applied_selection.lock() = selection;
+                // The worker cannot know about source notices that reached
+                // the Actor after its final read. Defer the one-shot mode
+                // effect to Completed; only that mailbox can settle it.
+                if let Some(change) = interruption {
+                    *self.checked_connection_effect.lock() = Some(CheckedConnectionEffect {
+                        change,
+                        replaced,
+                        prior: source.unwrap_or(Ok(None)),
+                    });
+                }
+                Ok(())
+            }
+            Err(error) => {
+                self.applied_selection.lock().take();
+                Err(error)
+            }
+        }
+    }
+
     pub(in crate::client) async fn execute(
         &self,
         command: Command,
         #[cfg(test)] startup_retry_target: &mut Option<StartupRetryTarget>,
     ) -> anyhow::Result<()> {
+        // The sole worker owns one command at a time. Any effect left over
+        // from a failed or superseded operation must not leak into the next.
+        self.checked_connection_effect.lock().take();
         #[cfg(test)]
         let refresh_startup_retry_identity =
             matches!(&command, Command::PatchApplicationConfig { .. });
@@ -694,6 +1036,12 @@ impl CoreLifecycleWorkflow {
             ),
             _ => false,
         };
+        // All non-Checked lifecycle operations may change the active Core or
+        // execution host, and do not yet return the ref AppliedCandidate.
+        // Never compare a later Checked selection against that obsolete state.
+        if !matches!(&command, Command::ApplyChecked { .. }) {
+            self.applied_selection.lock().take();
+        }
         let result = match command {
             Command::ProfileMutation(_) => {
                 anyhow::bail!("Profile mutations must run through ApplicationWorkflowActor")
@@ -707,23 +1055,17 @@ impl CoreLifecycleWorkflow {
                 domain,
                 version,
                 authority,
+                interrupt_mode,
             } => {
-                let target = prepared.target.as_deref().ok_or_else(|| {
-                    anyhow::anyhow!("checked runtime has no source target identity")
-                })?;
-                // Verify once before handing any bytes to Core and again
-                // after the Core owner confirms the apply. A later durable
-                // source commit may race this async Core operation. The old
-                // target's successful Core receipt must never be reported as
-                // latest-source convergence or settle Effects as current.
-                let checked_target = target.to_owned();
-                authority.verify(domain, version, &checked_target).await?;
-                self.core.reconcile_prepared(prepared, core_spec).await?;
-                // A changed source is typed CommittedTargetAdvanced by the
-                // live authority. The sole Actor's Completed handler already
-                // schedules its existing latest-source recovery on that type.
-                // Do not replay Core from here: that would create two owners.
-                authority.verify(domain, version, &checked_target).await
+                self.apply_checked_runtime(
+                    prepared,
+                    core_spec,
+                    domain,
+                    version,
+                    authority,
+                    interrupt_mode,
+                )
+                .await
             }
             Command::StartCore => self.reconcile_with_trigger(Trigger::Start).await,
             #[cfg(test)]
@@ -798,10 +1140,15 @@ impl CoreLifecycleWorkflow {
                 degradations,
                 runtime_converged,
             } => self
-                .patch_application_config(patch, service_connected)
+                .patch_application_config_with_result(patch, service_connected)
                 .await
                 .map(|result| {
-                    runtime_converged.store(result.is_empty(), Ordering::Release);
+                    // Checked Apply is a separate queued Core operation. The
+                    // source-command completion cannot mark it Converged.
+                    runtime_converged.store(
+                        result.checked_version.is_none() && result.degradations.is_empty(),
+                        Ordering::Release,
+                    );
                     let _ = degradations.send(result);
                 }),
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -1215,7 +1562,18 @@ impl CoreLifecycleWorkflow {
         target: &str,
         refusal: anyhow::Error,
     ) -> anyhow::Result<()> {
-        if self.core.outcome_uncertain() || waiting_dependency(&refusal) {
+        // A Service-to-Local fallback is authorized only by a *refused*
+        // Service submission. Unknown and Waiting outcomes cannot prove
+        // the Service owner stopped safely and must retain the original
+        // reason for the single Actor to retry or recover.
+        if !matches!(
+            crate::client::reconciler::attempt::legacy_error_verdict(
+                &refusal,
+                self.core.outcome_uncertain(),
+                false,
+            ),
+            crate::client::reconciler::attempt::LegacyApplyVerdict::Refused(_)
+        ) {
             return Err(refusal);
         }
         let observed = match self.core.status().await {
@@ -2106,27 +2464,46 @@ impl CoreLifecycleWorkflow {
     /// The ref source transition: a checked target is persisted before any
     /// running Core mutation. Only CoreLifecycle owns the later apply; no
     /// independent actor or second runtime writer is spawned by this path.
+    #[cfg(test)]
     pub(super) async fn patch_application_config(
         &self,
         patch: ChimeraAppConfigPatch,
         service_connected: bool,
     ) -> anyhow::Result<Vec<crate::client::runtime::Degradation>> {
+        Ok(self
+            .patch_application_config_with_result(patch, service_connected)
+            .await?
+            .degradations)
+    }
+
+    pub(super) async fn patch_application_config_with_result(
+        &self,
+        patch: ChimeraAppConfigPatch,
+        service_connected: bool,
+    ) -> anyhow::Result<ApplicationPatchResult> {
         if !crate::client::application_workflow::impact::application_patch_requires_reconcile(
             &patch,
             service_connected,
         ) {
             self.application.patch_typed(patch).await?;
-            return Ok(Vec::new());
+            return Ok(ApplicationPatchResult {
+                degradations: Vec::new(),
+                checked_version: None,
+            });
         }
 
         let previous = self.application.get().await?;
+        let use_checked = self.checked_gate.get().is_some()
+            && checked_application_patch_eligible(&patch, &previous.state, service_connected);
         let mut candidate = previous.state.clone();
         candidate.apply(patch);
         let prepared = self.application.prepare_replace(candidate.clone()).await?;
 
-        // Ref RuntimeGate::check: a preflight is read-only. Unlike the old
-        // application workflow, it cannot perform Reconcile/host handoff.
-        self.check_application_candidate(candidate.clone(), service_connected)
+        // The ref check ACKs *exact* prepared bytes with the one Core owner.
+        // For an eligible local-host update we will notify CheckedSourceCommitted
+        // after durable CAS; all host switch paths retain their old apply.
+        let checked_request = self
+            .check_application_candidate(candidate.clone(), service_connected, use_checked)
             .await?;
 
         let committed = self
@@ -2136,15 +2513,55 @@ impl CoreLifecycleWorkflow {
         let committed_version = match committed {
             Ok(crate::state::ConditionalReplaceResult::Replaced(snapshot)) => snapshot.version,
             Ok(crate::state::ConditionalReplaceResult::Conflict { actual_version }) => {
+                if let Some(request) = checked_request.as_ref() {
+                    self.checked_gate
+                        .get()
+                        .expect("checked Application gate admitted this proposal")
+                        .abort_with_receipt(
+                            chimera_contracts::mutation::ConfigDomain::Application,
+                            request.clone(),
+                        );
+                }
                 anyhow::bail!(
                     "application config version conflict: expected {}, actual {actual_version}",
                     previous.version
                 );
             }
             Err(error) => {
+                if let Some(request) = checked_request.as_ref() {
+                    self.checked_gate
+                        .get()
+                        .expect("checked Application gate admitted this proposal")
+                        .abort_with_receipt(
+                            chimera_contracts::mutation::ConfigDomain::Application,
+                            request.clone(),
+                        );
+                }
                 return Err(error.context("failed to commit checked application config"));
             }
         };
+
+        if use_checked {
+            // Like the upstream source owner, publish the exact durable CAS
+            // version immediately. The one CoreLifecycle Actor receives the
+            // checked notice while this command is active, and dispatches
+            // ApplyChecked only after this source command finishes. No UI
+            // callback is needed to make a successful source commit observable.
+            let gate = self
+                .checked_gate
+                .get()
+                .expect("checked gate admitted this commit");
+            gate.committed_with_receipt(
+                chimera_contracts::mutation::ConfigDomain::Application,
+                chimera_core::state::Version::new(committed_version),
+                checked_request.expect("admitted checked Application has a receipt"),
+            );
+            // Do not run the legacy inline reconcile on this same version.
+            return Ok(ApplicationPatchResult {
+                degradations: Vec::new(),
+                checked_version: Some(committed_version),
+            });
+        }
 
         // Source publication is complete. Ref's committed-target reconciler
         // always consumes the latest version; until the full actor is ported,
@@ -2163,9 +2580,15 @@ impl CoreLifecycleWorkflow {
                 message = %degradation.message,
                 "application source committed; runtime reconcile deferred"
             );
-            Ok(vec![degradation])
+            Ok(ApplicationPatchResult {
+                degradations: vec![degradation],
+                checked_version: None,
+            })
         } else {
-            Ok(Vec::new())
+            Ok(ApplicationPatchResult {
+                degradations: Vec::new(),
+                checked_version: None,
+            })
         }
     }
 
@@ -2176,31 +2599,62 @@ impl CoreLifecycleWorkflow {
         &self,
         app: ChimeraAppConfig,
         service_connected: bool,
-    ) -> anyhow::Result<()> {
+        use_checked: bool,
+    ) -> anyhow::Result<Option<String>> {
         use crate::state::mutation::{DomainChange, RuntimeCandidate};
 
-        let Some(profiles) = &self.profiles else {
-            // Compatibility-only tests instantiate no typed Profiles source.
-            return Ok(());
+        if self.profiles.is_none() {
+            // Only isolated test adapters may omit the authoritative Profiles
+            // domain. Production must never silently waive a Core check.
+            #[cfg(test)]
+            return Ok(None);
+            #[cfg(not(test))]
+            anyhow::bail!("Application preflight requires the typed Profiles source");
+        }
+        let candidate = RuntimeCandidate {
+            change: DomainChange::Application {
+                candidate: Arc::new(app.clone()),
+            },
+            staged: Default::default(),
         };
-        // Share the exact REF-style DomainChange admission path with the
-        // production Profiles/Clash gate. The CoreLifecycle mailbox still
-        // serializes source persistence and the subsequent runtime apply.
+        if let Some(gate) = self.checked_gate.get() {
+            if use_checked {
+                // The ACK proves that one Core owner retained the exact
+                // validated candidate before the source is made durable.
+                return gate
+                    .check_with_receipt(candidate)
+                    .await
+                    .map(Some)
+                    .map_err(anyhow::Error::new);
+            }
+            // Core selection and Service mode still use legacy postcommit
+            // transitions; avoid an orphaned Checked inbox entry for them.
+            return gate
+                .validate_only(candidate)
+                .await
+                .map(|()| None)
+                .map_err(anyhow::Error::new);
+        }
+        #[cfg(not(test))]
+        {
+            let _ = service_connected;
+            anyhow::bail!("Application preflight requires the installed production CandidateCheck");
+        }
+        // Isolated legacy workflow tests have no canonical runtime session.
+        #[cfg(test)]
         crate::client::reconciler::legacy_check::check_domain_candidate(
             self.core.as_ref(),
             self.application.get_typed(),
             self.clash.get()?,
-            profiles,
+            self.profiles
+                .as_ref()
+                .expect("checked Profiles availability"),
             self.content_reader.as_ref(),
-            RuntimeCandidate {
-                change: DomainChange::Application {
-                    candidate: Arc::new(app),
-                },
-                staged: Default::default(),
-            },
+            candidate,
             service_connected,
         )
         .await
+        .map(|()| None)
         .map_err(anyhow::Error::new)
     }
 
@@ -2621,5 +3075,56 @@ impl ProfileRuntime for CoreLifecycleWorkflow {
     fn request_runtime_rebuild(&self) {
         // The owning ApplicationWorkflowActor schedules dirty work after this
         // mutation releases the serialized execution domain.
+    }
+}
+
+#[cfg(test)]
+mod checked_connection_effect_tests {
+    use super::*;
+    use chimera_contracts::runtime::{DegradationPhase, DegradationReason, InterruptFailure};
+    use chimera_core::actor_v2::api::ApiError;
+
+    #[test]
+    fn core_api_interruption_failure_has_ref_typed_reason_and_wire_code() {
+        let cases = [
+            (ApiError::Stale, InterruptFailure::Stale),
+            (
+                ApiError::Unavailable("retired".into()),
+                InterruptFailure::Unavailable,
+            ),
+            (ApiError::Timeout, InterruptFailure::Timeout),
+        ];
+        for (error, expected) in cases {
+            let degradation = CheckedConnectionEffect::from_error(
+                SelectionChange::Mode,
+                anyhow::Error::new(error),
+            );
+            assert!(
+                matches!(degradation.reason, DegradationReason::ModeInterruptionFailed { cause } if cause == expected)
+            );
+            assert_eq!(degradation.phase, DegradationPhase::SystemEffect);
+            assert!(!degradation.retryable);
+            assert_eq!(
+                crate::client::runtime::Degradation::from_shared(degradation).code,
+                "mode_interruption_failed"
+            );
+        }
+    }
+
+    #[test]
+    fn stale_profile_effect_retains_profile_reason_after_source_fence() {
+        let effect = CheckedConnectionEffect {
+            change: SelectionChange::Profile,
+            replaced: Some(false),
+            prior: Err(anyhow::Error::new(ApiError::Stale)),
+        };
+        let degradation = effect.deferred("newer Profiles source reached mailbox");
+        assert!(matches!(
+            degradation.reason,
+            DegradationReason::ProfileInterruptionFailed {
+                cause: InterruptFailure::Unavailable
+            }
+        ));
+        assert_eq!(degradation.message, "newer Profiles source reached mailbox");
     }
 }

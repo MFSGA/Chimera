@@ -204,6 +204,9 @@ struct ChimeraClientInner {
     streams_shutdown: tokio_util::sync::CancellationToken,
     proxies: chimera_core::proxies_actor::ProxiesClient,
     typed_profiles: Option<profiles::ProfilesClient>,
+    /// The one candidate checker shared by the Profiles gate and legacy
+    /// Clash read-only preflight during the staged ref source cutover.
+    checked_gate: Option<Arc<reconciler::check::CandidateCheck>>,
     profile_service: Arc<ProfileFileService>,
     system_dns: Arc<dyn SystemDnsCache>,
     traffic_store: parking_lot::Mutex<Option<Arc<dyn chimera_traffic::TrafficStore>>>,
@@ -313,6 +316,9 @@ impl ChimeraClient {
                 shutdown.clone(),
                 &tasks,
             ))?;
+        let profile_content_source = Arc::new(crate::enhance::FsProfileContentSource::new(
+            paths.app_profiles_dir(),
+        ));
         let core_lifecycle =
             tauri::async_runtime::block_on(CoreLifecycleClient::spawn_with_profiles_and_content(
                 core.clone(),
@@ -320,10 +326,8 @@ impl ChimeraClient {
                 typed.clash_config.clone(),
                 Some(typed_profiles.snapshot_handle()),
                 Some(typed_profiles.content_reader()),
-                Some(Arc::new(crate::enhance::FsProfileContentSource::new(
-                    paths.app_profiles_dir(),
-                ))),
-                runtime_paths,
+                Some(profile_content_source.clone()),
+                runtime_paths.clone(),
                 Arc::new(chimera_os::core_install::FsBinaryInstaller::new(Arc::new(
                     crate::adapters::elevation::InteractiveElevationConsent,
                 ))),
@@ -331,16 +335,23 @@ impl ChimeraClient {
                 shutdown.clone(),
                 &tasks,
             ))?;
-        let profile_gate = Arc::new(reconciler::legacy_check::CandidateCheck::new(
-            core.clone(),
-            typed.application.clone(),
-            typed.clash_config.clone(),
+        let profile_gate = Arc::new(reconciler::composition::prepare_production_gate(
+            &typed.application,
+            &typed.clash_config,
             typed_profiles.content_reader(),
-            typed_profiles.snapshot_handle(),
-            core_lifecycle.clone(),
-        ));
+            profile_content_source,
+            runtime_paths,
+            &core_v2,
+            &core_lifecycle,
+        )?);
+        // Both Application and Clash legacy postcommit paths validate via
+        // the exact Profiles production checker. Install it in the sole
+        // CoreLifecycle workflow before opening Profile mutation admission.
         tauri::async_runtime::block_on(
-            mutations.connect_with_runtime_gate(core_lifecycle.clone(), profile_gate),
+            core_lifecycle.install_candidate_gate(profile_gate.clone()),
+        )?;
+        tauri::async_runtime::block_on(
+            mutations.connect_with_runtime_gate(core_lifecycle.clone(), profile_gate.clone()),
         )?;
         let streams_shutdown = shutdown.child_token();
         let streams =
@@ -394,6 +405,7 @@ impl ChimeraClient {
             proxies,
             profile_service,
             Some(typed_profiles),
+            Some(profile_gate),
             system_dns,
             ui_sink,
             Some(app_updater),
@@ -528,6 +540,7 @@ impl ChimeraClient {
             proxies,
             profile_service,
             None,
+            None,
             system_dns,
             ui_sink,
             None,
@@ -558,6 +571,7 @@ impl ChimeraClient {
         proxies: chimera_core::proxies_actor::ProxiesClient,
         profile_service: Arc<ProfileFileService>,
         typed_profiles: Option<profiles::ProfilesClient>,
+        checked_gate: Option<Arc<reconciler::check::CandidateCheck>>,
         system_dns: Arc<dyn SystemDnsCache>,
         ui_sink: Arc<dyn UiEventSink>,
         app_updater: Option<AppUpdateClient>,
@@ -602,6 +616,7 @@ impl ChimeraClient {
             streams_shutdown,
             proxies,
             typed_profiles,
+            checked_gate,
             profile_service,
             system_dns,
             traffic_store: parking_lot::Mutex::new(None),
