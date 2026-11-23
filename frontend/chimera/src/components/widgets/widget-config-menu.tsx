@@ -26,7 +26,11 @@ import {
   type WidgetConfig,
 } from './widget-config';
 import { ConfigGroup, ConfigRow } from './widget-config-row';
-import { WidgetOptionSelect } from './widget-reference-fields';
+import {
+  ProviderReferencesField,
+  SubscriptionTargetField,
+  WidgetOptionSelect,
+} from './widget-reference-fields';
 
 type ChoiceOption<T extends string> = { value: T; label: string };
 
@@ -39,7 +43,13 @@ function Choice<T extends string>({
   onChange,
 }: {
   field:
-    'speed-unit' | 'shortcut-layout' | 'shortcut-buttons' | 'shortcut-order';
+    | 'speed-unit'
+    | 'shortcut-layout'
+    | 'shortcut-buttons'
+    | 'shortcut-order'
+    | 'proxy-mode-layout'
+    | 'quota-wave-style'
+    | 'provider-types';
   label: string;
   value: T;
   options: ChoiceOption<T>[];
@@ -152,6 +162,159 @@ function ConfigFieldRows({
   onChange: (config: WidgetConfig) => void;
 }) {
   switch (config.type) {
+    case WidgetId.ProviderUpdates:
+      return (
+        <>
+          <ConfigGroup>
+            <Choice
+              field="provider-types"
+              label={m.dashboard_widget_config_provider_types()}
+              value={config.kinds}
+              options={[
+                {
+                  value: 'both',
+                  label: m.dashboard_widget_config_both_providers(),
+                },
+                {
+                  value: 'proxy',
+                  label: m.dashboard_widget_config_proxy_providers(),
+                },
+                {
+                  value: 'rule',
+                  label: m.dashboard_widget_config_rule_providers(),
+                },
+              ]}
+              disabled={disabled}
+              onChange={(kinds) => onChange({ ...config, kinds })}
+            />
+            <Stepper
+              label={m.dashboard_widget_config_items()}
+              value={config.maxItems}
+              range={WIDGET_CONFIG_NUMBER_RANGES.maxItems}
+              disabled={disabled}
+              onChange={(maxItems) => onChange({ ...config, maxItems })}
+            />
+          </ConfigGroup>
+          <ConfigGroup>
+            <ProviderReferencesField
+              resources={config.resources}
+              disabled={disabled}
+              onChange={(resources) => onChange({ ...config, resources })}
+            />
+          </ConfigGroup>
+        </>
+      );
+    case WidgetId.SubscriptionQuota:
+      return (
+        <>
+          <ConfigGroup>
+            <SubscriptionTargetField
+              target={config.target}
+              disabled={disabled}
+              onChange={(target) => onChange({ ...config, target })}
+            />
+          </ConfigGroup>
+          <ConfigGroup>
+            <Toggle
+              label={m.dashboard_widget_config_expiry()}
+              checked={config.showExpiry}
+              disabled={disabled}
+              onChange={(showExpiry) => onChange({ ...config, showExpiry })}
+            />
+            <Toggle
+              label={m.dashboard_widget_config_progress()}
+              checked={config.showProgress}
+              disabled={disabled}
+              onChange={(showProgress) => onChange({ ...config, showProgress })}
+            />
+            <Choice
+              field="quota-wave-style"
+              label={m.dashboard_widget_subscription_quota_config_wave_style()}
+              value={config.waveStyle}
+              options={[
+                {
+                  value: 'filled',
+                  label:
+                    m.dashboard_widget_subscription_quota_config_wave_filled(),
+                },
+                {
+                  value: 'outline',
+                  label:
+                    m.dashboard_widget_subscription_quota_config_wave_outline(),
+                },
+              ]}
+              disabled={disabled || !config.showProgress}
+              onChange={(waveStyle) => onChange({ ...config, waveStyle })}
+            />
+            <Toggle
+              label={m.dashboard_widget_subscription_quota_config_wave_animation()}
+              checked={config.animateWave}
+              disabled={disabled || !config.showProgress}
+              onChange={(animateWave) => onChange({ ...config, animateWave })}
+            />
+          </ConfigGroup>
+          <ConfigGroup>
+            <Stepper
+              label={m.dashboard_widget_config_expiry_threshold()}
+              value={config.expiryWarningDays}
+              range={WIDGET_CONFIG_NUMBER_RANGES.expiryWarningDays}
+              disabled={disabled}
+              onChange={(expiryWarningDays) =>
+                onChange({ ...config, expiryWarningDays })
+              }
+            />
+            <Stepper
+              label={m.dashboard_widget_config_quota_threshold()}
+              value={config.quotaWarningPercent}
+              range={WIDGET_CONFIG_NUMBER_RANGES.quotaWarningPercent}
+              disabled={disabled}
+              onChange={(quotaWarningPercent) =>
+                onChange({ ...config, quotaWarningPercent })
+              }
+            />
+          </ConfigGroup>
+        </>
+      );
+    case WidgetId.SubscriptionSchedule:
+      return (
+        <ConfigGroup>
+          <SubscriptionTargetField
+            target={config.target}
+            disabled={disabled}
+            onChange={(target) => onChange({ ...config, target })}
+          />
+          <Toggle
+            label={m.dashboard_widget_config_recent_runs()}
+            checked={config.showRecentRuns}
+            disabled={disabled}
+            onChange={(showRecentRuns) =>
+              onChange({ ...config, showRecentRuns })
+            }
+          />
+        </ConfigGroup>
+      );
+    case WidgetId.ProxyMode:
+      return (
+        <ConfigGroup>
+          <Choice
+            field="proxy-mode-layout"
+            label={m.dashboard_widget_proxy_mode_config_layout()}
+            value={config.layout}
+            disabled={disabled}
+            options={[
+              {
+                value: 'focus',
+                label: m.dashboard_widget_proxy_mode_config_focus(),
+              },
+              {
+                value: 'flex',
+                label: m.dashboard_widget_proxy_mode_config_flex(),
+              },
+            ]}
+            onChange={(layout) => onChange({ ...config, layout })}
+          />
+        </ConfigGroup>
+      );
     case WidgetId.TrafficDown:
     case WidgetId.TrafficUp:
       return (

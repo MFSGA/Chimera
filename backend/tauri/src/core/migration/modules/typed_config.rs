@@ -19,11 +19,11 @@ pub static MIGRATOR: TypedConfigMigrator = TypedConfigMigrator;
 static VERSION_0_23_0: Lazy<Version> = Lazy::new(|| Version::parse("0.23.0").unwrap());
 static SPLIT_LEGACY_CONFIG: SplitLegacyConfig = SplitLegacyConfig;
 static REPAIR_CLASH_CONFIG: RepairClashConfig = RepairClashConfig;
-static STEPS: [&dyn MigrationStep; 2] = [&SPLIT_LEGACY_CONFIG, &REPAIR_CLASH_CONFIG];
+static STEPS: [&dyn MigrationStep<Ctx>; 2] = [&SPLIT_LEGACY_CONFIG, &REPAIR_CLASH_CONFIG];
 
 pub struct TypedConfigMigrator;
 
-impl ModuleMigrator for TypedConfigMigrator {
+impl ModuleMigrator<Ctx> for TypedConfigMigrator {
     fn module(&self) -> &'static str {
         "typed_config"
     }
@@ -36,7 +36,7 @@ impl ModuleMigrator for TypedConfigMigrator {
         }
     }
 
-    fn steps(&self) -> &'static [&'static dyn MigrationStep] {
+    fn steps(&self) -> &'static [&'static dyn MigrationStep<Ctx>] {
         &STEPS
     }
 }
@@ -44,7 +44,7 @@ impl ModuleMigrator for TypedConfigMigrator {
 #[derive(Debug, Clone, Copy)]
 pub struct SplitLegacyConfig;
 
-impl MigrationStep for SplitLegacyConfig {
+impl MigrationStep<Ctx> for SplitLegacyConfig {
     fn id(&self) -> &'static str {
         "typed_config/split_legacy_config"
     }
@@ -91,7 +91,7 @@ impl MigrationStep for SplitLegacyConfig {
 #[derive(Debug, Clone, Copy)]
 pub struct RepairClashConfig;
 
-impl MigrationStep for RepairClashConfig {
+impl MigrationStep<Ctx> for RepairClashConfig {
     fn id(&self) -> &'static str {
         "typed_config/repair_clash_config"
     }

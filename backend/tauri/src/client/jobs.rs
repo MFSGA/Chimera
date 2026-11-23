@@ -192,6 +192,113 @@ pub struct ProfileSyncStatus {
     pub history_limit: usize,
 }
 
+/// Secret-free status for ordinary UI surfaces. Registration errors may carry
+/// subscription URLs, so expose only their presence.
+#[derive(Debug, serde::Serialize, specta::Type)]
+pub struct ProfileSyncSummary {
+    pub scheduled: bool,
+    pub next_run_at: Option<String>,
+    pub active: Vec<SyncRunSummary>,
+    pub journal_degraded: bool,
+    pub has_registration_error: bool,
+    pub history_limit: usize,
+}
+
+impl From<&ProfileSyncStatus> for ProfileSyncSummary {
+    fn from(status: &ProfileSyncStatus) -> Self {
+        Self {
+            scheduled: status.scheduled,
+            next_run_at: status.next_run_at.clone(),
+            active: status.active.iter().map(Into::into).collect(),
+            journal_degraded: status.journal_degraded,
+            has_registration_error: status.registration_error.is_some(),
+            history_limit: status.history_limit,
+        }
+    }
+}
+
+/// A sync run without job keys, output, failure text, or log counters.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
+pub struct SyncRunSummary {
+    pub id: String,
+    pub admission_sequence: String,
+    pub trigger: String,
+    pub scheduled_at: Option<String>,
+    pub admitted_at: String,
+    pub finished_at: Option<String>,
+    pub state: SyncRunStateSummary,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum SyncRunStateSummary {
+    Admitted,
+    Running,
+    Cancelling,
+    Finalizing,
+    Finished {
+        outcome: SyncOutcomeKind,
+        journal_degraded: bool,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, specta::Type)]
+#[serde(rename_all = "snake_case")]
+pub enum SyncOutcomeKind {
+    Succeeded,
+    Failed,
+    Cancelled,
+    Interrupted,
+    Skipped,
+}
+
+impl From<&chimera_jobs::dto::RunDto> for SyncRunSummary {
+    fn from(run: &chimera_jobs::dto::RunDto) -> Self {
+        use chimera_jobs::dto::{JournalDto, OutcomeDto, RunStateDto};
+
+        let state = match &run.state {
+            RunStateDto::Admitted => SyncRunStateSummary::Admitted,
+            RunStateDto::Running => SyncRunStateSummary::Running,
+            RunStateDto::Cancelling => SyncRunStateSummary::Cancelling,
+            RunStateDto::Finalizing => SyncRunStateSummary::Finalizing,
+            RunStateDto::Finished { completion } => SyncRunStateSummary::Finished {
+                outcome: match &completion.outcome {
+                    OutcomeDto::Succeeded => SyncOutcomeKind::Succeeded,
+                    OutcomeDto::Failed { .. } => SyncOutcomeKind::Failed,
+                    OutcomeDto::Cancelled => SyncOutcomeKind::Cancelled,
+                    OutcomeDto::Interrupted => SyncOutcomeKind::Interrupted,
+                    OutcomeDto::Skipped => SyncOutcomeKind::Skipped,
+                },
+                journal_degraded: matches!(completion.journal, JournalDto::Degraded { .. }),
+            },
+        };
+        Self {
+            id: run.id.clone(),
+            admission_sequence: run.admission_sequence.clone(),
+            trigger: run.trigger.clone(),
+            scheduled_at: run.scheduled_at.clone(),
+            admitted_at: run.admitted_at.clone(),
+            finished_at: run.finished_at.clone(),
+            state,
+        }
+    }
+}
+
+#[derive(Debug, serde::Serialize, specta::Type)]
+pub struct SyncRunPageSummary {
+    pub items: Vec<SyncRunSummary>,
+    pub next: Option<chimera_jobs::dto::RunCursorDto>,
+}
+
+impl From<&chimera_jobs::dto::RunPageDto> for SyncRunPageSummary {
+    fn from(page: &chimera_jobs::dto::RunPageDto) -> Self {
+        Self {
+            items: page.items.iter().map(Into::into).collect(),
+            next: page.next.clone(),
+        }
+    }
+}
+
 impl super::profiles::ProfilesClient {
     pub(crate) fn profile_sync_key(
         &self,
@@ -315,6 +422,76 @@ pub(crate) async fn settled(client: &JobsClient) {
     while !client.inspect().await.unwrap().active.is_empty() {
         assert!(std::time::Instant::now() < deadline, "jobs did not settle");
         tokio::task::yield_now().await;
+    }
+}
+
+#[cfg(test)]
+mod summary_tests {
+    use super::*;
+    use chimera_jobs::dto::{
+        CompletionDto, JournalDto, OutcomeDto, OutputDto, RunDto, RunPageDto, RunStateDto,
+    };
+
+    #[test]
+    fn dashboard_summaries_omit_owner_text_and_failure_payloads() {
+        let secret = "https://private.invalid/config?token=secret";
+        let run = RunDto {
+            id: "run-7".into(),
+            job: secret.into(),
+            definition_version: "revision".into(),
+            admission_sequence: "9007199254740993".into(),
+            trigger: "manual".into(),
+            scheduled_at: None,
+            admitted_at: "2026-01-01T00:00:00Z".into(),
+            finished_at: Some("2026-01-01T00:00:01Z".into()),
+            state: RunStateDto::Finished {
+                completion: CompletionDto {
+                    outcome: OutcomeDto::Failed {
+                        code: secret.into(),
+                        message: secret.into(),
+                    },
+                    output: OutputDto::JsonText {
+                        value: secret.into(),
+                    },
+                    journal: JournalDto::Degraded {
+                        code: secret.into(),
+                    },
+                },
+            },
+            last_log_sequence: "42".into(),
+            dropped_log_count: "1".into(),
+        };
+        let status = ProfileSyncStatus {
+            scheduled: true,
+            next_run_at: None,
+            latest_run_sequence: Some(run.admission_sequence.clone()),
+            active: vec![run.clone()],
+            journal_degraded: true,
+            registration_error: Some(secret.into()),
+            history_limit: DEFAULT_HISTORY_LIMIT,
+        };
+        let summary = ProfileSyncSummary::from(&status);
+        let page = SyncRunPageSummary::from(&RunPageDto {
+            items: vec![run],
+            next: None,
+        });
+        let encoded = format!(
+            "{}{}",
+            serde_json::to_string(&summary).unwrap(),
+            serde_json::to_string(&page).unwrap()
+        );
+        assert!(!encoded.contains(secret));
+        assert!(!encoded.contains("last_log_sequence"));
+        assert!(!encoded.contains("latest_run_sequence"));
+        assert!(summary.has_registration_error);
+        assert_eq!(page.items[0].admission_sequence, "9007199254740993");
+        assert_eq!(
+            page.items[0].state,
+            SyncRunStateSummary::Finished {
+                outcome: SyncOutcomeKind::Failed,
+                journal_degraded: true,
+            }
+        );
     }
 }
 

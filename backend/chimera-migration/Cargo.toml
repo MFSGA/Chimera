@@ -1,0 +1,25 @@
+[package]
+name = "chimera-migration"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[features]
+default = []
+test-support = []
+
+[dependencies]
+anyhow = "1"
+chimera-persistence = { path = "../chimera-persistence" }
+chimera-contracts = { path = "../chimera-contracts" }
+chimera-paths = { path = "../chimera-paths" }
+chrono = "0.4"
+semver = { version = "1", features = ["serde"] }
+serde.workspace = true
+serde_yaml_ng.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tempfile = "3"

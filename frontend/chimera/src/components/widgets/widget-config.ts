@@ -6,6 +6,10 @@ export enum WidgetId {
   Memory = 'memory',
   ProxyShortcuts = 'proxy-shortcuts',
   CoreShortcuts = 'core-shortcuts',
+  ProxyMode = 'proxy-mode',
+  SubscriptionSchedule = 'subscription-schedule',
+  SubscriptionQuota = 'subscription-quota',
+  ProviderUpdates = 'provider-updates',
 }
 
 type TrafficConfig = {
@@ -19,6 +23,8 @@ type HistoryConfig = { showChart: boolean; samples: number };
 /** Reference targets for upcoming subscription/report dashboard widgets. */
 export type SubscriptionTarget =
   { kind: 'current' } | { kind: 'fixed'; profileUid: string };
+
+export type SubscriptionQuotaWaveStyle = 'filled' | 'outline';
 
 export type ProviderReference = { kind: 'proxy' | 'rule'; name: string };
 
@@ -36,6 +42,31 @@ export type WidgetConfigs = {
   [WidgetId.CoreShortcuts]: {
     type: WidgetId.CoreShortcuts;
     showVersion: boolean;
+  };
+  [WidgetId.ProxyMode]: {
+    type: WidgetId.ProxyMode;
+    layout: 'focus' | 'flex';
+  };
+  [WidgetId.SubscriptionSchedule]: {
+    type: WidgetId.SubscriptionSchedule;
+    target: SubscriptionTarget;
+    showRecentRuns: boolean;
+  };
+  [WidgetId.SubscriptionQuota]: {
+    type: WidgetId.SubscriptionQuota;
+    target: SubscriptionTarget;
+    showExpiry: boolean;
+    showProgress: boolean;
+    waveStyle: SubscriptionQuotaWaveStyle;
+    animateWave: boolean;
+    expiryWarningDays: number;
+    quotaWarningPercent: number;
+  };
+  [WidgetId.ProviderUpdates]: {
+    type: WidgetId.ProviderUpdates;
+    kinds: 'both' | 'proxy' | 'rule';
+    resources: ProviderReference[];
+    maxItems: number;
   };
 };
 
@@ -74,6 +105,31 @@ export const DEFAULT_WIDGET_CONFIGS: WidgetConfigs = {
     type: WidgetId.CoreShortcuts,
     showVersion: true,
   },
+  [WidgetId.ProxyMode]: {
+    type: WidgetId.ProxyMode,
+    layout: 'flex',
+  },
+  [WidgetId.SubscriptionSchedule]: {
+    type: WidgetId.SubscriptionSchedule,
+    target: { kind: 'current' },
+    showRecentRuns: true,
+  },
+  [WidgetId.SubscriptionQuota]: {
+    type: WidgetId.SubscriptionQuota,
+    target: { kind: 'current' },
+    showExpiry: true,
+    showProgress: true,
+    waveStyle: 'filled',
+    animateWave: true,
+    expiryWarningDays: 7,
+    quotaWarningPercent: 20,
+  },
+  [WidgetId.ProviderUpdates]: {
+    type: WidgetId.ProviderUpdates,
+    kinds: 'both',
+    resources: [],
+    maxItems: 3,
+  },
 };
 
 export type WidgetConfigStorage = {
@@ -88,6 +144,9 @@ export const EMPTY_WIDGET_CONFIG_STORAGE: WidgetConfigStorage = {
 
 export const WIDGET_CONFIG_NUMBER_RANGES = {
   samples: [2, 32],
+  expiryWarningDays: [1, 365],
+  quotaWarningPercent: [1, 100],
+  maxItems: [1, 20],
 } as const;
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -118,18 +177,63 @@ export function normalizeWidgetConfigStorage(
     const config = { ...defaults } as WidgetConfig;
     for (const [key, defaultValue] of Object.entries(defaults)) {
       const candidate = value[key];
-      if (typeof candidate === 'boolean' && typeof defaultValue === 'boolean') {
-        Object.assign(config, { [key]: candidate });
-      } else if (key === 'samples' && typeof candidate === 'number') {
-        const [min, max] = WIDGET_CONFIG_NUMBER_RANGES.samples;
-        if (Number.isInteger(candidate)) {
-          Object.assign(config, {
-            samples: Math.min(max, Math.max(min, candidate)),
-          });
+      if (
+        key === 'target' &&
+        isRecord(candidate) &&
+        (candidate.kind === 'current' ||
+          (candidate.kind === 'fixed' &&
+            typeof candidate.profileUid === 'string' &&
+            candidate.profileUid.trim().length > 0))
+      ) {
+        Object.assign(config, {
+          target:
+            candidate.kind === 'current'
+              ? { kind: 'current' }
+              : { kind: 'fixed', profileUid: candidate.profileUid },
+        });
+      } else if (key === 'resources' && Array.isArray(candidate)) {
+        const resources: ProviderReference[] = [];
+        const seen = new Set<string>();
+        for (const entry of candidate) {
+          if (!isRecord(entry)) continue;
+          if (entry.kind !== 'proxy' && entry.kind !== 'rule') continue;
+          if (typeof entry.name !== 'string' || !entry.name.trim()) continue;
+          const identity = JSON.stringify([entry.kind, entry.name]);
+          if (seen.has(identity)) continue;
+          seen.add(identity);
+          resources.push({ kind: entry.kind, name: entry.name });
         }
+        Object.assign(config, { resources });
+      } else if (
+        typeof candidate === 'boolean' &&
+        typeof defaultValue === 'boolean'
+      ) {
+        Object.assign(config, { [key]: candidate });
+      } else if (
+        (key === 'samples' ||
+          key === 'expiryWarningDays' ||
+          key === 'quotaWarningPercent' ||
+          key === 'maxItems') &&
+        typeof candidate === 'number' &&
+        Number.isInteger(candidate)
+      ) {
+        const [min, max] = WIDGET_CONFIG_NUMBER_RANGES[key];
+        Object.assign(config, {
+          [key]: Math.min(max, Math.max(min, candidate)),
+        });
       } else if (
         (key === 'unit' && (candidate === 'bytes' || candidate === 'bits')) ||
-        (key === 'layout' && (candidate === 'equal' || candidate === 'flex')) ||
+        (key === 'waveStyle' &&
+          (candidate === 'filled' || candidate === 'outline')) ||
+        (key === 'kinds' &&
+          (candidate === 'both' ||
+            candidate === 'proxy' ||
+            candidate === 'rule')) ||
+        (key === 'layout' &&
+          ((config.type === WidgetId.ProxyMode &&
+            (candidate === 'focus' || candidate === 'flex')) ||
+            (config.type === WidgetId.ProxyShortcuts &&
+              (candidate === 'equal' || candidate === 'flex')))) ||
         (key === 'buttons' &&
           (candidate === 'both' ||
             candidate === 'system' ||

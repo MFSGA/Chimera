@@ -1,5 +1,67 @@
 # ref 对齐进度
 
+## DIFF-093：Migration Runner 执行事务与恢复核验下沉（2026-11-19）
+
+- **参考基线与风险**：以 `ref@c4b35e048` 的 `backend/nyanpasu-migration/src/runner.rs` 为核心参考；本批风险 **L2**（运行前保护与旧数据迁移）。目标是在共享 `chimera-migration` 里统一 Runner 步骤执行、恢复和模块遍历的真实生产逻辑，同时保留 Tauri 的宿主路径、BackupPort 与具体迁移模块。不改 `ref` / Runtime gitlink，不清理用户历史、备份与 `.corrupt-*` 数据证据。
+- **共享步骤事务**：`chimera-migration::runner::execute_step` 接管原 Tauri `run_step`、`finish_step`、`record_failure`、`check_step`、`ensure_satisfied`，沿用共享 `MigrationStep<Ctx>` 和 `Registry<Ctx>`。运行前先验证步骤需要性并落盘 `InProgress`；完成后核对 document stamp 和步骤条件，再连同模块连续 revision 记录 `Completed` / `Skipped`；发生检查、运行或后置条件错误时记录 `Failed` 并保留真实错误链，回滚为 best-effort，回滚失败不能掩盖原始运行错误；写状态文件失败时不执行下一次文件修改。
+- **共享恢复和文档核验**：`runner::{ensure_baselines,reconcile_documents,ensure_known_revisions,verify_applied_revisions,stamp_adopted_documents}` 接管 stamped 文档与状态文件的双向核对，拒绝高于当前版本的文件、丢失 stamp、落后于状态的文件及不一致的落盘修订；恢复错误 `RevisionError` 移入共享 crate，Tauri 保留同一类型重导出供原有启动诊断 downcast 使用。旧文档只在完整核验达到模块 head 且 BackupPort 已成功返回后补 stamp，保证失败前不覆盖原始配置。新安装的 baseline 仍不创建无意义备份。
+- **共享模块循环与最终提交**：`runner::{has_pending_steps,execute_pending_steps,commit_successful_run}` 负责逐模块执行、按 Registry 顺序处理 pending、独立模块失败时记录第一条错误并继续其他模块、重启仅重试失败步骤；全部模块、旧文档 stamp 和文件状态核验完成后才原子写入 `last_succeeded`。Tauri 仍负责 preflight 备份的实际文件生成/校验和最终备份 pruning，不能在成功状态落盘之前清理任何旧备份。单步 `run_migration` 沿用同一个共享执行事务。
+- **兼容与未完成**：保留既有 `_nyanpasu` stamp、`migration-state.yaml` schema 2 和错误消息、Profiles 功能开关、Chimera 0.28.x 的步骤版本门槛、旧 IPC 以及 BackupRequest/Manifest 语义。共享 Runner 接收泛型上下文及注入的 Registry/BackupPort，Tauri `Runner` 剩余宿主编排与具体 `modules/{profiles,typed_config,storage}` 业务尚未全部迁出，尚不能声称整个 Migration crate 已按 ref 100% 对齐。
+- **验证**：共享 Migration 直接验证成功、跳过、检查错误、运行错误、后置条件不满足、失败回滚、回滚失败不隐藏原始错误、重启重试、跨模块故障隔离、符号链接状态目标拒绝等，库测试 **35/35**；Tauri 完整库 **1057/1057**、1 项原有忽略项；`cargo check --locked -p chimera --all-features --tests`、Rustfmt、提交 Clippy、Git diff check 通过。仅 macOS 本地测试；Windows/Linux、用户历史数据实机升级、GUI E2E、远端 CI 尚未验收。
+- **回滚和后续**：出问题先回滚本轮共享 Runner 委托与相关诊断重导出，不重置状态、不删除迁移前备份或 `.corrupt-*` 证据。下一步完整搬迁 Profiles/Typed Config/Storage 的业务模块，最终将宿主 `Runner` 收敛为纯注入适配。
+
+## DIFF-092：Migration Module / Registry / Document 契约下沉（2026-11-19）
+
+- **基线与目标**：继续对齐 `ref@c4b35e048` 的 `nyanpasu-migration/src/{lib.rs,registry.rs,fs.rs,runner.rs}` 和 `nyanpasu-persistence::format`。本轮风险 **L2**（启动前迁移检查及带 stamp 的文档）；不改两个 git submodule 的指针，不触碰真实用户目录、网络服务和既有应用配置。
+- **共享模块契约**：新增 `chimera-migration/src/module.rs`，将 `StepCheck`、`MigrationCheckError`（保留 IO、YAML、KV、Stamp 原始错误来源）、`MigrationStep<Ctx>`、`ModuleMigrator<Ctx>`、`ModuleKind<Ctx>`、`DocumentSpec<Ctx>` 从 Tauri 搬到共享 crate。Context 采用泛型，Tauri 的 Profiles、Typed Config 和 Storage 模块继续实现共享契约并持有特有业务适配，避免迁移 crate 反向依赖宿主或修改旧 migration ID、revision、版本门槛和 Legacy IPC。Tauri `migration::mod` 只重导出共享类型，不再定义平行 trait。
+- **Registry 实际所有权**：新增 `chimera-migration/src/registry.rs` 的 `Registry<Ctx>`，统一维护有序模块集合与步骤查找，构建时拒绝重复模块、重复 step ID、错误模块归属或未严格递增的 revision。Tauri 注册表只注入既有的 `profiles → typed_config → storage` 实例及必需顺序；Runner 消费共享 Registry 输出，不再自建重复的步骤列表/查找算法。已有 Heuristic rev2 冻结测试、Profiles 迁移文档顺序测试保持不变。
+- **Document 实际所有权**：新增 `chimera-migration/src/document.rs`，统一 YAML 可选读取、暂态 IO 重试、悬挂软链接检查、stamp 解析/文件名校验、带指定前缀的原子写入及符号链接/目录目标保护；直接使用既有 `chimera-persistence::format` / `write`，保留 `_nyanpasu` stamp 和 `serde_yaml_ng` 字节格式。Tauri `core/migration/fs.rs` 仅保留兼容转发及原回归测试，不再复制核心解析和写入算法。
+- **验证与剩余边界**：共享 Migration 库 **29/29**、Tauri 全库 **1057/1057**、1 项原有忽略测试；后端 `cargo check --locked -p chimera --all-features --tests`、Rustfmt、提交 Clippy/diff check 通过。共享 Registry 已覆盖查找、严格 revision 顺序、重复模块/错误归属；Document 已覆盖 stamp 读写、错 stamp、软链接保护。完整 Runner 执行循环、Profiles/Typed Config/Storage 的迁移业务实现和应用特有备份生成仍在 Tauri；这不是对上游独立 Migration crate 的全部完成。未进行 Windows/Linux 实机、旧用户全量升级、桌面 E2E 和 GitHub CI 验收。
+- **回滚与下一步**：若发现生产迁移回归，先回滚本轮 Tauri 泛型迁移契约和共享 Registry/Document 接线，保留迁移前备份、旧配置以及任何 `.corrupt-*` 证据；下一轮集中迁移 Runner 的执行/恢复事务并逐步将具体 Module 转入共享 crate，完成对 ref 的完整迁移。
+
+## DIFF-091：Migration Context 与 Backup Port 共享化（2026-11-19）
+
+- **目标与基线**：以 `ref@c4b35e048` 的 `backend/nyanpasu-migration/src/{lib.rs,runner.rs}` 所定义的 `Ctx`、`PathResolver` 和迁移前 Backup gate 为准。本批风险 **L2**（旧配置备份及迁移前状态）。目标是让共享 `chimera-migration` 实际持有迁移路径、HotkeyStore 注入和安全备份决策；不更新两个 git submodule、不碰真实用户文件或启动服务，不改变旧 `migration-state.yaml` 的 schema 和 Legacy/UI/Agent 接口。
+- **Context 与 Path**：新增 `chimera-migration/src/context.rs`：`MigrationPaths` 从宿主解析后的 config/data 根目录纯派生 Profiles、应用配置、Session、Clash、Storage 和迁移状态路径；常量复用 `chimera-paths`，不要求 UTF-8 路径、不创建目录。共享 `Ctx` 保存这些路径与 `Arc<dyn HotkeyStoreOpener>`。Tauri 的 `core/migration::Ctx` 保留宿主 `PathResolver` 和一个可 `Deref` 的共享 Context；除 Profiles `DocumentSpec` 函数指针适配外，迁移模块经共享 Ctx 获取派生路径与 KV opener，避免两套热键/文件存储业务逻辑。
+- **Runner/Backup Port**：`chimera-migration::runner::{BackupPort,ensure_backup,has_nothing_to_protect}` 管理备份时机与“未成功备份就不得继续改写”的门槛：新安装（只有迁移状态 baseline）不创建备份；旧配置、Storage 文件或悬挂链接必须先备份；目录读取失败阻止迁移；已有快照不重复创建；备份失败不能将状态标记成已保护。Tauri `TauriBackupPort` 仅实现实际创建、完成校验的迁移备份，沿用 `BackupRequest::Migration`、关闭文件 `StorageSource::File`、manifest、安全目标与回滚约束；完成的快照才写入 Runner 的 `backup` 并可供启动故障诊断。原有 backup prune 与剩余 document/module 执行逻辑仍归 Tauri。
+- **兼容验证与错误**：共享 Migration 测试 **23/23**（含空目录和 baseline-only 不做 IO、未转换的非 UTF-8 路径、旧配置/KV 触发单次备份、失败后重试、悬挂软链接与无效配置根目录）；Tauri Migration **93/93**（宿主和共享派生路径逐项等价、真实 Runner 完整备份与重试）；Tauri 全库 **1057/1057**、1 项原有忽略项；`cargo check --locked --all-features --tests`、Rustfmt、diff check 通过。仅 macOS 本地运行，不能当作 Windows/Linux、真实用户数据迁移或 UI E2E 的验收。
+- **尚未完成/后续**：上游 `nyanpasu-migration` 的 `Runner` 完整循环、Document/Module traits、Registry、Modules 与 Backup 文件实现仍需分批搬迁；当前 Tauri 仅通过 BackupPort 注入实现。下批优先将 Module/Registry 对 `Ctx` 的引用改为共享上下文并迁入独立 crate，再收敛剩余执行循环/结构化错误；如发现运行时回归，回滚本轮 Context/Backup Port 接线即可，不能删除现有备份和 `.corrupt-*` 证据。
+
+## DIFF-090：Migration 状态所有权与 Runner 调度策略下沉（2026-11-19）
+
+- **目标与参考**：基于 `ref@c4b35e048` 的 `backend/nyanpasu-migration/src/{lib.rs,store.rs,runner.rs,fs.rs}`，新增 `backend/chimera-migration`（风险 **L2：迁移状态与启动恢复**）；验收是旧 `migration-state.yaml` 仍可按 schema 2 读取和重新写入，错误来源与保护行为不变，现有 Legacy/E2E/API 不受影响。非目标：本轮不把依赖 Tauri `PathResolver`、备份、Profiles/Typed Config 迁移模块的 Runner IO 逻辑直接挪进共享 crate，不修改真实用户数据和两个 git submodule。
+- **共享迁移内容**：从 Tauri 提取上游同名的 `MigrationState`、`MigrationAdvice`、`store::{MigrationStore,ModuleState,TaskRecord,SchemaError}`、`runner::{advice_step,introduced_in_reached}`，并通过无 UI 依赖的 `StepSpec` 描述步骤元数据。状态机的启动/完成/跳过/失败流转、连续 revision 推进、版本 gating（包括 prerelease）、错误文本和存储 schema 保持现有行为。Tauri 原 `migration::store` 仅重导出共享状态类型，`Runner::advice_step` 和状态转换直接委托共享实现，只有模块基线检测通过注入模块回调留在 Tauri。
+- **安全 IO 合并**：迁移状态 `load` 使用共享 `chimera_persistence::retry_io` 和 `symlink_metadata`，不把悬挂软链接当缺失文件。`flush_atomic` 保留原注释头、schema/字段名、文件写入格式；使用共享 `chimera-migration::fs::{atomic_write,validate_destination}` 在写入前拒绝符号链接、目录及其他非文件目标。Tauri 文档写入器也使用相同检查，避免两份安全策略漂移；未触碰 `.corrupt-*` 等证据文件。
+- **剩余差异**：上游完整 `nyanpasu-migration` crate 自己持有 Runner、Module、Registry、路径/备份接口；Chimera 尚有 `core/migration/{runner,modules,registry}` 在 Tauri，并包含 Legacy 配置适配。下一轮应先提供独立的路径、备份、Document/Module Port，迁移剩余 Runner IO 与完整模块，最终消除 Tauri 重导出适配；本轮不可宣称 Runner 全部完成迁移。
+- **验证及回滚**：新 crate 单元测试 **16/16**（从旧 Store 迁移的验证及新增状态调度/符号链接保护）、Tauri 迁移 **92/92**、Tauri 完整库 **1056/1056**、后端 all-features 编译、Rustfmt、提交检查通过；Tauri 测试数下降系 9 项原 Store 测试转移到了共享 crate，未删除验证。暂未执行 Windows/Linux、真实旧版用户升级与 GUI E2E；如果出现兼容性问题，回滚本轮 crate 接线和 Tauri 委托即可，用户配置、备份和旧证据文件必须保留。
+
+## DIFF-089：Storage Hotkeys 两步迁移生产接线（2026-11-19）
+
+- **固定基线与目标**：以 `ref@c4b35e048` 的 `nyanpasu-migration/src/modules/storage.rs` 和共享 `HotkeyStoreOpener` / `HotkeyStore` 契约为源，把热键从旧版 `chimera-config.yaml` 迁至 KV，再迁至 typed `application.yaml`。本轮不修改 `ref`、Runtime gitlink、真实用户文件、系统服务和网络设置。
+- **上游算法与真实注册**：`backend/tauri/src/core/migration/modules/storage.rs` 保留上游两个 Migration ID：`storage/hotkeys_to_kv`（rev1）和 `storage/hotkeys_to_typed_config`（rev2）。模块注册在 `typed_config` 之后，确保 typed 文件先建立；Ctx 注入 `Arc<dyn HotkeyStoreOpener>`，生产使用共享 `chimera_core::storage::RedbHotkeyStoreOpener`，测试允许注入拒绝访问源。第 1 步保存非空旧 YAML 热键后才移除旧字段；第 2 步在 typed 文件存在时将 KV 中的列表（含显式空列表）替换 typed 字段，并且只有 typed 原子写入成功后才删除 KV 旧键。
+- **安全与兼容边界**：保留上游 `clash_mode_script` 精确函数名过滤、保留其他 typed 应用字段、键不存在时无副作用，以及错误源和路径。使用 Chimera 的 `chimera_config_path`、`serde_yaml_ng`、具有链接保护的 `migration::fs::atomic_write`；上游 `2.0.0` 引入版本在本产品适配为 `0.28.3`。本地 Runner 在基线检测之后才建立迁移前备份，因此基线检测只读取 YAML 并保守检查存储节点是否存在，**不提前打开 redb**（它可能触发损坏文件恢复）；对损坏旧 YAML 的解析错误也延迟到备份后按步骤报告。无旧热键的首次安装不创建 KV，也不重写 typed 热键。
+- **类型化错误与剩余差异**：共享 `MigrationCheckError::Storage` 改为原始 `BoxedCause`，匹配上游动态存储端口；Storage 模块的读取、解析、序列化、检查、原子写入、存储打开/保存/删除错误均保留来源链，当前按本地 `thiserror` + `anyhow` 合同适配上游 `snafu` 错误型态。迁移框架当前仍位于 Tauri，未整体搬到独立 `chimera-migration` crate，也未接入上轮 Live Backup 的用户可见手动入口；这些仍属于后续架构工作。
+- **回归覆盖**：真实 redb + 临时路径验证 KV→typed、旧 YAML→KV→typed、空列表清空、缺失旧键幂等、Script 精确匹配、typed 缺失/损坏以及符号链接写入失败后旧 KV 不丢、注入打开失败保留真实 `io::Error`；真实 Runner 验证迁移前备份、完整两步流程、状态记录、二次启动不重写和不安全备份拒绝。Migration 定向测试 **101/101** 通过；原有备份失败和损坏文件保护测试全部保留。生成的 Specta Storage 文档注释同步到共享契约，不改变 TS 类型/IPC 形状。跨平台 E2E、真实用户旧版本数据和远端 CI 仍须另行验收。
+- **后续**：进一步将 Migration 迁出 Tauri 到上游式独立 crate，并打通手动 Live Backup UI；保持旧迁移状态 schema 与用户数据兼容，不通过重置应用数据修复测试。回滚时保留已生成的备份及 `.corrupt-*` 证据。
+
+## DIFF-088：Storage 共享所有权及 Live Snapshot / Hotkey Port（2026-11-19）
+
+- **基线与范围**：以 `ref@c4b35e048` 的 `nyanpasu-runtime-values/src/storage.rs`、`nyanpasu-core/src/storage.rs`、`nyanpasu-migration/{backup.rs,modules/storage.rs}` 为准迁移；不改变 `ref` 或 Runtime gitlink，不访问用户实际数据库与系统配置。重点消除 Tauri 持有的 redb 数据所有权和重复的错误分类实现。
+- **共享数据所有权**：`chimera-contracts/src/storage.rs` 定义上游同形的 `StorageRevision` / `StorageItem`（含 `INITIAL`、`checked_next`）及 `StorageSnapshot`、`HotkeyStore`、`HotkeyStoreOpener` 端口。`chimera-core/src/{storage.rs,redb_ext.rs}` 接管 redb 打开、恢复、条件提交、变更广播、错误分类及原有 Storage 测试；Tauri 仅保留路径注入、typed/legacy 窗口事件和现有 IPC 的兼容重导出，不复制 Core 的数据库算法。
+- **上游快照/Hotkey API**：共享 Core `Storage::export_to` 从一个 redb 读事务复制全部键值到新的数据库文件，禁止覆盖已有目标；为 `StorageSnapshot` 实现动态端口。`RedbHotkeyStoreOpener` 与 `HotkeyStore` 支持按 key `hotkeys` 的缺省读取、持久写入和删除，遵循短生命周期迁移句柄语义；尚未接入完整的上游 Storage Migrator。
+- **备份生产 API**：Tauri `StorageSource::Live(&dyn StorageSnapshot)` 使 `create_backup` 能在源数据库仍打开时导出一致性快照。原有 `StorageSource::File` 继续为启动前 Migration 复制关闭的文件，不能在打开的 redb 数据库上当作安全快照。Live 失败以 `BackupError::Snapshot` 保留原始错误，启动诊断保留失败路径，备份仅清理本次预留的 `.partial`。现有项目尚未从用户可见的手动备份按钮调用 Live 分支。
+- **兼容与非目标**：保留 Chimera 原有的 Revision CAS、Legacy WebStorage key fallback、广播顺序、旧 Tauri 事件名称和 JSON 形状、redb 4.3 兼容分类；未引入上游完整的 snafu/specta StorageOperationError，也未宣称所有 Migration/Backup UI 已对齐。原有 Storage 数据不会自动迁移或被清理。
+- **验证**：`chimera-core storage::tests` **17/17**、`chimera-core redb_ext::tests` **6/6**、Tauri 启动 Storage **2/2**、Backup **22/22**（含 Live 一致性、原文件不覆盖、失败后清理）、Migration **88/88**，IPC Storage 定向测试通过；`cargo check --locked -p chimera --all-features --tests`、Rustfmt、差异检查通过。只验证本机 macOS，Windows/Linux、用户真实热键迁移、桌面 E2E 与发布流程仍未验收。
+- **后续**：完整对齐上游 `nyanpasu-migration` Storage Migrator 与 typed 错误合同，并在有完整 UI/备份边界测试后接入 Live Backup 到真正的手动备份入口。若回滚本轮，应先取消 Live 备份接线再恢复 Tauri Storage owner，不能删除已有的 `.corrupt-*` 证据。
+
+## DIFF-087：Core Storage 启动恢复对齐 ref（2026-11-19）
+
+- **目标与基线**：以 `ref@c4b35e048` 的 `backend/nyanpasu-core/src/storage.rs` 为准，将 `StorageInner::{try_new_with_open,open_database,create_and_init_database}` 与 `transient_database_error`、`confirmed_database_problem`、`preserve_database` 的启动恢复语义迁入 `backend/tauri/src/core/storage.rs`；风险 L2（数据库恢复与旧用户数据）。本轮不更新 `ref`、Runtime gitlink，不直接访问用户数据库，也不修改系统代理/服务。
+- **实现与上游映射**：对齐上游的 `symlink_metadata`、`chimera_persistence::{retry_io,retry_with_delay,retry,is_link,preserve}`，沿用 `utils/redb_ext::{RedbFailure,find_failure}` 分类；只对明确损坏、不兼容或缺失表的数据库保留原节点并重建。暂态 IO/文件锁按上游 50/100/200 ms 重试，其他未确认失败直接返回而不改动原文件；目录与符号链接保留为 `.corrupt-*` 证据，不再递归删除。打开已有库还要验证预期 `clash-nyanpasu` 表存在。
+- **必要兼容差异**：上游已将 Storage 归属 `nyanpasu-core`，Chimera 本轮仍在 `tauri/src/core/storage.rs`，保留现有 `StorageRevision` 条件提交、namespaced/legacy fallback、typed/legacy 事件和 IPC 契约；错误类型仍是本地 `thiserror` 结构而非上游的完整 `snafu`/`specta` 类型。当前 redb 是 4.3 系列，而上游版本可能不同；剩余迁移需结合迁移/备份 ports 与前端 wire 合同统一收敛，不能宣称 Storage 已完全对齐。
+- **验证与失败历史**：macOS 本机 `core::storage::tests` **17/17**（损坏文件证据、缺失表、目录、链接、异常上级路径、暂态重试耗尽、未确认错误保留原始字节、现有 revision/Legacy 行为）；`core::backup::tests` **20/20**；`core::migration::` **88/88**。全 feature Tauri 测试目标编译检查及 Rustfmt/diff check 通过。一轮按 `ipc::tests` 过滤的测试额外命中 Service IPC 时序用例，其中 **1/23** 失败；该用例隔离重跑 **3/3** 通过，未修改测试或关闭断言，独立并发不稳定性尚需调查。未执行 Windows/Linux、真实用户数据库升级、全量 E2E，不能将定向验证视为发布验收。
+- **回滚与后续**：如出现不兼容，可回滚本轮 Storage 修改；已产生的 `.corrupt-*` 文件必须由用户明确处理，不允许清理脚本自动删除。下一批优先搬迁共享 Core Storage 所有权和细粒度错误合同，并对上游 `StorageSnapshot`、HotkeyStore / Migration ports 建立完整路径映射与回归。
+
 ## DIFF-086：ProfileFsPort 文件操作的精准类型化错误映射（2026-11-13）
 
 - **基线与范围**：在固定 `ref@59724e85c`、`backend/chimera-runtime@d56b083` 和本地 `codex/ref-os-dns-20261112` 上继续承接 DIFF-085。只改 `backend/tauri/src/service/profile_file.rs` 文件 I/O 失败的错误映射与对应测试，不改 App/Profiles 配置、文件事务算法、IPC 错误协议或生产行为；未合并、未推送。此轮风险为文件操作错误来源和日志文本的变化。

@@ -1,0 +1,1162 @@
+//! Pure migration scheduling decisions from the ref Runner path.
+//! IO, backup creation, and module execution remain injected by the application adapter.
+
+use crate::{
+    MigrationAdvice, MigrationState, StepSpec,
+    context::Ctx,
+    document,
+    module::{
+        DocumentSpec, MigrationCheckError, MigrationStep, ModuleKind, ModuleMigrator, StepCheck,
+    },
+    registry::Registry,
+    store::{MigrationStore, ModuleState, STORE_FILE_NAME},
+};
+use anyhow::{Context as _, bail};
+use semver::Version;
+use std::{fs, io, path::Path};
+
+/// A snapshot producer injected by the application shell. The shared Runner
+/// decides *whether* migration must be blocked on a backup, while the shell
+/// provides platform-aware file enumeration and verified manifest creation.
+pub trait BackupPort {
+    type Snapshot;
+
+    fn create_snapshot(&mut self, ctx: &Ctx) -> anyhow::Result<Self::Snapshot>;
+}
+
+/// Ensure that existing user state is snapshotted exactly once before any
+/// migration rewrite. A failed snapshot is not recorded, so a later retry can
+/// create a new one. No writes happen in this shared gate itself.
+pub fn ensure_backup<P: BackupPort>(
+    ctx: &Ctx,
+    existing: &mut Option<P::Snapshot>,
+    port: &mut P,
+) -> anyhow::Result<bool> {
+    if existing.is_some() || has_nothing_to_protect(ctx)? {
+        return Ok(false);
+    }
+    let snapshot = port.create_snapshot(ctx)?;
+    *existing = Some(snapshot);
+    Ok(true)
+}
+
+/// A fresh installation may have only migration-state baselines. Never treat
+/// a dangling database symlink as absent or ignore an inaccessible root.
+pub fn has_nothing_to_protect(ctx: &Ctx) -> anyhow::Result<bool> {
+    let storage_path = ctx.storage_path();
+    if crate::fs::config_node_exists(&storage_path)
+        .with_context(|| format!("failed to inspect {}", storage_path.display()))?
+    {
+        return Ok(false);
+    }
+    let config = ctx.paths().app_config_dir();
+    let entries = match fs::read_dir(config) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(true),
+        Err(error) => {
+            return Err(error).with_context(|| format!("failed to list {}", config.display()));
+        }
+    };
+    for entry in entries {
+        let entry = entry.with_context(|| format!("failed to inspect {}", config.display()))?;
+        if entry.file_name() != STORE_FILE_NAME {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+/// An on-disk revision written by a future build; never downgrade it.
+#[derive(Debug, thiserror::Error)]
+pub enum RevisionError {
+    #[error("{} is stamped at revision {read}, but this build only knows revisions up to {supported}; the file was written by a newer version. Update to that version, or restore this file from a compatible backup.", path.display())]
+    NewerDocument {
+        path: std::path::PathBuf,
+        read: u64,
+        supported: u64,
+    },
+    #[error(
+        "migration state records {module} at revision {read}, but this build only knows revisions up to {supported}; the data was migrated by a newer version"
+    )]
+    NewerAppliedModule {
+        path: std::path::PathBuf,
+        module: String,
+        read: u64,
+        supported: u64,
+    },
+}
+
+/// Initialize each module from its stamped document or injected baseline.
+/// A detected newer schema stops the run before any baseline state is flushed.
+pub fn ensure_baselines<C: 'static>(
+    modules: impl IntoIterator<Item = &'static dyn ModuleMigrator<C>>,
+    ctx: &C,
+    store: &mut MigrationStore,
+    state_path: &Path,
+) -> anyhow::Result<()> {
+    let modules: Vec<_> = modules.into_iter().collect();
+    let mut changed = reconcile_documents(modules.iter().copied(), ctx, store, state_path)?;
+    for module in modules {
+        if !store.modules.contains_key(module.module()) {
+            let baseline = module.detect_baseline(ctx)?;
+            changed |= store.ensure_module(module.module(), baseline);
+        }
+    }
+    if changed {
+        store
+            .flush_atomic(state_path)
+            .context("failed to persist migration baselines")?;
+    }
+    Ok(())
+}
+
+/// After all steps are verified, stamp legacy unstamped documents at their
+/// module head. Snapshot protection is checked before the first rewrite, and
+/// no `stamped` flag is set until the actual atomic write succeeds.
+pub fn stamp_adopted_documents<C: 'static, P: BackupPort>(
+    modules: impl IntoIterator<Item = &'static dyn ModuleMigrator<C>>,
+    ctx: &C,
+    backup_ctx: &Ctx,
+    store: &mut MigrationStore,
+    existing: &mut Option<P::Snapshot>,
+    port: &mut P,
+) -> anyhow::Result<()> {
+    for module in modules {
+        let ModuleKind::Document(spec) = module.kind() else {
+            continue;
+        };
+        let path = (spec.path)(ctx);
+        let Some(file) = document::read_document(&path, spec.document)
+            .with_context(|| format!("failed to inspect the {} files", module.module()))?
+        else {
+            continue;
+        };
+        if file.schema_revision.is_none() {
+            let head = head_revision(module);
+            if store.module_state(module.module()).applied_revision != head {
+                continue;
+            }
+            ensure_backup(backup_ctx, existing, port)?;
+            document::write_document(&path, spec.document, head, file.payload, None)
+                .with_context(|| format!("failed to stamp the {} files", module.module()))?;
+        }
+        store
+            .modules
+            .entry(module.module().to_owned())
+            .or_default()
+            .stamped = true;
+    }
+    Ok(())
+}
+
+pub fn reconcile_documents<C: 'static>(
+    modules: impl IntoIterator<Item = &'static dyn ModuleMigrator<C>>,
+    ctx: &C,
+    store: &mut MigrationStore,
+    state_path: &Path,
+) -> anyhow::Result<bool> {
+    let mut changed = false;
+    for module in modules {
+        let ModuleKind::Document(spec) = module.kind() else {
+            continue;
+        };
+        let head = head_revision(module);
+        let entry = store.modules.get(module.module()).copied();
+        // Left to `ensure_known_revisions`, which explains it better.
+        if entry.is_some_and(|state| state.applied_revision > head) {
+            continue;
+        }
+        let path = (spec.path)(ctx);
+        let file = document::read_document(&path, spec.document)
+            .with_context(|| format!("failed to inspect the {} files", module.module()))?;
+        let Some(file) = file else {
+            if entry.is_none() {
+                // Nothing to migrate: the file will be created at head.
+                store
+                    .modules
+                    .insert(module.module().to_string(), at_revision(head, false));
+                changed = true;
+            }
+            continue;
+        };
+
+        match (file.schema_revision, entry) {
+            (Some(stamped), _) if stamped > head => {
+                return Err(RevisionError::NewerDocument {
+                    path,
+                    read: stamped,
+                    supported: head,
+                }
+                .into());
+            }
+            (Some(stamped), None) => {
+                store
+                    .modules
+                    .insert(module.module().to_string(), at_revision(stamped, true));
+                changed = true;
+            }
+            (Some(stamped), Some(state)) if stamped < state.applied_revision => bail!(
+                "{} is stamped at revision {stamped}, although {} records {} as migrated \
+                     to revision {}. The file may have been restored from a backup or rewritten \
+                     by an older version. Restore it, or delete {} so the file is migrated \
+                     again from its stamp.",
+                path.display(),
+                state_path.display(),
+                module.module(),
+                state.applied_revision,
+                state_path.display()
+            ),
+            (Some(_), Some(state)) => {
+                if !state.stamped {
+                    store
+                        .modules
+                        .entry(module.module().to_owned())
+                        .or_default()
+                        .stamped = true;
+                    changed = true;
+                }
+            }
+            (None, Some(state))
+                if state.stamped || state.applied_revision > spec.unstamped_ceiling =>
+            {
+                bail!(
+                    "{} has lost the `{}` stamp it was written with; it may have been \
+                         rewritten by an older version or edited by hand. Restore it from a \
+                         backup, or delete {} so its revision is detected from its content.",
+                    path.display(),
+                    chimera_persistence::format::STAMP_KEY,
+                    state_path.display()
+                )
+            }
+            // Written before stamps: `detect_baseline` and `files_behind`
+            // still judge it, and `stamp_adopted_documents` stamps it once
+            // it is verified at head.
+            (None, _) => {}
+        }
+    }
+    Ok(changed)
+}
+
+pub fn ensure_known_revisions<C: 'static>(
+    modules: impl IntoIterator<Item = &'static dyn ModuleMigrator<C>>,
+    store: &MigrationStore,
+    state_path: &Path,
+) -> anyhow::Result<()> {
+    for module in modules {
+        let applied = store.module_state(module.module()).applied_revision;
+        let head = head_revision(module);
+        if applied > head {
+            return Err(RevisionError::NewerAppliedModule {
+                path: state_path.to_path_buf(),
+                module: module.module().to_owned(),
+                read: applied,
+                supported: head,
+            }
+            .into());
+        }
+    }
+    Ok(())
+}
+
+pub fn verify_applied_revisions<C: 'static>(
+    modules: impl IntoIterator<Item = &'static dyn ModuleMigrator<C>>,
+    ctx: &C,
+    store: &MigrationStore,
+    state_path: &Path,
+) -> anyhow::Result<()> {
+    for module in modules {
+        let applied = store.module_state(module.module()).applied_revision;
+        let behind = module
+            .files_behind(ctx, applied)
+            .with_context(|| format!("failed to inspect the {} files", module.module()))?;
+        if let Some(reason) = behind {
+            bail!(
+                "{reason}, although {} records {} as migrated to revision {applied}. The \
+                     files may have been moved, restored from a backup or rewritten by an older \
+                     version. Restore them, or delete {} so the files on disk are detected and \
+                     migrated again.",
+                state_path.display(),
+                module.module(),
+                state_path.display()
+            );
+        }
+    }
+    Ok(())
+}
+
+fn head_revision<C: 'static>(module: &dyn ModuleMigrator<C>) -> u64 {
+    module.steps().last().map_or(0, |step| step.revision())
+}
+
+fn at_revision(revision: u64, stamped: bool) -> ModuleState {
+    ModuleState {
+        applied_revision: revision,
+        baseline_revision: revision,
+        stamped,
+    }
+}
+
+/// Commit a fully verified migration run only after all steps, stamps and
+/// file-state checks succeed. The final version and task state share one
+/// crash-safe flush, and no backup is pruned until that flush returns success.
+pub fn commit_successful_run(
+    store: &mut MigrationStore,
+    target: &Version,
+    state_path: &Path,
+) -> anyhow::Result<()> {
+    store.set_last_succeeded(target.clone());
+    store
+        .flush_atomic(state_path)
+        .context("failed to persist successful migration state")
+}
+
+/// Decide preflight backup requirements before any step may rewrite data.
+pub fn has_pending_steps<C: 'static>(
+    modules: &[&'static dyn ModuleMigrator<C>],
+    store: &MigrationStore,
+    target: &Version,
+    force: bool,
+) -> bool {
+    modules.iter().any(|module| {
+        module.steps().iter().any(|step| {
+            advice_step(store, spec(*step), target, force, true) == MigrationAdvice::Pending
+        })
+    })
+}
+
+/// Execute all pending modules in registry order. A failed step stops its
+/// module but does not suppress independent modules; the first failure is
+/// returned *after* attempting them so the next startup can retry safely.
+/// Callers must finish the verified preflight snapshot before entering here.
+pub fn execute_pending_steps<C: 'static>(
+    modules: &[&'static dyn ModuleMigrator<C>],
+    ctx: &mut C,
+    store: &mut MigrationStore,
+    state_path: &Path,
+    registry: &Registry<C>,
+    target: &Version,
+    force: bool,
+) -> anyhow::Result<()> {
+    let mut first_error = None;
+    for module in modules {
+        for step in module.steps() {
+            let advice = advice_step(store, spec(*step), target, force, true);
+            println!(
+                "[{advice}] {} rev{} {}",
+                step.module(),
+                step.revision(),
+                step.id()
+            );
+            if advice != MigrationAdvice::Pending {
+                continue;
+            }
+            if let Err(error) = execute_step(*step, ctx, store, state_path, registry) {
+                eprintln!(
+                    "Migration {} failed; stopping module {} and continuing",
+                    step.id(),
+                    step.module()
+                );
+                if first_error.is_none() {
+                    first_error = Some(error);
+                }
+                break;
+            }
+        }
+    }
+    match first_error {
+        Some(error) => Err(error),
+        None => Ok(()),
+    }
+}
+
+/// A migration step transaction, shared with the reference Runner.
+///
+/// Record `in_progress` before invoking the step, verify the document and
+/// step-specific postconditions, and only then publish completed/skipped state.
+/// Failures are persisted for restart and best-effort rollback cannot hide
+/// the original error. The migration preflight backup is owned by the caller.
+pub fn execute_step<C: 'static>(
+    step: &dyn MigrationStep<C>,
+    ctx: &mut C,
+    store: &mut MigrationStore,
+    state_path: &Path,
+    registry: &Registry<C>,
+) -> anyhow::Result<()> {
+    match check_step(step, ctx, registry) {
+        Ok(Some(StepCheck::Satisfied)) => {
+            println!("Migration {} is already satisfied, skipping.", step.id());
+            return finish_step(step, ctx, store, state_path, registry, true);
+        }
+        Ok(Some(StepCheck::Needed) | None) => {}
+        Err(error) => {
+            let error = anyhow::Error::new(error).context(format!("failed to check {}", step.id()));
+            eprintln!("Migration {} failed: {error:#}", step.id());
+            return Err(record_failure(step, store, state_path, error));
+        }
+    }
+
+    store.mark_in_progress(spec(step));
+    store
+        .flush_atomic(state_path)
+        .with_context(|| format!("failed to persist {} in-progress state", step.id()))?;
+
+    match step
+        .run(ctx)
+        .and_then(|()| ensure_satisfied(step, ctx, registry))
+    {
+        Ok(()) => {
+            println!("Migration {} completed.", step.id());
+            finish_step(step, ctx, store, state_path, registry, false)
+        }
+        Err(error) => {
+            eprintln!("Migration {} failed: {error:#}", step.id());
+            if let Err(rollback_error) = step.rollback(ctx) {
+                eprintln!(
+                    "Migration {} rollback failed: {rollback_error:#}",
+                    step.id()
+                );
+            }
+            Err(record_failure(step, store, state_path, error))
+        }
+    }
+}
+
+fn spec<C: 'static>(step: &dyn MigrationStep<C>) -> StepSpec<'static> {
+    StepSpec {
+        id: step.id(),
+        module: step.module(),
+        revision: step.revision(),
+        introduced_in: step.introduced_in(),
+    }
+}
+
+fn finish_step<C: 'static>(
+    step: &dyn MigrationStep<C>,
+    ctx: &C,
+    store: &mut MigrationStore,
+    state_path: &Path,
+    registry: &Registry<C>,
+    skipped: bool,
+) -> anyhow::Result<()> {
+    // Record the presence of a stamp in the same flush as completion. A later
+    // lost stamp must be rejected even if the rest of the run never finishes.
+    if let Some(spec) = document_spec(registry, step.module())
+        && document::read_document(&(spec.path)(ctx), spec.document)?
+            .is_some_and(|file| file.schema_revision.is_some())
+    {
+        store
+            .modules
+            .entry(step.module().to_owned())
+            .or_default()
+            .stamped = true;
+    }
+    if skipped {
+        store.mark_skipped(spec(step));
+    } else {
+        store.mark_completed(spec(step));
+    }
+    store.bump_module(step.module());
+    store
+        .flush_atomic(state_path)
+        .with_context(|| format!("failed to persist {} finished state", step.id()))
+}
+
+fn record_failure<C: 'static>(
+    step: &dyn MigrationStep<C>,
+    store: &mut MigrationStore,
+    state_path: &Path,
+    error: anyhow::Error,
+) -> anyhow::Error {
+    store.mark_failed(spec(step), &error);
+    match store.flush_atomic(state_path) {
+        Ok(()) => error,
+        Err(flush_error) => error.context(format!(
+            "failed to persist {} failed state: {flush_error:#}",
+            step.id()
+        )),
+    }
+}
+
+/// A successful run must satisfy its check and, for document modules, must
+/// leave a stamped document, otherwise its completion cannot be persisted.
+fn ensure_satisfied<C: 'static>(
+    step: &dyn MigrationStep<C>,
+    ctx: &C,
+    registry: &Registry<C>,
+) -> anyhow::Result<()> {
+    if let Some(spec) = document_spec(registry, step.module()) {
+        let file = document::read_document(&(spec.path)(ctx), spec.document)
+            .with_context(|| format!("failed to check {} after it ran", step.id()))?;
+        if file.is_none_or(|file| file.schema_revision.is_none()) {
+            bail!(
+                "migration {} ran without leaving its document stamped; this is a bug in the migration",
+                step.id()
+            );
+        }
+    }
+    match check_step(step, ctx, registry) {
+        Ok(Some(StepCheck::Needed)) => bail!(
+            "migration {} ran but its check still reports it as needed; this is a bug in the migration",
+            step.id()
+        ),
+        Ok(Some(StepCheck::Satisfied) | None) => Ok(()),
+        Err(error) => Err(anyhow::Error::new(error)
+            .context(format!("failed to check {} after it ran", step.id()))),
+    }
+}
+
+fn check_step<C: 'static>(
+    step: &dyn MigrationStep<C>,
+    ctx: &C,
+    registry: &Registry<C>,
+) -> Result<Option<StepCheck>, MigrationCheckError> {
+    if let Some(spec) = document_spec(registry, step.module()) {
+        match document::read_document(&(spec.path)(ctx), spec.document)? {
+            None => return Ok(Some(StepCheck::Satisfied)),
+            Some(file) => {
+                if let Some(stamped) = file.schema_revision {
+                    return Ok(Some(StepCheck::from_needed(stamped < step.revision())));
+                }
+            }
+        }
+    }
+    step.check(ctx)
+}
+
+fn document_spec<C: 'static>(registry: &Registry<C>, module: &str) -> Option<DocumentSpec<C>> {
+    registry
+        .modules()
+        .find(|candidate| candidate.module() == module)
+        .and_then(|candidate| match candidate.kind() {
+            ModuleKind::Document(spec) => Some(spec),
+            ModuleKind::Heuristic => None,
+        })
+}
+
+pub fn advice_step(
+    store: &MigrationStore,
+    step: StepSpec<'_>,
+    target: &Version,
+    force: bool,
+    enabled: bool,
+) -> MigrationAdvice {
+    if !enabled {
+        return MigrationAdvice::Ignored;
+    }
+    if force {
+        return MigrationAdvice::Pending;
+    }
+    match store.task_state(step.id) {
+        Some(MigrationState::Completed | MigrationState::Skipped) => return MigrationAdvice::Done,
+        Some(MigrationState::Failed | MigrationState::InProgress | MigrationState::NotStarted) => {
+            return MigrationAdvice::Pending;
+        }
+        None => {}
+    }
+    if step.revision > store.module_state(step.module).applied_revision
+        && introduced_in_reached(step.introduced_in, target)
+    {
+        MigrationAdvice::Pending
+    } else {
+        MigrationAdvice::Ignored
+    }
+}
+
+/// Compare the release triple so an rc build executes migrations for the same release.
+pub fn introduced_in_reached(introduced_in: &Version, target: &Version) -> bool {
+    (
+        introduced_in.major,
+        introduced_in.minor,
+        introduced_in.patch,
+    ) <= (target.major, target.minor, target.patch)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use crate::context::MigrationPaths;
+    use chimera_contracts::{
+        BoxedCause,
+        storage::{HotkeyStore, HotkeyStoreOpener},
+    };
+    use std::{path::Path, sync::Arc};
+
+    #[derive(Debug)]
+    struct NeverOpenStore;
+    impl HotkeyStoreOpener for NeverOpenStore {
+        fn open(&self, _path: &Path) -> Result<Box<dyn HotkeyStore>, BoxedCause> {
+            unreachable!("backup detection must never open the database")
+        }
+    }
+
+    fn context(root: &Path) -> Ctx {
+        Ctx::new(
+            MigrationPaths::new(root.join("cfg"), root.join("data")),
+            Arc::new(NeverOpenStore),
+        )
+    }
+
+    #[derive(Default)]
+    struct RecordingBackup {
+        calls: usize,
+        fail: bool,
+    }
+    impl BackupPort for RecordingBackup {
+        type Snapshot = usize;
+        fn create_snapshot(&mut self, _ctx: &Ctx) -> anyhow::Result<usize> {
+            self.calls += 1;
+            if self.fail {
+                anyhow::bail!("injected snapshot failure")
+            }
+            Ok(self.calls)
+        }
+    }
+
+    #[test]
+    fn fresh_roots_and_baseline_file_need_no_snapshot_or_directory_creation() {
+        let root = tempfile::tempdir().unwrap();
+        let ctx = context(root.path());
+        let mut snapshot = None;
+        let mut port = RecordingBackup::default();
+        assert!(!ensure_backup(&ctx, &mut snapshot, &mut port).unwrap());
+        assert!(snapshot.is_none());
+        assert_eq!(port.calls, 0);
+        assert!(!ctx.paths().app_config_dir().exists());
+        assert!(!ctx.paths().app_data_dir().exists());
+
+        fs::create_dir_all(ctx.paths().app_config_dir()).unwrap();
+        fs::write(ctx.state_path(), b"store_schema_version: 2\n").unwrap();
+        assert!(!ensure_backup(&ctx, &mut snapshot, &mut port).unwrap());
+        assert_eq!(port.calls, 0);
+        assert!(snapshot.is_none());
+    }
+
+    #[test]
+    fn config_or_storage_requires_one_snapshot_before_rewrites() {
+        for source in ["config", "storage"] {
+            let root = tempfile::tempdir().unwrap();
+            let ctx = context(root.path());
+            if source == "config" {
+                fs::create_dir_all(ctx.paths().app_config_dir()).unwrap();
+                fs::write(ctx.chimera_config_path(), b"user settings").unwrap();
+            } else {
+                fs::create_dir_all(ctx.paths().app_data_dir()).unwrap();
+                fs::write(ctx.storage_path(), b"user storage").unwrap();
+            }
+            let mut snapshot = None;
+            let mut port = RecordingBackup::default();
+            assert!(ensure_backup(&ctx, &mut snapshot, &mut port).unwrap());
+            assert_eq!(snapshot, Some(1));
+            assert!(!ensure_backup(&ctx, &mut snapshot, &mut port).unwrap());
+            assert_eq!(port.calls, 1);
+        }
+    }
+
+    #[test]
+    fn failed_snapshot_does_not_mark_protection_complete() {
+        let root = tempfile::tempdir().unwrap();
+        let ctx = context(root.path());
+        fs::create_dir_all(ctx.paths().app_config_dir()).unwrap();
+        let old = b"hotkeys: [Control+Q]";
+        fs::write(ctx.chimera_config_path(), old).unwrap();
+        let mut snapshot = None;
+        let mut port = RecordingBackup {
+            fail: true,
+            ..Default::default()
+        };
+        let error = ensure_backup(&ctx, &mut snapshot, &mut port).unwrap_err();
+        assert!(format!("{error:#}").contains("injected snapshot failure"));
+        assert!(snapshot.is_none());
+        assert_eq!(fs::read(ctx.chimera_config_path()).unwrap(), old);
+        port.fail = false;
+        assert!(ensure_backup(&ctx, &mut snapshot, &mut port).unwrap());
+        assert_eq!(snapshot, Some(2));
+        assert_eq!(port.calls, 2);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn dangling_storage_link_still_requires_backup() {
+        use std::os::unix::fs::symlink;
+        let root = tempfile::tempdir().unwrap();
+        let ctx = context(root.path());
+        fs::create_dir_all(ctx.paths().app_data_dir()).unwrap();
+        let missing = root.path().join("not-created.redb");
+        symlink(&missing, ctx.storage_path()).unwrap();
+        let mut snapshot = None;
+        let mut port = RecordingBackup::default();
+        assert!(ensure_backup(&ctx, &mut snapshot, &mut port).unwrap());
+        assert_eq!(port.calls, 1);
+        assert_eq!(fs::read_link(ctx.storage_path()).unwrap(), missing);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn inaccessible_configuration_ancestor_blocks_without_backup_callback() {
+        let root = tempfile::tempdir().unwrap();
+        let ctx = context(root.path());
+        fs::create_dir_all(ctx.paths().app_data_dir()).unwrap();
+        let not_directory = ctx.paths().app_config_dir().to_path_buf();
+        fs::write(&not_directory, b"do not delete").unwrap();
+        let mut snapshot = None;
+        let mut port = RecordingBackup::default();
+        let error = ensure_backup(&ctx, &mut snapshot, &mut port).unwrap_err();
+        assert!(format!("{error:#}").contains("failed to list"));
+        assert!(snapshot.is_none());
+        assert_eq!(port.calls, 0);
+        assert_eq!(fs::read(&not_directory).unwrap(), b"do not delete");
+    }
+
+    #[test]
+    fn prerelease_matches_release_but_not_future_release() {
+        assert!(introduced_in_reached(
+            &Version::parse("0.28.3").unwrap(),
+            &Version::parse("0.28.3-rc.1").unwrap()
+        ));
+        assert!(!introduced_in_reached(
+            &Version::parse("0.28.4").unwrap(),
+            &Version::parse("0.28.3").unwrap()
+        ));
+    }
+
+    #[test]
+    fn all_durable_step_states_follow_runner_retry_policy() {
+        use crate::store::TaskRecord;
+        let mut store = MigrationStore::default();
+        let version = Version::new(0, 28, 3);
+        let step = StepSpec {
+            id: "storage/hotkeys_to_typed_config",
+            module: "storage",
+            revision: 2,
+            introduced_in: &version,
+        };
+        for (state, expected) in [
+            (MigrationState::NotStarted, MigrationAdvice::Pending),
+            (MigrationState::InProgress, MigrationAdvice::Pending),
+            (MigrationState::Failed, MigrationAdvice::Pending),
+            (MigrationState::Skipped, MigrationAdvice::Done),
+            (MigrationState::Completed, MigrationAdvice::Done),
+        ] {
+            store.tasks.insert(
+                step.id.into(),
+                TaskRecord {
+                    module: step.module.into(),
+                    revision: step.revision,
+                    introduced_in: version.clone(),
+                    state,
+                    started_at: None,
+                    finished_at: None,
+                    error: None,
+                },
+            );
+            assert_eq!(advice_step(&store, step, &version, false, true), expected);
+            assert_eq!(
+                advice_step(&store, step, &version, true, true),
+                MigrationAdvice::Pending
+            );
+            assert_eq!(
+                advice_step(&store, step, &version, true, false),
+                MigrationAdvice::Ignored
+            );
+        }
+    }
+
+    #[test]
+    fn a_future_step_is_ignored_until_target_release() {
+        let store = MigrationStore::default();
+        let introduced = Version::new(0, 29, 0);
+        let older = Version::new(0, 28, 3);
+        let step = StepSpec {
+            id: "future/step",
+            module: "future",
+            revision: 1,
+            introduced_in: &introduced,
+        };
+        assert_eq!(
+            advice_step(&store, step, &older, false, true),
+            MigrationAdvice::Ignored
+        );
+        assert_eq!(
+            advice_step(&store, step, &introduced, false, true),
+            MigrationAdvice::Pending
+        );
+    }
+
+    #[test]
+    fn disabled_steps_and_completed_steps_are_not_rerun_unless_forced() {
+        let store = MigrationStore::default();
+        let version = Version::new(0, 28, 3);
+        let step = StepSpec {
+            id: "storage/hotkeys_to_typed_config",
+            module: "storage",
+            revision: 2,
+            introduced_in: &version,
+        };
+        assert_eq!(
+            advice_step(&store, step, &version, false, false),
+            MigrationAdvice::Ignored
+        );
+        assert_eq!(
+            advice_step(&store, step, &version, false, true),
+            MigrationAdvice::Pending
+        );
+        assert_eq!(
+            advice_step(&store, step, &version, true, true),
+            MigrationAdvice::Pending
+        );
+    }
+
+    #[derive(Default)]
+    struct TransactionCtx {
+        completed: bool,
+        fail_check: bool,
+        fail_run: bool,
+        fail_rollback: bool,
+        leave_check_needed: bool,
+        runs: u32,
+        rollbacks: u32,
+        other_runs: u32,
+        other_completed: bool,
+    }
+
+    struct TransactionStep;
+    static TRANSACTION_STEP: TransactionStep = TransactionStep;
+    static TRANSACTION_VERSION: Version = Version::new(0, 28, 3);
+
+    impl MigrationStep<TransactionCtx> for TransactionStep {
+        fn id(&self) -> &'static str {
+            "example/commit"
+        }
+        fn module(&self) -> &'static str {
+            "example"
+        }
+        fn revision(&self) -> u64 {
+            1
+        }
+        fn introduced_in(&self) -> &'static Version {
+            &TRANSACTION_VERSION
+        }
+        fn name(&self) -> &'static str {
+            "TransactionStep"
+        }
+        fn check(&self, ctx: &TransactionCtx) -> Result<Option<StepCheck>, MigrationCheckError> {
+            if ctx.fail_check {
+                return Err(MigrationCheckError::Unrecognized(
+                    "injected check failure".into(),
+                ));
+            }
+            Ok(Some(StepCheck::from_needed(!ctx.completed)))
+        }
+        fn run(&self, ctx: &mut TransactionCtx) -> anyhow::Result<()> {
+            ctx.runs += 1;
+            if ctx.fail_run {
+                anyhow::bail!("injected run failure")
+            }
+            if !ctx.leave_check_needed {
+                ctx.completed = true;
+            }
+            Ok(())
+        }
+        fn rollback(&self, ctx: &mut TransactionCtx) -> anyhow::Result<()> {
+            ctx.rollbacks += 1;
+            if ctx.fail_rollback {
+                anyhow::bail!("injected rollback failure")
+            }
+            Ok(())
+        }
+    }
+
+    struct TransactionModule;
+    static TRANSACTION_MODULE: TransactionModule = TransactionModule;
+    static TRANSACTION_STEPS: [&dyn MigrationStep<TransactionCtx>; 1] = [&TRANSACTION_STEP];
+    impl ModuleMigrator<TransactionCtx> for TransactionModule {
+        fn module(&self) -> &'static str {
+            "example"
+        }
+        fn detect_baseline(&self, _: &TransactionCtx) -> anyhow::Result<u64> {
+            Ok(0)
+        }
+        fn steps(&self) -> &'static [&'static dyn MigrationStep<TransactionCtx>] {
+            &TRANSACTION_STEPS
+        }
+    }
+
+    fn transaction_registry() -> Registry<TransactionCtx> {
+        Registry::new(vec![&TRANSACTION_MODULE]).unwrap()
+    }
+
+    struct OtherTransactionStep;
+    static OTHER_STEP: OtherTransactionStep = OtherTransactionStep;
+    static OTHER_STEPS: [&dyn MigrationStep<TransactionCtx>; 1] = [&OTHER_STEP];
+    struct OtherTransactionModule;
+    static OTHER_MODULE: OtherTransactionModule = OtherTransactionModule;
+
+    impl MigrationStep<TransactionCtx> for OtherTransactionStep {
+        fn id(&self) -> &'static str {
+            "other/independent"
+        }
+        fn module(&self) -> &'static str {
+            "other"
+        }
+        fn revision(&self) -> u64 {
+            1
+        }
+        fn introduced_in(&self) -> &'static Version {
+            &TRANSACTION_VERSION
+        }
+        fn name(&self) -> &'static str {
+            "OtherTransactionStep"
+        }
+        fn check(&self, ctx: &TransactionCtx) -> Result<Option<StepCheck>, MigrationCheckError> {
+            Ok(Some(StepCheck::from_needed(!ctx.other_completed)))
+        }
+        fn run(&self, ctx: &mut TransactionCtx) -> anyhow::Result<()> {
+            ctx.other_runs += 1;
+            ctx.other_completed = true;
+            Ok(())
+        }
+    }
+
+    impl ModuleMigrator<TransactionCtx> for OtherTransactionModule {
+        fn module(&self) -> &'static str {
+            "other"
+        }
+        fn detect_baseline(&self, _: &TransactionCtx) -> anyhow::Result<u64> {
+            Ok(0)
+        }
+        fn steps(&self) -> &'static [&'static dyn MigrationStep<TransactionCtx>] {
+            &OTHER_STEPS
+        }
+    }
+
+    #[test]
+    fn pending_loop_continues_independent_module_after_failure_and_retries_only_failed_step() {
+        let dir = tempfile::tempdir().unwrap();
+        let state_path = dir.path().join("migration-state.yaml");
+        let registry = Registry::new(vec![
+            &TRANSACTION_MODULE as &dyn ModuleMigrator<TransactionCtx>,
+            &OTHER_MODULE,
+        ])
+        .unwrap();
+        let modules: Vec<_> = registry.modules().collect();
+        let mut store = MigrationStore::default();
+        let mut ctx = TransactionCtx {
+            fail_run: true,
+            ..Default::default()
+        };
+        let target = TRANSACTION_VERSION.clone();
+        assert!(has_pending_steps(&modules, &store, &target, false));
+        let error = execute_pending_steps(
+            &modules,
+            &mut ctx,
+            &mut store,
+            &state_path,
+            &registry,
+            &target,
+            false,
+        )
+        .unwrap_err();
+        assert!(format!("{error:#}").contains("injected run failure"));
+        assert_eq!((ctx.runs, ctx.rollbacks, ctx.other_runs), (1, 1, 1));
+        let durable = MigrationStore::load(&state_path).unwrap();
+        assert_eq!(
+            durable.task_state("example/commit"),
+            Some(MigrationState::Failed)
+        );
+        assert_eq!(
+            durable.task_state("other/independent"),
+            Some(MigrationState::Completed)
+        );
+        assert_eq!(durable.module_state("example").applied_revision, 0);
+        assert_eq!(durable.module_state("other").applied_revision, 1);
+
+        ctx.fail_run = false;
+        execute_pending_steps(
+            &modules,
+            &mut ctx,
+            &mut store,
+            &state_path,
+            &registry,
+            &target,
+            false,
+        )
+        .unwrap();
+        assert_eq!(ctx.runs, 2);
+        assert_eq!(
+            ctx.other_runs, 1,
+            "previously completed module must not re-execute"
+        );
+        assert_eq!(
+            MigrationStore::load(&state_path)
+                .unwrap()
+                .task_state("example/commit"),
+            Some(MigrationState::Completed)
+        );
+        assert!(!has_pending_steps(&modules, &store, &target, false));
+    }
+
+    #[test]
+    fn transaction_records_completed_then_skipped_and_advances_only_contiguous_revision() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("migration-state.yaml");
+        let mut ctx = TransactionCtx::default();
+        let mut store = MigrationStore::default();
+        let registry = transaction_registry();
+        execute_step(&TRANSACTION_STEP, &mut ctx, &mut store, &path, &registry).unwrap();
+        assert_eq!(ctx.runs, 1);
+        assert_eq!(ctx.rollbacks, 0);
+        assert_eq!(store.module_state("example").applied_revision, 1);
+        assert_eq!(
+            store.task_state("example/commit"),
+            Some(MigrationState::Completed)
+        );
+        let durable = MigrationStore::load(&path).unwrap();
+        assert_eq!(durable, store);
+        assert!(durable.tasks["example/commit"].started_at.is_some());
+        assert!(durable.tasks["example/commit"].finished_at.is_some());
+
+        execute_step(&TRANSACTION_STEP, &mut ctx, &mut store, &path, &registry).unwrap();
+        assert_eq!(ctx.runs, 1, "satisfied step must not execute again");
+        assert_eq!(
+            store.task_state("example/commit"),
+            Some(MigrationState::Skipped)
+        );
+        assert_eq!(store.module_state("example").applied_revision, 1);
+        assert_eq!(MigrationStore::load(&path).unwrap(), store);
+    }
+
+    #[test]
+    fn preflight_check_failure_is_durable_without_invoking_run_or_rollback() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("migration-state.yaml");
+        let mut ctx = TransactionCtx {
+            fail_check: true,
+            ..Default::default()
+        };
+        let mut store = MigrationStore::default();
+        let error = execute_step(
+            &TRANSACTION_STEP,
+            &mut ctx,
+            &mut store,
+            &path,
+            &transaction_registry(),
+        )
+        .unwrap_err();
+        assert!(format!("{error:#}").contains("injected check failure"));
+        assert_eq!((ctx.runs, ctx.rollbacks), (0, 0));
+        assert_eq!(store.module_state("example").applied_revision, 0);
+        let durable = MigrationStore::load(&path).unwrap();
+        assert_eq!(
+            durable.task_state("example/commit"),
+            Some(MigrationState::Failed)
+        );
+        assert!(
+            durable.tasks["example/commit"]
+                .error
+                .as_deref()
+                .unwrap()
+                .contains("injected check failure")
+        );
+    }
+
+    #[test]
+    fn rollback_failure_does_not_hide_original_run_error_and_retry_can_finish() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("migration-state.yaml");
+        let mut ctx = TransactionCtx {
+            fail_run: true,
+            fail_rollback: true,
+            ..Default::default()
+        };
+        let mut store = MigrationStore::default();
+        let registry = transaction_registry();
+        let error =
+            execute_step(&TRANSACTION_STEP, &mut ctx, &mut store, &path, &registry).unwrap_err();
+        assert!(format!("{error:#}").contains("injected run failure"));
+        assert_eq!((ctx.runs, ctx.rollbacks), (1, 1));
+        let failed = MigrationStore::load(&path).unwrap();
+        assert_eq!(
+            failed.task_state("example/commit"),
+            Some(MigrationState::Failed)
+        );
+        assert!(
+            failed.tasks["example/commit"]
+                .error
+                .as_deref()
+                .unwrap()
+                .contains("injected run failure")
+        );
+        assert!(
+            !failed.tasks["example/commit"]
+                .error
+                .as_deref()
+                .unwrap()
+                .contains("injected rollback failure")
+        );
+        ctx.fail_run = false;
+        ctx.fail_rollback = false;
+        execute_step(&TRANSACTION_STEP, &mut ctx, &mut store, &path, &registry).unwrap();
+        assert_eq!(ctx.runs, 2);
+        assert_eq!(store.module_state("example").applied_revision, 1);
+        assert_eq!(
+            MigrationStore::load(&path)
+                .unwrap()
+                .task_state("example/commit"),
+            Some(MigrationState::Completed)
+        );
+    }
+
+    #[test]
+    fn broken_step_postcondition_rolls_back_and_does_not_advance_revision() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("migration-state.yaml");
+        let mut ctx = TransactionCtx {
+            leave_check_needed: true,
+            ..Default::default()
+        };
+        let mut store = MigrationStore::default();
+        let error = execute_step(
+            &TRANSACTION_STEP,
+            &mut ctx,
+            &mut store,
+            &path,
+            &transaction_registry(),
+        )
+        .unwrap_err();
+        assert!(format!("{error:#}").contains("still reports it as needed"));
+        assert_eq!((ctx.runs, ctx.rollbacks), (1, 1));
+        assert_eq!(store.module_state("example").applied_revision, 0);
+        assert_eq!(
+            MigrationStore::load(&path)
+                .unwrap()
+                .task_state("example/commit"),
+            Some(MigrationState::Failed)
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn in_progress_flush_rejects_symlink_before_step_runs() {
+        use std::os::unix::fs::symlink;
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("external-state.yaml");
+        let path = dir.path().join("migration-state.yaml");
+        std::fs::write(&target, b"external state").unwrap();
+        symlink(&target, &path).unwrap();
+        let mut ctx = TransactionCtx::default();
+        let mut store = MigrationStore::default();
+        let error = execute_step(
+            &TRANSACTION_STEP,
+            &mut ctx,
+            &mut store,
+            &path,
+            &transaction_registry(),
+        )
+        .unwrap_err();
+        assert!(format!("{error:#}").contains("symbolic link"));
+        assert_eq!((ctx.runs, ctx.rollbacks), (0, 0));
+        assert_eq!(std::fs::read(&target).unwrap(), b"external state");
+        assert_eq!(std::fs::read_link(path).unwrap(), target);
+    }
+}

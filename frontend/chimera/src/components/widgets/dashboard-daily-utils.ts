@@ -1,4 +1,61 @@
-import type { ProfileSubscriptionInfo } from '@chimera/interface';
+import type {
+  ProfileItem_Serialize,
+  ProfileSubscriptionInfo,
+  RunDto,
+  SyncRunSummary,
+} from '@chimera/interface';
+import type { SubscriptionTarget } from './widget-config';
+
+export type ProfileSummaryItem = ProfileItem_Serialize;
+
+export type ProfileTargetResolution<
+  T extends ProfileSummaryItem = ProfileSummaryItem,
+> =
+  | { kind: 'selected'; profile: T }
+  | { kind: 'needs_selection' }
+  | { kind: 'missing' }
+  | { kind: 'unsupported'; profile?: T };
+
+export const isRemoteFileConfig = (item: ProfileSummaryItem): boolean =>
+  item.type === 'config' &&
+  item.config.type === 'file' &&
+  item.config.source.type === 'remote';
+
+export function getRemoteFileConfigs<T extends ProfileSummaryItem>(
+  items: T[],
+  allowedUids?: string[],
+): T[] {
+  const allowed = allowedUids ? new Set(allowedUids) : undefined;
+  return items.filter(
+    (item) => isRemoteFileConfig(item) && (!allowed || allowed.has(item.uid)),
+  );
+}
+
+/** Resolve a stored target without silently substituting another profile. */
+export function resolveProfileTarget<T extends ProfileSummaryItem>(
+  items: T[],
+  currentUid: string | null | undefined,
+  target: SubscriptionTarget,
+): ProfileTargetResolution<T> {
+  const uid = target.kind === 'current' ? currentUid : target.profileUid;
+  if (!uid) {
+    return target.kind === 'current'
+      ? { kind: 'needs_selection' }
+      : { kind: 'missing' };
+  }
+
+  const profile = items.find((item) => item.uid === uid);
+  if (!profile) return { kind: 'missing' };
+  if (
+    target.kind === 'current' &&
+    profile.type === 'config' &&
+    profile.config.type === 'composition'
+  ) {
+    return { kind: 'needs_selection' };
+  }
+  if (!isRemoteFileConfig(profile)) return { kind: 'unsupported', profile };
+  return { kind: 'selected', profile };
+}
 
 export type SubscriptionQuota = {
   upload: number;
@@ -59,4 +116,41 @@ export function subscriptionExpiryTimestamp(
     Number.isFinite(new Date(timestamp).getTime())
     ? timestamp
     : null;
+}
+
+export function latestFinishedRuns<T extends RunDto | SyncRunSummary>(
+  runs: T[],
+  limit: number,
+): T[] {
+  return runs
+    .filter((run) => run.state.kind === 'finished')
+    .sort((a, b) => {
+      const aTime = a.finished_at ? Date.parse(a.finished_at) : 0;
+      const bTime = b.finished_at ? Date.parse(b.finished_at) : 0;
+      if (aTime !== bTime) return bTime - aTime;
+      return BigInt(a.admission_sequence) > BigInt(b.admission_sequence)
+        ? -1
+        : BigInt(a.admission_sequence) < BigInt(b.admission_sequence)
+          ? 1
+          : 0;
+    })
+    .slice(0, Math.max(0, limit));
+}
+
+/** Warn on an approaching expiration, including already-expired subscriptions. */
+export function isExpiryWarning(
+  timestamp: number | null,
+  warningDays: number,
+  now: number,
+): boolean {
+  return (
+    timestamp !== null && timestamp - now <= warningDays * 24 * 60 * 60 * 1000
+  );
+}
+
+export function isQuotaWarning(
+  quota: SubscriptionQuota | null,
+  warningPercent: number,
+): boolean {
+  return quota !== null && quota.remainingPercent <= warningPercent;
 }

@@ -1,6 +1,6 @@
 use super::{
-    Ctx, DocumentSpec, MigrationAdvice, MigrationCheckError, MigrationState, MigrationStep,
-    ModuleKind, ModuleMigrator, StepCheck, current_version, fs, registry,
+    Ctx, DocumentSpec, MigrationAdvice, MigrationCheckError, MigrationStep, ModuleKind,
+    ModuleMigrator, StepCheck, current_version, fs, registry,
     store::{MigrationStore, ModuleState},
 };
 use crate::{
@@ -11,28 +11,48 @@ use crate::{
     utils::path::PathResolver,
 };
 use anyhow::{Context, bail};
+use chimera_migration::{StepSpec, runner as core_runner};
 use semver::Version;
 use time::OffsetDateTime;
 
-/// An on-disk revision written by a future build; never downgrade it.
-#[derive(Debug, thiserror::Error)]
-pub(crate) enum RevisionError {
-    #[error("{} is stamped at revision {read}, but this build only knows revisions up to {supported}; the file was written by a newer version. Update to that version, or restore this file from a compatible backup.", path.display())]
-    NewerDocument {
-        path: std::path::PathBuf,
-        read: u64,
-        supported: u64,
-    },
-    #[error(
-        "migration state records {module} at revision {read}, but this build only knows revisions up to {supported}; the data was migrated by a newer version"
-    )]
-    NewerAppliedModule {
-        path: std::path::PathBuf,
-        module: String,
-        read: u64,
-        supported: u64,
-    },
+fn step_spec(step: &dyn MigrationStep<Ctx>) -> StepSpec<'static> {
+    StepSpec {
+        id: step.id(),
+        module: step.module(),
+        revision: step.revision(),
+        introduced_in: step.introduced_in(),
+    }
 }
+
+/// The shell-only verified backup producer, injected into the shared Runner.
+struct TauriBackupPort<'a> {
+    paths: &'a PathResolver,
+    from: Option<&'a Version>,
+    target: &'a Version,
+}
+
+impl core_runner::BackupPort for TauriBackupPort<'_> {
+    type Snapshot = BackupInfo;
+
+    fn create_snapshot(
+        &mut self,
+        ctx: &chimera_migration::context::Ctx,
+    ) -> anyhow::Result<BackupInfo> {
+        let storage_path = ctx.storage_path();
+        backup::create_backup(&BackupRequest {
+            paths: self.paths,
+            storage: StorageSource::File(&storage_path),
+            kind: BackupKind::Migration {
+                from: self.from,
+                target: self.target,
+            },
+            now: OffsetDateTime::now_utc(),
+        })
+        .context("failed to back up the config before migrating")
+    }
+}
+
+pub(crate) use chimera_migration::runner::RevisionError;
 
 #[derive(Debug)]
 pub struct Runner {
@@ -79,37 +99,17 @@ impl Runner {
         )
     }
 
-    pub fn advice_step(&self, step: &dyn MigrationStep) -> MigrationAdvice {
-        if !self.profile_migrations_enabled && step.module() == "profiles" {
-            return MigrationAdvice::Ignored;
-        }
-        if self.force {
-            return MigrationAdvice::Pending;
-        }
-
-        match self.store.task_state(step.id()) {
-            Some(MigrationState::Completed | MigrationState::Skipped) => {
-                return MigrationAdvice::Done;
-            }
-            Some(
-                MigrationState::Failed | MigrationState::InProgress | MigrationState::NotStarted,
-            ) => {
-                return MigrationAdvice::Pending;
-            }
-            None => {}
-        }
-
-        let module_state = self.store.module_state(step.module());
-        if step.revision() > module_state.applied_revision
-            && introduced_in_reached(step.introduced_in(), &self.target)
-        {
-            MigrationAdvice::Pending
-        } else {
-            MigrationAdvice::Ignored
-        }
+    pub fn advice_step(&self, step: &dyn MigrationStep<Ctx>) -> MigrationAdvice {
+        core_runner::advice_step(
+            &self.store,
+            step_spec(step),
+            &self.target,
+            self.force,
+            self.profile_migrations_enabled || step.module() != "profiles",
+        )
     }
 
-    pub fn run_migration(&mut self, step: &dyn MigrationStep) -> anyhow::Result<()> {
+    pub fn run_migration(&mut self, step: &dyn MigrationStep<Ctx>) -> anyhow::Result<()> {
         println!("Running migration: {} ({})", step.id(), step.name());
         self.ensure_known_revisions()?;
         let advice = self.advice_step(step);
@@ -124,53 +124,24 @@ impl Runner {
     pub fn run_pending(&mut self) -> anyhow::Result<()> {
         println!("Running migrations up to version: {}", self.target);
         self.ensure_known_revisions()?;
-        let has_pending = self
-            .modules()
-            .into_iter()
-            .flat_map(|module| module.steps())
-            .any(|step| self.advice_step(*step) == MigrationAdvice::Pending);
-        if has_pending {
+        let modules = self.modules();
+        if core_runner::has_pending_steps(&modules, &self.store, &self.target, self.force) {
             self.ensure_backup()?;
         }
-        let mut first_error = None;
-
-        for module in self.modules() {
-            for step in module.steps() {
-                let advice = self.advice_step(*step);
-                println!(
-                    "[{advice}] {} rev{} {}",
-                    step.module(),
-                    step.revision(),
-                    step.id()
-                );
-                if advice != MigrationAdvice::Pending {
-                    continue;
-                }
-
-                if let Err(error) = self.run_step(*step) {
-                    eprintln!(
-                        "Migration {} failed; stopping module {} and continuing",
-                        step.id(),
-                        step.module()
-                    );
-                    if first_error.is_none() {
-                        first_error = Some(error);
-                    }
-                    break;
-                }
-            }
-        }
-
-        if let Some(error) = first_error {
-            return Err(error);
-        }
+        let state_path = self.ctx.state_path();
+        core_runner::execute_pending_steps(
+            &modules,
+            &mut self.ctx,
+            &mut self.store,
+            &state_path,
+            &registry::MODULES,
+            &self.target,
+            self.force,
+        )?;
         self.verify_applied_revisions()?;
         self.stamp_adopted_documents()?;
 
-        self.store.set_last_succeeded(self.target.clone());
-        self.store
-            .flush_atomic(&self.ctx.state_path())
-            .context("failed to persist successful migration state")?;
+        core_runner::commit_successful_run(&mut self.store, &self.target, &self.ctx.state_path())?;
         if let Err(error) = backup::prune_backups(
             &self.ctx.paths().backups_dir(),
             MIGRATION_PREFIX,
@@ -187,53 +158,22 @@ impl Runner {
         self.backup.as_ref()
     }
 
-    /// Snapshot all migration inputs before any pending step or document stamp
-    /// changes persistent configuration. Refuses to migrate if the snapshot fails.
-    /// Fresh installations with no existing data do not need a backup.
+    /// Shared Runner decides whether existing data needs a snapshot; Tauri
+    /// supplies the verified filesystem backup implementation via a port.
     fn ensure_backup(&mut self) -> anyhow::Result<()> {
-        if self.backup.is_some() || self.has_nothing_to_protect()? {
-            return Ok(());
-        }
-        let storage_path = self.ctx.storage_path();
-        let info = backup::create_backup(&BackupRequest {
+        let mut backup_port = TauriBackupPort {
             paths: self.ctx.paths(),
-            storage: StorageSource::File(&storage_path),
-            kind: BackupKind::Migration {
-                from: self.store.app.last_succeeded.as_ref(),
-                target: &self.target,
-            },
-            now: OffsetDateTime::now_utc(),
-        })
-        .context("failed to back up the config before migrating")?;
-        tracing::info!(path = %info.path.display(), "migration backup created before config rewrite");
-        self.backup = Some(info);
-        Ok(())
-    }
-
-    /// The first install has no existing config to protect. A migration-state
-    /// record created by baseline detection alone is not user source data.
-    fn has_nothing_to_protect(&self) -> anyhow::Result<bool> {
-        let storage_path = self.ctx.storage_path();
-        if crate::core::corrupt::config_node_exists(&storage_path)
-            .with_context(|| format!("failed to inspect {}", storage_path.display()))?
-        {
-            return Ok(false);
-        }
-        let config = self.ctx.paths().app_config_dir();
-        let entries = match std::fs::read_dir(config) {
-            Ok(entries) => entries,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(true),
-            Err(error) => {
-                return Err(error).with_context(|| format!("failed to list {}", config.display()));
-            }
+            from: self.store.app.last_succeeded.as_ref(),
+            target: &self.target,
         };
-        for entry in entries {
-            let entry = entry.with_context(|| format!("failed to inspect {}", config.display()))?;
-            if entry.file_name() != super::store::STORE_FILE_NAME {
-                return Ok(false);
-            }
+        if core_runner::ensure_backup(&self.ctx, &mut self.backup, &mut backup_port)? {
+            let info = self
+                .backup
+                .as_ref()
+                .expect("shared runner recorded a created backup");
+            tracing::info!(path = %info.path.display(), "migration backup created before config rewrite");
         }
-        Ok(true)
+        Ok(())
     }
 
     fn with_context(target: Version, force: bool, ctx: Ctx) -> anyhow::Result<Self> {
@@ -260,349 +200,73 @@ impl Runner {
         Ok(runner)
     }
 
-    fn modules(&self) -> Vec<&'static dyn ModuleMigrator> {
+    fn modules(&self) -> Vec<&'static dyn ModuleMigrator<Ctx>> {
         registry::modules()
             .filter(|module| self.profile_migrations_enabled || module.module() != "profiles")
             .collect()
     }
 
     fn ensure_baselines(&mut self) -> anyhow::Result<()> {
-        let mut changed = self.reconcile_documents()?;
-        for module in self.modules() {
-            changed |= self.store.ensure_module(module, &self.ctx)?;
-        }
-
-        if changed {
-            self.store
-                .flush_atomic(&self.ctx.state_path())
-                .context("failed to persist migration baselines")?;
-        }
-        Ok(())
+        core_runner::ensure_baselines(
+            self.modules(),
+            &self.ctx,
+            &mut self.store,
+            &self.ctx.state_path(),
+        )
     }
 
-    /// Settles each document module against the stamp in its file, before
-    /// the baselines are written. A stamp is the file's own record of its
-    /// revision, so it replaces `detect_baseline` when the state has no entry,
-    /// and it refuses a state that the file contradicts. A state already ahead
-    /// of this build is left to `ensure_known_revisions`, which runs after the
-    /// baselines are written. Returns whether the state changed.
-    fn reconcile_documents(&mut self) -> anyhow::Result<bool> {
-        let state_path = self.ctx.state_path();
-        let mut changed = false;
-        for module in self.modules() {
-            let ModuleKind::Document(spec) = module.kind() else {
-                continue;
-            };
-            let head = head_revision(module);
-            let entry = self.store.modules.get(module.module()).copied();
-            // Left to `ensure_known_revisions`, which explains it better.
-            if entry.is_some_and(|state| state.applied_revision > head) {
-                continue;
-            }
-            let path = (spec.path)(&self.ctx);
-            let file = fs::read_document(&path, spec.document)
-                .with_context(|| format!("failed to inspect the {} files", module.module()))?;
-            let Some(file) = file else {
-                if entry.is_none() {
-                    // Nothing to migrate: the file will be created at head.
-                    self.store
-                        .modules
-                        .insert(module.module().to_string(), at_revision(head, false));
-                    changed = true;
-                }
-                continue;
-            };
-
-            match (file.schema_revision, entry) {
-                (Some(stamped), _) if stamped > head => {
-                    return Err(RevisionError::NewerDocument {
-                        path,
-                        read: stamped,
-                        supported: head,
-                    }
-                    .into());
-                }
-                (Some(stamped), None) => {
-                    self.store
-                        .modules
-                        .insert(module.module().to_string(), at_revision(stamped, true));
-                    changed = true;
-                }
-                (Some(stamped), Some(state)) if stamped < state.applied_revision => bail!(
-                    "{} is stamped at revision {stamped}, although {} records {} as migrated \
-                     to revision {}. The file may have been restored from a backup or rewritten \
-                     by an older version. Restore it, or delete {} so the file is migrated \
-                     again from its stamp.",
-                    path.display(),
-                    state_path.display(),
-                    module.module(),
-                    state.applied_revision,
-                    state_path.display()
-                ),
-                (Some(_), Some(state)) => {
-                    if !state.stamped {
-                        self.set_stamped(module.module());
-                        changed = true;
-                    }
-                }
-                (None, Some(state))
-                    if state.stamped || state.applied_revision > spec.unstamped_ceiling =>
-                {
-                    bail!(
-                        "{} has lost the `{}` stamp it was written with; it may have been \
-                         rewritten by an older version or edited by hand. Restore it from a \
-                         backup, or delete {} so its revision is detected from its content.",
-                        path.display(),
-                        chimera_core::format::STAMP_KEY,
-                        state_path.display()
-                    )
-                }
-                // Written before stamps: `detect_baseline` and `files_behind`
-                // still judge it, and `stamp_adopted_documents` stamps it once
-                // it is verified at head.
-                (None, _) => {}
-            }
-        }
-        Ok(changed)
-    }
-
-    /// Stamps document files that predate stamps once they are verified at
-    /// their module's head, and records every stamped file, so that later
-    /// starts judge them by their stamp alone.
+    /// Shared Runner owns stamp adoption; Tauri injects the verified backup.
     fn stamp_adopted_documents(&mut self) -> anyhow::Result<()> {
-        for module in self.modules() {
-            let ModuleKind::Document(spec) = module.kind() else {
-                continue;
-            };
-            let path = (spec.path)(&self.ctx);
-            let Some(file) = fs::read_document(&path, spec.document)
-                .with_context(|| format!("failed to inspect the {} files", module.module()))?
-            else {
-                continue;
-            };
-            if file.schema_revision.is_none() {
-                let head = head_revision(module);
-                if self.store.module_state(module.module()).applied_revision != head {
-                    continue;
-                }
-                self.ensure_backup()?;
-                fs::write_document(&path, spec.document, head, file.payload, None)
-                    .with_context(|| format!("failed to stamp the {} files", module.module()))?;
-            }
-            self.set_stamped(module.module());
+        let from = self.store.app.last_succeeded.clone();
+        let mut backup_port = TauriBackupPort {
+            paths: self.ctx.paths(),
+            from: from.as_ref(),
+            target: &self.target,
+        };
+        let backup_was_missing = self.backup.is_none();
+        core_runner::stamp_adopted_documents(
+            self.modules(),
+            &self.ctx,
+            &self.ctx,
+            &mut self.store,
+            &mut self.backup,
+            &mut backup_port,
+        )?;
+        if backup_was_missing && let Some(info) = &self.backup {
+            tracing::info!(path = %info.path.display(), "migration backup created before config rewrite");
         }
         Ok(())
     }
 
-    fn set_stamped(&mut self, module: &str) {
-        self.store
-            .modules
-            .entry(module.to_string())
-            .or_default()
-            .stamped = true;
-    }
-
-    /// Refuses data migrated by a newer build: this build cannot know which
-    /// files those unknown revisions moved or rewrote, so it would start on
-    /// stale locations.
     fn ensure_known_revisions(&self) -> anyhow::Result<()> {
-        for module in self.modules() {
-            let applied = self.store.module_state(module.module()).applied_revision;
-            let head = head_revision(module);
-            if applied > head {
-                return Err(RevisionError::NewerAppliedModule {
-                    path: self.ctx.state_path(),
-                    module: module.module().to_owned(),
-                    read: applied,
-                    supported: head,
-                }
-                .into());
-            }
-        }
-        Ok(())
+        core_runner::ensure_known_revisions(self.modules(), &self.store, &self.ctx.state_path())
     }
 
-    /// Refuses a state file that is ahead of the files on disk, which would
-    /// otherwise skip the migrations those files still need.
     fn verify_applied_revisions(&self) -> anyhow::Result<()> {
+        core_runner::verify_applied_revisions(
+            self.modules(),
+            &self.ctx,
+            &self.store,
+            &self.ctx.state_path(),
+        )
+    }
+
+    fn run_step(&mut self, step: &dyn MigrationStep<Ctx>) -> anyhow::Result<()> {
         let state_path = self.ctx.state_path();
-        for module in self.modules() {
-            let applied = self.store.module_state(module.module()).applied_revision;
-            let behind = module
-                .files_behind(&self.ctx, applied)
-                .with_context(|| format!("failed to inspect the {} files", module.module()))?;
-            if let Some(reason) = behind {
-                bail!(
-                    "{reason}, although {} records {} as migrated to revision {applied}. The \
-                     files may have been moved, restored from a backup or rewritten by an older \
-                     version. Restore them, or delete {} so the files on disk are detected and \
-                     migrated again.",
-                    state_path.display(),
-                    module.module(),
-                    state_path.display()
-                );
-            }
-        }
-        Ok(())
-    }
-
-    fn run_step(&mut self, step: &dyn MigrationStep) -> anyhow::Result<()> {
-        match check_step(step, &self.ctx) {
-            Ok(Some(StepCheck::Satisfied)) => {
-                println!("Migration {} is already satisfied, skipping.", step.id());
-                return self.finish_step(step, true);
-            }
-            Ok(Some(StepCheck::Needed) | None) => {}
-            Err(error) => {
-                let error =
-                    anyhow::Error::new(error).context(format!("failed to check {}", step.id()));
-                eprintln!("Migration {} failed: {error:#}", step.id());
-                return Err(self.record_failure(step, error));
-            }
-        }
-
-        self.store.mark_in_progress(step);
-        self.store
-            .flush_atomic(&self.ctx.state_path())
-            .with_context(|| format!("failed to persist {} in-progress state", step.id()))?;
-
-        match step
-            .run(&mut self.ctx)
-            .and_then(|()| ensure_satisfied(step, &self.ctx))
-        {
-            Ok(()) => {
-                println!("Migration {} completed.", step.id());
-                self.finish_step(step, false)
-            }
-            Err(error) => {
-                eprintln!("Migration {} failed: {error:#}", step.id());
-                if let Err(rollback_error) = step.rollback(&mut self.ctx) {
-                    eprintln!(
-                        "Migration {} rollback failed: {rollback_error:#}",
-                        step.id()
-                    );
-                }
-                Err(self.record_failure(step, error))
-            }
-        }
-    }
-
-    fn finish_step(&mut self, step: &dyn MigrationStep, skipped: bool) -> anyhow::Result<()> {
-        // Recorded in the same flush, so a stamp lost later is recognised as
-        // lost even if the rest of the run never finishes.
-        if let Some(spec) = document_spec(step.module())
-            && fs::read_document(&(spec.path)(&self.ctx), spec.document)?
-                .is_some_and(|file| file.schema_revision.is_some())
-        {
-            self.set_stamped(step.module());
-        }
-        if skipped {
-            self.store.mark_skipped(step);
-        } else {
-            self.store.mark_completed(step);
-        }
-        self.store.bump_module(step.module());
-        self.store
-            .flush_atomic(&self.ctx.state_path())
-            .with_context(|| format!("failed to persist {} finished state", step.id()))
-    }
-
-    fn record_failure(&mut self, step: &dyn MigrationStep, error: anyhow::Error) -> anyhow::Error {
-        self.store.mark_failed(step, &error);
-        match self.store.flush_atomic(&self.ctx.state_path()) {
-            Ok(()) => error,
-            Err(flush_error) => error.context(format!(
-                "failed to persist {} failed state: {flush_error:#}",
-                step.id()
-            )),
-        }
+        core_runner::execute_step(
+            step,
+            &mut self.ctx,
+            &mut self.store,
+            &state_path,
+            &registry::MODULES,
+        )
     }
 }
 
-/// Asks a step's check again right after its run. Still `Needed` means the
-/// check or the run is defective, which must not be recorded as completed.
-/// A document step must also leave its file in place and stamped, which a
-/// fallback check cannot tell.
-fn ensure_satisfied(step: &dyn MigrationStep, ctx: &Ctx) -> anyhow::Result<()> {
-    if let Some(spec) = document_spec(step.module()) {
-        let file = fs::read_document(&(spec.path)(ctx), spec.document)
-            .with_context(|| format!("failed to check {} after it ran", step.id()))?;
-        if file.is_none_or(|file| file.schema_revision.is_none()) {
-            bail!(
-                "migration {} ran without leaving its document stamped; this is a bug in the \
-                 migration",
-                step.id()
-            );
-        }
-    }
-    match check_step(step, ctx) {
-        Ok(Some(StepCheck::Needed)) => bail!(
-            "migration {} ran but its check still reports it as needed; this is a bug in the \
-             migration",
-            step.id()
-        ),
-        Ok(Some(StepCheck::Satisfied) | None) => Ok(()),
-        Err(error) => Err(anyhow::Error::new(error)
-            .context(format!("failed to check {} after it ran", step.id()))),
-    }
-}
-
-/// Whether `step` is needed. A document module's file answers for every step
-/// of the module, so document steps need no check of their own: a missing
-/// file has nothing to migrate and is created at head, and a stamped one
-/// needs the steps above its stamp. A step that runs without stamping its
-/// revision is caught by [`ensure_satisfied`]. Unstamped files fall back to
-/// the step's check.
-fn check_step(
-    step: &dyn MigrationStep,
-    ctx: &Ctx,
-) -> Result<Option<StepCheck>, MigrationCheckError> {
-    if let Some(spec) = document_spec(step.module()) {
-        match fs::read_document(&(spec.path)(ctx), spec.document)? {
-            None => return Ok(Some(StepCheck::Satisfied)),
-            Some(file) => {
-                if let Some(stamped) = file.schema_revision {
-                    return Ok(Some(StepCheck::from_needed(stamped < step.revision())));
-                }
-            }
-        }
-    }
-    step.check(ctx)
-}
-
-fn document_spec(module: &str) -> Option<DocumentSpec> {
-    registry::modules()
-        .find(|candidate| candidate.module() == module)
-        .and_then(|candidate| match candidate.kind() {
-            ModuleKind::Document(spec) => Some(spec),
-            ModuleKind::Heuristic => None,
-        })
-}
-
-fn head_revision(module: &dyn ModuleMigrator) -> u64 {
-    module.steps().last().map_or(0, |step| step.revision())
-}
-
-fn at_revision(revision: u64, stamped: bool) -> ModuleState {
-    ModuleState {
-        applied_revision: revision,
-        baseline_revision: revision,
-        stamped,
-    }
-}
-
-/// Whether a migration introduced in `introduced_in` should run when upgrading
-/// to `target`. Only the `(major, minor, patch)` triple is compared, so a
-/// prerelease/nightly build (e.g. `2.0.0-rc.1`) still runs migrations introduced
-/// in the matching release (`2.0.0`) instead of skipping them due to semver
-/// prerelease ordering (`2.0.0-rc.1 < 2.0.0`).
-fn introduced_in_reached(introduced_in: &Version, target: &Version) -> bool {
-    (
-        introduced_in.major,
-        introduced_in.minor,
-        introduced_in.patch,
-    ) <= (target.major, target.minor, target.patch)
-}
+#[cfg(test)]
+use super::MigrationState;
+#[cfg(test)]
+use chimera_migration::runner::introduced_in_reached;
 
 #[cfg(test)]
 mod tests {
@@ -640,7 +304,7 @@ mod tests {
         fail: bool,
     }
 
-    impl MigrationStep for TestStep {
+    impl MigrationStep<Ctx> for TestStep {
         fn id(&self) -> &'static str {
             self.id
         }
@@ -871,7 +535,7 @@ mod tests {
 
     struct RemovesProfiles;
 
-    impl MigrationStep for RemovesProfiles {
+    impl MigrationStep<Ctx> for RemovesProfiles {
         fn id(&self) -> &'static str {
             "profiles/removes"
         }

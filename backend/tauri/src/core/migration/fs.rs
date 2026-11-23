@@ -1,194 +1,19 @@
-//! Crash-safe filesystem writes for the migration subsystem.
-//!
-//! Wraps [`atomicwrites`] (already a workspace dependency via `chimera-core`)
-//! behind a single helper so the migration store and every config rewrite share
-//! one durable write path. Keeping the third-party type in one place means a
-//! future swap only touches this file.
+//! Tauri compatibility path for shared Migration document and YAML IO.
+//! The single source of truth lives in chimera-migration::document.
 
+#[cfg(test)]
 use super::MigrationCheckError;
-use anyhow::{Context, bail, ensure};
-use atomicwrites::{AllowOverwrite, AtomicFile};
-use chimera_core::format::{DocumentStamp, Inspected, StampError};
-use serde::de::DeserializeOwned;
+pub(crate) use chimera_migration::document::{
+    DocumentFile, read_document, read_yaml_if_exists, try_exists, write_document,
+};
+#[cfg(test)]
+use chimera_migration::document::{read_document_with, read_yaml_if_exists_with};
+#[cfg(test)]
 use serde_yaml_ng::Mapping;
-use std::{io::Write, path::Path};
+use std::path::Path;
 
-/// Whether `path` exists, reporting an inaccessible parent as an error
-/// instead of the `false` that [`Path::exists`] would return.
-pub(crate) fn try_exists(path: &Path) -> Result<bool, MigrationCheckError> {
-    crate::core::corrupt::config_node_exists(path).map_err(|source| MigrationCheckError::Io {
-        path: path.to_path_buf(),
-        source,
-    })
-}
-
-/// Read optional migration input without discarding a present dangling link.
-/// NotFound from the read is only absence if the node itself is also absent.
-fn read_string_if_exists_with(
-    path: &Path,
-    read: impl FnMut() -> std::io::Result<String>,
-) -> Result<Option<String>, MigrationCheckError> {
-    match crate::core::corrupt::retry_io(read) {
-        Ok(raw) => Ok(Some(raw)),
-        Err(source) if source.kind() == std::io::ErrorKind::NotFound && !try_exists(path)? => {
-            Ok(None)
-        }
-        Err(source) => Err(MigrationCheckError::Io {
-            path: path.to_path_buf(),
-            source,
-        }),
-    }
-}
-
-/// The YAML document at `path`, or `None` when the file does not exist.
-pub(crate) fn read_yaml_if_exists<T: DeserializeOwned>(
-    path: &Path,
-) -> Result<Option<T>, MigrationCheckError> {
-    read_yaml_if_exists_with(path, || std::fs::read_to_string(path))
-}
-
-fn read_yaml_if_exists_with<T: DeserializeOwned>(
-    path: &Path,
-    read: impl FnMut() -> std::io::Result<String>,
-) -> Result<Option<T>, MigrationCheckError> {
-    let Some(raw) = read_string_if_exists_with(path, read)? else {
-        return Ok(None);
-    };
-    serde_yaml_ng::from_str(&raw)
-        .map(Some)
-        .map_err(|source| MigrationCheckError::Parse {
-            path: path.to_path_buf(),
-            source,
-        })
-}
-
-/// A document module's file, split into its stamp and content.
-pub(crate) struct DocumentFile {
-    pub raw: String,
-    /// `None` for a file written before its module adopted stamps.
-    pub schema_revision: Option<u64>,
-    pub payload: Mapping,
-}
-
-/// The file at `path` holding `document`, or `None` when it does not exist.
-/// A malformed stamp, or one naming another document, is an error.
-pub(crate) fn read_document(
-    path: &Path,
-    document: &str,
-) -> Result<Option<DocumentFile>, MigrationCheckError> {
-    read_document_with(path, document, || std::fs::read_to_string(path))
-}
-
-fn read_document_with(
-    path: &Path,
-    document: &str,
-    read: impl FnMut() -> std::io::Result<String>,
-) -> Result<Option<DocumentFile>, MigrationCheckError> {
-    let Some(raw) = read_string_if_exists_with(path, read)? else {
-        return Ok(None);
-    };
-    let stamp_error = |source| MigrationCheckError::Stamp {
-        path: path.to_path_buf(),
-        source,
-    };
-    let (schema_revision, payload) =
-        match chimera_core::format::inspect(&raw).map_err(stamp_error)? {
-            Inspected::Unstamped(payload) => (None, payload),
-            Inspected::Stamped { stamp, payload } => {
-                if stamp.document != document {
-                    return Err(stamp_error(StampError::WrongDocument {
-                        expected: document.to_owned(),
-                        found: stamp.document,
-                    }));
-                }
-                (Some(stamp.schema_revision), payload)
-            }
-        };
-    Ok(Some(DocumentFile {
-        raw,
-        schema_revision,
-        payload,
-    }))
-}
-
-/// Atomically write `payload` to `path`, stamped as `document` at
-/// `schema_revision`, so the content and its revision always change together.
-pub(crate) fn write_document(
-    path: &Path,
-    document: &str,
-    schema_revision: u64,
-    payload: Mapping,
-    prefix: Option<&str>,
-) -> anyhow::Result<()> {
-    let stamp = DocumentStamp {
-        document: document.to_owned(),
-        schema_revision,
-    };
-    let stamped = chimera_core::format::stamp(payload, &stamp)
-        .with_context(|| format!("failed to stamp {}", path.display()))?;
-    let body = serde_yaml_ng::to_string(&stamped)
-        .with_context(|| format!("failed to serialize {}", path.display()))?;
-    let content = match prefix {
-        Some(prefix) => format!("{prefix}\n\n{body}"),
-        None => body,
-    };
-    atomic_write(path, content.as_bytes())
-}
-
-/// Atomically write `contents` to `path`.
-///
-/// The destination is never left half-written: `atomicwrites` writes the bytes
-/// into a temp file under a randomized `.atomicwrite` subdirectory of the
-/// target's parent, fsyncs it, then atomically replaces `path`. On Unix it also
-/// fsyncs the parent directories so the rename survives a crash; on Windows it
-/// replaces via `MoveFileExW` with write-through semantics. Missing parent
-/// directories are created first.
 pub(crate) fn atomic_write(path: &Path, contents: &[u8]) -> anyhow::Result<()> {
-    ensure!(
-        path.file_name().is_some(),
-        "destination path has no file name: {}",
-        path.display()
-    );
-    if let Some(parent) = path
-        .parent()
-        .filter(|parent| !parent.as_os_str().is_empty())
-    {
-        crate::core::corrupt::retry_io(|| std::fs::create_dir_all(parent))
-            .with_context(|| format!("failed to create dir {}", parent.display()))?;
-    }
-    // An atomic rename would replace a symbolic link itself rather than
-    // updating its target, silently breaking externally managed config paths.
-    // A directory or other non-file node must never be replaced either.
-    match crate::core::corrupt::retry_io(|| std::fs::symlink_metadata(path)) {
-        Ok(metadata) if crate::core::corrupt::is_link(&metadata) => {
-            bail!(
-                "cannot atomically overwrite symbolic link {}",
-                path.display()
-            );
-        }
-        Ok(metadata) if !metadata.is_file() => {
-            bail!(
-                "cannot atomically overwrite non-file node {}",
-                path.display()
-            );
-        }
-        Ok(_) => {}
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => {
-            return Err(error)
-                .with_context(|| format!("failed to inspect destination {}", path.display()));
-        }
-    }
-    crate::core::corrupt::retry(
-        || AtomicFile::new(path, AllowOverwrite).write(|file| file.write_all(contents)),
-        |error| {
-            let (atomicwrites::Error::Internal(error) | atomicwrites::Error::User(error)) = error;
-            crate::utils::recovery_io::classify(error)
-                == crate::utils::recovery_io::IoFailure::Transient
-        },
-    )
-    .with_context(|| format!("failed to atomically write {}", path.display()))?;
-    Ok(())
+    chimera_migration::fs::atomic_write(path, contents)
 }
 
 #[cfg(test)]
@@ -229,6 +54,36 @@ mod tests {
             b"keep"
         );
         assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn stamped_migration_write_uses_shared_document_format() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("nested").join("profiles.yaml");
+        let mut payload = Mapping::new();
+        payload.insert("revision".into(), 7.into());
+        write_document(&path, "profiles", 4, payload, Some("# migrated")).unwrap();
+        let document = read_document(&path, "profiles").unwrap().unwrap();
+        assert!(document.raw.starts_with("# migrated\n\n"));
+        assert_eq!(document.schema_revision, Some(4));
+        assert_eq!(document.payload["revision"].as_u64(), Some(7));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn stamped_migration_write_preserves_link_and_target() {
+        use std::os::unix::fs::symlink;
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("managed.yaml");
+        let link = dir.path().join("profiles.yaml");
+        std::fs::write(&target, b"external config").unwrap();
+        symlink(&target, &link).unwrap();
+        let mut payload = Mapping::new();
+        payload.insert("revision".into(), 7.into());
+        let error = write_document(&link, "profiles", 4, payload, None).unwrap_err();
+        assert!(format!("{error:#}").contains("symbolic link"));
+        assert_eq!(std::fs::read_link(link).unwrap(), target);
+        assert_eq!(std::fs::read(target).unwrap(), b"external config");
     }
 
     #[cfg(unix)]

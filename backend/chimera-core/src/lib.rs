@@ -5,5 +5,7 @@ pub mod connections;
 pub mod format;
 pub mod proxies;
 pub mod proxies_actor;
+pub mod redb_ext;
 pub mod service;
 pub mod state;
+pub mod storage;

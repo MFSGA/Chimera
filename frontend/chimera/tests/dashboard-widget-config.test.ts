@@ -86,6 +86,173 @@ test('normalizes persisted widget settings and rejects invalid values', () => {
   assert.equal('unknown-0' in normalized.byInstance, false);
 });
 
+test('Provider Updates keeps pinned resources and constrains invalid saved options', () => {
+  const saved = normalizeWidgetConfigStorage({
+    version: 1,
+    byInstance: {
+      selected: {
+        type: WidgetId.ProviderUpdates,
+        kinds: 'rule',
+        maxItems: 50,
+        resources: [
+          { kind: 'proxy', name: 'Alpha' },
+          { kind: 'proxy', name: 'Alpha' },
+          { kind: 'rule', name: 'Rule One' },
+          { kind: 'random', name: 'invalid' },
+          { kind: 'proxy', name: '' },
+        ],
+      },
+      broken: {
+        type: WidgetId.ProviderUpdates,
+        kinds: 'untrusted',
+        maxItems: 0,
+        resources: 'broken',
+      },
+      low: {
+        type: WidgetId.ProviderUpdates,
+        maxItems: 1.5,
+      },
+    },
+  });
+  assert.deepEqual(
+    getWidgetConfig(saved, 'selected', WidgetId.ProviderUpdates),
+    {
+      type: WidgetId.ProviderUpdates,
+      kinds: 'rule',
+      maxItems: 20,
+      resources: [
+        { kind: 'proxy', name: 'Alpha' },
+        { kind: 'rule', name: 'Rule One' },
+      ],
+    },
+  );
+  assert.deepEqual(getWidgetConfig(saved, 'broken', WidgetId.ProviderUpdates), {
+    type: WidgetId.ProviderUpdates,
+    kinds: 'both',
+    maxItems: 1,
+    resources: [],
+  });
+  assert.deepEqual(
+    getWidgetConfig(saved, 'low', WidgetId.ProviderUpdates),
+    DEFAULT_WIDGET_CONFIGS[WidgetId.ProviderUpdates],
+  );
+});
+
+test('normalizes Subscription Quota controls without accepting invalid thresholds', () => {
+  const storage = normalizeWidgetConfigStorage({
+    version: 1,
+    byInstance: {
+      custom: {
+        type: WidgetId.SubscriptionQuota,
+        target: { kind: 'fixed', profileUid: 'remote-a' },
+        showExpiry: false,
+        showProgress: false,
+        waveStyle: 'outline',
+        animateWave: false,
+        expiryWarningDays: 500,
+        quotaWarningPercent: 0,
+      },
+      malformed: {
+        type: WidgetId.SubscriptionQuota,
+        target: { kind: 'fixed', profileUid: '' },
+        waveStyle: 'invalid',
+        expiryWarningDays: 2.5,
+        quotaWarningPercent: NaN,
+      },
+    },
+  });
+  assert.deepEqual(
+    getWidgetConfig(storage, 'custom', WidgetId.SubscriptionQuota),
+    {
+      type: WidgetId.SubscriptionQuota,
+      target: { kind: 'fixed', profileUid: 'remote-a' },
+      showExpiry: false,
+      showProgress: false,
+      waveStyle: 'outline',
+      animateWave: false,
+      expiryWarningDays: 365,
+      quotaWarningPercent: 1,
+    },
+  );
+  assert.deepEqual(
+    getWidgetConfig(storage, 'malformed', WidgetId.SubscriptionQuota),
+    DEFAULT_WIDGET_CONFIGS[WidgetId.SubscriptionQuota],
+  );
+});
+
+test('preserves only valid Subscription Schedule targets and history settings', () => {
+  const stored = normalizeWidgetConfigStorage({
+    version: 1,
+    byInstance: {
+      fixed: {
+        type: WidgetId.SubscriptionSchedule,
+        target: { kind: 'fixed', profileUid: 'remote-a' },
+        showRecentRuns: false,
+      },
+      empty: {
+        type: WidgetId.SubscriptionSchedule,
+        target: { kind: 'fixed', profileUid: '' },
+      },
+      malformed: {
+        type: WidgetId.SubscriptionSchedule,
+        target: { kind: 'unknown', profileUid: 'remote-a' },
+      },
+      follow: {
+        type: WidgetId.SubscriptionSchedule,
+        target: { kind: 'current', profileUid: 'ignored' },
+      },
+    },
+  });
+  assert.deepEqual(
+    getWidgetConfig(stored, 'fixed', WidgetId.SubscriptionSchedule),
+    {
+      type: WidgetId.SubscriptionSchedule,
+      target: { kind: 'fixed', profileUid: 'remote-a' },
+      showRecentRuns: false,
+    },
+  );
+  for (const id of ['empty', 'malformed']) {
+    assert.deepEqual(
+      getWidgetConfig(stored, id, WidgetId.SubscriptionSchedule).target,
+      { kind: 'current' },
+    );
+  }
+  assert.deepEqual(
+    getWidgetConfig(stored, 'follow', WidgetId.SubscriptionSchedule).target,
+    { kind: 'current' },
+  );
+});
+
+test('normalizes Proxy Mode layout without changing Proxy Shortcuts semantics', () => {
+  const stored = normalizeWidgetConfigStorage({
+    version: 1,
+    byInstance: {
+      'proxy-mode-0': { type: WidgetId.ProxyMode, layout: 'focus' },
+      'proxy-mode-1': { type: WidgetId.ProxyMode, layout: 'equal' },
+      'proxy-shortcuts-0': {
+        type: WidgetId.ProxyShortcuts,
+        layout: 'equal',
+        buttons: 'both',
+        order: 'system-first',
+      },
+    },
+  });
+
+  assert.equal(
+    getWidgetConfig(stored, 'proxy-mode-0', WidgetId.ProxyMode).layout,
+    'focus',
+  );
+  assert.equal(
+    getWidgetConfig(stored, 'proxy-mode-1', WidgetId.ProxyMode).layout,
+    'flex',
+  );
+  assert.equal(
+    getWidgetConfig(stored, 'proxy-shortcuts-0', WidgetId.ProxyShortcuts)
+      .layout,
+    'equal',
+  );
+});
+
 test('rejects unknown versions and defaults malformed storage and mismatches', () => {
   for (const version of [2, '2']) {
     assert.throws(
