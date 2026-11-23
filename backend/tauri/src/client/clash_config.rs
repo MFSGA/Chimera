@@ -706,14 +706,14 @@ impl ChimeraClient {
     /// independently. The lower Core validator is read-only and does not
     /// acquire the workflow's mutating Core/Service ownership.
     pub(super) async fn check_clash_runtime_candidate(&self, candidate: ClashConfig) -> Result<()> {
-        let Some(profiles) = self.inner.typed_profiles.as_ref() else {
+        if self.inner.typed_profiles.is_none() {
             // Compatibility-only fixtures instantiate no Profiles source.
             #[cfg(test)]
             return Ok(());
             #[cfg(not(test))]
             bail!("runtime candidate check requires the typed Profiles source");
-        };
-        use crate::state::mutation::{DomainChange, RuntimeCandidate, RuntimeGate as _};
+        }
+        use crate::state::mutation::{DomainChange, RuntimeCandidate};
 
         let proposed = RuntimeCandidate {
             change: DomainChange::Clash {
@@ -731,16 +731,29 @@ impl ChimeraClient {
                 .await
                 .map_err(anyhow::Error::new);
         }
+
+        // The upstream RuntimeGate is mandatory in production. An absent
+        // gate must never silently fall back to an independently constructed
+        // CoreLifecycle validator with a different runtime/port session.
+        #[cfg(not(test))]
+        bail!("Clash candidate validation requires the installed Core-owned RuntimeGate");
+
         // Isolated legacy fixtures have no canonical Core runtime session.
-        let checker = super::reconciler::legacy_check::CandidateCheck::new(
-            self.inner.core.clone(),
-            self.inner.application.clone(),
-            self.inner.clash_config.clone(),
-            profiles.content_reader(),
-            profiles.snapshot_handle(),
-            self.inner.core_lifecycle.clone(),
-        );
-        checker.check(proposed).await.map_err(anyhow::Error::new)
+        #[cfg(test)]
+        {
+            use crate::state::mutation::RuntimeGate as _;
+
+            let profiles = self.inner.typed_profiles.as_ref().expect("checked above");
+            let checker = super::reconciler::legacy_check::CandidateCheck::new(
+                self.inner.core.clone(),
+                self.inner.application.clone(),
+                self.inner.clash_config.clone(),
+                profiles.content_reader(),
+                profiles.snapshot_handle(),
+                self.inner.core_lifecycle.clone(),
+            );
+            checker.check(proposed).await.map_err(anyhow::Error::new)
+        }
     }
 
     pub(crate) fn get_clash_config(&self) -> Result<ClashConfig> {

@@ -380,3 +380,11 @@ cargo clippy --manifest-path backend/Cargo.toml --all-targets --all-features
 - 当前收敛：Reconciler inputs 直接 re-export chimera_core::client::runtime_build_port::FrozenProfileContent；RuntimeBuildService 的新构建路径与 legacy_preparation 的候选/已提交读取，都调用同一个 core::runtime_build_port::FrozenProfileContent::capture_content。删去冗余 RuntimeContentPort 与重复文件读取实现。legacy_preparation 仅保留现阶段必需的 staged_content 与 ProfileContentReader 的读锁/提交版本栅栏；没有新建 source owner。
 - 原语义边界：闭包顺序、global/scoped transform、Composition 来源、读取错误保留、仅为活跃依赖替换 staged_content、Target identity 和 Core 校验字节均由共享 core 类型决定；没有修改 RuntimeBuildPort、Config 持久化、Service host、Source CAS 或 Core 运行时写入。同步维持 content source 的 Send + Sync 约束。
 - 仅代码迁移，本轮没有执行单元测试、构建、Clippy 或 E2E（用户要求）；已执行 Rustfmt、git diff --check 和人工静态差异检查。下一次集中验证重点是 staged 文件优先级、源晋升时的内容读锁，以及 Reconciler 和 legacy gate 输入类型一致性。
+
+### DIFF-CANDIDATE-GATE-PRODUCTION-FALLBACK：移除生产级旧 CoreLifecycle 候选校验回退
+
+- ref 基线：4607a7379f0aa060daf55b369dc8103dda929d82；ref 的 client/reconciler/check.rs::CandidateCheck 通过统一 RuntimePreparation、RuntimeBuildPort、CoreValidatorPort 为来源文档构建并校验候选，状态提交由 RuntimeGate 通知唯一运行时 owner。
+- 生产现状：Chimera 已为 Profiles、Application、Clash 构建并安装 Core-owned CandidateCheck，且共享提交后的 Checked inbox / Core 状态所有权。Clash 的只读预检和停止状态 Profile TCC 已使用该路径，但此前遇到未安装 gate 或无有效 runtime preparation session 时仍可能调用 legacy_check::CandidateCheck::check 或 legacy_check::check_candidate，转向独立 CoreLifecycle 验证路径。
+- 本轮收敛：Clash 生产预检只允许已安装、共享的 CandidateCheck::validate_only；Stopped Profile TCC 只允许共享 gate::validate_stopped_profile_tcc，并要求 Core-owned runtime session。任一前提缺失均返回明确的候选不可用错误，不再独立构建/校验另一份 Core 配置。旧 legacy_check 整个模块仅为 cfg(test) 编译，保留隔离 fixture 及类型化拒绝错误的回归测试。
+- 兼容性边界：没有将仍在使用旧 postcommit Apply 的 Clash/Core 选择与 Service host 路径强行切换成 CheckedSourceCommitted；没有新建第二个 Core owner、改动 Profile 文件锁、暂存字节、Source CAS、Runtime 产品、Service handoff 或现有模式切换效果。legacy_preparation 继续服务运行时迁移期间的安全内容捕获，但旧校验器不再在生产编译。
+- 本轮按用户指示未执行单元测试、编译、Clippy 或桌面 E2E，仅做源码路径审查、Rustfmt、文档格式整理与 git diff --check。后续迁移重点是把 Application/Clash 的旧 postcommit Apply 与 Core owner 生命周期一起移到上游 Checked 提交流程，不能仅替换接口后忽略 host 转换。

@@ -3403,6 +3403,22 @@ impl ProfileRuntime for CoreLifecycleWorkflow {
         {
             return gate.validate_stopped_profile_tcc(inputs).await;
         }
+        // Production must not build and validate a second runtime candidate
+        // through the old CoreLifecycle port. Only the live Core-owned
+        // RuntimePreparation/RuntimeGate can check stopped Profile TCC bytes.
+        #[cfg(not(test))]
+        {
+            let _ = inputs;
+            Err(crate::client::application_workflow::mutation::RuntimeCheckFailure::
+                candidate_unavailable(
+                    "Stopped Profile validation requires the installed Core-owned RuntimeGate and preparation session",
+                )
+                .into())
+        }
+
+        // Test fixtures without live Core-owned sessions retain the isolated
+        // legacy validator; no production fallback is compiled.
+        #[cfg(test)]
         crate::client::reconciler::legacy_check::check_candidate(
             self.core.as_ref(),
             inputs,
