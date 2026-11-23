@@ -2137,6 +2137,27 @@ impl ApplicationWorkflow {
         // retiring another owned Core even when Local is already selected.
         let owner = host_for_run_type(current.run_type);
         let (service, generation) = lifecycle.service_evidence().await;
+        // S2 cannot queue a host handoff from a single stale Core/Service
+        // pairing. Verify that both independently owned facts stayed fixed
+        // across the asynchronous readiness observation, just as S3/S4 do.
+        let Ok(resampled_core) = lifecycle.startup_core_status().await else {
+            return false;
+        };
+        let (resampled_service, resampled_generation) = lifecycle.service_evidence().await;
+        let Ok(final_core) = lifecycle.startup_core_status().await else {
+            return false;
+        };
+        if !crate::client::reconciler::decision::stable_owner_facts(
+            &current,
+            &resampled_core,
+            &service,
+            generation,
+            &resampled_service,
+            resampled_generation,
+        ) || !crate::client::reconciler::decision::same_core_status(&current, &final_core)
+        {
+            return false;
+        }
         let failed_generation = lifecycle.startup_failed_generation();
         let readiness = if failed_generation != 0 && failed_generation == generation {
             Some(false)

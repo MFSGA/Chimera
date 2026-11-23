@@ -26,6 +26,9 @@ use crate::client::application_workflow::workflow::ProfileRuntime;
 use crate::client::reconciler::attempt::{
     AttemptPolicy, CommittedTargetAdvanced, ServiceFallbackDeferred,
 };
+use crate::client::reconciler::decision::{
+    confirmed_planned_stop, same_core_status, stable_owner_facts,
+};
 use crate::client::reconciler::{
     committed::{Selection, SelectionChange},
     inputs::RuntimeInputs,
@@ -55,19 +58,26 @@ pub(in crate::client) struct ApplicationPatchResult {
     pub(in crate::client) checked_version: Option<u64>,
 }
 
-/// Use the ref checked-source handoff only for a local-host enhancement
-/// update. Core selection and Service ownership changes still require the
-/// specialized legacy handoff until their ref workflows migrate together.
+/// Use ref checked-source handoff only for an isolated local-host runtime
+/// enhancement patch. Core/Service ownership and other application settings
+/// may carry separate effects; admitting a combined patch would skip their
+/// legacy postcommit workflow after publishing CheckedSourceCommitted.
 fn checked_application_patch_eligible(
     patch: &ChimeraAppConfigPatch,
     previous: &ChimeraAppConfig,
     service_connected: bool,
 ) -> bool {
-    patch.enable_builtin_enhanced.is_some()
-        && patch.core.is_none()
-        && patch.enable_service_mode.is_none()
-        && !previous.enable_service_mode
-        && !service_connected
+    use struct_patch::Status as _;
+
+    if patch.enable_builtin_enhanced.is_none() || previous.enable_service_mode || service_connected
+    {
+        return false;
+    }
+    // Compare every field, including nested patch DTOs, against the empty
+    // patch so a future app setting never silently becomes Checked-eligible.
+    let mut remainder = patch.clone();
+    remainder.enable_builtin_enhanced = None;
+    remainder.is_empty()
 }
 
 #[cfg(test)]
@@ -106,6 +116,26 @@ mod checked_application_route_tests {
         assert!(!checked_application_patch_eligible(
             &patch, &previous, false
         ));
+
+        // A combined enhancement/OS-effect patch must stay with the existing
+        // owner that handles proxy, launch and network action side effects.
+        patch.enable_builtin_enhanced = Some(false);
+        patch.enable_system_proxy = Some(true);
+        assert!(!checked_application_patch_eligible(
+            &patch, &previous, false
+        ));
+        patch.enable_system_proxy = None;
+        patch.enable_auto_launch = Some(true);
+        assert!(!checked_application_patch_eligible(
+            &patch, &previous, false
+        ));
+        patch.enable_auto_launch = None;
+        patch.hotkeys = Some(vec!["toggle_system_proxy,Ctrl+Shift+P".into()]);
+        assert!(!checked_application_patch_eligible(
+            &patch, &previous, false
+        ));
+        patch.hotkeys = None;
+        assert!(checked_application_patch_eligible(&patch, &previous, false));
     }
 }
 
@@ -1599,22 +1629,46 @@ impl CoreLifecycleWorkflow {
     }
 
     pub(super) async fn maintain_service_release(&self) -> anyhow::Result<()> {
-        use crate::client::reconciler::release::ReleaseObservation;
+        use crate::client::reconciler::release::{
+            ReleaseObservation, observation, same_release_owner,
+        };
 
         let before = self.core.status().await?;
         anyhow::ensure!(
             self.service_release_observation().await == ReleaseObservation::Owed,
             "Service daemon release is not authorized by a verified Local owner"
         );
+        let (service_before, generation_before) = self.service_evidence().await;
+        anyhow::ensure!(
+            observation(false, true, &service_before) == ReleaseObservation::Owed,
+            "Service daemon stopped-owner evidence was lost before acquiring the transition lease"
+        );
         // Nonblocking lock acquisition preserves ServiceActor -> CoreLifecycle
         // ordering: a UI command can hold this lock while awaiting our mailbox.
         let mut lease = self.try_begin_service_transition().await?;
+        let local_after_lease = self.core.status().await?;
+        anyhow::ensure!(
+            same_core_status(&before, &local_after_lease)
+                && matches!(local_after_lease.state, CoreState::Running),
+            "Local Core instance changed before the queued Service release was admitted"
+        );
         anyhow::ensure!(
             self.service_release_observation().await == ReleaseObservation::Owed,
             "Service owner evidence changed after acquiring the transition lease"
         );
-        // An intentionally retired daemon must not be restarted by the
-        // separate endpoint-recovery loop on the next interval.
+        let (service_after_lease, generation_after_lease) = self.service_evidence().await;
+        anyhow::ensure!(
+            same_release_owner(
+                &service_before,
+                generation_before,
+                &service_after_lease,
+                generation_after_lease,
+            ),
+            "Service daemon owner or readiness generation changed before the queued release"
+        );
+        // The lease proves the stop still targets the same stopped, locally
+        // owned daemon. A newer readiness generation must use a new release
+        // decision rather than reusing an older convergence observation.
         self.service_recovery.lock().suppress();
         lease.stop_daemon().await?;
         lease.confirm_stopped().await?;
@@ -1625,10 +1679,7 @@ impl CoreLifecycleWorkflow {
         );
         let current = self.core.status().await?;
         anyhow::ensure!(
-            before.instance_id == current.instance_id
-                && before.state_changed_at == current.state_changed_at
-                && before.run_type == current.run_type
-                && matches!(current.state, CoreState::Running),
+            same_core_status(&before, &current) && matches!(current.state, CoreState::Running),
             "Local Core changed while retiring the Service daemon"
         );
         self.refresh_service_recovery_host().await;
@@ -1802,6 +1853,85 @@ impl CoreLifecycleWorkflow {
         }
     }
 
+    /// Ref S3 Stop must observe a settled, stopped Core before S4 can
+    /// apply the next committed target. A successful command reply alone
+    /// cannot prove that the selected endpoint stopped, nor that the
+    /// sources or accepted Core revision stayed fixed across the stop.
+    ///
+    /// The existing CoreLifecycle actor remains the only executor; no new
+    /// Runtime writer or host-selection operation is introduced here.
+    async fn stop_planned_unverified_core(
+        &self,
+        target: &str,
+        observed: &CoreStatusSnapshot,
+        accepted: Option<&Arc<crate::client::runtime::RuntimeApplyReceipt>>,
+    ) -> anyhow::Result<()> {
+        use crate::client::reconciler::attempt::OwnershipTransitionPending;
+
+        // The old source may have advanced while S2/S3 sampled its owner.
+        // Do not stop a real Core for a candidate no longer committed.
+        if self.startup_target_identity().await? != target {
+            return Err(CommittedTargetAdvanced.into());
+        }
+        let before = self.core.status().await?;
+        if !same_core_status(observed, &before) || !matches!(before.state, CoreState::Running) {
+            return Err(OwnershipTransitionPending::waiting(
+                "the selected Core changed before its S3 stop could begin",
+            )
+            .into());
+        }
+        if let Some(accepted) = accepted {
+            let current = self.core.active_runtime_receipt().await?;
+            if accepted.host != crate::client::reconciler::proof::host_for(before.run_type)
+                || !current
+                    .as_ref()
+                    .is_some_and(|current| Arc::ptr_eq(accepted, current))
+            {
+                return Err(OwnershipTransitionPending::waiting(
+                    "the accepted Core revision changed before the S3 stop",
+                )
+                .into());
+            }
+        }
+        let stop = self.core.stop().await;
+        if self.core.outcome_uncertain() {
+            anyhow::bail!("S3 Core stop outcome is uncertain; do not apply a second runtime");
+        }
+        let stopped = self.core.status().await?;
+        if !confirmed_planned_stop(&before, &stopped) {
+            // A failed Stop RPC retains its actual error; a successful reply
+            // without a stopped observation is a dependency wait.
+            if let Err(error) = stop {
+                return Err(error);
+            }
+            return Err(OwnershipTransitionPending::waiting(
+                "the Core stop reply had no stable stopped-state proof",
+            )
+            .into());
+        }
+        // Ref stop_owner permits NotStarted only after independent stopped
+        // proof. Every other error must retain the original refusal.
+        if let Err(error) = stop
+            && !startup_stop_error_is_idempotent(&error)
+        {
+            return Err(error);
+        }
+        let confirmed = self.core.status().await?;
+        if !same_core_status(&stopped, &confirmed) {
+            return Err(OwnershipTransitionPending::waiting(
+                "the selected Core changed while confirming its S3 stop",
+            )
+            .into());
+        }
+        // The stop is now proven, but the previously captured source target
+        // could have been superseded while the external Core action ran.
+        // In that case only a latest-source round may perform the next Apply.
+        if self.startup_target_identity().await? != target {
+            return Err(CommittedTargetAdvanced.into());
+        }
+        Ok(())
+    }
+
     /// Execute only those decisions of ref's S3/S4 plan for which Chimera
     /// has established the selected host and has a live runtime receipt.
     /// Ownership moves continue through the single startup handoff actor.
@@ -1836,22 +1966,35 @@ impl CoreLifecycleWorkflow {
         // Read the same ServiceActor-owned evidence as StartupWorkflow. Its
         // epoch/readiness and the selected Core state form ONE ref Facts round
         // instead of permitting S3 to bypass a pending S2 owner transition.
-        let (service, _) = self.service_evidence().await;
-        // The Service probe is asynchronous. A Core instance or routing
-        // generation change during that await invalidates the paired Facts
-        // sample; never stop/apply based on observations from two owners.
-        let resampled = self.core.status().await.ok();
-        if !resampled
+        let (service, service_generation) = self.service_evidence().await;
+        // Both selected Core and Service ownership must form one coherent
+        // S2/S3 Facts frame. Async probes can cross a daemon restart even if
+        // they return two individually valid Ready snapshots.
+        let resampled_core = self.core.status().await.ok();
+        let (resampled_service, resampled_generation) = self.service_evidence().await;
+        let final_core = self.core.status().await.ok();
+        let coherent = resampled_core.as_ref().is_some_and(|current| {
+            stable_owner_facts(
+                &observed,
+                current,
+                &service,
+                service_generation,
+                &resampled_service,
+                resampled_generation,
+            )
+        }) && final_core
             .as_ref()
-            .is_some_and(|current| same_core_status(&observed, current))
-        {
+            .is_some_and(|current| same_core_status(&observed, current));
+        if !coherent {
             return Ok(Some(Err(
                 crate::client::reconciler::attempt::OwnershipTransitionPending::waiting(
-                    "the selected Core changed while sampling Service ownership",
+                    "Core or Service ownership changed while sampling the committed Facts round",
                 )
                 .into(),
             )));
         }
+        // An S3/S4 decision may reuse a receipt only when the original Core
+        // revision remains the one selected after the ownership probes.
         if let Some(original) = receipt.as_ref()
             && !self
                 .core
@@ -1901,9 +2044,11 @@ impl CoreLifecycleWorkflow {
                 .into(),
             ))),
             Some(Step::Stop { intent: false }) => {
-                // A live Core with the wrong accepted revision must stop
-                // before we submit this different committed target.
-                self.core.stop().await?;
+                // Ref S3: a stale or unverified Running Core must retire
+                // before S4 prepares the new runtime. Only proceed after
+                // a stable terminal stop and a fresh source-target fence.
+                self.stop_planned_unverified_core(target, &observed, receipt.as_ref())
+                    .await?;
                 Ok(None)
             }
             Some(Step::FallBackToLocal) => {
@@ -2805,6 +2950,19 @@ impl CoreLifecycleWorkflow {
             .degradations)
     }
 
+    /// Snapshot every committed source version before the legacy validation
+    /// starts, without sending an RPC to a source writer blocked on this
+    /// CoreLifecycle actor.
+    fn committed_runtime_source_versions(
+        &self,
+    ) -> crate::client::reconciler::committed::SourceVersions {
+        crate::client::reconciler::committed::SourceVersions::from_committed(
+            &self.application,
+            &self.clash,
+            self.profiles.as_ref().map(|p| *p.load().version),
+        )
+    }
+
     pub(super) async fn patch_application_config_with_result(
         &self,
         patch: ChimeraAppConfigPatch,
@@ -2822,6 +2980,10 @@ impl CoreLifecycleWorkflow {
         }
 
         let previous = self.application.get().await?;
+        // Unlike the old single-domain fence, ref reconciles the complete
+        // committed runtime target. Track Clash and Profiles as well so an
+        // overlapping domain commit cannot be claimed as a successful Apply.
+        let expected_sources = self.committed_runtime_source_versions();
         let use_checked = self.checked_gate.get().is_some()
             && checked_application_patch_eligible(&patch, &previous.state, service_connected);
         let mut candidate = previous.state.clone();
@@ -2900,7 +3062,14 @@ impl CoreLifecycleWorkflow {
             "application",
             committed_version,
             || async { self.application.get().await.map(|latest| latest.version) },
-            || self.reconcile_application(candidate, service_connected),
+            || {
+                crate::client::reconciler::committed::apply_with_dependency_fence(
+                    crate::client::reconciler::committed::SourceDomain::Application,
+                    expected_sources,
+                    || async { self.committed_runtime_source_versions() },
+                    || self.reconcile_application(candidate, service_connected),
+                )
+            },
         )
         .await;
         if let Some(degradation) = degradation {
@@ -3329,20 +3498,6 @@ fn service_prepared_owner_proven(observed: &CoreStatusSnapshot, service: &Servic
             .is_none_or(|expected| observed.instance_id.as_deref() == Some(expected.as_str())),
         _ => false,
     }
-}
-
-fn same_core_status(left: &CoreStatusSnapshot, right: &CoreStatusSnapshot) -> bool {
-    let same_state = match (&left.state, &right.state) {
-        (CoreState::Running, CoreState::Running) => true,
-        (CoreState::Stopped(left_reason), CoreState::Stopped(right_reason)) => {
-            left_reason == right_reason
-        }
-        _ => false,
-    };
-    left.instance_id == right.instance_id
-        && same_state
-        && left.state_changed_at == right.state_changed_at
-        && left.run_type == right.run_type
 }
 
 #[async_trait::async_trait]

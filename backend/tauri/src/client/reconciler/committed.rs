@@ -84,6 +84,26 @@ pub(crate) struct SourceVersions {
 }
 
 impl SourceVersions {
+    /// Read the committed versions without calling a source actor that may
+    /// already be waiting on the CoreLifecycle mailbox. Production supplies
+    /// the Profiles snapshot; isolated legacy fixtures can omit that owner.
+    pub(crate) fn from_committed(
+        application: &crate::client::application::ApplicationClient,
+        clash: &crate::client::clash_config::ClashConfigClient,
+        profiles_version: Option<u64>,
+    ) -> Self {
+        let mut versions = Self::default();
+        versions.observe(
+            SourceDomain::Application,
+            application.committed_runtime_source().1,
+        );
+        versions.observe(SourceDomain::Clash, clash.committed_runtime_source().1);
+        if let Some(version) = profiles_version {
+            versions.observe(SourceDomain::Profiles, version);
+        }
+        versions
+    }
+
     pub(crate) fn observe(&mut self, domain: SourceDomain, version: u64) {
         let seen = match domain {
             SourceDomain::Application => &mut self.application,
@@ -114,9 +134,59 @@ impl SourceVersions {
             SourceDomain::Profiles => self.profiles,
         }
     }
+
+    /// A compatibility Apply already fences the version of the source that
+    /// triggered it. Fence the *other* committed source domains too: a newer
+    /// Application, Clash or Profiles target invalidates an in-flight build
+    /// even when the initiating source version has not changed.
+    pub(crate) fn ensure_dependencies_current(
+        &self,
+        origin: SourceDomain,
+        current: &Self,
+    ) -> anyhow::Result<()> {
+        for domain in [
+            SourceDomain::Application,
+            SourceDomain::Clash,
+            SourceDomain::Profiles,
+        ] {
+            if domain != origin && self.version(domain) != current.version(domain) {
+                return Err(anyhow::Error::new(super::attempt::CommittedTargetAdvanced).context(
+                    format!(
+                        "{domain:?} source advanced during {origin:?} runtime apply: expected {:?}, observed {:?}",
+                        self.version(domain),
+                        current.version(domain),
+                    ),
+                ));
+            }
+        }
+        Ok(())
+    }
 }
 
 use anyhow::Result;
+
+/// Keep the legacy inline Core apply conditional on *all* independent source
+/// domains still matching the candidate that passed precommit validation.
+/// The read is repeated after Core work, so an overlapping source write
+/// produces a retryable deferred result instead of false convergence.
+/// No new runtime actor or product writer is created by this fence.
+pub(crate) async fn apply_with_dependency_fence<Read, ReadFuture, Apply, ApplyFuture>(
+    origin: SourceDomain,
+    expected: SourceVersions,
+    mut read: Read,
+    apply: Apply,
+) -> Result<()>
+where
+    Read: FnMut() -> ReadFuture,
+    ReadFuture: Future<Output = SourceVersions>,
+    Apply: FnOnce() -> ApplyFuture,
+    ApplyFuture: Future<Output = Result<()>>,
+{
+    expected.ensure_dependencies_current(origin, &read().await)?;
+    let result = apply().await;
+    expected.ensure_dependencies_current(origin, &read().await)?;
+    result
+}
 
 use crate::client::{
     application_workflow::tcc::safe_to_retry_deferred_runtime,
@@ -232,6 +302,69 @@ mod tests {
         assert_eq!(seen.version(SourceDomain::Profiles), Some(9));
         seen.observe(SourceDomain::Clash, 5);
         assert_eq!(seen.version(SourceDomain::Clash), Some(5));
+    }
+
+    #[tokio::test]
+    async fn cross_domain_source_advance_prevents_a_legacy_apply() {
+        let mut expected = SourceVersions::default();
+        expected.observe(SourceDomain::Application, 7);
+        expected.observe(SourceDomain::Clash, 3);
+        expected.observe(SourceDomain::Profiles, 9);
+        let mut newer = expected.clone();
+        newer.observe(SourceDomain::Profiles, 10);
+        let calls = Arc::new(AtomicUsize::new(0));
+        let invoked = calls.clone();
+        let error = apply_with_dependency_fence(
+            SourceDomain::Application,
+            expected.clone(),
+            move || {
+                let snapshot = newer.clone();
+                async move { snapshot }
+            },
+            move || async move {
+                invoked.fetch_add(1, Ordering::AcqRel);
+                Ok(())
+            },
+        )
+        .await
+        .expect_err("another source must invalidate the legacy candidate");
+        assert_eq!(calls.load(Ordering::Acquire), 0);
+        assert!(
+            error
+                .downcast_ref::<super::super::attempt::CommittedTargetAdvanced>()
+                .is_some()
+        );
+        assert!(safe_to_retry_deferred_runtime(&error));
+
+        let applied = Arc::new(AtomicUsize::new(0));
+        let observed = Arc::new(AtomicU64::new(3));
+        let seen = observed.clone();
+        let advance = observed.clone();
+        let applied_counter = applied.clone();
+        let error = apply_with_dependency_fence(
+            SourceDomain::Application,
+            expected,
+            move || {
+                let mut snapshot = SourceVersions::default();
+                snapshot.observe(SourceDomain::Application, 7);
+                snapshot.observe(SourceDomain::Clash, seen.load(Ordering::Acquire));
+                snapshot.observe(SourceDomain::Profiles, 9);
+                async move { snapshot }
+            },
+            move || async move {
+                applied_counter.fetch_add(1, Ordering::AcqRel);
+                advance.store(4, Ordering::Release);
+                Ok(())
+            },
+        )
+        .await
+        .expect_err("a concurrent Clash commit must defer an in-flight apply");
+        assert_eq!(applied.load(Ordering::Acquire), 1);
+        assert!(
+            error
+                .downcast_ref::<super::super::attempt::CommittedTargetAdvanced>()
+                .is_some()
+        );
     }
 
     #[tokio::test]

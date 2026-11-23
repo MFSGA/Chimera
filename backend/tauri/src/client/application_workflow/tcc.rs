@@ -1129,8 +1129,11 @@ pub(in crate::client) fn safe_to_defer_runtime_apply(error: &anyhow::Error) -> b
 pub(in crate::client) fn safe_to_retry_deferred_runtime(error: &anyhow::Error) -> bool {
     error.chain().any(|cause| {
         cause
-            .downcast_ref::<CoreError>()
-            .is_some_and(|error| error.kind == Some(CoreErrorKind::QueueFull) && error.retryable)
+            .downcast_ref::<crate::client::reconciler::attempt::CommittedTargetAdvanced>()
+            .is_some()
+            || cause.downcast_ref::<CoreError>().is_some_and(|error| {
+                error.kind == Some(CoreErrorKind::QueueFull) && error.retryable
+            })
             || cause
                 .downcast_ref::<super::mutation::RuntimeCheckFailure>()
                 .is_some_and(|failure| failure.cause() == TryCauseKind::Transient)

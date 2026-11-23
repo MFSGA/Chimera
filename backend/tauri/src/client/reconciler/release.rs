@@ -42,6 +42,24 @@ pub(crate) fn observation(
     }
 }
 
+/// The daemon-stop command is queued after the Local Core converges, but
+/// acquiring the Service transition lease may race a daemon restart, a new
+/// Ready generation, or another instance's ownership. A generic "stopped"
+/// answer is not sufficient: only the *same* proven daemon generation may
+/// consume the queued release intent. The Service transition lease then
+/// excludes further operations while the stop is performed.
+pub(crate) fn same_release_owner(
+    before: &ServiceEvidence,
+    before_generation: u64,
+    after: &ServiceEvidence,
+    after_generation: u64,
+) -> bool {
+    before_generation == after_generation
+        && before == after
+        && observation(false, true, before) == ReleaseObservation::Owed
+        && observation(false, true, after) == ReleaseObservation::Owed
+}
+
 #[derive(Debug, Default)]
 pub(crate) struct ServiceReleaseDebt {
     owed: bool,
@@ -153,6 +171,40 @@ mod tests {
             ),
             ReleaseObservation::Unproven
         );
+    }
+
+    #[test]
+    fn release_requires_same_proven_daemon_generation_after_lease() {
+        let original = ServiceEvidence::CoreStopped {
+            ready: true,
+            phase: ServicePhase::Ready,
+            runtime_owned: true,
+        };
+        assert!(same_release_owner(&original, 12, &original, 12));
+        assert!(!same_release_owner(&original, 12, &original, 13));
+
+        for changed in [
+            ServiceEvidence::CoreStopped {
+                ready: true,
+                phase: ServicePhase::Ready,
+                runtime_owned: false,
+            },
+            ServiceEvidence::CoreRunning {
+                ready: true,
+                phase: ServicePhase::Ready,
+                instance: None,
+                revision: None,
+            },
+            ServiceEvidence::ForeignCore {
+                ready: true,
+                phase: ServicePhase::Ready,
+            },
+            ServiceEvidence::Unreadable {
+                phase: ServicePhase::Unknown,
+            },
+        ] {
+            assert!(!same_release_owner(&original, 12, &changed, 12));
+        }
     }
 
     #[test]

@@ -11,9 +11,59 @@ use chimera_core::{
 use chimera_ipc::api::status::CoreState;
 
 use crate::client::{
+    application_workflow::startup::ServiceEvidence as ObservedServiceEvidence,
     core_lifecycle::ports::CoreStatusSnapshot, reconciler::proof::host_for,
     runtime::RuntimeApplyReceipt,
 };
+
+/// The same Core instance must still own the selected endpoint after an
+/// asynchronous ServiceActor probe. Merely observing Running both times is
+/// not a proof of the same selected Core.
+pub(crate) fn same_core_status(left: &CoreStatusSnapshot, right: &CoreStatusSnapshot) -> bool {
+    let same_state = match (&left.state, &right.state) {
+        (CoreState::Running, CoreState::Running) => true,
+        (CoreState::Stopped(left_reason), CoreState::Stopped(right_reason)) => {
+            left_reason == right_reason
+        }
+        _ => false,
+    };
+    left.instance_id == right.instance_id
+        && same_state
+        && left.state_changed_at == right.state_changed_at
+        && left.run_type == right.run_type
+}
+
+/// Ref stop_owner does not treat a successful Stop RPC as a settled
+/// terminal. S4 may start only after observing the same selected host in
+/// a real stopped state, not another Running Core or an uninitialized status.
+pub(crate) fn confirmed_planned_stop(
+    before: &CoreStatusSnapshot,
+    after: &CoreStatusSnapshot,
+) -> bool {
+    matches!(before.state, CoreState::Running)
+        && before.run_type == after.run_type
+        && after.state_changed_at > 0
+        && matches!(after.state, CoreState::Stopped(_))
+}
+
+/// One coherent ref Facts sample for S2 ownership and S3/S4 decisions.
+/// ServiceActor's Ready generation is authoritative, but the same generation
+/// alone does not prove unchanged ownership while a daemon transitions.
+/// Compare the full typed evidence and the selected Core identity as well.
+/// This is read-only; acquiring a transition lease and mutating hosts remain
+/// responsibilities of the single CoreLifecycle actor.
+pub(crate) fn stable_owner_facts(
+    before_core: &CoreStatusSnapshot,
+    after_core: &CoreStatusSnapshot,
+    before_service: &ObservedServiceEvidence,
+    before_generation: u64,
+    after_service: &ObservedServiceEvidence,
+    after_generation: u64,
+) -> bool {
+    same_core_status(before_core, after_core)
+        && before_generation == after_generation
+        && before_service == after_service
+}
 
 /// The reusable ref Facts frame. In S2 the Core fact stays Unreadable and
 /// ownership Unproven; in a committed round Core facts are sampled only after
@@ -157,6 +207,92 @@ mod tests {
             instance: Some("owned".into()),
             revision: None,
         }
+    }
+
+    #[test]
+    fn ref_facts_require_same_service_generation_owner_and_core_instance() {
+        let original = running(crate::core::RunType::Normal);
+        let service = ObservedServiceEvidence::CoreStopped {
+            ready: true,
+            phase: ServicePhase::Ready,
+            runtime_owned: true,
+        };
+        assert!(stable_owner_facts(
+            &original, &original, &service, 7, &service, 7
+        ));
+        assert!(!stable_owner_facts(
+            &original, &original, &service, 7, &service, 8
+        ));
+
+        let replacement = CoreStatusSnapshot {
+            instance_id: Some("another-instance".into()),
+            ..original.clone()
+        };
+        assert!(!stable_owner_facts(
+            &original,
+            &replacement,
+            &service,
+            7,
+            &service,
+            7
+        ));
+        let different_generation = CoreStatusSnapshot {
+            state_changed_at: 2,
+            ..original.clone()
+        };
+        assert!(!stable_owner_facts(
+            &original,
+            &different_generation,
+            &service,
+            7,
+            &service,
+            7
+        ));
+        let foreign = ObservedServiceEvidence::ForeignCore {
+            ready: true,
+            phase: ServicePhase::Ready,
+        };
+        assert!(!stable_owner_facts(
+            &original, &original, &service, 7, &foreign, 7
+        ));
+        let unreadable = ObservedServiceEvidence::Unreadable {
+            phase: ServicePhase::Unknown,
+        };
+        assert!(!stable_owner_facts(
+            &original,
+            &original,
+            &service,
+            7,
+            &unreadable,
+            7
+        ));
+    }
+
+    #[test]
+    fn ref_s3_requires_a_confirmed_terminal_before_s4_apply() {
+        let before = running(crate::core::RunType::Normal);
+        let stopped = CoreStatusSnapshot {
+            state: CoreState::Stopped(None),
+            state_changed_at: 2,
+            ..before.clone()
+        };
+        assert!(confirmed_planned_stop(&before, &stopped));
+        assert!(!confirmed_planned_stop(&before, &before));
+        assert!(!confirmed_planned_stop(
+            &before,
+            &CoreStatusSnapshot {
+                state_changed_at: 0,
+                ..stopped.clone()
+            }
+        ));
+        assert!(!confirmed_planned_stop(
+            &before,
+            &CoreStatusSnapshot {
+                run_type: crate::core::RunType::Service,
+                ..stopped.clone()
+            }
+        ));
+        assert!(!confirmed_planned_stop(&stopped, &stopped));
     }
 
     #[test]

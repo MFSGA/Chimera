@@ -342,24 +342,35 @@ impl ClashConfigClient {
         owner: &ChimeraClient,
         patch: ClashConfigPatch,
     ) -> Result<ClashCommitReport> {
+        let expected_sources = owner.committed_runtime_source_versions();
         if let Some(gate) = owner.inner.checked_gate.as_ref() {
             let app = owner.get_app_config()?;
             let service_connected = crate::core::service::ipc::get_ipc_state().is_connected();
-            if checked_clash_patch_eligible(&patch, &app, service_connected) {
-                return self.patch_typed_config_checked(patch, gate).await;
+            // The same committed source snapshot decides DNS/Hosts ownership
+            // and the exact expected CAS version; do not re-read independently.
+            let before = self.get_snapshot().await?;
+            if checked_clash_patch_eligible(&patch, &before.state, &app, service_connected) {
+                return self.patch_typed_config_checked(before, patch, gate).await;
             }
         }
         let candidate_patch = patch.clone();
         self.patch_typed_config_with(
             patch,
             |candidate| owner.check_clash_runtime_candidate(candidate),
-            || async {
-                if candidate_patch.enable_tun_mode.is_some() {
-                    self.apply_legacy_patch_runtime(owner, &candidate_patch)
-                        .await
-                } else {
-                    update_core_config(owner).await
-                }
+            || {
+                super::reconciler::committed::apply_with_dependency_fence(
+                    super::reconciler::committed::SourceDomain::Clash,
+                    expected_sources,
+                    || async { owner.committed_runtime_source_versions() },
+                    || async {
+                        if candidate_patch.enable_tun_mode.is_some() {
+                            self.apply_legacy_patch_runtime(owner, &candidate_patch)
+                                .await
+                        } else {
+                            update_core_config(owner).await
+                        }
+                    },
+                )
             },
             || {
                 Config::clash().data().save_config()?;
@@ -370,16 +381,15 @@ impl ClashConfigClient {
         .await
     }
 
-    /// The first Clash source-owner cutover: a strictly limited set of local
-    /// config-builder flags has no TUN, port, host, or mode-side effects.
-    /// The same ref CandidateCheck ACKs the exact bytes before CAS, then the
-    /// durable source owner publishes its *own* version to one Core mailbox.
+    /// Ref source-owner cutover for local config-builder flags and managed
+    /// DNS/Hosts. These inputs have no TUN/port/host/mode one-shot effects:
+    /// the sole Core owner receives the checked product after durable CAS.
     async fn patch_typed_config_checked(
         &self,
+        before: ClashConfigSnapshot,
         patch: ClashConfigPatch,
         gate: &Arc<super::reconciler::check::CandidateCheck>,
     ) -> Result<ClashCommitReport> {
-        let before = self.get_snapshot().await?;
         let mut next = before.state.clone();
         next.apply(patch);
         self.commit_checked_candidate(before, next, gate, false)
@@ -640,29 +650,43 @@ impl ClashConfigClient {
         }
         let mode_changed = plan.mode_changed;
         let break_on_mode_change = plan.break_on_mode_change;
+        let expected_sources = owner.committed_runtime_source_versions();
         let report = self
             .commit_candidate_with(
                 before,
                 next,
                 reaches_runtime,
                 |candidate| owner.check_clash_runtime_candidate(candidate),
-                || async {
-                    // RuntimeBuilder consumes the committed typed Clash
-                    // source. RuntimeLifecycle publishes the generated
-                    // mapping only after the candidate is accepted and applied.
-                    update_core_config(owner).await?;
-                    if mode_changed {
-                        let api = owner.clash_api_client().await?;
-                        log_err!(
-                            crate::core::connection_interruption::ConnectionInterruptionService::on_mode_change(
-                                &api,
-                                break_on_mode_change,
-                            )
-                            .await,
-                            "failed to interrupt connections after mode change"
-                        );
-                    }
-                    Ok(())
+                || {
+                    super::reconciler::committed::apply_with_dependency_fence(
+                        super::reconciler::committed::SourceDomain::Clash,
+                        expected_sources.clone(),
+                        || async { owner.committed_runtime_source_versions() },
+                        || async {
+                            // RuntimeBuilder consumes committed typed Clash;
+                            // the sole Core owner publishes on confirmed Apply.
+                            update_core_config(owner).await?;
+                            // A different source may have advanced during
+                            // Apply. Do not interrupt the old connection for
+                            // a mode change that no longer owns the target.
+                            expected_sources.ensure_dependencies_current(
+                                super::reconciler::committed::SourceDomain::Clash,
+                                &owner.committed_runtime_source_versions(),
+                            )?;
+                            if mode_changed {
+                                let api = owner.clash_api_client().await?;
+                                log_err!(
+                                    crate::core::connection_interruption::ConnectionInterruptionService::on_mode_change(
+                                        &api,
+                                        break_on_mode_change,
+                                    )
+                                    .await,
+                                    "failed to interrupt connections after mode change"
+                                );
+                            }
+                            Ok(())
+                        },
+                    )
                 },
                 || {
                     // RuntimeLifecycle publishes the confirmed runtime product.
@@ -701,6 +725,20 @@ impl Drop for ClashConfigStateBackend {
 }
 
 impl ChimeraClient {
+    /// Read the three committed source versions without waiting on a writer
+    /// RPC. Reused by both legacy Clash Apply entrypoints; no second runtime
+    /// owner, port session or source snapshot store is created.
+    fn committed_runtime_source_versions(&self) -> super::reconciler::committed::SourceVersions {
+        super::reconciler::committed::SourceVersions::from_committed(
+            &self.inner.application,
+            &self.inner.clash_config,
+            self.inner
+                .typed_profiles
+                .as_ref()
+                .map(|p| *p.snapshot_handle().load().version),
+        )
+    }
+
     /// Ref CandidateCheck: freeze the currently committed Profile document and
     /// all managed-file content while the candidate Clash document is supplied
     /// independently. The lower Core validator is read-only and does not
@@ -970,24 +1008,48 @@ async fn update_core_config(client: &ChimeraClient) -> Result<()> {
     }
 }
 
-/// Admit only two source flags that feed RuntimeBuildService without changing
-/// the listener, execution host, TUN lifecycle, override mode, or other
-/// one-shot effects. Comparing the residual patch with a default patch also
-/// excludes explicit same-value commands on other fields.
+/// Ref CheckedSourceCommit for local Core-rendered inputs: builder flags
+/// and DNS/Hosts ownership. These do not require a separate OS operation.
+/// Everything else (ports, TUN, IPC controller, host handoff, mode effects)
+/// stays with its existing source-specific workflow.
 fn checked_clash_patch_eligible(
     patch: &ClashConfigPatch,
+    current: &ClashConfig,
     app: &chimera_config::application::ChimeraAppConfig,
     service_connected: bool,
 ) -> bool {
     if app.enable_service_mode || service_connected {
         return false;
     }
-    if patch.enable_clash_fields.is_none() && patch.expand_include_all.is_none() {
+    let requested = patch.enable_clash_fields.is_some()
+        || patch.expand_include_all.is_some()
+        || patch.dns_control.is_some()
+        || patch.hosts_control.is_some()
+        || (patch.dns.is_some() && current.managed_dns().is_some())
+        || (patch.hosts.is_some() && current.managed_hosts().is_some());
+    if !requested {
         return false;
     }
+
+    // A table is only a checked runtime input when the source already owns
+    // it or this patch explicitly changes ownership. Pure profile-owned DNS
+    // or Hosts drafts keep their existing document-only semantics instead.
+    if patch.dns.is_some() && current.managed_dns().is_none() && patch.dns_control.is_none() {
+        return false;
+    }
+    if patch.hosts.is_some() && current.managed_hosts().is_none() && patch.hosts_control.is_none() {
+        return false;
+    }
+
+    // Fail closed on every unlisted (including future) typed patch field.
+    // Treat even explicit same-value requests as intent, not as no-ops.
     let mut remainder = patch.clone();
     remainder.enable_clash_fields = None;
     remainder.expand_include_all = None;
+    remainder.dns_control = None;
+    remainder.dns = None;
+    remainder.hosts_control = None;
+    remainder.hosts = None;
     match (
         serde_yaml::to_value(&remainder),
         serde_yaml::to_value(ClashConfig::new_empty_patch()),
@@ -1044,28 +1106,124 @@ mod tests {
         app.enable_service_mode = false;
         let mut patch = ClashConfig::new_empty_patch();
         patch.enable_clash_fields = Some(true);
-        assert!(checked_clash_patch_eligible(&patch, &app, false));
-        assert!(!checked_clash_patch_eligible(&patch, &app, true));
+        assert!(checked_clash_patch_eligible(
+            &patch,
+            &ClashConfig::default(),
+            &app,
+            false
+        ));
+        assert!(!checked_clash_patch_eligible(
+            &patch,
+            &ClashConfig::default(),
+            &app,
+            true
+        ));
         app.enable_service_mode = true;
-        assert!(!checked_clash_patch_eligible(&patch, &app, false));
+        assert!(!checked_clash_patch_eligible(
+            &patch,
+            &ClashConfig::default(),
+            &app,
+            false
+        ));
         app.enable_service_mode = false;
 
         patch.expand_include_all = Some(false);
-        assert!(checked_clash_patch_eligible(&patch, &app, false));
+        assert!(checked_clash_patch_eligible(
+            &patch,
+            &ClashConfig::default(),
+            &app,
+            false
+        ));
         patch.enable_clash_fields = None;
-        assert!(checked_clash_patch_eligible(&patch, &app, false));
+        assert!(checked_clash_patch_eligible(
+            &patch,
+            &ClashConfig::default(),
+            &app,
+            false
+        ));
         patch.expand_include_all = None;
-        assert!(!checked_clash_patch_eligible(&patch, &app, false));
+        assert!(!checked_clash_patch_eligible(
+            &patch,
+            &ClashConfig::default(),
+            &app,
+            false
+        ));
 
         patch.enable_clash_fields = Some(true);
         patch.enable_tun_mode = Some(false);
-        assert!(!checked_clash_patch_eligible(&patch, &app, false));
+        assert!(!checked_clash_patch_eligible(
+            &patch,
+            &ClashConfig::default(),
+            &app,
+            false
+        ));
         patch.enable_tun_mode = None;
         patch.web_ui_list = Some(Vec::new());
-        assert!(!checked_clash_patch_eligible(&patch, &app, false));
+        assert!(!checked_clash_patch_eligible(
+            &patch,
+            &ClashConfig::default(),
+            &app,
+            false
+        ));
         patch.web_ui_list = None;
         patch.mixed_port.start_port = Some(chimera_config::clash::config::DEFAULT_MIXED_PORT);
-        assert!(!checked_clash_patch_eligible(&patch, &app, false));
+        assert!(!checked_clash_patch_eligible(
+            &patch,
+            &ClashConfig::default(),
+            &app,
+            false
+        ));
+    }
+
+    #[test]
+    fn checked_typed_dns_hosts_require_explicit_runtime_ownership() {
+        use chimera_config::clash::config::dns::ControlSource;
+
+        let mut app = chimera_config::application::ChimeraAppConfig::default();
+        app.enable_service_mode = false;
+        let mut before = ClashConfig::default();
+        let mut patch = ClashConfig::new_empty_patch();
+
+        // Editing a stored DNS draft while the profile still owns the
+        // runtime must not turn a document-only update into a Core apply.
+        patch.dns = Some(before.dns.clone());
+        assert!(!checked_clash_patch_eligible(&patch, &before, &app, false));
+
+        // Explicitly taking control with the same request is safe: the
+        // resulting bytes are built once and admitted by the sole Core owner.
+        patch.dns_control = Some(ControlSource::Chimera);
+        assert!(checked_clash_patch_eligible(&patch, &before, &app, false));
+
+        patch.hosts = Some(indexmap::IndexMap::new());
+        assert!(!checked_clash_patch_eligible(&patch, &before, &app, false));
+        patch.hosts_control = Some(ControlSource::Chimera);
+        assert!(checked_clash_patch_eligible(&patch, &before, &app, false));
+
+        assert!(!checked_clash_patch_eligible(&patch, &before, &app, true));
+        app.enable_service_mode = true;
+        assert!(!checked_clash_patch_eligible(&patch, &before, &app, false));
+        app.enable_service_mode = false;
+
+        // Listener, TUN and other side effects stay outside this source path,
+        // even when mixed into the same DNS/Hosts patch.
+        patch.enable_tun_mode = Some(false);
+        assert!(!checked_clash_patch_eligible(&patch, &before, &app, false));
+        patch.enable_tun_mode = None;
+        patch.mixed_port.start_port = Some(7890);
+        assert!(!checked_clash_patch_eligible(&patch, &before, &app, false));
+        patch.mixed_port.start_port = None;
+
+        // Once an owner is already selected, changing its table alone is a
+        // runtime input, including an explicit same-value re-submission.
+        before.dns_control = ControlSource::Chimera;
+        patch.dns_control = None;
+        patch.hosts_control = None;
+        patch.hosts = None;
+        assert!(checked_clash_patch_eligible(&patch, &before, &app, false));
+
+        // Relinquishing ownership also changes the runtime DNS source.
+        patch.dns_control = Some(ControlSource::Profile);
+        assert!(checked_clash_patch_eligible(&patch, &before, &app, false));
     }
 
     #[test]

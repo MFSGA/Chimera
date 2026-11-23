@@ -388,3 +388,44 @@ cargo clippy --manifest-path backend/Cargo.toml --all-targets --all-features
 - 本轮收敛：Clash 生产预检只允许已安装、共享的 CandidateCheck::validate_only；Stopped Profile TCC 只允许共享 gate::validate_stopped_profile_tcc，并要求 Core-owned runtime session。任一前提缺失均返回明确的候选不可用错误，不再独立构建/校验另一份 Core 配置。旧 legacy_check 整个模块仅为 cfg(test) 编译，保留隔离 fixture 及类型化拒绝错误的回归测试。
 - 兼容性边界：没有将仍在使用旧 postcommit Apply 的 Clash/Core 选择与 Service host 路径强行切换成 CheckedSourceCommitted；没有新建第二个 Core owner、改动 Profile 文件锁、暂存字节、Source CAS、Runtime 产品、Service handoff 或现有模式切换效果。legacy_preparation 继续服务运行时迁移期间的安全内容捕获，但旧校验器不再在生产编译。
 - 本轮按用户指示未执行单元测试、编译、Clippy 或桌面 E2E，仅做源码路径审查、Rustfmt、文档格式整理与 git diff --check。后续迁移重点是把 Application/Clash 的旧 postcommit Apply 与 Core owner 生命周期一起移到上游 Checked 提交流程，不能仅替换接口后忽略 host 转换。
+
+### DIFF-CHECKED-DNS-HOSTS-SOURCE-OWNERSHIP：将本地 DNS/Hosts typed 接管纳入统一 RuntimeGate
+
+- ref 基线：4607a7379f0aa060daf55b369dc8103dda929d82，统一 Source RuntimeGate 在提交之前准备完整候选、确认 Core 校验并由唯一 Core owner ACK，再用源版本通知提交，禁止两个并行的 Runtime Apply。
+- 本地现状：Chimera 的 Clash typed patch 仅限 enable_clash_fields / expand_include_all 使用 checked inbox；DNS/Hosts 的接管与已接管表变更虽然由纯 RuntimeBuilder 渲染，却仍走 legacy validate-only、source CAS、inline rebuild 的兼容路径。Application 的 checked 准入只排除 Core/Service，可能将带有系统代理、启动项、热键等副作用的组合补丁错误纳入无后处理的 checked 路径。
+- 本轮迁移：仅在非 Service 主机、已安装共享 gate 时，允许 DNS/Hosts 控制源选择器以及当前已接管或在同一请求中显式更改控制源的表值进入 typed CheckedSourceCommit。使用同一个已提交 Clash 源快照进行准入和 source CAS，预构建的 Core 候选经真实验证与请求收据后通知唯一 owner，不运行第二次 inline Apply。
+- 仍为 Profile 控制的 DNS/Hosts 草稿编辑继续使用文档保存行为，不强迫 Runtime 重建；TUN、端口、控制器、代理模式及其他任意未知 typed 字段仍拒绝 checked 路由。Application checked 路由只接受独立 enable_builtin_enhanced 请求；其他所有组合字段（包括系统效果）保留原有流程。显式同值请求继续保留 Runtime 意图。
+- 修改包括 backend/tauri/src/client/clash_config.rs、backend/tauri/src/client/core_lifecycle/workflow.rs；在已有测试模块加入准入判定回归用例，但按用户要求不执行测试、构建、Clippy 或 E2E，仅进行 Rustfmt 与静态差异审阅。下一阶段才处理 Core/Service 所有权转换与剩余旧的 inline Apply，不能直接放宽主机状态条件。
+
+### DIFF-LEGACY-RUNTIME-CROSS-DOMAIN-SOURCE-FENCE：旧 Application/Clash Apply 栅栏对齐三域提交版本
+
+- ref 基线：4607a7379f0aa060daf55b369dc8103dda929d82。上游 Source RuntimeGate 的提交由唯一 RuntimeReconciler 消费，Core 应用前从 Application、Clash、Profiles 和 managed-file 闭包共同确认最新的已提交目标。当前 Chimera 的 legacy inline Apply 仍保留分阶段 host/TUN/port 效果，不能直接引入第二个写入者。
+- 旧问题：reconciler::committed::apply_committed 只围绕触发变更的单个源版本做应用前后检查。当另一个源域在校验之后或 Core Apply 期间提交时，发起域版本未变，旧流程可能误报收敛，或者执行属于旧目标的模式连接中断。
+- 本轮迁移：新增只读 SourceVersions::from_committed 与 apply_with_dependency_fence，所有版本从已有 source snapshot handle 读取，避免 source actor 正在等待 CoreLifecycle 时互相阻塞。Application legacy patch、Clash typed legacy patch、Clash raw/override legacy patch 都在候选验证前保存其他源域的版本，并在 Core Apply 前后核对。发起域的版本仍由既有 apply_committed 独立核验。
+- 目标推进语义：其他源域版本不同则产生类型化 CommittedTargetAdvanced；旧 runtime_deferred 现在将此类错误标记为可重试，通过已有 CoreLifecycle SourceCommitted / coalesced Retry 路径收敛，不撤销已持久化来源、不新建 Runtime actor 或强行触发第二次 inline Apply。raw Clash 的显式 mode interruption 在 Core Apply 后额外核对依赖域版本，避免对已经过期的目标主动断开旧连接。
+- 测试支持：加入模拟 Application apply 前发生 Profiles 提交、Core apply 期间发生 Clash 提交的回归用例，并断言新错误分类为可重试；按用户要求未运行任何测试、编译、Clippy 或 E2E，仅执行 Rustfmt、静态审阅与 git diff --check。
+- 迁移限制：这是旧 Apply 的单调提交版本栅栏，不等价于 ref 完整内容摘要与 Core Applied-instance 证明。managed-file 内容与执行 Host 的所有权确认仍应由后续 RuntimeReconciler / RuntimeSourceAuthority 迁移接管，不能据此放宽 Service/TUN/port 路由。
+
+### DIFF-SERVICE-RELEASE-LEASE-OWNER-FENCE：S5 Service daemon 释放绑定就绪代次与 Local Core 实例
+
+- ref 基线：4607a7379f0aa060daf55b369dc8103dda929d82。ref client/reconciler/committed.rs::maintain_service_release 和 apply.rs::release_service 仅在 Local owner 已建立、Core 无未决操作且仍有待释放债务时处理 daemon stop，失败保留独立 pending_release。Chimera 的 ServiceActor 还存在多实例、错误停止的隔离语义，必须在完整复用 ref 前维护实例证明。
+- 本地旧差异：CoreLifecycle 的 MaintainServiceRelease 已在唯一 Actor 内持有独立 release-owed debt，并在取得 Service transition lease 前后重验可释放状态；但对加锁前后不同的 Service Ready 代次或 Local Core 实例没有明确相等性判定。新的 Ready daemon 恰好同样报告 owned/stopped 时，旧的已排队释放意图可能继续用于新的 Service 状态。
+- 本轮收敛：读取初始 ServiceEvidence 和 authoritative ready_generation；获取现有 Service 过渡锁后，重新验证 Local Core 状态与 instance_id/state_changed_at/run_type 完全相同，确认同一已接管但已停止的 Service Core、相同 ServiceEvidence 与 Ready 代次，然后才调用 stop_daemon；停止后继续要求新探针证明 daemon Absent，且 Local Core 仍为原有已验证实例。单一 CoreLifecycle actor、现有 release debt 和显式 Retry 机制未改变。
+- 失败语义：代次、实例、运行状态、Service ownership 或 probe 发生变化时，拒绝过期维护命令，失败由 CoreLifecycle 的 ServiceRelease debt 记录；非显式 Retry 不会反复停止一个变化中的 Service。无新的 Core 写入者，不改变 host 选择、Source CAS、Runtime product 或 TUN/port 行为。
+- 增补 same_release_owner 的回归用例代码覆盖 Ready 代次推进、foreign/running/unreadable/失去 runtime ownership 等情形；按用户要求未运行测试、编译、Clippy 或 E2E，只执行 Rustfmt、静态差异检查。后续仍需将完整 RuntimeReconciler 与 Service owner 流程按 ref 合并，当前只是 S5 daemon 释放的安全所有权栅栏。
+
+### DIFF-OWNER-FACTS-S2-S3-COHERENT-SNAPSHOT：共享 ref S2/S3 Core/Service Facts 稳定性验证
+
+- ref 基线：4607a7379f0aa060daf55b369dc8103dda929d82。ref client/reconciler/plan.rs、startup.rs 与 workflow.rs 以同一组已观察的 Core、Service 与运行意图组合 Facts，再由 plan(Facts) 决定 S2 owner handoff 和 S3/S4 Apply/Stop；未完成的外部操作与未知所有权不能作为动作许可。
+- Chimera 差异：现有 CoreLifecycle::planned_committed_round 已使用 ref 计划器并核对 Core 实例，但只采样一次 ServiceActor 状态，不比对第二次 Service 读取及 Ready 代次。ApplicationWorkflow::service_host_change_due 使用一组独立 Core/Service 观察；异步 Service 探测期间 Core 或 daemon 所有权可能已经改变，单次 S2 决定无法证明原 Facts 仍有效。
+- 本轮统一：在 reconciler::decision 增加纯只读 same_core_status、stable_owner_facts。要求同一 selected Core 的 instance_id、状态、状态变更时间、run_type 一致，同时同一 typed ServiceEvidence 和 ServiceActor ready_generation 不变。S2 跟进前和 S3/S4 已提交目标规划中复用这条规则，在异步读取后再次复核 Core；S3/S4 还保留已有的 active_runtime_receipt Arc 身份核对。
+- 异常路径：S2 事实不稳定时不排入 FollowService handoff；S3/S4 则返回 typed OwnershipTransitionPending::waiting，不执行计划中的 Core Stop/Apply。没有建立第二个 Core 控制器、独立 Service 代次缓存或额外持久化来源；所有 host mutation 仍由唯一 CoreLifecycle actor 及原 Service 过渡锁负责。
+- 回归测试代码覆盖 Core 实例替换、状态 epoch 变化、Service Ready 代次推进、外部 owner 和不可读 Service；本轮按用户要求未运行测试、编译、Clippy 或 E2E，只运行 Rustfmt、Prettier、git diff --check 并静态审阅。该迁移统一了 S2/S3 Facts 的稳定性门槛，尚不等于替换完整的上游 RuntimeReconciler 状态机。
+
+### DIFF-PLANNED-S3-STOP-TERMINAL-FENCE：S3 未验证 Core 的 Stop 必须取得终态及最新源证明
+
+- ref 基线：4607a7379f0aa060daf55b369dc8103dda929d82。上游 client/reconciler/startup.rs::stop_owner 在执行 S3 Step::Stop 后再次刷新 Core 状态；仅在观察到 Stopped 且无未结的外部操作时继续 S4，对 NotStarted 只在真实停止已确认时按幂等处理。完整的目标重建始终来自已提交源，而非旧内存候选。
+- Chimera 旧差异：core_lifecycle/workflow.rs::planned_committed_round 在 Step::Stop {intent:false} 下仅调用 core.stop().await?，随后直接把控制权交给旧 runtime reconcile；一个成功的 RPC 不等于 Core 已停止，Core 可能已经换实例，且 Stop 期间可能已有新 Application/Clash/Profiles 文件或配置提交。
+- 本轮修改：将 Stop 与后续 S4 的准入隔离为 stop_planned_unverified_core。停止前重新确认完整已提交 Runtime target、当前 Core 状态与计划时相同且为 Running、既有 active receipt 没有跨 host 或跨 revision 切换；停止后拒绝不确定终态，重新确认同一 selected host 的真实 Stopped 状态及第二次稳定观察，才允许继续旧的 S4。Stop 结束后再次确认完整 committed target，过期时返回 typed CommittedTargetAdvanced 由唯一 owner 处理最新源重试。
+- 将 ref 的 Stop 终态规则抽入 reconciler::decision::confirmed_planned_stop，并保留已有 startup_stop_error_is_idempotent 的 NotStarted 专项处理：只有已证明 Stopped 才容忍此类并发幂等失败；其他真实 Stop 错误不静默吞掉。
+- 现有 CoreLifecycle actor、host selection、Service lease、runtime receipt 与 Checked Apply 没有增加第二写入者。本轮继续保留 ref 对齐过程中的 legacy Core stop 端口，尚未把全部 S3/S4 转成上游 RuntimeReconciler::apply_prepared 的统一执行器。添加终态判断的静态回归用例代码，但按用户要求不运行测试、编译、Clippy 或 E2E；仅执行 Rustfmt、Prettier、git diff --check 与源码审阅。
