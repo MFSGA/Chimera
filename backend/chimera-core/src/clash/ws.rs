@@ -5,6 +5,7 @@
 //! Tauri owns event delivery and native Channel adapters.
 
 use std::{
+    any::Any,
     collections::VecDeque,
     sync::Arc,
     time::{Duration, Instant},
@@ -17,7 +18,7 @@ use serde::{Deserialize, Serialize};
 use specta::Type;
 use tokio::{
     sync::{broadcast, watch},
-    task::{JoinHandle, JoinSet},
+    task::{JoinError, JoinHandle, JoinSet},
 };
 use tokio_util::{sync::CancellationToken, task::TaskTracker};
 
@@ -358,6 +359,43 @@ impl Drop for State {
     }
 }
 
+/// Reap all stream owners before propagating an unexpected panic. Read-only
+/// websocket workers may be cancelled; unlike a Core mutation they own no
+/// lasting OS effect, but a lost JoinError must still reach supervision.
+type WorkerPanic = Box<dyn Any + Send + 'static>;
+
+fn collect_stream_join(
+    joined: std::result::Result<(), JoinError>,
+    name: &'static str,
+    first_panic: &mut Option<WorkerPanic>,
+) {
+    if let Err(error) = joined {
+        match error.try_into_panic() {
+            Ok(panic) if first_panic.is_none() => *first_panic = Some(panic),
+            Ok(_) => tracing::error!(name, "additional Clash stream worker panicked"),
+            Err(error) if error.is_cancelled() => {}
+            Err(error) => tracing::warn!(name, %error, "Clash stream worker failed"),
+        }
+    }
+}
+
+async fn cancel_stream_worker(
+    slot: &mut Option<JoinHandle<()>>,
+    name: &'static str,
+    first_panic: &mut Option<WorkerPanic>,
+) {
+    if let Some(task) = slot.take() {
+        task.abort();
+        collect_stream_join(task.await, name, first_panic);
+    }
+}
+
+fn resume_stream_panic(first_panic: Option<WorkerPanic>) {
+    if let Some(panic) = first_panic {
+        std::panic::resume_unwind(panic);
+    }
+}
+
 impl State {
     fn snapshot(&self) -> ClashWsSnapshot {
         self.history.snapshot(self.status, self.recording.clone())
@@ -392,10 +430,10 @@ impl State {
     }
 
     async fn reset(&mut self) {
-        if let Some(task) = self.logs.take() {
-            task.abort();
-            let _ = task.await;
-        }
+        let mut fatal = None;
+        cancel_stream_worker(&mut self.logs, "logs socket", &mut fatal).await;
+        // The previous logs subscription is fully retired before its lease
+        // and epoch are cleared. This also applies to a replaced Core host.
         self.api = None;
         self.history = ClashWsHistory::default();
         self.previous_download_total = 0;
@@ -423,6 +461,7 @@ impl State {
             self.emit(ClashWsEvent::HistoryCleared(kind));
         }
         self.publish_snapshot();
+        resume_stream_panic(fatal);
     }
 
     fn accepts(&self, api: &ApiClient) -> bool {
@@ -431,30 +470,37 @@ impl State {
             .is_some_and(|current| current.same_instance(api))
     }
 
-    fn restart_logs(&mut self, actor: &ActorRef<Message>) {
+    async fn restart_logs(&mut self, actor: &ActorRef<Message>) {
         let epoch = &mut self.stream_epochs[ClashWsKind::Logs.index()];
         *epoch = epoch.wrapping_add(1);
-        if let Some(task) = self.logs.take() {
-            task.abort();
-        }
+        let new_epoch = *epoch;
+        let mut fatal = None;
+        // The old log socket must be joined before opening its replacement,
+        // not merely aborted and left to race new-epoch delivery.
+        cancel_stream_worker(&mut self.logs, "logs socket", &mut fatal).await;
+        resume_stream_panic(fatal);
         if let Some(api) = self.api.clone()
             && self.args.log_level != LogLevel::Silent
         {
             let stream = Stream::Logs(subscription_level(self.args.log_level));
-            self.logs = Some(tokio::spawn(run_stream(actor.clone(), api, stream, *epoch)));
+            self.logs = Some(tokio::spawn(run_stream(
+                actor.clone(),
+                api,
+                stream,
+                new_epoch,
+            )));
         }
     }
 
     async fn stop(&mut self) {
-        if let Some(task) = self.task.take() {
-            task.abort();
-            let _ = task.await;
-        }
-        if let Some(task) = self.logs.take() {
-            task.abort();
-            let _ = task.await;
-        }
+        let mut fatal = None;
+        cancel_stream_worker(&mut self.task, "stream reconnect owner", &mut fatal).await;
+        cancel_stream_worker(&mut self.logs, "logs socket", &mut fatal).await;
+        cancel_stream_worker(&mut self.details_closed, "details subscriber", &mut fatal).await;
+        // Clear cached instance-bound API and publication state before any
+        // fatal panic is rethrown to the actor supervisor.
         self.reset().await;
+        resume_stream_panic(fatal);
     }
 
     fn update(&mut self, sample: Sample) {
@@ -639,21 +685,24 @@ async fn run(
             epochs[ClashWsKind::Memory.index()],
         ));
 
+        let mut fatal = None;
         tokio::select! {
             biased;
             _ = shutdown.cancelled() => {},
             _ = api.cancelled() => {},
             result = streams.join_next() => {
-                if let Some(Err(error)) = result {
-                    match error.try_into_panic() {
-                        Ok(panic) => std::panic::resume_unwind(panic),
-                        Err(error) => tracing::warn!("Clash stream task failed: {error}"),
-                    }
+                if let Some(result) = result {
+                    collect_stream_join(result, "websocket worker", &mut fatal);
                 }
             }
         }
         streams.abort_all();
-        while streams.join_next().await.is_some() {}
+        // A fault in one socket must not detach the others before supervision
+        // sees it. Reap the complete JoinSet, then propagate the first panic.
+        while let Some(result) = streams.join_next().await {
+            collect_stream_join(result, "websocket worker", &mut fatal);
+        }
+        resume_stream_panic(fatal);
 
         if matches!(
             deliver(&actor, Delivery::Invalidated).await,
@@ -856,9 +905,10 @@ impl Actor for StreamsActor {
                     let _ = state.args.details.send_replace(None);
                 }
                 let receiver = state.args.details.subscribe();
-                if let Some(task) = state.details_closed.take() {
-                    task.abort();
-                }
+                let mut fatal = None;
+                cancel_stream_worker(&mut state.details_closed, "details subscriber", &mut fatal)
+                    .await;
+                resume_stream_panic(fatal);
                 let details = state.args.details.clone();
                 let owner = actor.clone();
                 state.details_closed = Some(tokio::spawn(async move {
@@ -895,7 +945,7 @@ impl Actor for StreamsActor {
                                     state.reset().await;
                                 }
                                 state.api = Some(api);
-                                state.restart_logs(&actor);
+                                state.restart_logs(&actor).await;
                                 result = DeliveryResult::Bound(state.stream_epochs);
                             }
                         }
@@ -933,7 +983,7 @@ impl Actor for StreamsActor {
             Message::SetLogLevel(level, reply) => {
                 if state.args.log_level != level {
                     state.args.log_level = level;
-                    state.restart_logs(&actor);
+                    state.restart_logs(&actor).await;
                 }
                 let _ = reply.send(());
             }

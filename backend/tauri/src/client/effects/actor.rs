@@ -1,7 +1,6 @@
 //! Owns peripheral desired state and independent, coalesced execution groups.
 use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
-use futures_util::FutureExt;
 use ractor::{Actor, ActorProcessingErr, ActorRef, RpcReplyPort, rpc::CallResult};
 use tokio::sync::watch;
 
@@ -344,6 +343,30 @@ impl State {
         self.pending.insert(kind, effect);
     }
 
+    /// Ref EffectsActor drains active owners rather than aborting a command
+    /// halfway through a platform mutation. All new work is already gated by
+    /// `closed`; draining also prevents `port.shutdown()` from racing a late
+    /// SystemProxy/TransparentProxy/Hotkeys apply.
+    async fn drain_active(&mut self) {
+        let mut first_panic = None;
+        for task in self.active.iter_mut().filter_map(Option::take) {
+            if let Err(error) = task.await {
+                match error.try_into_panic() {
+                    Ok(panic) if first_panic.is_none() => first_panic = Some(panic),
+                    Ok(_) => tracing::error!("additional effects owner task panicked during drain"),
+                    Err(error) => {
+                        tracing::warn!(%error, "effects owner task was cancelled during drain");
+                    }
+                }
+            }
+        }
+        // Drain every independent group before resuming a fatal panic. An
+        // early resume would detach other OS mutations and lose ownership.
+        if let Some(panic) = first_panic {
+            std::panic::resume_unwind(panic);
+        }
+    }
+
     fn drive(&mut self, myself: &ActorRef<Message>) {
         for index in 0..4 {
             if self.active[index].is_some() {
@@ -379,10 +402,17 @@ impl State {
                     port.apply(revision, ApplicationEffectPlan::from_effects(effects))
                         .await
                 };
-                let statuses = std::panic::AssertUnwindSafe(work)
-                    .catch_unwind()
-                    .await
-                    .unwrap_or_default();
+                // The effect actor retains its recovery/retry state rather
+                // than allowing a panicking effect to tear down the group.
+                // Only the active poll is marked recoverable: no TLS guard
+                // may remain active while this task is suspended.
+                let statuses = match chimera_panics::catch_recoverable_future(work).await {
+                    Ok(statuses) => statuses,
+                    Err(error) => {
+                        tracing::error!(%error, ?kinds, "application effect group panicked");
+                        Vec::new()
+                    }
+                };
                 let _ = actor.cast(Message::Completed {
                     group: index,
                     revision,
@@ -524,7 +554,15 @@ impl Actor for EffectsActor {
                 kinds,
                 statuses,
             } if !state.closed => {
-                state.active[completed_group] = None;
+                // A completion message is sent before the spawned task
+                // returns. Reap the owned JoinHandle before admitting more
+                // work for this group; never silently detach a fatal panic.
+                if let Some(task) = state.active[completed_group].take()
+                    && let Err(error) = task.await
+                    && let Ok(panic) = error.try_into_panic()
+                {
+                    std::panic::resume_unwind(panic);
+                }
                 for kind in kinds {
                     let Some(entry) = state.entries.get_mut(&kind) else {
                         continue;
@@ -621,12 +659,10 @@ impl Actor for EffectsActor {
                 state.closed = true;
                 state.timer.abort();
                 state.pending.clear();
-                for task in &mut state.active {
-                    if let Some(task) = task.take() {
-                        task.abort();
-                        let _ = task.await;
-                    }
-                }
+                // A platform effect can already be changing OS state. Abort
+                // would allow a late apply to race the following shutdown.
+                // The ref owner instead waits for in-flight groups to settle.
+                state.drain_active().await;
                 for ((kind, revision), replies) in std::mem::take(&mut state.waiters) {
                     let status = EffectStatus {
                         kind,
@@ -660,12 +696,11 @@ impl Actor for EffectsActor {
         _: ActorRef<Message>,
         state: &mut State,
     ) -> Result<(), ActorProcessingErr> {
+        state.closed = true;
         state.timer.abort();
-        for task in &mut state.active {
-            if let Some(task) = task.take() {
-                task.abort();
-            }
-        }
+        // Unexpected actor termination must not abandon in-flight OS effects.
+        // Preserve upstream JoinHandle panic propagation after draining.
+        state.drain_active().await;
         Ok(())
     }
 }
@@ -826,6 +861,83 @@ mod tests {
         async fn shutdown(&self) -> Vec<EffectStatus> {
             Vec::new()
         }
+    }
+
+    /// A side-effect already admitted by the owner is not safe to abort:
+    /// it may be changing system proxy settings when shutdown begins.
+    struct BlockingEffectsPort {
+        started: mpsc::UnboundedSender<()>,
+        release: tokio::sync::Mutex<Option<tokio::sync::oneshot::Receiver<()>>>,
+        completed: Arc<std::sync::atomic::AtomicBool>,
+    }
+
+    #[async_trait::async_trait]
+    impl ApplicationEffectsPort for BlockingEffectsPort {
+        async fn apply(
+            &self,
+            revision: EffectRevision,
+            plan: ApplicationEffectPlan,
+        ) -> Vec<EffectStatus> {
+            let done = self.release.lock().await.take().expect("one gated effect");
+            let _ = self.started.send(());
+            let _ = done.await;
+            self.completed
+                .store(true, std::sync::atomic::Ordering::SeqCst);
+            plan.effects()
+                .iter()
+                .map(|effect| EffectStatus {
+                    kind: effect.kind(),
+                    desired_revision: revision,
+                    applied_revision: revision,
+                    health: EffectHealth::Healthy,
+                })
+                .collect()
+        }
+
+        async fn shutdown(&self) -> Vec<EffectStatus> {
+            assert!(
+                self.completed.load(std::sync::atomic::Ordering::SeqCst),
+                "effect must settle before its owner calls shutdown"
+            );
+            Vec::new()
+        }
+    }
+
+    #[tokio::test]
+    async fn shutdown_drains_inflight_platform_effect_without_aborting_it() {
+        let (started, mut receiver) = mpsc::unbounded_channel();
+        let (release, gate) = tokio::sync::oneshot::channel();
+        let completed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let effects = EffectsClient::spawn(EffectsArgs {
+            port: Arc::new(BlockingEffectsPort {
+                started,
+                release: tokio::sync::Mutex::new(Some(gate)),
+                completed: completed.clone(),
+            }),
+            initial: inputs(),
+        })
+        .await
+        .expect("effects actor");
+
+        CommitNotifications::profiles_committed(&effects, Vec::new());
+        tokio::time::timeout(Duration::from_secs(5), receiver.recv())
+            .await
+            .expect("effect began")
+            .expect("effect owner is active");
+        let stopping = tokio::spawn(async move { effects.shutdown().await });
+        tokio::task::yield_now().await;
+        assert!(!completed.load(std::sync::atomic::Ordering::SeqCst));
+        assert!(
+            !stopping.is_finished(),
+            "shutdown cannot abort an active effect"
+        );
+        release.send(()).expect("worker was not cancelled");
+        let reported = tokio::time::timeout(Duration::from_secs(5), stopping)
+            .await
+            .expect("shutdown settled")
+            .expect("shutdown task returned");
+        assert!(reported.is_empty(), "effect port shutdown completed");
+        assert!(completed.load(std::sync::atomic::Ordering::SeqCst));
     }
 
     fn inputs() -> ApplicationEffectInputs {

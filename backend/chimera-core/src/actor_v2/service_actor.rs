@@ -676,7 +676,31 @@ impl Actor for ServiceActor {
     ) -> Result<(), ActorProcessingErr> {
         if let Some(timer) = state.health_timer.take() {
             timer.abort();
-            let _ = timer.await;
+            if let Err(error) = timer.await
+                && let Ok(panic) = error.try_into_panic()
+            {
+                std::panic::resume_unwind(panic);
+            }
+        }
+        // Ref's tracked Service commands keep ownership beyond the caller's
+        // timeout. Actor termination must not detach an installer/updater or
+        // daemon stop that can still mutate the real service. We deliberately
+        // do not abort the helper: an elevated command may already be running.
+        if let Some((command, helper)) = state.outstanding.take() {
+            match helper.await {
+                Ok(Ok(())) => {
+                    tracing::info!(?command, "outstanding service command settled during stop")
+                }
+                Ok(Err(error)) => {
+                    tracing::warn!(?command, %error, "outstanding service command failed during stop")
+                }
+                Err(error) => match error.try_into_panic() {
+                    Ok(panic) => std::panic::resume_unwind(panic),
+                    Err(error) => {
+                        tracing::warn!(?command, %error, "outstanding service command cancelled during stop")
+                    }
+                },
+            }
         }
         Ok(())
     }

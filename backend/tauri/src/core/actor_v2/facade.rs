@@ -14,7 +14,6 @@ use chimera_core::actor_v2::{
 use std::{
     collections::{HashMap, VecDeque},
     future::Future,
-    panic::AssertUnwindSafe,
     sync::{
         Arc,
         atomic::{AtomicBool, AtomicU64, Ordering},
@@ -27,7 +26,6 @@ use chimera_config::clash::config::ClashConfig;
 use chimera_core_manager::{
     CoreCommand, CoreCommandEnvelope, CoreError, CoreErrorKind, CoreOwner, OperationId,
 };
-use futures::FutureExt;
 use tokio_util::{sync::CancellationToken, task::TaskTracker};
 
 use super::{
@@ -215,7 +213,9 @@ impl LocalOperationRegistry {
             }
         }
         tokio::spawn(async move {
-            let result = match AssertUnwindSafe(future).catch_unwind().await {
+            // Lower-host mutations are already recoverable at this boundary;
+            // ensure only the current poll is treated as recoverable.
+            let result = match chimera_panics::catch_recoverable_future(future).await {
                 Ok(result) => MutationResult::Completed(result.map_err(|error| {
                     match error.downcast::<
                         crate::client::application_workflow::mutation::RuntimeCheckFailure,
@@ -268,7 +268,7 @@ where
     }
 
     let mut reply_guard = MutationReplyGuard::new(outcome_uncertain.clone());
-    let result = AssertUnwindSafe(future).catch_unwind().await;
+    let result = chimera_panics::catch_recoverable_future(future).await;
     reply_guard.disarm();
     match result {
         Ok(result) => result,
@@ -1202,14 +1202,27 @@ impl CoreFacade {
         if self.local_runtime.is_none() {
             return ApiClient::new(self.active_clash_info().await?);
         }
-        let (endpoint, connection) = self.active_control_endpoint().await?;
+        let (endpoint, connection) = match self.active_control_endpoint().await {
+            Ok(active) => active,
+            Err(error) => {
+                // A failed Core instance/status proof also retires the
+                // legacy cache. Never let an old controller lease outlive
+                // the host whose Running receipt could not be established.
+                if let Some(retired) = self.api_client.lock().await.take() {
+                    retired.stop().await;
+                }
+                return Err(error);
+            }
+        };
         let mut cached = self.api_client.lock().await;
         if let Some(lease) = cached.as_ref() {
             if lease.client.matches_binding(&connection) {
                 return Ok(lease.client.clone());
             }
         }
-        cached.take();
+        if let Some(retired) = cached.take() {
+            retired.stop().await;
+        }
         let client = ApiClient::from_connection(connection, endpoint)?;
         *cached = Some(ApiLease::new(client.clone()));
         Ok(client)
@@ -1289,6 +1302,11 @@ impl CoreFacade {
     /// pump, then shut down the local manager executor. This is separate
     /// from the user's ordinary Stop Core command, which retains the actor.
     pub(crate) async fn finish_shutdown(&self) -> anyhow::Result<()> {
+        // Retire any compatibility cached API before stopping Core or Service.
+        // In production this cache is empty: the ref CoreActor owns its lease.
+        if let Some(retired) = self.api_client.lock().await.take() {
+            retired.stop().await;
+        }
         let mut result = Ok(());
         if let Some(router) = &self.core_router {
             // Even when shutdown fails, the local executor must still get
@@ -1311,6 +1329,13 @@ impl CoreFacade {
             } else if let Err(error) = closed {
                 tracing::warn!(%error, "local executor shutdown also failed");
             }
+        }
+        // The production facade delegates Service to the ref ServiceActor,
+        // whose separate TaskTracker watcher already drains it. Only a
+        // facade constructed without that router (legacy/test fallback)
+        // must explicitly join its retained elevated helper here.
+        if self.core_router.is_none() {
+            self.service_commands.drain_legacy_on_shutdown().await;
         }
         result
     }

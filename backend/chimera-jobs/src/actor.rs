@@ -2,13 +2,14 @@ use crate::{job::Job, journal::Journal, logging::LogCapture, model::*, schedule:
 use jiff::Timestamp;
 use ractor::{Actor, ActorProcessingErr, ActorRef, RpcReplyPort};
 use std::{
+    any::Any,
     collections::{BTreeMap, BTreeSet},
     sync::Arc,
     time::Duration,
 };
 use tokio::{
     sync::{oneshot, watch},
-    task::JoinHandle,
+    task::{JoinError, JoinHandle},
     time::Instant,
 };
 use tokio_util::sync::CancellationToken;
@@ -107,6 +108,31 @@ pub(crate) enum Msg {
     Done(RunId),
     MaintenanceDone(RunId),
 }
+/// Reap an actor-owned worker without treating a cancelled task as a fatal
+/// panic. Never resume the first panic before other workers have been joined:
+/// storage and OS owners must be settled before the owner unwinds.
+pub(crate) type PanicPayload = Box<dyn Any + Send + 'static>;
+
+pub(crate) fn collect_join_failure(
+    joined: Result<(), JoinError>,
+    task: &'static str,
+    first_panic: &mut Option<PanicPayload>,
+) {
+    if let Err(error) = joined {
+        match error.try_into_panic() {
+            Ok(panic) if first_panic.is_none() => *first_panic = Some(panic),
+            Ok(_) => tracing::error!(task, "additional Jobs owner task panicked during drain"),
+            Err(error) => tracing::warn!(task, %error, "Jobs owner task was cancelled"),
+        }
+    }
+}
+
+fn resume_first_panic(first_panic: Option<PanicPayload>) {
+    if let Some(panic) = first_panic {
+        std::panic::resume_unwind(panic);
+    }
+}
+
 pub(crate) struct JobsActor;
 pub(crate) struct Args {
     pub journal: Journal,
@@ -262,16 +288,25 @@ impl Actor for JobsActor {
             }
             Msg::MaintenanceDone(id) => {
                 if let Some(task) = state.maintenance.take() {
-                    let _ = task.await;
+                    let mut panic = None;
+                    collect_join_failure(task.await, "maintenance", &mut panic);
+                    state.faults.remove(&id);
+                    resume_first_panic(panic);
+                } else {
+                    state.faults.remove(&id);
                 }
-                state.faults.remove(&id);
             }
             Msg::Done(id) => {
                 if let Some(active) = state.active.remove(&id) {
-                    let _ = active.task.await;
+                    let mut panic = None;
+                    collect_join_failure(active.task.await, "job execution", &mut panic);
+                    state.faults.remove(&id);
+                    state.logs.remove(id);
+                    resume_first_panic(panic);
+                } else {
+                    state.faults.remove(&id);
+                    state.logs.remove(id);
                 }
-                state.faults.remove(&id);
-                state.logs.remove(id);
             }
         }
         if state.shutting_down && state.active.is_empty() && state.maintenance.is_none() {
@@ -285,18 +320,21 @@ impl Actor for JobsActor {
         state: &mut State,
     ) -> Result<(), ActorProcessingErr> {
         state.timer_cancel.cancel();
+        let mut first_panic = None;
         if let Some(timer) = state.timer.take() {
-            let _ = timer.await;
+            collect_join_failure(timer.await, "tick timer", &mut first_panic);
         }
-        // Also drain on unexpected actor termination. Client clones never expose
-        // stop/abort, but an actor failure must not close the store under workers.
+        // An unexpected actor stop must still wait for all in-flight jobs
+        // before the store is released. A recovered handler panic is already
+        // a durable Failed completion; an unhandled worker panic is fatal.
         for (_, active) in std::mem::take(&mut state.active) {
-            let _ = active.task.await;
+            collect_join_failure(active.task.await, "job execution", &mut first_panic);
         }
         if let Some(task) = state.maintenance.take() {
-            let _ = task.await;
+            collect_join_failure(task.await, "maintenance", &mut first_panic);
         }
         state.closed.send_replace(true);
+        resume_first_panic(first_panic);
         Ok(())
     }
 }

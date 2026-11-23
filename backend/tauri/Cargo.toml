@@ -58,6 +58,7 @@ chimera-macro = { path = "../chimera-macro" }
 chimera-core = { path = "../chimera-core" }
 chimera-persistence = { path = "../chimera-persistence" }
 chimera-migration = { path = "../chimera-migration" }
+chimera-panics = { path = "../chimera-panics" }
 chimera-state-engine = { path = "../chimera-state-engine" }
 chimera-config = { path = "../chimera-config" }
 chimera-geodata = { path = "../chimera-geodata" }

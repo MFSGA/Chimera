@@ -1,5 +1,6 @@
 //! Actor-owned proxy cache shared by IPC and tray adapters.
 use std::{
+    any::Any,
     collections::hash_map::DefaultHasher,
     hash::Hasher,
     sync::{
@@ -174,32 +175,70 @@ impl Drop for State {
         }
     }
 }
+/// Read-only subscription tasks may be cancelled, but their unexpected
+/// panics must reach the proxy actor's supervision instead of being detached.
+type MonitorPanic = Box<dyn Any + Send + 'static>;
+
+async fn cancel_owned_task(
+    slot: &mut Option<tokio::task::JoinHandle<()>>,
+    name: &'static str,
+) -> Option<MonitorPanic> {
+    let task = slot.take()?;
+    task.abort();
+    match task.await {
+        Ok(()) => None,
+        Err(error) => match error.try_into_panic() {
+            Ok(panic) => Some(panic),
+            Err(error) if error.is_cancelled() => None,
+            Err(error) => {
+                tracing::warn!(name, %error, "proxy owner task failed");
+                None
+            }
+        },
+    }
+}
+
+fn resume_monitor_panic(panic: Option<MonitorPanic>) {
+    if let Some(panic) = panic {
+        std::panic::resume_unwind(panic);
+    }
+}
+
 impl State {
-    fn clear(&mut self) {
-        if let Some(task) = self.monitor.take() {
-            task.abort();
-        }
+    /// A queued old-host invalidation cannot clear a replacement generation.
+    fn invalidate_cache(&mut self) {
+        self.generation = self.generation.wrapping_add(1);
         if self.cache.take().is_some() {
             self.snapshots.send_replace(None);
             self.changes.send_replace(());
         }
     }
 
+    async fn clear(&mut self) {
+        let fatal = cancel_owned_task(&mut self.monitor, "proxy API monitor").await;
+        self.invalidate_cache();
+        resume_monitor_panic(fatal);
+    }
+
     async fn read(&mut self, actor: &ActorRef<Message>, force: bool) -> Result<Arc<Snapshot>> {
         let api = match self.core.api_client().await {
             Ok(api) => api,
             Err(error) => {
-                self.clear();
+                self.clear().await;
                 return Err(error);
             }
         };
+        if self.shutdown.is_cancelled() || api.is_revoked() {
+            self.clear().await;
+            anyhow::bail!("proxy owner or Core instance retired during cached read");
+        }
         if let Some(cache) = &self.cache {
             if cache.api.same_instance(&api) {
                 if !force && cache.fetched.elapsed() < Duration::from_secs(3) {
                     return Ok(cache.clone());
                 }
             } else {
-                self.clear();
+                self.clear().await;
             }
         }
         self.refresh(actor, api).await
@@ -242,33 +281,34 @@ impl State {
         .await;
         match result {
             Ok(snapshot) => {
-                anyhow::ensure!(
-                    !self.shutdown.is_cancelled(),
-                    "proxy owner shut down before snapshot publication"
-                );
-                let changed = self
-                    .cache
-                    .as_ref()
-                    .is_none_or(|old| old.fingerprint != snapshot.fingerprint);
-                self.cache = Some(snapshot.clone());
-                self.snapshots.send_replace(Some(snapshot.clone()));
-                if changed {
-                    self.changes.send_replace(());
+                // Retire the old monitor before publishing the new Core lease.
+                let fatal = cancel_owned_task(&mut self.monitor, "proxy API monitor").await;
+                resume_monitor_panic(fatal);
+                if self.shutdown.is_cancelled() || snapshot.api.is_revoked() {
+                    self.clear().await;
+                    anyhow::bail!("proxy owner or Core instance retired before publication");
                 }
-                if let Some(task) = self.monitor.take() {
-                    task.abort();
-                }
-                self.generation += 1;
+                // Identical groups on a different Host still need a binding
+                // change event so downstream actions refresh their API lease.
+                let changed = self.cache.as_ref().is_none_or(|old| {
+                    old.fingerprint != snapshot.fingerprint || !old.api.same_instance(&snapshot.api)
+                });
+                self.generation = self.generation.wrapping_add(1);
                 let generation = self.generation;
                 let actor = actor.clone();
                 self.monitor = Some(tokio::spawn(async move {
                     api.cancelled().await;
                     let _ = actor.cast(Message::Invalidated(generation));
                 }));
+                self.cache = Some(snapshot.clone());
+                self.snapshots.send_replace(Some(snapshot.clone()));
+                if changed {
+                    self.changes.send_replace(());
+                }
                 Ok(snapshot)
             }
             Err(error) => {
-                self.clear();
+                self.clear().await;
                 Err(error)
             }
         }
@@ -302,7 +342,7 @@ impl State {
         let api = match self.core.api_client().await {
             Ok(api) => api,
             Err(error) => {
-                self.clear();
+                self.clear().await;
                 return Err(error);
             }
         };
@@ -487,7 +527,7 @@ impl Actor for ProxiesActor {
                     let api = match state.core.api_client().await {
                         Ok(api) => api,
                         Err(error) => {
-                            state.clear();
+                            state.clear().await;
                             return Err(error);
                         }
                     };
@@ -532,9 +572,11 @@ impl Actor for ProxiesActor {
             Message::Rearranged => {
                 state.changes.send_replace(());
             }
-            Message::Invalidated(generation) if generation == state.generation => state.clear(),
+            Message::Invalidated(generation) if generation == state.generation => {
+                state.clear().await
+            }
             Message::Invalidated(_) => {}
-            Message::Invalidate => state.clear(),
+            Message::Invalidate => state.clear().await,
         }
         Ok(())
     }
@@ -543,9 +585,12 @@ impl Actor for ProxiesActor {
         _actor: ActorRef<Message>,
         state: &mut State,
     ) -> Result<(), ActorProcessingErr> {
-        if let Some(timer) = state.timer.take() {
-            timer.abort();
-        }
+        // These are read-only, cancellable tasks. Wait for both owners and
+        // clear the published snapshot before resuming any fatal task panic.
+        let timer_panic = cancel_owned_task(&mut state.timer, "proxy refresh timer").await;
+        let monitor_panic = cancel_owned_task(&mut state.monitor, "proxy API monitor").await;
+        state.invalidate_cache();
+        resume_monitor_panic(timer_panic.or(monitor_panic));
         Ok(())
     }
 }

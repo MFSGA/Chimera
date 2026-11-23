@@ -476,10 +476,9 @@ pub struct CoreActorState {
     events_tx: broadcast::Sender<CoreStatusProjection>,
     pump: Option<tokio::task::JoinHandle<()>>,
     stop_wait: Duration,
-    /// The stop leg of a handoff in flight. Owned here so the actor's own
-    /// termination takes it down with the pump: it holds the source endpoint,
-    /// an `ActorRef` and the caller's reply port, and a hung call would keep
-    /// all three alive past the mailbox.
+    /// The stop-and-prove leg of a handoff in flight. Unlike the read-only
+    /// status pump, an admitted Core stop must settle before the actor drops
+    /// the previous owner's endpoint. The stop leg has its own I/O bounds.
     handoff: Option<tokio::task::JoinHandle<()>>,
     status_timeout: Duration,
     /// A timed-out network mutation may have reached the OS. There is no
@@ -536,6 +535,17 @@ impl CoreActorState {
     fn set_snapshot(&mut self, snapshot: CoreStatusSnapshot) {
         self.snapshot = Some(snapshot);
         self.publish();
+    }
+
+    /// Revoke an instance-bound API before another owner can serve requests;
+    /// join its monitor so fatal task failures reach actor supervision.
+    async fn retire_api(&mut self) {
+        if let Some(lease) = self.api.take()
+            && let Err(error) = lease.stop().await
+            && let Ok(panic) = error.try_into_panic()
+        {
+            std::panic::resume_unwind(panic);
+        }
     }
 }
 
@@ -744,16 +754,49 @@ impl Actor for CoreActor {
         _myself: ActorRef<Self::Msg>,
         state: &mut Self::State,
     ) -> Result<(), ActorProcessingErr> {
-        state.api.take();
+        let retired_api = state.api.take();
+        if let Some(lease) = &retired_api {
+            lease.client.revoke();
+        }
         // The pump outlives the mailbox otherwise: it holds an `ActorRef` and
         // an endpoint, and a status read in flight keeps both alive.
+        let mut first_panic = None;
         if let Some(pump) = state.pump.take() {
+            // Status reads do not change the Core owner, so cancelling this
+            // subscription is safe. An unexpected panic still belongs to
+            // the router's supervision rather than being silently ignored.
             pump.abort();
-            let _ = pump.await;
+            if let Err(error) = pump.await
+                && let Ok(panic) = error.try_into_panic()
+            {
+                first_panic = Some(panic);
+            }
         }
         if let Some(handoff) = state.handoff.take() {
-            handoff.abort();
-            let _ = handoff.await;
+            // Unlike a status pump, this task already owns stop-and-prove.
+            // Do not abort a partially admitted Core stop at actor exit:
+            // retain its endpoint/operation ownership until it finishes.
+            if let Err(error) = handoff.await {
+                match error.try_into_panic() {
+                    Ok(panic) if first_panic.is_none() => first_panic = Some(panic),
+                    Ok(_) => tracing::error!("another Core owner task panicked during stop"),
+                    Err(error) => tracing::warn!(%error, "Core handoff stop task was cancelled"),
+                }
+            }
+        }
+        // An API monitor panic must not detach the previously admitted Core Stop.
+        if let Some(lease) = retired_api
+            && let Err(error) = lease.stop().await
+        {
+            match error.try_into_panic() {
+                Ok(panic) if first_panic.is_none() => first_panic = Some(panic),
+                Ok(_) => tracing::error!("another Core API monitor panicked during stop"),
+                Err(error) => tracing::warn!(%error, "Core API monitor cancelled during stop"),
+            }
+        }
+        // Do not let a pump panic detach a still-owned Core Stop.
+        if let Some(panic) = first_panic {
+            std::panic::resume_unwind(panic);
         }
         Ok(())
     }
@@ -939,8 +982,14 @@ impl Actor for CoreActor {
                 let _ = reply.send(());
             }
             CoreActorMessage::ApiClient { reply } => {
-                let result = match &state.slot {
-                    EndpointSlot::Connected(endpoint) => {
+                // Keep a local endpoint handle so retiring the API lease can
+                // mutate actor state without holding a borrow of its slot.
+                let endpoint = match &state.slot {
+                    EndpointSlot::Connected(endpoint) => Some(endpoint.clone()),
+                    _ => None,
+                };
+                let result = match endpoint {
+                    Some(endpoint) => {
                         match tokio::time::timeout(state.status_timeout, endpoint.api_connection())
                             .await
                         {
@@ -952,7 +1001,7 @@ impl Actor for CoreActor {
                                 {
                                     Ok(state.api.as_ref().expect("checked above").client.clone())
                                 } else {
-                                    state.api.take();
+                                    state.retire_api().await;
                                     match api::ApiClient::from_connection(
                                         binding,
                                         std::sync::Arc::new(RouterApiEndpoint(endpoint.clone())),
@@ -968,7 +1017,7 @@ impl Actor for CoreActor {
                                 }
                             }
                             result => {
-                                state.api.take();
+                                state.retire_api().await;
                                 Err(api::ApiError::Unavailable(match result {
                                     Ok(Ok(None)) => {
                                         "no running process exposes a usable API".into()
@@ -980,9 +1029,12 @@ impl Actor for CoreActor {
                             }
                         }
                     }
-                    _ => Err(api::ApiError::Unavailable(
-                        "the core endpoint is not connected".into(),
-                    )),
+                    _ => {
+                        state.retire_api().await;
+                        Err(api::ApiError::Unavailable(
+                            "the core endpoint is not connected".into(),
+                        ))
+                    }
                 };
                 let _ = reply.send(result);
             }
@@ -1128,7 +1180,8 @@ impl Actor for CoreActor {
                 result,
                 reply,
             } => {
-                self.handoff_stopped(&myself, state, generation, result, reply);
+                self.handoff_stopped(&myself, state, generation, result, reply)
+                    .await;
             }
 
             CoreActorMessage::EndpointEvent {
@@ -1164,7 +1217,7 @@ impl Actor for CoreActor {
                     // Honest terminal: desired host stays committed, nothing
                     // falls back silently (I-R2).
                     Some(desired) => {
-                        state.api.take();
+                        state.retire_api().await;
                         state.slot = EndpointSlot::Degraded { desired, reason };
                         state.publish();
                     }
@@ -1181,14 +1234,18 @@ impl Actor for CoreActor {
             }
 
             CoreActorMessage::Shutdown { reply } => {
-                state.api.take();
+                state.retire_api().await;
                 if let EndpointSlot::ShutDown { report } = &state.slot {
                     let _ = reply.send(report.clone());
                     return Ok(());
                 }
                 if let Some(pump) = state.pump.take() {
                     pump.abort();
-                    let _ = pump.await;
+                    if let Err(error) = pump.await
+                        && let Ok(panic) = error.try_into_panic()
+                    {
+                        std::panic::resume_unwind(panic);
+                    }
                 }
                 if matches!(state.slot, EndpointSlot::HandingOff { .. }) {
                     // A stop for this very runtime is already in flight.
@@ -1321,7 +1378,7 @@ impl CoreActor {
                     state.snapshot.as_ref().and_then(|s| s.state.as_ref()),
                     Some(chimera_ipc::api::status::CoreStateDetail::Running { .. })
                 );
-            self.adopt(myself, state, target);
+            self.adopt(myself, state, target).await;
             let _ = reply.send(Ok(HandoffReport::Completed {
                 generation: state.generation,
                 interrupted_running,
@@ -1332,7 +1389,7 @@ impl CoreActor {
         // Phase: StoppingSource — no StopProof, no next owner. The source's
         // pump keeps running: its frames are still this generation's truth
         // until ownership actually moves.
-        state.api.take();
+        state.retire_api().await;
         state.slot = EndpointSlot::HandingOff {
             from: source.clone(),
             target,
@@ -1354,7 +1411,7 @@ impl CoreActor {
     }
 
     /// The handoff's second half, back inside the mailbox.
-    fn handoff_stopped(
+    async fn handoff_stopped(
         &self,
         myself: &ActorRef<CoreActorMessage>,
         state: &mut CoreActorState,
@@ -1376,8 +1433,15 @@ impl CoreActor {
             return;
         }
         let (from, target, source_down) = (from.clone(), target.clone(), source_down.clone());
-        // Its own message; nothing is left to cancel.
-        state.handoff = None;
+        // The handoff task sent this completion before returning. Join it
+        // before releasing the previous owner's slot or confirming shutdown.
+        // Simply dropping the handle would discard a late fatal panic.
+        if let Some(handoff) = state.handoff.take()
+            && let Err(error) = handoff.await
+            && let Ok(panic) = error.try_into_panic()
+        {
+            std::panic::resume_unwind(panic);
+        }
 
         if !state.pending_shutdown.is_empty() {
             let _ = reply.send(Err(CoreError::new(
@@ -1401,7 +1465,7 @@ impl CoreActor {
 
         match result {
             Ok(_) => {
-                self.adopt(myself, state, target);
+                self.adopt(myself, state, target).await;
                 let _ = reply.send(Ok(HandoffReport::Completed {
                     generation: state.generation,
                     // This leg exists because the source proved it stopped.
@@ -1425,7 +1489,7 @@ impl CoreActor {
     }
 
     /// Phase: Adopt — the generation fences out every stale frame afterwards.
-    fn adopt(
+    async fn adopt(
         &self,
         myself: &ActorRef<CoreActorMessage>,
         state: &mut CoreActorState,
@@ -1434,12 +1498,17 @@ impl CoreActor {
         state.generation += 1;
         if let Some(pump) = state.pump.take() {
             pump.abort();
+            if let Err(error) = pump.await
+                && let Ok(panic) = error.try_into_panic()
+            {
+                std::panic::resume_unwind(panic);
+            }
         }
         // The previous host's runtime is not this one's. Clearing before the
         // publish is what keeps the new generation's first frame from carrying
         // the old owner's state forward.
         state.snapshot = None;
-        state.api.take();
+        state.retire_api().await;
         state.transparent_proxy_uncertain = false;
         state.slot = EndpointSlot::Connected(target.clone());
         state.publish();

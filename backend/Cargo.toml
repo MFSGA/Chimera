@@ -5,6 +5,7 @@ members = [
   "chimera-state-engine",
   "chimera-persistence",
   "chimera-migration",
+  "chimera-panics",
   "chimera-os",
   "chimera-net",
   "chimera-geodata",

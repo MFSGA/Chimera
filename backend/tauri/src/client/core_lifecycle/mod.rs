@@ -24,7 +24,6 @@ use super::reconciler::{
     status::ReconcilerStatus,
 };
 use chimera_core::client::reconciler::plan::RunIntent;
-use futures_util::FutureExt;
 use ractor::{Actor, ActorProcessingErr, ActorRef, RpcReplyPort, rpc::CallResult};
 use tokio_util::{sync::CancellationToken, task::TaskTracker};
 
@@ -780,7 +779,9 @@ impl ApplicationWorkflowState {
         }
         if let Command::ReplaceCoreBinary(artifact) = &request.command {
             let message = error.to_string();
-            if std::panic::catch_unwind(AssertUnwindSafe(|| {
+            // A UI progress observer is allowed to fail without making the
+            // core mutation's result uncertain. This closure is synchronous.
+            if chimera_panics::catch_recoverable(AssertUnwindSafe(|| {
                 artifact.progress.finished(Some(&message));
             }))
             .is_err()
@@ -1094,9 +1095,13 @@ impl ApplicationWorkflowState {
         let task = tokio::spawn(async move {
             let (result, workflow_panicked, request_runtime_rebuild) = match command {
                 Command::ProfileMutation(mut mutation) => {
-                    let run = AssertUnwindSafe(workflow.run_profile_mutation(&mut mutation))
-                        .catch_unwind()
-                        .await;
+                    // Ref's recoverable panic flag must cover each future
+                    // poll, not remain set across a Tokio .await. Preserve
+                    // the uncertainty/recovery settlement on panic.
+                    let run = chimera_panics::catch_recoverable_future(
+                        workflow.run_profile_mutation(&mut mutation),
+                    )
+                    .await;
                     match run {
                         Ok((request_runtime_rebuild, settlement)) => (
                             settlement.map_err(anyhow::Error::msg),
@@ -1125,9 +1130,10 @@ impl ApplicationWorkflowState {
                     }
                 }
                 command => {
-                    match AssertUnwindSafe(workflow.execute_lifecycle(command))
-                        .catch_unwind()
-                        .await
+                    match chimera_panics::catch_recoverable_future(
+                        workflow.execute_lifecycle(command),
+                    )
+                    .await
                     {
                         Ok(Ok(request_runtime_rebuild)) => {
                             (Ok::<(), anyhow::Error>(()), false, request_runtime_rebuild)
@@ -1148,7 +1154,9 @@ impl ApplicationWorkflowState {
             };
             if let Some(progress) = progress {
                 let error = result.as_ref().err().map(ToString::to_string);
-                if std::panic::catch_unwind(AssertUnwindSafe(|| {
+                // Do not let a synchronous notification callback override
+                // the actual lifecycle outcome or trigger fatal panic UI.
+                if chimera_panics::catch_recoverable(AssertUnwindSafe(|| {
                     progress.finished(error.as_deref())
                 }))
                 .is_err()
@@ -1166,9 +1174,7 @@ impl ApplicationWorkflowState {
             let service_probe = if service_mutation && !workflow_panicked && publish_legacy_service
             {
                 Some(
-                    match AssertUnwindSafe(lifecycle.probe_service())
-                        .catch_unwind()
-                        .await
+                    match chimera_panics::catch_recoverable_future(lifecycle.probe_service()).await
                     {
                         Ok(Ok(info)) => Ok(info),
                         Ok(Err(error)) => Err(error.to_string()),
@@ -1411,7 +1417,14 @@ impl Actor for ApplicationWorkflowActor {
                         .take()
                         .expect("matched active lifecycle operation");
                     debug_assert_eq!(active.shutdown, shutdown);
-                    let _ = active.task.await;
+                    // A Completed message precedes the task's return. Keep
+                    // the workflow task owned until its JoinHandle settles;
+                    // unexpected task panics must reach Actor supervision.
+                    if let Err(error) = active.task.await
+                        && let Ok(panic) = error.try_into_panic()
+                    {
+                        std::panic::resume_unwind(panic);
+                    }
                     // A successful command alone is not proof that the Core
                     // reached Running or Stopped. Publish Converged/Inactive
                     // only after sampling the runtime owner.
@@ -2146,6 +2159,29 @@ impl Actor for ApplicationWorkflowActor {
         state: &mut Self::State,
     ) -> Result<(), ActorProcessingErr> {
         state.service_recovery_timer.abort();
+        // The workflow (and its transaction/Service lease) is moved into the
+        // active task. An unexpected Actor stop cannot drop that owner while
+        // it might still be mutating Core or committing a profile decision.
+        // The outcome is unproven because its Completed message was not
+        // handled; do not publish a successful runtime conclusion.
+        if let Some(active) = state.active.take() {
+            state.uncertain = true;
+            state
+                .startup_owner_unproven_shared
+                .store(true, Ordering::Release);
+            {
+                let mut status = state.status.lock();
+                status.active = None;
+                status.uncertain = true;
+                status.shutting_down = true;
+            }
+            if let Err(error) = active.task.await {
+                match error.try_into_panic() {
+                    Ok(panic) => std::panic::resume_unwind(panic),
+                    Err(error) => tracing::warn!(%error, "core lifecycle owner task cancelled"),
+                }
+            }
+        }
         state.reconciler.send_modify(ReconcilerStatus::close);
         Ok(())
     }

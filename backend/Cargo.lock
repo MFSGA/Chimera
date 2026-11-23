@@ -1060,6 +1060,7 @@ dependencies = [
  "chimera-migration",
  "chimera-net",
  "chimera-os",
+ "chimera-panics",
  "chimera-paths",
  "chimera-persistence",
  "chimera-state-engine",
@@ -1373,6 +1374,7 @@ dependencies = [
 name = "chimera-jobs"
 version = "0.1.1-rc.5"
 dependencies = [
+ "chimera-panics",
  "futures-util",
  "jiff",
  "jiff-cron",
@@ -1472,6 +1474,16 @@ dependencies = [
  "tracing",
  "url",
  "whoami",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "chimera-panics"
+version = "0.1.0"
+dependencies = [
+ "backtrace",
+ "scopeguard",
+ "tracing",
  "windows-sys 0.61.2",
 ]
 

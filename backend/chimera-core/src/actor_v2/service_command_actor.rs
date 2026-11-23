@@ -183,6 +183,36 @@ impl ServiceCommandActor {
         }
     }
 
+    /// Legacy compatibility owner cleanup. Production uses the one ref
+    /// ServiceActor and its TaskTracker shutdown drain, not this command lane.
+    /// Call after admission has been closed by the parent facade; holding the
+    /// mutex prevents overlapping legacy callers while the helper settles.
+    /// An elevated command already running at timeout must not be aborted.
+    pub async fn drain_legacy_on_shutdown(&self) {
+        let mut state = self.state.lock().await;
+        if let Some((command, helper)) = state.outstanding.take() {
+            let joined = helper.await;
+            self.outstanding.store(false, Ordering::Release);
+            // The helper has finished, but a new Service probe has not proved
+            // its resulting OS state. Keep the uncertainty latch closed.
+            self.unsettled.store(true, Ordering::Release);
+            match joined {
+                Ok(Ok(())) => {
+                    tracing::info!(%command, "legacy Service command settled on shutdown")
+                }
+                Ok(Err(error)) => {
+                    tracing::warn!(%command, %error, "legacy Service command failed on shutdown")
+                }
+                Err(error) => match error.try_into_panic() {
+                    Ok(panic) => std::panic::resume_unwind(panic),
+                    Err(error) => {
+                        tracing::warn!(%command, %error, "legacy Service command was cancelled on shutdown")
+                    }
+                },
+            }
+        }
+    }
+
     /// A single serialized OS mutation. Timeouts return StillRunning and
     /// retain the helper, instead of silently cancelling its JoinHandle.
     pub async fn command(
@@ -528,6 +558,35 @@ mod tests {
         );
         actor.command(ServiceCommand::Stop).await.unwrap();
         assert!(actor.daemon_not_running().await);
+    }
+
+    #[tokio::test]
+    async fn legacy_shutdown_waits_for_timed_out_elevated_command() {
+        let fake = Arc::new(FakeProcess::new(ServiceStatus::Stopped, None));
+        fake.pause_start.store(true, Ordering::Release);
+        let actor = Arc::new(ServiceCommandActor::with_timeout(
+            fake.clone(),
+            Duration::from_millis(30),
+        ));
+        assert!(matches!(
+            actor.command(ServiceCommand::Start).await,
+            Err(ServiceCommandError::StillRunning { .. })
+        ));
+        let owner = actor.clone();
+        let drain = tokio::spawn(async move { owner.drain_legacy_on_shutdown().await });
+        tokio::task::yield_now().await;
+        assert!(!drain.is_finished(), "the OS helper must not be aborted");
+        fake.release.notify_one();
+        tokio::time::timeout(Duration::from_secs(2), drain)
+            .await
+            .expect("the OS helper finished")
+            .expect("the owner drain returned");
+        assert!(!actor.has_outstanding());
+        assert!(
+            actor.has_unsettled_outcome(),
+            "a shutdown does not prove Service state"
+        );
+        assert_eq!(fake.calls(), [ServiceCommand::Start]);
     }
 
     #[tokio::test]

@@ -347,10 +347,19 @@ impl ApiClient {
     }
 
     async fn execute_stream_frame<T>(&self, frame: clash_api::Result<T>) -> ApiResult<T> {
-        self.check_binding().await?;
-        let result = frame.map_err(ApiError::Protocol);
-        self.check_binding().await?;
-        result
+        // A retired host's authority probe might be blocked on IPC. Keep the
+        // same deadline and permanent revocation semantics as normal API
+        // operations, even when the websocket frame itself has arrived.
+        tokio::select! {
+            biased;
+            _ = self.cancelled() => Err(ApiError::Stale),
+            verified = tokio::time::timeout(DEFAULT_API_TIMEOUT, async {
+                self.check_binding().await?;
+                let result = frame.map_err(ApiError::Protocol);
+                self.check_binding().await?;
+                result
+            }) => verified.unwrap_or(Err(ApiError::Timeout)),
+        }
     }
 
     pub async fn get_connections(&self) -> Result<ConnectionsRes> {
@@ -644,7 +653,16 @@ where
                 _ = sender.closed() => break,
                 item = stream.next() => match item {
                     Some(Ok(sample)) => {
-                        if let Err(error) = api.check_binding().await {
+                        // A stalled authorization read must not keep a
+                        // retired websocket alive after its Core Lease dies.
+                        let check = tokio::select! {
+                            biased;
+                            _ = api.cancelled() => Err(ApiError::Stale),
+                            checked = tokio::time::timeout(DEFAULT_API_TIMEOUT, api.check_binding()) => {
+                                checked.unwrap_or(Err(ApiError::Timeout))
+                            }
+                        };
+                        if let Err(error) = check {
                             tracing::debug!(%error, "retired Clash API stream stopped");
                             break;
                         }
@@ -779,15 +797,25 @@ impl ApiLease {
         Self { client, monitor }
     }
 
-    /// Ref's deterministic test seam: join the revoked monitor to surface a
-    /// panic instead of allowing the actor test to pass before teardown.
-    #[cfg(any(test, feature = "test-support"))]
-    pub(in crate::actor_v2) async fn stop_for_test(mut self) {
+    /// Stop one instance-bound API lease and reap the owned monitor. Dropping
+    /// remains fail-closed for unexpected owner unwinding, but normal Core
+    /// transitions must not silently discard a monitor's fatal JoinError.
+    pub async fn stop(mut self) -> Result<(), tokio::task::JoinError> {
         self.client.revoke();
         self.monitor.abort();
         match (&mut self.monitor).await {
-            Err(error) if error.is_panic() => std::panic::resume_unwind(error.into_panic()),
-            _ => {}
+            Err(error) if error.is_cancelled() => Ok(()),
+            result => result,
+        }
+    }
+
+    /// Ref's deterministic test seam uses the same production shutdown path.
+    #[cfg(any(test, feature = "test-support"))]
+    pub(in crate::actor_v2) async fn stop_for_test(self) {
+        if let Err(error) = self.stop().await
+            && let Ok(panic) = error.try_into_panic()
+        {
+            std::panic::resume_unwind(panic);
         }
     }
 }
@@ -801,7 +829,7 @@ impl Drop for ApiLease {
 
 #[cfg(test)]
 mod typed_error_tests {
-    use super::{ApiChanges, ApiClient, ApiError, CoreApiEndpoint};
+    use super::{ApiChanges, ApiClient, ApiError, ApiLease, CoreApiEndpoint};
     use chimera_ipc::api::{core::v2::CoreApiConnection, status::CoreControllerInfo};
     use std::{
         future::pending,
@@ -932,6 +960,19 @@ mod typed_error_tests {
             4,
             "each request must check its instance binding before and after"
         );
+    }
+
+    #[tokio::test]
+    async fn explicit_lease_stop_revokes_all_clones_and_joins_monitor() {
+        let (client, _) = bound();
+        let another = client.clone();
+        let lease = ApiLease::new(client);
+        lease
+            .stop()
+            .await
+            .expect("monitor cancellation must settle");
+        assert!(another.is_revoked());
+        assert!(matches!(another.version().await, Err(ApiError::Stale)));
     }
 
     #[tokio::test]
