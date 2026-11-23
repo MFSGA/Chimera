@@ -3,6 +3,7 @@ import { commands } from './bindings';
 export { isTauri } from './connection-details-channel';
 export * from './system-dns';
 export * from './profile-folders';
+export * from './proxy-group-layout';
 export * from './use-profile';
 export * from './use-profile-sync';
 export * from './use-runtime-transform-diagnostics';

@@ -1,83 +1,142 @@
-/**
- * 代理组导航侧栏
- *
- * 迁移自 ref: `src/pages/(main)/main/proxies/_modules/proxies-navigate.tsx`
- *
- * 职责：
- * - 在桌面端侧边栏中展示所有代理组列表
- * - 每个组可作为链接点击，导航到 `/main/proxies/group/$name`
- * - 当组有图标时显示图标
- *
- * 当前阶段（Step 2）：
- * - 使用现有的 Chimera GroupList 组件渲染组列表
- * - 后续可逐步替换为 ref 的虚拟化列表实现
- */
-
 import { useNativeProxies } from '@chimera/interface';
-import { cn } from '@chimera/ui';
 import { Button } from '@chimera/ui/button';
-import { Link, useLocation } from '@tanstack/react-router';
-import { CacheImage } from '@/components/ui/image';
+import {
+  NavigationList,
+  NavigationListGroup,
+} from '@chimera/ui/navigation-list';
+import { pointerIntersection } from '@dnd-kit/collision';
+import { useDroppable } from '@dnd-kit/react';
+import { useParams } from '@tanstack/react-router';
+import AddRounded from '~icons/material-symbols/add-rounded';
+import { useEffect } from 'react';
+import * as m from '@/paraglide/messages';
+import { useFolderCollapsed } from '../../_modules/use-folder-collapsed';
+import GroupFolder from './group-folder';
+import GroupListActions from './group-list-actions';
+import GroupNavItem from './group-nav-item';
+import {
+  folderOfDragId,
+  GROUP_DRAG_TYPE,
+  groupNamesOf,
+  SECTION_DRAG_TYPE,
+  sectionId,
+} from './resolve-group-drop';
+import { useGroupLayout } from './use-group-layout';
+import { useProxiesDnd } from './use-proxies-dnd';
 
-/**
- * 代理组导航组件
- *
- * 渲染在 SidebarContent 中，显示所有代理组列表。
- * 每个组是一个按钮，点击跳转到对应的组详情页。
- */
+const COLLAPSED_KV_KEY = 'proxies-folder-collapsed';
+
 export default function ProxiesNavigate() {
   const { data: proxies } = useNativeProxies();
 
-  const location = useLocation();
+  const { layout, openCreateFolder } = useGroupLayout();
+
+  const { isCollapsed, toggle, setAll } = useFolderCollapsed(COLLAPSED_KV_KEY);
+
+  // The lists follow a drag in progress, so they show where an item would land.
+  const { items, folders: folderOrder } = useProxiesDnd();
+
+  const { ref: groupsRef } = useDroppable({
+    id: sectionId(null),
+    type: SECTION_DRAG_TYPE,
+    accept: GROUP_DRAG_TYPE,
+    collisionDetector: pointerIntersection,
+  });
+
+  const { name: activeName } = useParams({ strict: false });
+
+  const folderOfActive = layout?.folders.find((folder) =>
+    activeName ? folder.members.includes(activeName) : false,
+  )?.id;
+
+  // A selected group stays visible: opening it (from a link, the keyboard or
+  // the tray) opens the folder it is in.
+  useEffect(() => {
+    if (folderOfActive) {
+      setAll([folderOfActive], false);
+    }
+  }, [folderOfActive, activeName, setAll]);
+
+  if (!proxies || !layout) {
+    return null;
+  }
+
+  const groups = new Map(proxies.groups.map((group) => [group.name, group]));
+
+  const renderGroups = (section: string | null) =>
+    groupNamesOf(items[sectionId(section)] ?? []).map((name, index) => {
+      const group = groups.get(name);
+
+      return group ? (
+        <GroupNavItem
+          key={name}
+          group={group}
+          proxies={proxies}
+          active={name === activeName}
+          index={index}
+          section={section}
+        />
+      ) : null;
+    });
+
+  const folderIds = layout.folders.map((folder) => folder.id);
+
+  const folders = folderOrder.flatMap(
+    (id) =>
+      layout.folders.find((folder) => folder.id === folderOfDragId(id)) ?? [],
+  );
 
   return (
-    <div className="flex flex-col gap-2 p-2" data-slot="proxies-navigate">
-      {proxies?.groups.map((group) => (
-        <Button
-          key={group.name}
-          variant="fab"
-          data-active={String(
-            location.pathname.endsWith(`/group/${group.name}`),
-          )}
-          asChild
-        >
-          <Link
-            className={cn(
-              'h-16',
-              'flex items-center gap-2',
-              'data-[active=true]:bg-surface-variant/80',
-              'data-[active=false]:bg-transparent',
-              'data-[active=false]:shadow-none',
-              'data-[active=false]:hover:shadow-none',
-              'data-[active=false]:hover:bg-surface-variant/30',
-            )}
-            to="/main/proxies/$name"
-            params={{
-              name: group.name,
-            }}
-          >
-            <div className="flex items-center gap-2.5">
-              {/* 代理组图标（如果有） */}
-              {group.icon && (
-                <div className="size-8">
-                  <CacheImage
-                    icon={group.icon}
-                    className="size-8"
-                    loadingClassName="rounded-full"
-                  />
-                </div>
-              )}
+    <NavigationList
+      aria-label={m.proxies_nav_label()}
+      data-slot="proxies-navigate"
+    >
+      <NavigationListGroup
+        ref={groupsRef}
+        label={m.proxies_nav_groups()}
+        action={
+          <GroupListActions
+            hasFolders={folderIds.length > 0}
+            onExpandAll={() => setAll(folderIds, false)}
+            onCollapseAll={() => setAll(folderIds, true)}
+          />
+        }
+      >
+        {renderGroups(null)}
+      </NavigationListGroup>
 
-              <div className="flex flex-col gap-1">
-                <div className="text-sm font-medium">{group.name}</div>
-                <div className="text-xs text-zinc-500">
-                  {group.now || group.type}
-                </div>
-              </div>
-            </div>
-          </Link>
-        </Button>
-      ))}
-    </div>
+      <NavigationListGroup
+        label={m.proxies_nav_folders()}
+        className="[&>[role=group]]:gap-2"
+        action={
+          <Button
+            icon
+            className="mr-2 size-8"
+            aria-label={m.profile_folder_new_title()}
+            data-slot="proxies-folder-add"
+            onClick={() => openCreateFolder()}
+          >
+            <AddRounded className="size-5" />
+          </Button>
+        }
+      >
+        {folders.map((folder, index) => {
+          const members = groupNamesOf(items[sectionId(folder.id)] ?? []);
+
+          return (
+            <GroupFolder
+              key={folder.id}
+              folder={{ ...folder, members }}
+              index={index}
+              count={folders.length}
+              expanded={!isCollapsed(folder.id)}
+              onToggle={() => toggle(folder.id)}
+            >
+              {renderGroups(folder.id)}
+            </GroupFolder>
+          );
+        })}
+      </NavigationListGroup>
+    </NavigationList>
   );
 }

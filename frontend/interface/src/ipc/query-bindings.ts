@@ -232,6 +232,16 @@ export const mutations = {
     mutationFn: (input: Parameters<typeof commands.createProfileFolder>) =>
       commands.createProfileFolder(...input),
   }),
+  setProxyGroupLayout: mutationOptions({
+    mutationKey: ['setProxyGroupLayout'],
+    mutationFn: (input: Parameters<typeof commands.setProxyGroupLayout>) =>
+      commands.setProxyGroupLayout(...input),
+  }),
+  createProxyGroupFolder: mutationOptions({
+    mutationKey: ['createProxyGroupFolder'],
+    mutationFn: (input: Parameters<typeof commands.createProxyGroupFolder>) =>
+      commands.createProxyGroupFolder(...input),
+  }),
   reorderProfilesByList: mutationOptions({
     mutationKey: ['reorderProfilesByList'],
     mutationFn: (input: Parameters<typeof commands.reorderProfilesByList>) =>

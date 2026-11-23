@@ -27,6 +27,8 @@ chimera-utils = { workspace = true, features = ["core_manager"] }
 chimera-config = { path = "../chimera-config" }
 chimera-contracts = { path = "../chimera-contracts" }
 chimera-ipc = { workspace = true }
+chimera-traffic = { path = "../chimera-traffic" }
+chimera-geodata = { path = "../chimera-geodata" }
 futures-util = "0.3"
 serde_json = "1"
 serde_yaml = "0.9"

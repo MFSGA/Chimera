@@ -32,7 +32,7 @@ function RouteComponent() {
   // 移动端：显示代理组列表作为独立页面
   return (
     <AppContentScrollArea
-      className="bg-surface-variant/10"
+      className="bg-surface-variant/50 dark:bg-transparent"
       data-slot="proxies-sidebar-scroll-area"
     >
       <ProxiesNavigate />

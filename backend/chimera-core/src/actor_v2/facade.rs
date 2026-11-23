@@ -442,10 +442,19 @@ impl CoreFacade {
                 false,
             )));
         }
-        let expected_applied = expected
-            .snapshot
-            .as_ref()
-            .and_then(|snapshot| snapshot.revision.clone());
+        // Ref main: a stopped core can still report its last revision, but
+        // that is not an applied runtime. Do not send that stale revision as
+        // the optimistic-concurrency token of the next reconcile.
+        let expected_applied = expected.snapshot.as_ref().and_then(|snapshot| {
+            if matches!(
+                snapshot.state,
+                Some(chimera_ipc::api::status::CoreStateDetail::Stopped { .. })
+            ) {
+                None
+            } else {
+                snapshot.revision.clone()
+            }
+        });
         // `expected_applied` is the optimistic-concurrency guard: apply only if
         // the manager is still on this revision. The wire carries the epoch as a
         // plain `u64`, and `Epoch` rejects zero. Dropping the guard on a zero
@@ -706,6 +715,18 @@ impl CoreFacade {
     /// one it started before this facade existed (T10 §1.3).
     pub async fn service_command_settled(&self) -> Result<bool, CoreError> {
         self.service.command_settled().await
+    }
+
+    /// Ref main: ensure the daemon is installed, running and through its
+    /// version gate without changing ownership of the running Core.
+    /// The reconciler must establish the new owner separately.
+    pub async fn prepare_service_host(&mut self) -> Result<(), CoreError> {
+        let service = self.service.clone();
+        self.service_command(ServiceCommandKind::EnsureReady, async move {
+            service.ensure_ready().await
+        })
+        .await
+        .map(|_| ())
     }
 
     pub async fn install_service(&mut self) -> Result<(), CoreError> {
@@ -1196,6 +1217,51 @@ mod tests {
             })
         );
         assert_eq!(submissions[0].core_type, Some((&ClashCore::Mihomo).into()));
+    }
+
+    #[tokio::test]
+    async fn reconcile_from_stopped_core_does_not_use_stale_revision_as_cas() {
+        let stale = RevisionIdInfo {
+            epoch: 4,
+            generation: 9,
+            effective_hash: "stopped-effective".into(),
+        };
+        let mut local = RecordingEndpoint::new(ExecutionHost::Local, Some(stale));
+        Arc::get_mut(&mut local)
+            .expect("one fixture owner")
+            .status
+            .state = Some(CoreStateDetail::Stopped { reason: None });
+        let (mut facade, _) = facade(local.clone()).await;
+        wait_for_snapshot(&facade.core).await;
+        let document = serde_yaml_ng::from_str("mode: rule\n").unwrap();
+        let spec = CoreSpec {
+            kind: CoreKind::Mihomo,
+            binary_path: Utf8PathBuf::from("fake-mihomo"),
+            version: None,
+            features: vec![],
+        };
+        facade
+            .reconcile(&intent(&document), spec, &facade.core_status())
+            .await
+            .unwrap();
+        let submissions = local.submissions.lock().unwrap();
+        let CoreCommand::Reconcile(request) = &submissions[0].envelope.command else {
+            panic!("expected reconcile");
+        };
+        assert_eq!(request.expected_applied, None);
+    }
+
+    #[tokio::test]
+    async fn prepare_service_host_does_not_transfer_core_ownership() {
+        let local = RecordingEndpoint::new(ExecutionHost::Local, None);
+        let (mut facade, _) = facade(local).await;
+        wait_for_snapshot(&facade.core).await;
+        let owner_before = facade.core_status().host;
+        facade
+            .prepare_service_host()
+            .await
+            .expect("ready service is prepared without a host handoff");
+        assert_eq!(facade.core_status().host, owner_before);
     }
 
     #[tokio::test]

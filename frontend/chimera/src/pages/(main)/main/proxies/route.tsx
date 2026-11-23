@@ -14,15 +14,19 @@
 import { ProxyMode, useNativeProxies, useProxyMode } from '@chimera/interface';
 import { cn } from '@chimera/ui';
 import { Button } from '@chimera/ui/button';
+import { EmptyState } from '@chimera/ui/empty-state';
 import { AppContentScrollArea } from '@chimera/ui/scroll-area';
 import { createFileRoute, Link } from '@tanstack/react-router';
 import BoxOutlineRounded from '~icons/material-symbols/box-outline-rounded';
 import DirectionsRunRounded from '~icons/material-symbols/directions-run-rounded';
+import { z } from 'zod';
 import { AnimatedOutletPreset } from '@/components/router/animated-outlet';
 import { Sidebar, SidebarContent } from '@/components/ui/sidebar';
 import { useLockFn } from '@/hooks/use-lock-fn';
 import * as m from '@/paraglide/messages';
 import { ProfileType } from '../profiles/_modules/consts';
+import ProxiesDndProvider from './_modules/proxies-dnd-provider';
+import ProxiesLayoutProvider from './_modules/proxies-layout-provider';
 import ProxiesNavigate from './_modules/proxies-navigate';
 
 /**
@@ -33,6 +37,7 @@ import ProxiesNavigate from './_modules/proxies-navigate';
  */
 export const Route = createFileRoute('/(main)/main/proxies')({
   component: RouteComponent,
+  validateSearch: z.object({ q: z.string().optional() }),
 });
 
 /**
@@ -58,21 +63,18 @@ const Empty = () => {
   });
 
   return (
-    <div
-      className="absolute inset-0 flex flex-col items-center justify-center gap-4"
+    <EmptyState
+      className="absolute inset-0"
       data-slot="proxies-no-proxies"
+      icon={Icon}
+      message={
+        <span data-slot="proxies-no-proxies-message">
+          {proxyMode.value.direct
+            ? m.proxies_group_direct_message()
+            : m.proxies_group_empty_message()}
+        </span>
+      }
     >
-      <Icon className="text-surface-variant size-16" />
-
-      <p
-        className="text-surface-variant text-sm"
-        data-slot="proxies-no-proxies-message"
-      >
-        {proxyMode.value.direct
-          ? m.proxies_group_direct_message()
-          : m.proxies_group_empty_message()}
-      </p>
-
       {proxyMode.value.direct ? (
         <div className="flex items-center gap-2">
           <Button
@@ -102,7 +104,7 @@ const Empty = () => {
           </Link>
         </Button>
       )}
-    </div>
+    </EmptyState>
   );
 };
 
@@ -129,44 +131,48 @@ function RouteComponent() {
   const proxyMode = useProxyMode();
 
   return (
-    <Sidebar data-slot="proxies-container">
-      {/* 左侧侧边栏：代理组列表（仅在 Rule/Script 模式且有组时显示） */}
-      {!isNoProxies && (proxyMode.value.rule || proxyMode.value.script) && (
-        <SidebarContent
-          className="bg-surface-variant/10"
-          data-slot="proxies-sidebar-scroll-area"
-        >
-          <ProxiesNavigate />
-        </SidebarContent>
-      )}
+    <ProxiesLayoutProvider>
+      <ProxiesDndProvider>
+        <Sidebar data-slot="proxies-container">
+          {/* 左侧侧边栏：代理组列表（仅在 Rule/Script 模式且有组时显示） */}
+          {!isNoProxies && (proxyMode.value.rule || proxyMode.value.script) && (
+            <SidebarContent
+              className="bg-surface-variant/50 dark:bg-transparent"
+              data-slot="proxies-sidebar-scroll-area"
+            >
+              <ProxiesNavigate />
+            </SidebarContent>
+          )}
 
-      {/* 
+          {/*
         右侧内容区域：代理节点详情
         使用 AppContentScrollArea 匹配 ref 的滚动管理方式
         空状态或直连模式时显示 Empty 组件
       */}
-      <AppContentScrollArea
-        className={cn(
-          'group/proxies-content flex-[3_1_auto]',
-          // 为 AnimatedOutletPreset 过渡动画保留 overflow-clip
-          'overflow-clip',
-        )}
-        data-slot="proxies-content-scroll-area"
-      >
-        {isNoProxies || proxyMode.value.direct ? (
-          <Empty />
-        ) : (
-          <div
+          <AppContentScrollArea
             className={cn(
-              'container mx-auto w-full min-w-full',
-              'flex min-h-full flex-col',
+              'group/proxies-content flex-[3_1_0%]',
+              // 为 AnimatedOutletPreset 过渡动画保留 overflow-clip
+              'overflow-clip',
             )}
-            data-slot="proxies-content"
+            data-slot="proxies-content-scroll-area"
           >
-            <AnimatedOutletPreset className="flex flex-1 flex-col" />
-          </div>
-        )}
-      </AppContentScrollArea>
-    </Sidebar>
+            {isNoProxies || proxyMode.value.direct ? (
+              <Empty />
+            ) : (
+              <div
+                className={cn(
+                  'container mx-auto w-full min-w-full',
+                  'flex min-h-full flex-col',
+                )}
+                data-slot="proxies-content"
+              >
+                <AnimatedOutletPreset className="flex flex-1 flex-col" />
+              </div>
+            )}
+          </AppContentScrollArea>
+        </Sidebar>
+      </ProxiesDndProvider>
+    </ProxiesLayoutProvider>
   );
 }

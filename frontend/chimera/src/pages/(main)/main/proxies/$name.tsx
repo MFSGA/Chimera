@@ -20,6 +20,7 @@
  */
 
 import {
+  useKvStorage,
   useNativeProxies,
   useNativeProxyActions,
   useProxyMode,
@@ -37,15 +38,29 @@ import { useVirtualizer } from '@tanstack/react-virtual';
 import ArrowDownwardAltRounded from '~icons/material-symbols/arrow-downward-alt-rounded';
 import ArrowUpwardAltRounded from '~icons/material-symbols/arrow-upward-alt-rounded';
 import KeepOffRounded from '~icons/material-symbols/keep-off-rounded';
-import Radar from '~icons/material-symbols/radar';
 import { filesize } from 'filesize';
-import { useCallback, useMemo, useRef } from 'react';
+import { useCallback, useDeferredValue, useMemo, useState } from 'react';
 import { useLockFn } from '@/hooks/use-lock-fn';
 import { formatError } from '@/utils';
 import { message } from '@/utils/notification';
+import { useSearchTerm } from '../_modules/use-search-term';
 import DelayTestButton from './_modules/delay-test-button';
 import GroupHeader from './_modules/group-header';
 import { useCurrentGroupConnection } from './_modules/hooks';
+import {
+  DEFAULT_NODE_VIEW,
+  NODE_VIEW_KV_KEY,
+  toNodeView,
+  visibleMembers,
+  type NodeView,
+} from './_modules/node-list';
+import {
+  HideUnavailableButton,
+  LocateCurrentNodeButton,
+  NoMatchingNodes,
+  SearchNodesButton,
+  SortNodesButton,
+} from './_modules/node-list-toolbar';
 import ProxyNodeButton from './_modules/proxy-node-button';
 
 /**
@@ -72,6 +87,40 @@ export const Route = createFileRoute('/(main)/main/proxies/$name')({
 function RouteComponent() {
   // 从路由参数中获取代理组名称
   const { name: proxyGroupName } = Route.useParams();
+  const { q } = Route.useSearch();
+  const navigate = Route.useNavigate();
+  const writeQuery = useCallback(
+    (next: string | undefined) =>
+      navigate({
+        search: (previous) => ({ ...previous, q: next }),
+        replace: true,
+      }),
+    [navigate],
+  );
+  const [search, setSearch] = useSearchTerm(q, writeQuery);
+  const deferredSearch = useDeferredValue(search);
+  const [searchOpen, setSearchOpen] = useState(Boolean(q));
+  const handleSearchOpenChange = useCallback(
+    (open: boolean) => {
+      setSearchOpen(open);
+      // Closing the field must not leave a hidden URL filter active.
+      if (!open) setSearch('');
+    },
+    [setSearch],
+  );
+  const [storedView, setView] = useKvStorage<NodeView>(
+    NODE_VIEW_KV_KEY,
+    DEFAULT_NODE_VIEW,
+    { migrate: toNodeView },
+  );
+  const handleViewChange = useCallback(
+    async (next: NodeView) => {
+      if (!(await setView(next))) {
+        await message('Unable to save the proxy node view', { kind: 'error' });
+      }
+    },
+    [setView],
+  );
 
   const { data: proxies } = useNativeProxies();
   const { selectProxy, clearProxyFixed, isClearingFixed, updateProxiesDelay } =
@@ -150,31 +199,41 @@ function RouteComponent() {
     4,
   );
 
-  // 初始化 @tanstack/react-virtual 多列虚拟化
+  const members = useMemo(
+    () =>
+      currentGroup && proxies
+        ? visibleMembers({
+            group: currentGroup,
+            proxies,
+            query: deferredSearch,
+            view: storedView,
+          })
+        : [],
+    [currentGroup, proxies, deferredSearch, storedView],
+  );
+
+  // Ref's cards are fixed-height: measuring each visible card forces layout.
   const virtualizer = useVirtualizer({
-    count: currentGroup?.all?.length || 0,
+    count: members.length,
     getScrollElement: () => viewportElement,
-    estimateSize: () => 60,
+    estimateSize: () => 64,
     overscan: 5,
     lanes,
-    measureElement: (element) => element?.getBoundingClientRect().height,
   });
 
   const virtualItems = virtualizer.getVirtualItems();
-
-  // 滚动到当前选中节点（便于用户在列表中快速定位）
+  const currentIndex = currentGroup?.now
+    ? members.indexOf(currentGroup.now)
+    : -1;
   const handleScrollToCurrentNode = useCallback(() => {
-    const index = currentGroup?.all.findIndex(
-      (name) => name === currentGroup.now,
-    );
-
-    if (index !== undefined && index >= 0) {
-      virtualizer.scrollToIndex(index, {
+    if (currentIndex >= 0) {
+      virtualizer.scrollToIndex(currentIndex, {
         align: 'center',
         behavior: 'smooth',
       });
     }
-  }, [currentGroup?.all, currentGroup?.now, virtualizer]);
+  }, [currentIndex, virtualizer]);
+  const noMatch = members.length === 0 && Boolean(currentGroup?.all.length);
 
   // 获取经过当前组的连接流量（用于显示 download/upload 速率）
   const currentGroupConnection = useCurrentGroupConnection(currentGroup);
@@ -229,57 +288,79 @@ function RouteComponent() {
 
         <div className="flex-1" />
 
-        {/* 滚动到当前节点按钮 */}
-        <Button icon className="size-8" onClick={handleScrollToCurrentNode}>
-          <Radar className="size-4" />
-        </Button>
+        <div className="flex shrink-0 items-center gap-1">
+          <SearchNodesButton
+            search={search}
+            onSearchChange={setSearch}
+            open={searchOpen}
+            onOpenChange={handleSearchOpenChange}
+          />
+          <SortNodesButton
+            view={storedView}
+            onViewChange={(next) => void handleViewChange(next)}
+          />
+          <HideUnavailableButton
+            pressed={storedView.hideUnavailable}
+            onPressedChange={(hideUnavailable) =>
+              void handleViewChange({ ...storedView, hideUnavailable })
+            }
+          />
+          <LocateCurrentNodeButton
+            disabled={currentIndex === -1}
+            onLocate={handleScrollToCurrentNode}
+          />
+        </div>
       </GroupHeader>
 
       {/*
         虚拟化网格容器
         使用 @tanstack/react-virtual 的多列 lanes 布局
       */}
-      <div
-        className="relative m-2"
-        data-slot="proxies-virtual-list"
-        style={{
-          width: 'calc(100% - 16px)',
-          height: `${virtualizer.getTotalSize()}px`,
-        }}
-      >
-        {virtualItems.map((virtualItem) => {
-          const proxyName = currentGroup?.all[virtualItem.index];
-          const proxy = proxyName ? proxies?.nodes[proxyName] : undefined;
+      {noMatch ? (
+        <NoMatchingNodes />
+      ) : (
+        <div
+          className="relative m-2"
+          data-slot="proxies-virtual-list"
+          style={{
+            width: 'calc(100% - 16px)',
+            height: `${virtualizer.getTotalSize()}px`,
+          }}
+        >
+          {virtualItems.map((virtualItem) => {
+            const proxyName = members[virtualItem.index];
+            const proxy = proxyName ? proxies?.nodes[proxyName] : undefined;
 
-          if (!proxy) {
-            return null;
-          }
+            if (!proxy) {
+              return null;
+            }
 
-          return (
-            <div
-              key={virtualItem.index}
-              ref={virtualizer.measureElement}
-              className="group absolute top-0 left-0 p-1"
-              style={{
-                transform: `translateY(${virtualItem.start}px)`,
-                width: `${100 / lanes}%`,
-                left: `${virtualItem.lane * (100 / lanes)}%`,
-              }}
-              data-index={virtualItem.index}
-              data-slot="proxies-virtual-item"
-              data-active={String(proxy.name === currentGroup?.now)}
-            >
-              <ProxyNodeButton
-                proxy={proxy}
-                selectable={selectable}
-                fixed={currentGroup?.fixed === proxy.name}
-                onSelect={handleSelectProxy}
-                onDelayTest={handleDelayTest}
-              />
-            </div>
-          );
-        })}
-      </div>
+            return (
+              <div
+                key={virtualItem.index}
+                className="group absolute top-0 left-0 p-1"
+                style={{
+                  height: `${virtualItem.size}px`,
+                  transform: `translateY(${virtualItem.start}px)`,
+                  width: `${100 / lanes}%`,
+                  left: `${virtualItem.lane * (100 / lanes)}%`,
+                }}
+                data-index={virtualItem.index}
+                data-slot="proxies-virtual-item"
+                data-active={String(proxy.name === currentGroup?.now)}
+              >
+                <ProxyNodeButton
+                  proxy={proxy}
+                  selectable={selectable}
+                  fixed={currentGroup?.fixed === proxy.name}
+                  onSelect={handleSelectProxy}
+                  onDelayTest={handleDelayTest}
+                />
+              </div>
+            );
+          })}
+        </div>
+      )}
 
       {/* 浮动延迟测试按钮 */}
       <DelayTestButton groupName={currentGroup?.name} />

@@ -1,0 +1,314 @@
+//! Pure RuntimeArtifact mapping following ref client/artifact_snapshot.rs.
+//! Chimera keeps the legacy output layout and Mapping document until its
+//! RuntimeBuild and snapshot storage representation move together.
+
+use anyhow::{Context, Result};
+use chimera_config::{
+    profile::{ConfigDefinition, ProfileDefinition, ProfileId, Profiles},
+    runtime::{
+        executor::{RuntimeArtifact, StepLog, StepLogLevel},
+        snapshot::SnapshotNodeKey,
+    },
+};
+use indexmap::IndexMap;
+use serde::{Deserialize, Serialize};
+
+use super::runtime_inspection::RuntimeInspectionData;
+
+// Legacy frontend wire keys are strings. Keep the previous ProfileUid alias
+// instead of changing the serialized map to the typed ProfileId newtype.
+type ProfileUid = String;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "lowercase")]
+pub enum LogSpan {
+    Log,
+    Info,
+    Warn,
+    Error,
+}
+
+pub type Logs = Vec<(LogSpan, String)>;
+
+#[derive(Default, Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+/// 后处理输出
+pub struct PostProcessingOutput {
+    /// Per-source transform chain output, keyed by source profile UID and transform UID.
+    pub scopes: IndexMap<ProfileUid, IndexMap<ProfileUid, Logs>>,
+    /// Global transform chain output, keyed by transform UID.
+    pub global: IndexMap<ProfileUid, Logs>,
+}
+
+fn span(level: StepLogLevel) -> LogSpan {
+    match level {
+        StepLogLevel::Log => LogSpan::Log,
+        StepLogLevel::Info => LogSpan::Info,
+        StepLogLevel::Warn => LogSpan::Warn,
+        StepLogLevel::Error => LogSpan::Error,
+    }
+}
+
+fn transform_uid_of(profiles: &Profiles, host: &ProfileId, step_index: u32) -> Option<String> {
+    let item = profiles.items.get(host)?;
+    let list = match &item.definition {
+        ProfileDefinition::Config {
+            config: ConfigDefinition::File(file),
+        } => &file.transforms,
+        ProfileDefinition::Config {
+            config: ConfigDefinition::Composition(composition),
+        } => &composition.transforms,
+        _ => return None,
+    };
+    list.get(step_index as usize).map(|uid| uid.0.clone())
+}
+
+pub fn map_postprocessing(
+    step_logs: &[StepLog],
+    profiles: &Profiles,
+    builtin_names: &[String],
+) -> PostProcessingOutput {
+    let mut output = PostProcessingOutput::default();
+    for log in step_logs {
+        let logs: Logs = log
+            .entries
+            .iter()
+            .map(|entry| (span(entry.level), entry.message.clone()))
+            .collect();
+        if logs.is_empty() {
+            continue;
+        }
+        match &log.key {
+            SnapshotNodeKey::ScopedTransform {
+                host_profile_id,
+                step_index,
+                ..
+            } => {
+                let transform = transform_uid_of(profiles, host_profile_id, *step_index)
+                    .unwrap_or_else(|| format!("step-{step_index}"));
+                output
+                    .scopes
+                    .entry(host_profile_id.0.clone())
+                    .or_default()
+                    .insert(transform, logs);
+            }
+            SnapshotNodeKey::GlobalTransform { step_index, .. } => {
+                let uid = profiles
+                    .global_transforms
+                    .get(*step_index as usize)
+                    .map(|uid| uid.0.clone())
+                    .unwrap_or_else(|| format!("global-{step_index}"));
+                output.global.insert(uid, logs);
+            }
+            SnapshotNodeKey::BuiltinTransform { step_index, .. } => {
+                let name = builtin_names
+                    .get(*step_index as usize)
+                    .cloned()
+                    .unwrap_or_else(|| format!("builtin-{step_index}"));
+                output.global.insert(name, logs);
+            }
+            _ => {}
+        }
+    }
+    output
+}
+
+/// The validated runtime build's legacy projection, without any I/O or
+/// dependency on Tauri's transform/script execution layer.
+#[derive(Debug, Clone)]
+pub struct ArtifactSnapshotData {
+    pub config: serde_yaml::Mapping,
+    pub exists_keys: Vec<String>,
+    pub postprocessing_output: PostProcessingOutput,
+    pub inspection: RuntimeInspectionData,
+}
+
+/// Convert a built executor artifact to the promoted snapshot data model.
+/// `builtin_names` come from the caller's core-specific builtin table.
+pub fn artifact_to_snapshot_data(
+    artifact: RuntimeArtifact,
+    profiles: &Profiles,
+    builtin_names: &[String],
+) -> Result<ArtifactSnapshotData> {
+    let RuntimeArtifact {
+        final_config,
+        graph,
+        step_logs,
+        applied_fields,
+        ..
+    } = artifact;
+    let value = serde_yaml::to_value(final_config.to_json())
+        .context("failed to serialize final runtime config")?;
+    let mapping = value
+        .as_mapping()
+        .cloned()
+        .context("final runtime config is not a mapping")?;
+    let output = map_postprocessing(&step_logs, profiles, builtin_names);
+    let exists_keys = applied_fields.into_iter().collect();
+    Ok(ArtifactSnapshotData {
+        config: mapping,
+        exists_keys,
+        postprocessing_output: output,
+        inspection: RuntimeInspectionData {
+            final_node: graph
+                .nodes
+                .iter()
+                .rposition(|node| {
+                    matches!(
+                        &node.tag,
+                        chimera_config::runtime::snapshot::OperatorTag::BuiltinStep {
+                            step: chimera_config::runtime::snapshot::BuiltinStepKind::Finalizing,
+                            ..
+                        }
+                    )
+                })
+                .context("runtime inspection graph has no finalizing step")?
+                as u32,
+            graph,
+            step_logs,
+        },
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use chimera_config::runtime::{
+        executor::{StepLog, StepLogEntry},
+        snapshot::{BuiltinStepKind, ConfigExecutionRole, ConfigSnapshotsBuilder, OperatorTag},
+        value::ConfigValue,
+    };
+    use indexmap::IndexSet;
+
+    use super::*;
+
+    fn log(key: SnapshotNodeKey, level: StepLogLevel, message: &str) -> StepLog {
+        StepLog {
+            key,
+            entries: vec![StepLogEntry::new(level, message)],
+        }
+    }
+
+    #[test]
+    fn ref_log_keys_keep_chimera_legacy_scope_global_and_builtin_layout() {
+        let profiles = Profiles::default();
+        let host = ProfileId("source".into());
+        let logs = vec![
+            log(
+                SnapshotNodeKey::ScopedTransform {
+                    host_profile_id: host.clone(),
+                    role: ConfigExecutionRole::Selected,
+                    step_index: 2,
+                },
+                StepLogLevel::Warn,
+                "source transform",
+            ),
+            log(
+                SnapshotNodeKey::GlobalTransform {
+                    selected_profile_id: Some(host.clone()),
+                    step_index: 1,
+                },
+                StepLogLevel::Error,
+                "global transform",
+            ),
+            log(
+                SnapshotNodeKey::BuiltinTransform {
+                    selected_profile_id: Some(host),
+                    step_index: 0,
+                },
+                StepLogLevel::Info,
+                "built-in transform",
+            ),
+            log(
+                SnapshotNodeKey::BareRoot,
+                StepLogLevel::Log,
+                "nontransform diagnostic",
+            ),
+        ];
+        let output = map_postprocessing(&logs, &profiles, &["config_fixer".to_owned()]);
+        assert_eq!(
+            output.scopes["source"]["step-2"],
+            [(LogSpan::Warn, "source transform".into())]
+        );
+        assert_eq!(
+            output.global["global-1"],
+            [(LogSpan::Error, "global transform".into())]
+        );
+        assert_eq!(
+            output.global["config_fixer"],
+            [(LogSpan::Info, "built-in transform".into())]
+        );
+        // The legacy frontend wire contract intentionally lacks ref's advice field.
+        assert_eq!(output.global.len(), 2);
+        assert_eq!(output.scopes.len(), 1);
+        assert!(
+            serde_json::to_value(&output)
+                .unwrap()
+                .get("advice")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn artifact_mapping_keeps_finalizing_node_and_applied_field_order() {
+        let root = Arc::new(ConfigValue::try_from(serde_json::json!({"mode": "rule"})).unwrap());
+        let final_config =
+            Arc::new(ConfigValue::try_from(serde_json::json!({"mode": "global"})).unwrap());
+        let mut builder = ConfigSnapshotsBuilder::new_root(root, OperatorTag::BareRoot);
+        builder
+            .push(
+                OperatorTag::BuiltinStep {
+                    selected_profile_id: None,
+                    step: BuiltinStepKind::Finalizing,
+                },
+                final_config.clone(),
+            )
+            .unwrap();
+        let graph = builder.build().unwrap();
+        let fields: IndexSet<String> = ["mixed-port", "tun", "dns"]
+            .into_iter()
+            .map(str::to_owned)
+            .collect();
+        let data = artifact_to_snapshot_data(
+            RuntimeArtifact {
+                final_config,
+                graph,
+                step_logs: Vec::new(),
+                applied_fields: fields,
+                transform_failures: Vec::new(),
+            },
+            &Profiles::default(),
+            &[],
+        )
+        .unwrap();
+        assert_eq!(
+            data.config.get(serde_yaml::Value::String("mode".into())),
+            Some(&serde_yaml::Value::String("global".into()))
+        );
+        assert_eq!(data.exists_keys, ["mixed-port", "tun", "dns"]);
+        assert_eq!(data.inspection.final_node, 1);
+        assert!(data.postprocessing_output.scopes.is_empty());
+        assert!(data.postprocessing_output.global.is_empty());
+    }
+
+    #[test]
+    fn an_artifact_without_finalizing_node_fails_instead_of_publishing() {
+        let config = Arc::new(ConfigValue::try_from(serde_json::json!({"mode": "rule"})).unwrap());
+        let graph = ConfigSnapshotsBuilder::new_root(config.clone(), OperatorTag::BareRoot)
+            .build()
+            .unwrap();
+        let error = artifact_to_snapshot_data(
+            RuntimeArtifact {
+                final_config: config,
+                graph,
+                step_logs: Vec::new(),
+                applied_fields: IndexSet::new(),
+                transform_failures: Vec::new(),
+            },
+            &Profiles::default(),
+            &[],
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("no finalizing step"));
+    }
+}

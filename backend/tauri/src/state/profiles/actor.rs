@@ -7,9 +7,9 @@ use chimera_config::profile::{
     ConfigDefinition, ExternalMode, FileConfig, FolderId, LocalBinding, ManagedProfilePath,
     MaterializedFile, ProfileDefinition, ProfileDependencyIndex, ProfileFolder, ProfileId,
     ProfileItem, ProfileLayout, ProfileMetadata, ProfileMetadataPatch, ProfileRevisionError,
-    ProfileSource, ProfileValidationError, Profiles, RemoteProfileOptions,
-    RemoteProfileOptionsPatch, RemoteSyncInterval, ScriptRuntime, SubscriptionInfo,
-    TransformDefinition,
+    ProfileSource, ProfileValidationError, Profiles, ProxyGroupFolder, ProxyGroupLayout,
+    RemoteProfileOptions, RemoteProfileOptionsPatch, RemoteSyncInterval, ScriptRuntime,
+    SubscriptionInfo, TransformDefinition,
 };
 use chimera_core::state::{PersistentStateManager, ReplaceIfVersionResult, Version};
 use chimera_core_manager::OperationId;
@@ -281,6 +281,17 @@ pub enum ProfilesActorMessage {
         members: Vec<ProfileId>,
         reply: RpcReplyPort<Result<(CommitReport, FolderId), ProfilesError>>,
     },
+    SetProxyGroupLayout {
+        profile: ProfileId,
+        layout: ProxyGroupLayout,
+        reply: RpcReplyPort<Result<CommitReport, ProfilesError>>,
+    },
+    CreateProxyGroupFolder {
+        profile: ProfileId,
+        name: String,
+        members: Vec<String>,
+        reply: RpcReplyPort<Result<(CommitReport, FolderId), ProfilesError>>,
+    },
     PatchMetadata {
         uid: ProfileId,
         patch: ProfileMetadataPatch,
@@ -360,40 +371,7 @@ impl ProfilesActor {
     }
 
     pub(crate) fn current_closure(profiles: &Profiles) -> indexmap::IndexSet<ProfileId> {
-        let mut closure: indexmap::IndexSet<ProfileId> =
-            profiles.global_transforms.iter().cloned().collect();
-        let Some(current) = &profiles.current else {
-            return closure;
-        };
-
-        closure.insert(current.clone());
-        let mut configs = vec![current.clone()];
-        if let Some(item) = profiles.items.get(current)
-            && let ProfileDefinition::Config {
-                config: ConfigDefinition::Composition(composition),
-            } = &item.definition
-        {
-            if let Some(base) = &composition.base {
-                closure.insert(base.clone());
-                configs.push(base.clone());
-            }
-            for member in &composition.extend_proxies_from {
-                closure.insert(member.clone());
-                configs.push(member.clone());
-            }
-        }
-
-        for config in configs {
-            if let Some(item) = profiles.items.get(&config)
-                && let ProfileDefinition::Config { config } = &item.definition
-            {
-                for transform in config.transforms() {
-                    closure.insert(transform.clone());
-                }
-            }
-        }
-
-        closure
+        chimera_core::client::runtime_build_port::current_profile_closure(profiles)
     }
 
     fn evaluate_affects(rule: &AffectsRule, before: &Profiles, after: &Profiles) -> bool {
@@ -1066,6 +1044,15 @@ impl ProfilesActor {
         }
     }
 
+    fn generate_proxy_group_folder_id(layout: &ProxyGroupLayout) -> FolderId {
+        loop {
+            let candidate = FolderId(format!("f{}", nanoid::nanoid!(11)));
+            if layout.folders.iter().all(|folder| folder.id != candidate) {
+                return candidate;
+            }
+        }
+    }
+
     /// Attach a new Config to a folder before the source transaction commits.
     /// Missing folders reject the entire add/import; never persist an orphan.
     fn join_folder(
@@ -1380,6 +1367,8 @@ impl Actor for ProfilesActor {
                     profiles.current = next.current;
                     profiles.global_transforms = next.global_transforms;
                     profiles.valid = next.valid;
+                    profiles.folders = next.folders;
+                    profiles.proxy_group_layouts = next.proxy_group_layouts;
                     profiles.items = next.items;
                     Ok(AffectsRule::Always)
                 })
@@ -1566,6 +1555,53 @@ impl Actor for ProfilesActor {
                     profiles
                         .apply_layout(ProfileLayout { folders, ungrouped })
                         .map_err(ProfilesError::ValidationFailed)?;
+                    Ok(AffectsRule::Never)
+                })
+                .await
+                .map(|report| (report, folder_id));
+                let _ = reply.send(result);
+            }
+            ProfilesActorMessage::SetProxyGroupLayout {
+                profile,
+                layout,
+                reply,
+            } => {
+                let result = Self::run_state_write(&myself, state, move |profiles| {
+                    if layout.is_empty() {
+                        profiles.proxy_group_layouts.shift_remove(&profile);
+                    } else {
+                        profiles.proxy_group_layouts.insert(profile, layout);
+                    }
+                    Ok(AffectsRule::Never)
+                })
+                .await;
+                let _ = reply.send(result);
+            }
+            ProfilesActorMessage::CreateProxyGroupFolder {
+                profile,
+                name,
+                members,
+                reply,
+            } => {
+                let id = Self::generate_proxy_group_folder_id(
+                    Self::current_state(state)
+                        .proxy_group_layouts
+                        .get(&profile)
+                        .unwrap_or(&ProxyGroupLayout::default()),
+                );
+                let folder_id = id.clone();
+                let result = Self::run_state_write(&myself, state, move |profiles| {
+                    let mut layout = profiles
+                        .proxy_group_layouts
+                        .get(&profile)
+                        .cloned()
+                        .unwrap_or_default();
+                    layout.ungrouped.retain(|group| !members.contains(group));
+                    for folder in &mut layout.folders {
+                        folder.members.retain(|group| !members.contains(group));
+                    }
+                    layout.folders.push(ProxyGroupFolder { id, name, members });
+                    profiles.proxy_group_layouts.insert(profile, layout);
                     Ok(AffectsRule::Never)
                 })
                 .await

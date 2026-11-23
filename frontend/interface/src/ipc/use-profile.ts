@@ -16,11 +16,13 @@ import {
   type ProfileLayout,
   type ProfileMetadataPatch_Deserialize,
   type ProfileSource_Serialize,
+  type ProxyGroupLayout,
   type RemoteProfileImportMode,
   type RemoteProfileOptionsPatch_Deserialize,
 } from './bindings.js';
 import { remoteProfileDefinitionOf } from './profile-definition.js';
 import { applyProfileLayout } from './profile-folders.js';
+import { applyProxyGroupLayout } from './proxy-group-layout.js';
 import { mutations, queries } from './query-bindings.js';
 import { invokeMutation, invokeQuery } from './query-options.js';
 
@@ -129,6 +131,8 @@ export const useProfile = (options?: { without_helper_fn?: boolean }) => {
   const reorderProfilesByList = mutations.reorderProfilesByList;
   const setProfileLayout = mutations.setProfileLayout;
   const createProfileFolder = mutations.createProfileFolder;
+  const setProxyGroupLayoutMutation = mutations.setProxyGroupLayout;
+  const createProxyGroupFolderMutation = mutations.createProxyGroupFolder;
   const deleteProfile = mutations.deleteProfile;
   const invalidate = () =>
     queryClient.invalidateQueries({ queryKey: profilesOptions.queryKey });
@@ -321,6 +325,70 @@ export const useProfile = (options?: { without_helper_fn?: boolean }) => {
     onSuccess: invalidate,
   });
 
+  // The proxy group arrangement is presentation-only, and its mutation must
+  // stay serialized with an optimistic document visible to every UI window.
+  const setProxyGroupLayout = useMutation({
+    mutationKey: setProxyGroupLayoutMutation.mutationKey,
+    scope: { id: 'proxy-group-layout' },
+    mutationFn: async ({
+      profile,
+      layout,
+    }: {
+      profile: ProfileId;
+      layout: ProxyGroupLayout;
+    }) =>
+      unwrapResult(
+        await invokeMutation(setProxyGroupLayoutMutation, [profile, layout]),
+      ),
+    onMutate: async ({ profile, layout }) => {
+      const queryKey = profilesOptions.queryKey;
+      await queryClient.cancelQueries({ queryKey });
+      const previous = queryClient.getQueryData<ProfileQueryData>(queryKey);
+      if (previous) {
+        queryClient.setQueryData<ProfileQueryData>(
+          queryKey,
+          applyProxyGroupLayout(previous, profile, layout),
+        );
+      }
+      return { previous };
+    },
+    onError: (_error, _args, context) => {
+      if (context?.previous) {
+        queryClient.setQueryData<ProfileQueryData>(
+          profilesOptions.queryKey,
+          context.previous,
+        );
+      }
+    },
+    onSettled: () => {
+      const queued = queryClient.isMutating({
+        mutationKey: setProxyGroupLayoutMutation.mutationKey,
+      });
+      return queued > 1 ? undefined : invalidate();
+    },
+  });
+
+  const createProxyGroupFolder = useMutation({
+    mutationKey: createProxyGroupFolderMutation.mutationKey,
+    mutationFn: async ({
+      profile,
+      name,
+      members,
+    }: {
+      profile: ProfileId;
+      name: string;
+      members: string[];
+    }) =>
+      unwrapResult(
+        await invokeMutation(createProxyGroupFolderMutation, [
+          profile,
+          name,
+          members,
+        ]),
+      ),
+    onSuccess: invalidate,
+  });
+
   const drop = useMutation({
     mutationKey: deleteProfile.mutationKey,
     mutationFn: async (uid: ProfileId) =>
@@ -341,6 +409,8 @@ export const useProfile = (options?: { without_helper_fn?: boolean }) => {
     sort,
     setLayout,
     createFolder,
+    setProxyGroupLayout,
+    createProxyGroupFolder,
     drop,
   };
 };

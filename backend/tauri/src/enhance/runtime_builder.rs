@@ -5,20 +5,18 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use chimera_config::{
     application::ChimeraAppConfig,
-    clash::config::{
-        ClashConfig, TransparentProxyMode, TransparentProxyValidationError, tun_stack::TunStack,
-    },
+    clash::config::{ClashConfig, tun_stack::TunStack},
     profile::Profiles,
     runtime::executor::{
-        BuiltinTransform, ExecutionTarget, GuardInputs, PortError, ProfileContentSource,
-        ResolvedPortBindings, RuntimeArtifact, RuntimePipelineError, RuntimePipelineInputs,
-        ScriptRunner, TransformFailure, TunFlavor, TunParams, execute,
+        BuiltinTransform, ProfileContentSource, ResolvedPortBindings, RuntimeArtifact,
+        ScriptRunner, TunFlavor,
     },
-    runtime::snapshot::OperatorTag,
 };
+
+pub use chimera_core::client::runtime_build::{RuntimeBuildError, RuntimeBuildInput};
 
 use crate::{
     config::chimera::ClashCore as LegacyClashCore,
@@ -28,36 +26,6 @@ use crate::{
     },
     utils::dirs,
 };
-
-#[derive(Debug, thiserror::Error)]
-pub enum RuntimeBuildError {
-    #[error("profiles snapshot failed validation: {0:?}")]
-    Validation(Vec<chimera_config::profile::ProfileValidationError>),
-    #[error("transparent proxy settings are invalid: {0}")]
-    ValidateTransparentProxy(#[from] TransparentProxyValidationError),
-    #[error("transparent capture requires service mode")]
-    TransparentProxyRequiresServiceMode,
-    #[error(transparent)]
-    Pipeline(#[from] RuntimePipelineError),
-    #[error("runtime candidate contains failed transforms: {failures:?}")]
-    TransformsFailed {
-        failures: Vec<TransformFailure>,
-        logs: Vec<RuntimeBuildLog>,
-    },
-}
-
-#[derive(Debug, Clone)]
-pub struct RuntimeBuildLog {
-    pub tag: OperatorTag,
-    pub entries: Vec<chimera_config::runtime::executor::StepLogEntry>,
-}
-
-pub struct RuntimeBuildInput {
-    pub profiles: Arc<Profiles>,
-    pub clash: ClashConfig,
-    pub app: ChimeraAppConfig,
-    pub resolved_ports: ResolvedPortBindings,
-}
 
 const MIHOMO_FAMILY: &[chimera_config::application::ClashCore] = &[
     chimera_config::application::ClashCore::Mihomo,
@@ -123,58 +91,20 @@ pub fn builtin_transforms_for(
         .collect()
 }
 
-/// Legacy TUN derivation, including Premium+Mixed -> Gvisor.
+/// Legacy TUN derivation delegated to the shared ref-style builder.
 pub fn derive_tun_flavor(
     core: chimera_config::application::ClashCore,
     stack: TunStack,
 ) -> TunFlavor {
-    if core == chimera_config::application::ClashCore::ClashRs {
-        return TunFlavor::ClashRs;
-    }
-    if matches!(
-        core,
-        chimera_config::application::ClashCore::ChimeraClient
-            | chimera_config::application::ClashCore::ChimeraClientAlpha
-    ) {
-        return TunFlavor::ChimeraClient;
-    }
-    let stack = if core == chimera_config::application::ClashCore::ClashPremium
-        && stack == TunStack::Mixed
-    {
-        TunStack::Gvisor
-    } else {
-        stack
-    };
-    TunFlavor::Standard { stack }
+    chimera_core::client::runtime_build::derive_tun_flavor(core, stack)
 }
 
+/// Tauri shell: chooses bundled scripts, delegates the pure build to Core.
 pub struct RuntimeBuilder;
 
 impl RuntimeBuilder {
-    /// Retain the rejected candidate's diagnostics without publishing its output.
     pub fn validate_transforms(artifact: &RuntimeArtifact) -> Result<(), RuntimeBuildError> {
-        if artifact.transform_failures.is_empty() {
-            return Ok(());
-        }
-        let logs = artifact
-            .step_logs
-            .iter()
-            .map(|log| RuntimeBuildLog {
-                tag: artifact
-                    .graph
-                    .nodes
-                    .iter()
-                    .find(|node| node.key == log.key)
-                    .expect("executor logs must belong to a snapshot node")
-                    .tag
-                    .clone(),
-                entries: log.entries.clone(),
-            })
-            .collect();
-        Err(RuntimeBuildError::TransformsFailed {
-            failures: artifact.transform_failures.clone(),
-            logs,
-        })
+        chimera_core::client::runtime_build::RuntimeBuilder::validate_transforms(artifact)
     }
 
     pub fn build(
@@ -182,54 +112,14 @@ impl RuntimeBuilder {
         content: &dyn ProfileContentSource,
         scripts: &dyn ScriptRunner,
     ) -> Result<RuntimeArtifact, RuntimeBuildError> {
-        input
-            .profiles
-            .validate()
-            .map_err(RuntimeBuildError::Validation)?;
-        if input.clash.transparent_proxy.mode != TransparentProxyMode::Disabled
-            && !input.app.enable_service_mode
-        {
-            return Err(RuntimeBuildError::TransparentProxyRequiresServiceMode);
-        }
-        input
-            .clash
-            .validate_transparent_proxy(input.app.core, cfg!(target_os = "linux"))?;
-
-        let target = match &input.profiles.current {
-            Some(uid) => ExecutionTarget::Selected(uid.clone()),
-            None => ExecutionTarget::Bare,
-        };
-        let builtin_transforms = if input.app.enable_builtin_enhanced {
+        let builtins = if input.app.enable_builtin_enhanced {
             builtin_transforms_for(input.app.core)
         } else {
             Vec::new()
         };
-        let inputs = RuntimePipelineInputs {
-            profiles: &input.profiles,
-            target,
-            guard: GuardInputs {
-                overrides: &input.clash.overrides,
-                ports: input.resolved_ports.clone(),
-                routing_mark: (cfg!(target_os = "linux")
-                    && input.clash.transparent_proxy.mode != TransparentProxyMode::Disabled)
-                    .then_some(0x20000),
-            },
-            whitelist_enabled: input.clash.enable_clash_fields,
-            core_supports_mmdb: matches!(
-                input.app.core,
-                chimera_config::application::ClashCore::ChimeraClient
-                    | chimera_config::application::ClashCore::ChimeraClientAlpha
-            ),
-            tun: TunParams {
-                enable: input.clash.enable_tun_mode,
-                overrides: input.clash.tun,
-                flavor: derive_tun_flavor(input.app.core, input.clash.tun_stack),
-                windows_fake_ip_filter: cfg!(windows),
-            },
-            expand_include_all: input.clash.expand_include_all,
-            builtin_transforms: &builtin_transforms,
-        };
-        execute(&inputs, content, scripts).map_err(RuntimeBuildError::Pipeline)
+        chimera_core::client::runtime_build::RuntimeBuilder::build(
+            input, &builtins, content, scripts,
+        )
     }
 }
 
@@ -262,45 +152,27 @@ pub(crate) async fn build_from_profiles_with_inspection(
     };
     let profiles_dir = dirs::app_profiles_dir()?;
 
-    tokio::task::spawn_blocking(move || {
-        let content = CandidateProfileContentSource {
-            base: FsProfileContentSource::new(profiles_dir),
-            staged: staged_content,
-        };
-        let scripts = EnhanceScriptRunner::new()?;
-        let artifact = RuntimeBuilder::build(&input, &content, &scripts)
-            .map_err(|error| anyhow::anyhow!(error))?;
-        if strict_transforms {
-            RuntimeBuilder::validate_transforms(&artifact)
-                .map_err(|error| anyhow::anyhow!(error))?;
-        }
-        artifact_to_legacy_output_with_inspection(
-            artifact,
-            &input.profiles,
-            input.app.core,
-            input.app.enable_builtin_enhanced,
-        )
-    })
-    .await
-    .context("runtime builder task failed")?
-}
-
-struct CandidateProfileContentSource {
-    base: FsProfileContentSource,
-    staged: BTreeMap<String, String>,
-}
-
-impl ProfileContentSource for CandidateProfileContentSource {
-    fn read(
-        &self,
-        path: &chimera_config::profile::ManagedProfilePath,
-    ) -> Result<String, PortError> {
-        self.staged
-            .get(&path.to_string())
-            .cloned()
-            .map(Ok)
-            .unwrap_or_else(|| self.base.read(path))
-    }
+    let builtin_transforms = if input.app.enable_builtin_enhanced {
+        builtin_transforms_for(input.app.core)
+    } else {
+        Vec::new()
+    };
+    let content = FsProfileContentSource::new(profiles_dir);
+    let data = chimera_core::client::runtime_build::RuntimeBuildService::build_with_capture(
+        input,
+        content,
+        staged_content,
+        builtin_transforms,
+        || Ok(Box::new(EnhanceScriptRunner::new()?)),
+        strict_transforms,
+    )
+    .await?;
+    Ok((
+        data.config,
+        data.exists_keys,
+        data.postprocessing_output,
+        data.inspection,
+    ))
 }
 
 fn map_core(core: LegacyClashCore) -> chimera_config::application::ClashCore {
@@ -328,8 +200,11 @@ mod tests {
             ProfileDefinition, ProfileId, ProfileItem, ProfileMetadata, ProfileSource,
             ScriptRuntime, ScriptTransform, TransformDefinition,
         },
-        runtime::executor::{PortError, ScriptRunOutcome},
-        runtime::value::ConfigValue,
+        runtime::{
+            executor::{PortError, ScriptRunOutcome, TransformFailure},
+            snapshot::OperatorTag,
+            value::ConfigValue,
+        },
     };
     use serde_json::json;
 
@@ -366,6 +241,100 @@ mod tests {
         fn eval_item_expr(&self, _: &str, item: &ConfigValue) -> Result<ConfigValue, PortError> {
             Ok(item.clone())
         }
+    }
+
+    #[tokio::test]
+    async fn shared_runtime_service_respects_staged_content_without_mutating_files() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("active.yaml");
+        let disk = "proxies: []\nmode: direct\nextra-key: disk\n";
+        std::fs::write(&path, disk).unwrap();
+
+        let mut profiles = Profiles::default();
+        profiles.append_item(ProfileItem {
+            uid: ProfileId("active".into()),
+            metadata: ProfileMetadata {
+                name: "Active".into(),
+                desc: None,
+                custom_name: true,
+            },
+            definition: ProfileDefinition::Config {
+                config: ConfigDefinition::File(FileConfig {
+                    source: ProfileSource::Local {
+                        binding: LocalBinding::Managed {
+                            materialized: MaterializedFile {
+                                file: ManagedProfilePath::new("active.yaml").unwrap(),
+                                updated_at: None,
+                            },
+                        },
+                    },
+                    transforms: Vec::new(),
+                }),
+            },
+        });
+        profiles.set_current(Some(ProfileId("active".into())));
+        let input = RuntimeBuildInput {
+            profiles: Arc::new(profiles),
+            clash: ClashConfig::default(),
+            app: ChimeraAppConfig {
+                enable_builtin_enhanced: false,
+                ..ChimeraAppConfig::default()
+            },
+            resolved_ports: ResolvedPortBindings {
+                mixed_port: 7890,
+                ..Default::default()
+            },
+        };
+        // A second candidate verifies that the runner cannot see source
+        // changes made after the capture phase on the same blocking thread.
+        let after_input = RuntimeBuildInput {
+            profiles: Arc::clone(&input.profiles),
+            clash: input.clash.clone(),
+            app: input.app.clone(),
+            resolved_ports: input.resolved_ports.clone(),
+        };
+        let staged = "proxies: []\nmode: global\nextra-key: staged\n".to_string();
+        let data = chimera_core::client::runtime_build::RuntimeBuildService::build_with_capture(
+            input,
+            FsProfileContentSource::new(directory.path().to_path_buf()),
+            BTreeMap::from([("active.yaml".into(), staged)]),
+            Vec::new(),
+            || Ok(Box::new(EchoRunner)),
+            true,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            data.config
+                .get(serde_yaml::Value::String("extra-key".into())),
+            Some(&serde_yaml::Value::String("staged".into()))
+        );
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), disk);
+        assert!(data.inspection.final_node < data.inspection.graph.nodes.len() as u32);
+
+        let path_to_remove = path.clone();
+        let second = chimera_core::client::runtime_build::RuntimeBuildService::build_with_capture(
+            after_input,
+            FsProfileContentSource::new(directory.path().to_path_buf()),
+            BTreeMap::new(),
+            Vec::new(),
+            move || {
+                // Runs *after* capture; deleting the file must not affect
+                // the executor's already-frozen document.
+                std::fs::remove_file(&path_to_remove)?;
+                Ok(Box::new(EchoRunner))
+            },
+            true,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            second
+                .config
+                .get(serde_yaml::Value::String("extra-key".into())),
+            Some(&serde_yaml::Value::String("disk".into()))
+        );
+        assert!(!path.exists());
     }
 
     #[test]
