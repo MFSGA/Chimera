@@ -1,3 +1,95 @@
+## [0.29.0] - 2026-11-23 08:15:23
+
+### ✨ Features
+
+- **connections:** Port floating dock and virtualized connection rows by @MFSGA
+
+- **network:** Port opt-in network automation and private policy ownership by @MFSGA
+
+- **network:** Add direct egress probes and traffic dashboard sources by @MFSGA
+
+- **providers:** Port native provider details and task failures by @MFSGA
+
+- **proxies:** Align profile-scoped group layouts and runtime builders by @MFSGA
+
+- **settings:** Align DNS editor and capability-driven TUN controls by @MFSGA
+
+- **settings:** Align reference settings navigation and prepared runtime ports by @MFSGA
+
+- **traffic:** Align ref local egress attribution with committed source gates by @MFSGA
+
+- **tun:** Expose MIPS stack and controller with core capability matrix by @MFSGA
+
+- **ui:** Align dashboard v2 layout and migration error handling by @MFSGA
+
+- **ui:** Align connection history and dashboard control surfaces by @MFSGA
+
+- **ui:** Align Providers view and subscription accounting by @MFSGA
+
+- **ui:** Align native Proxies and Rules dashboard sections by @MFSGA
+
+### 🐛 Bug Fixes
+
+- **ci:** Remove required commit signature checks by @MFSGA
+
+- **runtime:** Diagnose Profile activation and coalesce Service readiness by @MFSGA
+
+- **runtime:** Bound source retries and provider operations during startup by @MFSGA
+
+- **runtime:** Recover retained source through Service readiness changes by @MFSGA
+
+- **startup:** Fence deferred source recovery by outcome by @MFSGA
+
+### 🔨 Refactor
+
+- **contracts:** Retain typed Core, Profile and proxy mutation outcomes by @MFSGA
+
+- **core:** Route live APIs and UI through fenced actor state by @MFSGA
+
+- **core:** Adopt CoreActor and ServiceActor lifecycle ownership by @MFSGA
+
+- **migration:** Isolate desktop migration and persist dashboard editing by @MFSGA
+
+- **os:** Consolidate system integration and Core installation ports by @MFSGA
+
+- **owners:** Port crash reporting and drain Core and Service tasks by @MFSGA
+
+- **profiles:** Preserve typed precommit gates and dashboard previews by @MFSGA
+
+- **profiles:** Share network fetch and materialization ports by @MFSGA
+
+- **reconciler:** Enforce checked candidate and source-generation fences by @MFSGA
+
+- **reconciler:** Admit checked Profile candidates through one owner by @MFSGA
+
+- **runtime:** Require Core-owned CandidateCheck in production by @MFSGA
+
+- **runtime:** Unify frozen Profile content with shared Core builder by @MFSGA
+
+- **runtime:** Align stored snapshots and unified config ownership by @MFSGA
+
+- **runtime:** Share prepared Core apply across hosts and Profile TCC by @MFSGA
+
+- **runtime:** Reuse checked source gates and settle Core side effects by @MFSGA
+
+- **runtime:** Implement verified S2-S4 convergence and host handoff by @MFSGA
+
+- **runtime:** Commit sources before Core apply and protect proxy metadata by @MFSGA
+
+- **service:** Reconcile Service readiness and Core host ownership by @MFSGA
+
+- **startup:** Centralize workflow orchestration and recovery by @MFSGA
+
+- **startup:** Align platform setup and failure recovery with ref by @MFSGA
+
+- **state:** Version sources and fence runtime content snapshots by @MFSGA
+
+- **storage:** Migrate reference persistence and shared storage owners by @MFSGA
+
+---
+
+**Full Changelog**: https://github.com/MFSGA/Chimera/compare/v0.28.3...v0.29.0
+
 ## [0.28.3] - 2026-11-14 01:39:16
 
 ### ✅ Testing
