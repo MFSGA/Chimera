@@ -60,6 +60,7 @@ export const baseE2eSuites = {
     './specs/main-tooltip.e2e.ts',
     './specs/providers-detail-main.e2e.ts',
     './specs/providers-main-layout.e2e.ts',
+    './specs/providers-update-main.e2e.ts',
     './specs/proxies-main-layout.e2e.ts',
     './specs/proxies-node-main.e2e.ts',
     './specs/rules-main-layout.e2e.ts',
