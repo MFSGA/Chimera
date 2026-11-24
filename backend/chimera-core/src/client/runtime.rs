@@ -1,6 +1,6 @@
 //! Ref-shaped RuntimeSnapshotStore with Chimera's instance-bound receipt.
 //! The session allocator, derived artifact, accepted receipt, and recovery
-//! baseline remain one shared owner. No Tauri or filesystem dependency.
+//! baseline remain one shared owner. The shared product publisher has no Tauri dependency.
 use super::{
     clash_info::ClashInfo,
     runtime_inspection::{RuntimeInspection, RuntimeInspectionContent},
@@ -597,4 +597,36 @@ mod tests {
         assert!(store.publish_applied(product).is_err());
         assert!(store.snapshot().applied.is_none());
     }
+}
+
+/// Upstream's typed atomic publication boundary. Reconciler invokes this
+/// only after Core confirms an apply; building a candidate never publishes.
+pub async fn write_product(
+    product: &std::path::Path,
+    bytes: Vec<u8>,
+) -> std::result::Result<(), chimera_contracts::publish::PublishRuntimeError> {
+    use chimera_contracts::{profiles::error::ErrorPath, publish::PublishRuntimeError};
+    if let Some(parent) = product.parent() {
+        tokio::fs::create_dir_all(parent).await.map_err(|source| {
+            PublishRuntimeError::CreateRuntimeDirectory {
+                path: ErrorPath::from(parent),
+                source,
+            }
+        })?;
+    }
+    let path = product.to_path_buf();
+    let written = tokio::task::spawn_blocking(move || {
+        atomicwrites::AtomicFile::new(&path, atomicwrites::OverwriteBehavior::AllowOverwrite)
+            .write(|file| std::io::Write::write_all(file, &bytes))
+    })
+    .await;
+    let written = written.unwrap_or_else(|error| {
+        // The worker failed before reporting its own typed atomic-write error.
+        // Preserve the source and do not claim publication succeeded.
+        Err(atomicwrites::Error::Internal(std::io::Error::other(error)))
+    });
+    written.map_err(|source| PublishRuntimeError::WriteRuntimeConfig {
+        path: ErrorPath::from(product),
+        source,
+    })
 }

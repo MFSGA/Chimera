@@ -4,9 +4,7 @@ use chimera_contracts::runtime;
 /// Map crate-internal profile materialization degradations onto the public
 /// wire. Actor-internal Cleanup/Reconcile phases collapse to
 /// `ProfileMaterialization`; retryability stays code-derived.
-pub(in crate::client) fn map_profile_degradation(
-    degradation: &ProfileDegradation,
-) -> runtime::Degradation {
+pub fn map_profile_degradation(degradation: &ProfileDegradation) -> runtime::Degradation {
     use chimera_contracts::profiles::ports::ProfileDegradationCode;
 
     let reason = match degradation.code {

@@ -1766,15 +1766,6 @@ impl CoreClient {
         self.initial_endpoint.clone()
     }
 
-    /// Read-only upstream candidate validation through the initial endpoint.
-    /// It bypasses the mutating CoreActor mailbox, but cannot apply a config.
-    pub async fn check_config(
-        &self,
-        submission: endpoint::CheckSubmission,
-    ) -> endpoint::CheckSupport {
-        self.initial_endpoint.check_config(submission).await
-    }
-
     pub async fn submit(&self, submission: CoreSubmission) -> Result<SubmitTicket, SubmitFailure> {
         self.call(
             |reply| CoreActorMessage::Submit { submission, reply },

@@ -7,7 +7,6 @@ pub(crate) use actor::{
     CoreLifecycleOperationResult, CoreLifecycleStatus, RuntimeReconcilerClient,
 };
 
-pub(in crate::client) mod adapters;
 pub(crate) mod apply;
 pub(crate) mod attempt;
 pub(in crate::client) mod authority;
@@ -25,7 +24,6 @@ pub(in crate::client) mod legacy_source;
 pub(crate) mod mutation;
 pub(in crate::client) mod ports;
 pub(in crate::client) mod preparation;
-pub(crate) mod profiles;
 pub(crate) mod proof;
 pub(crate) mod release;
 

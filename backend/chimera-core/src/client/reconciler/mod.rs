@@ -1,7 +1,9 @@
 //! Latest ref RuntimeReconciler decision engine.
 //! Only the new reconciler actor may own state; this module is pure.
 
+pub mod adapters;
 pub mod plan;
+pub mod profiles;
 
 pub mod committed;
 pub mod workflow;

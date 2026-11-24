@@ -11,19 +11,18 @@ use chimera_config::{
     application::ChimeraAppConfig, clash::config::ClashConfig,
     runtime::executor::ProfileContentSource,
 };
+use chimera_core::client::{
+    reconciler::adapters::CoreCheckValidator,
+    runtime_build::{CoreSpecResolver, RuntimeBuildService},
+};
 use chimera_state_engine::StateSnapshot;
 
 use super::{
-    adapters::CoreCheckValidator,
     check::{self, CandidateCheck, CheckedCandidatePort},
     ports::{RuntimeValidatorPort, ScriptRunnerFactory},
 };
 use crate::{
-    client::{
-        ports::RuntimePreparationSession,
-        runtime::RuntimePaths,
-        runtime_build::{CoreSpecResolver, RuntimeBuildService},
-    },
+    client::{ports::RuntimePreparationSession, runtime::RuntimePaths},
     state::mutation::ProfileContentReader,
 };
 
@@ -215,7 +214,10 @@ fn candidate_gate_with_ports(
         paths,
     } = sources;
     let builder = Arc::new(RuntimeBuildService::new(
-        content, core_specs, paths, scripts,
+        content,
+        core_specs,
+        paths.product().to_owned(),
+        scripts,
     ));
     CandidateCheck::new(check::Args {
         application,

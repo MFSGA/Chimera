@@ -1,16 +1,16 @@
 use async_trait::async_trait;
 
-use chimera_core::actor_v2::{
+use crate::actor_v2::{
     CoreClient,
-    endpoint::{CheckSubmission, CheckSupport},
+    endpoint::{CheckSubmission, CheckSupport, EndpointHandle},
 };
 
 /// Checks inline documents through the session's local control plane.
 ///
 /// The local endpoint stays alive while the service owns the running core.
 /// Its read-only check runs outside the mutating queue and is awaited to completion.
-pub(in crate::client) struct CoreCheckValidator {
-    core: CoreClient,
+pub struct CoreCheckValidator {
+    endpoint: EndpointHandle,
 }
 
 /// The phrase the runtime puts in the message when its own check bound
@@ -20,8 +20,10 @@ pub(in crate::client) struct CoreCheckValidator {
 const RUNTIME_CHECK_TIMEOUT: &str = "config check timed out after ";
 
 impl CoreCheckValidator {
-    pub(in crate::client) fn new(core: &CoreClient) -> Self {
-        Self { core: core.clone() }
+    pub fn new(core: &CoreClient) -> Self {
+        Self {
+            endpoint: core.initial_endpoint(),
+        }
     }
 }
 
@@ -34,7 +36,7 @@ impl super::ports::RuntimeValidatorPort for CoreCheckValidator {
         #[cfg(feature = "e2e")]
         tracing::warn!(target: "chimera::e2e_profile", stage = "local_config_check_started", "Runtime candidate core validation stage");
         let support = self
-            .core
+            .endpoint
             .check_config(CheckSubmission {
                 core_spec: request.core_spec,
                 core_type: request.intent.core_type.clone(),

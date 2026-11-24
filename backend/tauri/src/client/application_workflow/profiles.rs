@@ -6,7 +6,7 @@ pub(in crate::client) fn map_profile_degradation(
     degradation: &crate::state::profiles::ports::ProfileDegradation,
 ) -> runtime::Degradation {
     runtime::Degradation::from_shared(
-        crate::client::reconciler::profiles::map_profile_degradation(degradation),
+        chimera_core::client::reconciler::profiles::map_profile_degradation(degradation),
     )
 }
 

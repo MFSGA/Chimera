@@ -65,7 +65,7 @@ pub(crate) async fn build_from_profiles_with_inspection(
     };
     // Ref runtime_build.rs: host ports are injected once, not discovered
     // behind a build. The script runner is created inside spawn_blocking.
-    let builder = chimera_core::client::runtime_build::RuntimeBuildService::new(
+    let builder = chimera_core::client::runtime_build::RuntimeBuildExecutor::new(
         Arc::new(FsProfileContentSource::new(profiles_dir)),
         Arc::new(|| Ok(Box::new(EnhanceScriptRunner::new()?))),
     );
@@ -204,7 +204,7 @@ mod tests {
             resolved_ports: input.resolved_ports.clone(),
         };
         let staged = "proxies: []\nmode: global\nextra-key: staged\n".to_string();
-        let data = chimera_core::client::runtime_build::RuntimeBuildService::build_with_capture(
+        let data = chimera_core::client::runtime_build::RuntimeBuildExecutor::build_with_capture(
             input,
             FsProfileContentSource::new(directory.path().to_path_buf()),
             BTreeMap::from([("active.yaml".into(), staged)]),
@@ -225,7 +225,7 @@ mod tests {
         let path_to_remove = path.clone();
         // Exercise the new injected service that the production Tauri builder
         // also uses, rather than only the earlier static compatibility helper.
-        let builder = chimera_core::client::runtime_build::RuntimeBuildService::new(
+        let builder = chimera_core::client::runtime_build::RuntimeBuildExecutor::new(
             Arc::new(FsProfileContentSource::new(directory.path().to_path_buf())),
             Arc::new(move || {
                 // This closure is called on the blocking build thread, after

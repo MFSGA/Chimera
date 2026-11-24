@@ -154,6 +154,42 @@ pub fn artifact_to_snapshot_data(
     })
 }
 
+/// Ref's candidate-to-snapshot boundary. Retain Chimera's Mapping and exact
+/// product bytes until the remaining runtime value migration is complete.
+pub fn runtime_snapshot_data_from_artifact(
+    artifact: RuntimeArtifact,
+    profiles: &Profiles,
+    core: chimera_config::application::ClashCore,
+    builtin_enabled: bool,
+) -> std::result::Result<
+    (std::sync::Arc<[u8]>, super::runtime::RuntimeSnapshotData),
+    chimera_profile_transform::RuntimeBuildError,
+> {
+    use chimera_profile_transform::{RuntimeBuildError, builtin_transforms_for};
+    let builtin_names: Vec<String> = if builtin_enabled {
+        builtin_transforms_for(core)
+            .into_iter()
+            .map(|builtin| builtin.name)
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let data = artifact_to_snapshot_data(artifact, profiles, &builtin_names)
+        .map_err(RuntimeBuildError::ProjectArtifact)?;
+    let bytes = serde_yaml::to_string(&data.config)
+        .map_err(RuntimeBuildError::SerializeFinalConfig)?
+        .into_bytes();
+    Ok((
+        bytes.into(),
+        super::runtime::RuntimeSnapshotData {
+            config: data.config,
+            exists_keys: data.exists_keys,
+            postprocessing_output: data.postprocessing_output,
+            inspection: std::sync::Arc::new(data.inspection),
+        },
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
