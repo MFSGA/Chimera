@@ -51,14 +51,17 @@ use crate::client::{
     runtime::RuntimePaths,
 };
 
+#[cfg(test)]
+use chimera_core::client::reconciler::mailbox::MAX_PENDING;
+
 const CALL_WAIT: Duration = Duration::from_secs(180);
-const DIRTY_WINDOW: Duration = Duration::from_millis(500);
 use chimera_core::client::core_lifecycle::RECOVERY_INTERVAL;
 const STARTUP_RECOVERY_LEASE_ATTEMPTS: usize = 3;
-const MAX_PENDING: usize = 32;
-const COMPLETED_LIMIT: usize = 32;
 
-type OperationId = u64;
+use chimera_core::client::reconciler::mailbox::{
+    ActiveOperation, AdmissionFailure, DIRTY_WINDOW, DirtyTick, Mailbox, MailboxTimers,
+    OperationId, RequestKind, Response, ShutdownAdmission, replay_shutdown,
+};
 
 pub(in crate::client) struct CompletedLifecycleOperation {
     pub(in crate::client) result: anyhow::Result<()>,
@@ -164,20 +167,9 @@ fn is_source_only_application_patch(command: &Command) -> bool {
     )
 }
 
-#[derive(Debug, Clone, Default, serde::Serialize, specta::Type)]
-pub(crate) struct CoreLifecycleStatus {
-    pub(crate) active: Option<OperationId>,
-    pub(crate) queued: Vec<OperationId>,
-    pub(crate) uncertain: bool,
-    pub(crate) shutting_down: bool,
-    pub(crate) completed: Vec<CoreLifecycleOperationResult>,
-}
-
-#[derive(Debug, Clone, serde::Serialize, specta::Type)]
-pub(crate) struct CoreLifecycleOperationResult {
-    pub(crate) id: OperationId,
-    pub(crate) error: Option<String>,
-}
+pub use chimera_core::client::reconciler::mailbox::{
+    CoreLifecycleOperationResult, CoreLifecycleStatus,
+};
 
 use chimera_core::actor_v2::{
     service_policy::{ServicePhase, ServiceRestartPolicySnapshot},
@@ -185,6 +177,24 @@ use chimera_core::actor_v2::{
 };
 
 // OS-specific runtime ownership evidence enters the core through an input.
+fn request_kind(command: &Command) -> RequestKind {
+    if matches!(command, Command::CacheStartupUnsettled { .. })
+        || is_source_only_application_patch(command)
+    {
+        RequestKind::SourceOnly
+    } else if matches!(
+        command,
+        Command::StartupReconcile { .. }
+            | Command::RecoverStartup { .. }
+            | Command::RetryStartup { .. }
+            | Command::ServiceEndpointDown(_)
+    ) {
+        RequestKind::StartupOwner
+    } else {
+        RequestKind::Other
+    }
+}
+
 #[cfg(test)]
 fn classify_service_probe(info: chimera_ipc::types::StatusInfo<'static>) -> ServiceHostStatus {
     let owned = crate::core::service::is_service_runtime_owned(&info);
@@ -386,29 +396,20 @@ enum Message {
 struct RuntimeReconcilerActor;
 
 struct RuntimeReconcilerMailbox {
+    mailbox: Mailbox<Command>,
+    timers: MailboxTimers<Message>,
     reconciler: tokio::sync::watch::Sender<ReconcilerStatus>,
     workflow: Option<ApplicationWorkflow>,
     #[cfg(test)]
     pending_mutation_connection: Option<(ApplicationWorkflow, RpcReplyPort<anyhow::Result<()>>)>,
-    active: Option<ActiveOperation>,
-    pending: VecDeque<Request>,
     pending_startup_retry_lease_failures: VecDeque<(String, String)>,
     #[cfg(test)]
     startup_retry_lease_failure_observer: Option<tokio::sync::oneshot::Sender<()>>,
-    next_id: Arc<AtomicU64>,
-    status: Arc<parking_lot::Mutex<CoreLifecycleStatus>>,
     service_status: ServiceHostWatch,
     service: Arc<dyn ServiceLifecyclePort>,
-    uncertain: bool,
-    startup_owner_unproven: bool,
-    startup_owner_unproven_shared: Arc<AtomicBool>,
-    shutting_down: bool,
-    shutdown_result: Option<Option<String>>,
-    shutdown_waiters: Vec<Response>,
     runtime: RuntimeReconcilerState,
     source_authority: Option<Arc<dyn crate::client::reconciler::authority::RuntimeSourceAuthority>>,
     service_recovery_inflight: bool,
-    service_recovery_timer: tokio::task::JoinHandle<()>,
     startup_recovery_pending: Arc<AtomicBool>,
 }
 
@@ -449,38 +450,20 @@ struct RuntimeReconcilerArgs {
     startup_recovery_pending: Arc<AtomicBool>,
 }
 
-struct Response {
-    id: OperationId,
-    reply: Option<RpcReplyPort<anyhow::Result<()>>>,
-}
-
-struct Request {
-    command: Command,
-    response: Response,
-    deferred_retry: Option<String>,
-}
-
-struct ActiveOperation {
-    response: Response,
-    task: tokio::task::JoinHandle<()>,
-    shutdown: bool,
-    trigger: &'static str,
-    checked_clash: bool,
-    /// Checked Apply already promotes its own exact verified selection.
-    /// Legacy startup/reconcile must recover it from the confirmed receipt.
-    checked_apply: bool,
-    observed_sources: SourceVersions,
-}
+type Request = chimera_core::client::reconciler::mailbox::Request<Command>;
 
 impl RuntimeReconcilerMailbox {
     fn source_dispatch_facts(&self) -> SourceDispatchFacts {
         SourceDispatchFacts {
-            shutting_down: self.shutting_down,
-            uncertain: self.uncertain,
-            startup_owner_unproven: self.startup_owner_unproven
-                || self.startup_owner_unproven_shared.load(Ordering::Acquire),
+            shutting_down: self.mailbox.shutting_down,
+            uncertain: self.mailbox.uncertain,
+            startup_owner_unproven: self.mailbox.startup_owner_unproven
+                || self
+                    .mailbox
+                    .startup_owner_unproven_shared
+                    .load(Ordering::Acquire),
             owner_transition_pending: self.owner_transition_pending(),
-            queue_full: self.pending.len() >= MAX_PENDING,
+            queue_full: self.mailbox.queue_full(),
             authority_available: self.source_authority.is_some(),
         }
     }
@@ -493,8 +476,8 @@ impl RuntimeReconcilerMailbox {
         authority: Arc<dyn crate::client::reconciler::authority::RuntimeSourceAuthority>,
         reply: Option<RpcReplyPort<anyhow::Result<()>>>,
     ) {
-        let id = self.allocate_operation_id();
-        self.pending.push_back(Request {
+        let id = self.mailbox.allocate_operation_id();
+        self.mailbox.pending.push_back(Request {
             command: Command::ApplyChecked {
                 prepared: checked.prepared,
                 core_spec: checked.core_spec,
@@ -542,10 +525,6 @@ impl RuntimeReconcilerMailbox {
                 .send_modify(|status| status.record_system_degradation(degradation));
             self.publish_maintenance();
         }
-    }
-
-    fn allocate_operation_id(&self) -> OperationId {
-        self.next_id.fetch_add(1, Ordering::Relaxed)
     }
 
     /// Ref ServiceActor is the sole production publisher of daemon phase,
@@ -612,31 +591,25 @@ impl RuntimeReconcilerMailbox {
     }
 
     fn mark_runtime_dirty(&mut self, myself: &ActorRef<Message>) {
-        if self.runtime.run_intent == RunIntent::Stopped || self.uncertain || self.shutting_down {
-            return;
-        }
-        self.runtime.dirty = true;
-        if !self.runtime.dirty_tick_scheduled {
-            self.runtime.dirty_tick_scheduled = true;
-            let actor = myself.clone();
-            tokio::spawn(async move {
-                tokio::time::sleep(DIRTY_WINDOW).await;
-                let _ = actor.cast(Message::DirtyTick);
-            });
+        if self
+            .runtime
+            .request_dirty_tick(self.mailbox.uncertain, self.mailbox.shutting_down)
+        {
+            self.timers
+                .after(myself, DIRTY_WINDOW, || Message::DirtyTick);
         }
     }
 
     fn schedule_deferred_retry(
-        &self,
+        &mut self,
         myself: &ActorRef<Message>,
         digest: String,
         next_attempt: tokio::time::Instant,
     ) {
-        let actor = myself.clone();
-        tokio::spawn(async move {
-            tokio::time::sleep_until(next_attempt).await;
-            let _ = actor.cast(Message::DeferredRetry { digest });
-        });
+        self.timers
+            .at(myself, next_attempt, move || Message::DeferredRetry {
+                digest,
+            });
     }
 
     fn reschedule_deferred_retry(
@@ -655,23 +628,22 @@ impl RuntimeReconcilerMailbox {
     }
 
     fn schedule_startup_retry(
-        &self,
+        &mut self,
         myself: &ActorRef<Message>,
         identity: String,
         next_attempt: tokio::time::Instant,
     ) {
-        let actor = myself.clone();
-        tokio::spawn(async move {
-            tokio::time::sleep_until(next_attempt).await;
-            let _ = actor.cast(Message::StartupRetryDue { identity });
-        });
+        self.timers
+            .at(myself, next_attempt, move || Message::StartupRetryDue {
+                identity,
+            });
     }
 
     fn request_startup_recovery(&self, myself: &ActorRef<Message>) {
-        let startup_owner_unproven = self.startup_owner_unproven_shared.clone();
+        let startup_owner_unproven = self.mailbox.startup_owner_unproven_shared.clone();
         schedule_startup_recovery(
             myself.clone(),
-            self.next_id.clone(),
+            self.mailbox.next_id.clone(),
             self.service.clone(),
             self.startup_recovery_pending.clone(),
             move || startup_owner_unproven.load(Ordering::Acquire),
@@ -694,7 +666,7 @@ impl RuntimeReconcilerMailbox {
     /// established owner before those transitions have settled.
     fn owner_transition_pending(&self) -> bool {
         self.startup_recovery_pending.load(Ordering::Acquire)
-            || self.pending.iter().any(|request| {
+            || self.mailbox.pending.iter().any(|request| {
                 matches!(
                     &request.command,
                     Command::FollowService { .. }
@@ -710,11 +682,14 @@ impl RuntimeReconcilerMailbox {
     /// daemon stop is admitted as its own serialized lifecycle command.
     async fn schedule_service_release(&mut self, explicit_retry: bool) {
         if self.runtime.run_intent == RunIntent::Stopped
-            || self.uncertain
-            || self.shutting_down
-            || self.active.is_some()
-            || self.startup_owner_unproven
-            || self.startup_owner_unproven_shared.load(Ordering::Acquire)
+            || self.mailbox.uncertain
+            || self.mailbox.shutting_down
+            || self.mailbox.active.is_some()
+            || self.mailbox.startup_owner_unproven
+            || self
+                .mailbox
+                .startup_owner_unproven_shared
+                .load(Ordering::Acquire)
             || self.owner_transition_pending()
             || !matches!(
                 self.reconciler.borrow().conclusion,
@@ -736,7 +711,7 @@ impl RuntimeReconcilerMailbox {
             self.publish_maintenance();
             return;
         }
-        if self.pending.len() >= MAX_PENDING {
+        if self.mailbox.queue_full() {
             self.runtime
                 .service_release_debt
                 .deferred("lifecycle queue is full".into());
@@ -756,11 +731,14 @@ impl RuntimeReconcilerMailbox {
     fn replan_retained_source_on_service_change(&mut self, myself: &ActorRef<Message>) {
         if !self.runtime.source_after_handoff
             || self.runtime.run_intent != RunIntent::Running
-            || self.uncertain
-            || self.shutting_down
-            || self.startup_owner_unproven
-            || self.startup_owner_unproven_shared.load(Ordering::Acquire)
-            || self.active.is_some()
+            || self.mailbox.uncertain
+            || self.mailbox.shutting_down
+            || self.mailbox.startup_owner_unproven
+            || self
+                .mailbox
+                .startup_owner_unproven_shared
+                .load(Ordering::Acquire)
+            || self.mailbox.active.is_some()
             || self.owner_transition_pending()
         {
             return;
@@ -776,11 +754,14 @@ impl RuntimeReconcilerMailbox {
     fn rearm_deferred_dirty_after_owner(&mut self, myself: &ActorRef<Message>) {
         if self.runtime.dirty
             && self.runtime.run_intent == RunIntent::Running
-            && !self.uncertain
-            && !self.shutting_down
-            && !self.startup_owner_unproven
-            && !self.startup_owner_unproven_shared.load(Ordering::Acquire)
-            && self.active.is_none()
+            && !self.mailbox.uncertain
+            && !self.mailbox.shutting_down
+            && !self.mailbox.startup_owner_unproven
+            && !self
+                .mailbox
+                .startup_owner_unproven_shared
+                .load(Ordering::Acquire)
+            && self.mailbox.active.is_none()
             && !self.owner_transition_pending()
         {
             self.mark_runtime_dirty(myself);
@@ -789,11 +770,14 @@ impl RuntimeReconcilerMailbox {
 
     async fn follow_service(&mut self) {
         if self.runtime.run_intent == RunIntent::Stopped
-            || self.active.is_some()
-            || self.uncertain
-            || self.shutting_down
-            || self.startup_owner_unproven
-            || self.startup_owner_unproven_shared.load(Ordering::Acquire)
+            || self.mailbox.active.is_some()
+            || self.mailbox.uncertain
+            || self.mailbox.shutting_down
+            || self.mailbox.startup_owner_unproven
+            || self
+                .mailbox
+                .startup_owner_unproven_shared
+                .load(Ordering::Acquire)
             || self.owner_transition_pending()
         {
             return;
@@ -818,7 +802,7 @@ impl RuntimeReconcilerMailbox {
         if !workflow.service_host_change_due().await {
             return;
         }
-        if self.pending.len() >= MAX_PENDING {
+        if self.mailbox.queue_full() {
             tracing::warn!("dropping Service owner follow-up because the lifecycle queue is full");
             self.runtime.service_handoff_maintenance =
                 Some("Service owner handoff is waiting for lifecycle queue capacity".into());
@@ -827,12 +811,12 @@ impl RuntimeReconcilerMailbox {
         }
         self.runtime.service_handoff_maintenance = Some("Service owner handoff is pending".into());
         self.publish_maintenance();
-        let operation_id = self.allocate_operation_id();
+        let operation_id = self.mailbox.allocate_operation_id();
         // Run this post-command owner reconciliation before requests already
         // queued behind the event that observed the readiness change. The
         // lease is held across the request, so allowing another queued Core
         // mutation to run first would invert the reference actor's order.
-        self.pending.push_front(Request {
+        self.mailbox.pending.push_front(Request {
             command: Command::FollowService {
                 operation_id,
                 transition,
@@ -843,39 +827,6 @@ impl RuntimeReconcilerMailbox {
             },
             deferred_retry: None,
         });
-    }
-
-    fn publish(&self) {
-        let mut status = self.status.lock();
-        status.active = self.active.as_ref().map(|operation| operation.response.id);
-        status.queued = self
-            .pending
-            .iter()
-            .map(|request| request.response.id)
-            .chain(self.shutdown_waiters.iter().map(|response| response.id))
-            .collect();
-        status.uncertain = self.uncertain
-            || self.startup_owner_unproven
-            || self.startup_owner_unproven_shared.load(Ordering::Acquire);
-        status.shutting_down = self.shutting_down;
-    }
-
-    fn settle(&self, response: Response, result: anyhow::Result<()>) {
-        {
-            let mut status = self.status.lock();
-            if status.completed.len() == COMPLETED_LIMIT {
-                status.completed.remove(0);
-            }
-            status.completed.push(CoreLifecycleOperationResult {
-                id: response.id,
-                error: result.as_ref().err().map(ToString::to_string),
-            });
-        }
-        if let Some(reply) = response.reply {
-            let _ = reply.send(result);
-        } else if let Err(error) = result {
-            tracing::warn!(%error, id = response.id, "background core lifecycle operation failed");
-        }
     }
 
     fn reject(&mut self, request: Request, error: anyhow::Error) {
@@ -904,115 +855,56 @@ impl RuntimeReconcilerMailbox {
                 tracing::error!("binary installation progress observer panicked");
             }
         }
-        self.settle(request.response, Err(error));
+        self.mailbox.settle(request.response, Err(error));
     }
 
-    fn reject_pending_for_uncertain(&mut self) {
-        if !self.uncertain || self.shutting_down {
-            return;
+    fn reject_pending(&mut self, myself: &ActorRef<Message>) {
+        if self.mailbox.uncertain && !self.mailbox.shutting_down {
+            self.runtime.dirty = false;
         }
-        self.runtime.dirty = false;
-        let mut allowed = VecDeque::new();
-        while let Some(request) = self.pending.pop_front() {
-            if matches!(&request.command, Command::CacheStartupUnsettled { .. })
-                || is_source_only_application_patch(&request.command)
-            {
-                allowed.push_back(request);
-            } else {
-                self.reject(request, anyhow::anyhow!(
-                    "previous core lifecycle operation has an uncertain outcome; restart the application before further mutations"
-                ));
-            }
-        }
-        self.pending = allowed;
-    }
-
-    fn reject_pending_for_unproven_startup_owner(&mut self, myself: &ActorRef<Message>) {
-        if !(self.startup_owner_unproven
-            || self.startup_owner_unproven_shared.load(Ordering::Acquire))
-            || self.shutting_down
-        {
-            return;
-        }
-        let mut allowed = VecDeque::new();
-        while let Some(request) = self.pending.pop_front() {
+        let workflow = self.workflow.as_ref();
+        let refused = self.mailbox.drain_refused(request_kind, |command| {
+            workflow.is_none_or(|workflow| {
+                !workflow.has_unresolved_attempt()
+                    || workflow.recovery_command_allowed(command)
+                    || matches!(command, Command::Shutdown)
+            })
+        });
+        for (request, reason) in refused {
             if matches!(
-                &request.command,
-                Command::StartupReconcile { .. }
-                    | Command::RecoverStartup { .. }
-                    | Command::RetryStartup { .. }
-                    | Command::CacheStartupUnsettled { .. }
-                    | Command::ServiceEndpointDown(_)
-            ) || is_source_only_application_patch(&request.command)
-            {
-                allowed.push_back(request);
-            } else {
+                reason,
+                AdmissionFailure::StartupUnproven | AdmissionFailure::ApplicationRecovery
+            ) {
                 if let Some(digest) = request.deferred_retry.as_deref() {
                     self.reschedule_deferred_retry(myself, digest, Duration::from_secs(5));
                 }
-                self.reject(
-                    request,
-                    anyhow::anyhow!(
-                        "startup has not established the Core owner; retry startup reconciliation before runtime mutations"
-                    ),
-                );
             }
+            self.reject(request, anyhow::anyhow!(reason.message()));
         }
-        self.pending = allowed;
-    }
-
-    fn reject_pending_for_application_recovery(&mut self, myself: &ActorRef<Message>) {
-        let isolated = self
-            .workflow
-            .as_ref()
-            .is_some_and(ApplicationWorkflow::has_unresolved_attempt);
-        if !isolated || self.shutting_down {
-            return;
-        }
-        let mut allowed = VecDeque::new();
-        while let Some(request) = self.pending.pop_front() {
-            let can_recover = self
-                .workflow
-                .as_ref()
-                .is_some_and(|workflow| workflow.recovery_command_allowed(&request.command));
-            if can_recover || matches!(&request.command, Command::Shutdown) {
-                allowed.push_back(request);
-            } else {
-                if let Some(digest) = request.deferred_retry.as_deref() {
-                    self.reschedule_deferred_retry(myself, digest, Duration::from_secs(5));
-                }
-                self.reject(
-                    request,
-                    anyhow::anyhow!(
-                        "an application runtime attempt is unresolved; run its explicit recovery before another command"
-                    ),
-                );
-            }
-        }
-        self.pending = allowed;
     }
 
     fn close(&mut self) {
-        self.shutting_down = true;
-        // A checked document that was never committed is not a running Core
-        // receipt; discard it instead of carrying it past shutdown.
+        self.timers.cancel();
         self.runtime.checked.clear();
         self.runtime.clear_dirty();
-        while let Some(request) = self.pending.pop_front() {
-            self.reject(request, anyhow::anyhow!("core lifecycle is shutting down"));
+        for request in self.mailbox.close() {
+            self.reject(
+                request,
+                anyhow::anyhow!(AdmissionFailure::Closing.message()),
+            );
         }
-        self.publish();
+        self.mailbox.publish();
     }
 
     fn push_background(&mut self, command: Command) {
-        if self.pending.len() >= MAX_PENDING {
+        if self.mailbox.queue_full() {
             tracing::warn!("dropping background lifecycle operation because the queue is full");
             return;
         }
-        self.pending.push_back(Request {
+        self.mailbox.pending.push_back(Request {
             command,
             response: Response {
-                id: self.allocate_operation_id(),
+                id: self.mailbox.allocate_operation_id(),
                 reply: None,
             },
             deferred_retry: None,
@@ -1020,16 +912,16 @@ impl RuntimeReconcilerMailbox {
     }
 
     fn push_deferred_retry(&mut self, digest: String) -> bool {
-        if self.pending.len() >= MAX_PENDING {
+        if self.mailbox.queue_full() {
             tracing::warn!("dropping deferred Profile retry because the lifecycle queue is full");
             return false;
         }
-        self.pending.push_back(Request {
+        self.mailbox.pending.push_back(Request {
             command: Command::RetryDeferredProfiles {
                 digest: digest.clone(),
             },
             response: Response {
-                id: self.allocate_operation_id(),
+                id: self.mailbox.allocate_operation_id(),
                 reply: None,
             },
             deferred_retry: Some(digest),
@@ -1038,32 +930,13 @@ impl RuntimeReconcilerMailbox {
     }
 
     fn drive(&mut self, myself: &ActorRef<Message>) {
-        if self.active.is_some() {
-            self.publish();
+        if self.mailbox.active.is_some() {
+            self.mailbox.publish();
             return;
         }
-        self.reject_pending_for_uncertain();
-        self.reject_pending_for_unproven_startup_owner(myself);
-        self.reject_pending_for_application_recovery(myself);
-
-        let request = if self.shutting_down {
-            if self.shutdown_result.is_some() {
-                self.publish();
-                return;
-            }
-            let Some(response) = self.shutdown_waiters.pop() else {
-                self.publish();
-                return;
-            };
-            Request {
-                command: Command::Shutdown,
-                response,
-                deferred_retry: None,
-            }
-        } else if let Some(request) = self.pending.pop_front() {
-            request
-        } else {
-            self.publish();
+        self.reject_pending(myself);
+        let Some(request) = self.mailbox.take_next(|| Command::Shutdown) else {
+            self.mailbox.publish();
             return;
         };
 
@@ -1081,7 +954,7 @@ impl RuntimeReconcilerMailbox {
                 return;
             }
             RuntimeAdmission::SkipInactive => {
-                self.settle(request.response, Ok(()));
+                self.mailbox.settle(request.response, Ok(()));
                 self.drive(myself);
                 return;
             }
@@ -1103,7 +976,7 @@ impl RuntimeReconcilerMailbox {
                 request,
                 anyhow::anyhow!("core lifecycle workflow unavailable"),
             );
-            self.publish();
+            self.mailbox.publish();
             return;
         };
 
@@ -1116,7 +989,7 @@ impl RuntimeReconcilerMailbox {
                 request,
                 anyhow::anyhow!("application workflow is not connected"),
             );
-            self.publish();
+            self.mailbox.publish();
             return;
         }
 
@@ -1334,7 +1207,7 @@ impl RuntimeReconcilerMailbox {
             }
         });
 
-        self.active = Some(ActiveOperation {
+        self.mailbox.active = Some(ActiveOperation {
             response: request.response,
             task,
             shutdown,
@@ -1343,7 +1216,7 @@ impl RuntimeReconcilerMailbox {
             checked_apply,
             observed_sources,
         });
-        self.publish();
+        self.mailbox.publish();
     }
 }
 
@@ -1392,32 +1265,25 @@ impl Actor for RuntimeReconcilerActor {
         myself: ActorRef<Self::Msg>,
         args: Self::Arguments,
     ) -> Result<Self::State, ActorProcessingErr> {
-        let service_recovery_timer =
-            myself.send_interval(RECOVERY_INTERVAL, || Message::ServiceRecoveryTick);
         Ok(RuntimeReconcilerMailbox {
+            mailbox: Mailbox::new(
+                args.next_id,
+                args.status,
+                args.startup_owner_unproven_shared,
+            ),
+            timers: MailboxTimers::new(&myself, RECOVERY_INTERVAL, || Message::ServiceRecoveryTick),
             reconciler: args.reconciler,
             workflow: Some(args.workflow),
             #[cfg(test)]
             pending_mutation_connection: None,
-            active: None,
-            pending: VecDeque::new(),
             pending_startup_retry_lease_failures: VecDeque::new(),
             #[cfg(test)]
             startup_retry_lease_failure_observer: None,
-            next_id: args.next_id,
-            status: args.status,
             service_status: args.service_status,
             service: args.service,
-            uncertain: false,
-            startup_owner_unproven: false,
-            startup_owner_unproven_shared: args.startup_owner_unproven_shared,
-            shutting_down: false,
-            shutdown_result: None,
-            shutdown_waiters: Vec::new(),
             runtime: RuntimeReconcilerState::default(),
             source_authority: args.source_authority,
             service_recovery_inflight: false,
-            service_recovery_timer,
             startup_recovery_pending: args.startup_recovery_pending,
         })
     }
@@ -1452,7 +1318,7 @@ impl Actor for RuntimeReconcilerActor {
                 );
             }
             Message::InstallCandidateGate { gate, reply } => {
-                let result = if state.shutting_down {
+                let result = if state.mailbox.shutting_down {
                     Err(anyhow::anyhow!("core lifecycle is shutting down"))
                 } else {
                     state
@@ -1477,7 +1343,7 @@ impl Actor for RuntimeReconcilerActor {
                 reply,
                 registered,
             } => {
-                let validation = if state.shutting_down {
+                let validation = if state.mailbox.shutting_down {
                     Err(anyhow::anyhow!("core lifecycle is shutting down"))
                 } else if state.pending_mutation_connection.is_some()
                     || state
@@ -1528,59 +1394,31 @@ impl Actor for RuntimeReconcilerActor {
                 {
                     *patch_service_connected = service_connected;
                 }
-                let source_only_application_patch =
-                    is_source_only_application_patch(&request.command);
                 if matches!(&request.command, Command::Shutdown) {
-                    if let Some(error) = state.shutdown_result.clone() {
-                        let result = match error {
-                            Some(error) => Err(anyhow::anyhow!(error)),
-                            None => Ok(()),
-                        };
-                        state.settle(request.response, result);
-                    } else if state.shutdown_waiters.len() >= MAX_PENDING {
-                        state.reject(request, anyhow::anyhow!("too many shutdown waiters"));
-                    } else {
-                        state.shutdown_waiters.push(request.response);
-                        if !state.shutting_down {
-                            state.close();
+                    match state.mailbox.shutdown_admission() {
+                        ShutdownAdmission::Replay(error) => state
+                            .mailbox
+                            .settle(request.response, replay_shutdown(&error)),
+                        ShutdownAdmission::Full => state.reject(
+                            request,
+                            anyhow::anyhow!(AdmissionFailure::TooManyShutdownWaiters.message()),
+                        ),
+                        ShutdownAdmission::Wait { first } => {
+                            state.mailbox.enqueue_shutdown_waiter(request.response);
+                            if first {
+                                state.close();
+                            }
                         }
                     }
-                } else if state.shutting_down {
-                    state.reject(request, anyhow::anyhow!("core lifecycle is shutting down"));
-                } else if state.uncertain
-                    && !source_only_application_patch
-                    && !matches!(&request.command, Command::CacheStartupUnsettled { .. })
+                } else if let Err(reason) =
+                    state.mailbox.admit_request(request_kind(&request.command))
                 {
-                    state.reject(
-                        request,
-                        anyhow::anyhow!(
-                            "previous core lifecycle operation has an uncertain outcome; restart the application before further mutations"
-                        ),
-                    );
-                } else if (state.startup_owner_unproven
-                    || state.startup_owner_unproven_shared.load(Ordering::Acquire))
-                    && !matches!(
-                        &request.command,
-                        Command::StartupReconcile { .. }
-                            | Command::RecoverStartup { .. }
-                            | Command::RetryStartup { .. }
-                            | Command::CacheStartupUnsettled { .. }
-                            | Command::ServiceEndpointDown(_)
-                    )
-                    && !source_only_application_patch
-                {
-                    state.reject(
-                        request,
-                        anyhow::anyhow!(
-                            "startup has not established the Core owner; retry startup reconciliation before runtime mutations"
-                        ),
-                    );
-                } else if state.pending.len() >= MAX_PENDING {
-                    state.reject(request, anyhow::anyhow!("core lifecycle queue is full"));
+                    state.reject(request, anyhow::anyhow!(reason.message()));
                 } else {
-                    state.pending.push_back(request);
+                    state.mailbox.pending.push_back(request);
                 }
             }
+
             Message::Completed {
                 id,
                 workflow,
@@ -1598,8 +1436,15 @@ impl Actor for RuntimeReconcilerActor {
                 deferred_retry,
                 reconciled,
             } => {
-                if state.active.as_ref().map(|operation| operation.response.id) == Some(id) {
+                if state
+                    .mailbox
+                    .active
+                    .as_ref()
+                    .map(|operation| operation.response.id)
+                    == Some(id)
+                {
                     let active = state
+                        .mailbox
                         .active
                         .as_ref()
                         .expect("matched active lifecycle operation");
@@ -1612,7 +1457,7 @@ impl Actor for RuntimeReconcilerActor {
                         active.trigger,
                         &active.observed_sources,
                         &state.runtime.seen_sources,
-                        state.uncertain,
+                        state.mailbox.uncertain,
                         workflow_panicked,
                         lower_outcome_uncertain,
                     );
@@ -1624,6 +1469,7 @@ impl Actor for RuntimeReconcilerActor {
                     // before subsequent mode changes inspect the baseline.
                     if source_advanced
                         && state
+                            .mailbox
                             .active
                             .as_ref()
                             .is_some_and(|active| active.checked_apply)
@@ -1644,6 +1490,7 @@ impl Actor for RuntimeReconcilerActor {
                     #[cfg(feature = "e2e")]
                     tracing::warn!(target: "chimera::e2e_core_mailbox", stage = "completed_binding_observed", "CoreLifecycle completion stage");
                     let active = state
+                        .mailbox
                         .active
                         .take()
                         .expect("matched active lifecycle operation");
@@ -1708,13 +1555,10 @@ impl Actor for RuntimeReconcilerActor {
                     ) {
                         state.publish_maintenance();
                     }
-                    state.startup_owner_unproven = startup_owner_unproven;
-                    state
-                        .startup_owner_unproven_shared
-                        .store(startup_owner_unproven, Ordering::Release);
+                    state.mailbox.set_owner_unproven(startup_owner_unproven);
                     #[cfg(test)]
                     if let Some((incoming, reply)) = state.pending_mutation_connection.take() {
-                        let validation = if state.shutting_down {
+                        let validation = if state.mailbox.shutting_down {
                             Err(anyhow::anyhow!("core lifecycle is shutting down"))
                         } else if reply.is_closed() {
                             Err(anyhow::anyhow!(
@@ -1761,7 +1605,7 @@ impl Actor for RuntimeReconcilerActor {
                     {
                         state.schedule_startup_retry(&myself, identity, next_attempt);
                     }
-                    state.uncertain |= workflow_panicked || lower_outcome_uncertain;
+                    state.mailbox.uncertain |= workflow_panicked || lower_outcome_uncertain;
 
                     match service_probe {
                         Some(Ok(info)) => {
@@ -1805,18 +1649,9 @@ impl Actor for RuntimeReconcilerActor {
                             deferred_runtime_waiting_dependency,
                     );
                     if shutdown {
-                        let shutdown_error = result.as_ref().err().map(ToString::to_string);
-                        state.shutdown_result = Some(shutdown_error.clone());
-                        state.settle(active.response, result);
-                        for waiter in std::mem::take(&mut state.shutdown_waiters) {
-                            let waiter_result = match &shutdown_error {
-                                Some(error) => Err(anyhow::anyhow!(error.clone())),
-                                None => Ok(()),
-                            };
-                            state.settle(waiter, waiter_result);
-                        }
+                        state.mailbox.complete_shutdown(active.response, result);
                     } else {
-                        state.settle(active.response, result);
+                        state.mailbox.settle(active.response, result);
                     }
 
                     if let Some(digest) = deferred_retry {
@@ -1827,7 +1662,7 @@ impl Actor for RuntimeReconcilerActor {
                                     !failed,
                                     deferred_retry_retryable,
                                     deferred_retry_waiting,
-                                    state.uncertain,
+                                    state.mailbox.uncertain,
                                     deferred_retry_error,
                                 )
                                 .await
@@ -1847,17 +1682,20 @@ impl Actor for RuntimeReconcilerActor {
                         retry_reconcile_on_failure,
                         failed,
                         source_advanced,
-                        state.uncertain,
-                        state.shutting_down,
+                        state.mailbox.uncertain,
+                        state.mailbox.shutting_down,
                     ) {
                         state.mark_runtime_dirty(&myself);
                     }
                     match rebuild_after_completion(
                         request_runtime_rebuild,
-                        state.shutting_down,
-                        state.startup_owner_unproven
-                            || state.startup_owner_unproven_shared.load(Ordering::Acquire),
-                        state.uncertain,
+                        state.mailbox.shutting_down,
+                        state.mailbox.startup_owner_unproven
+                            || state
+                                .mailbox
+                                .startup_owner_unproven_shared
+                                .load(Ordering::Acquire),
+                        state.mailbox.uncertain,
                     ) {
                         RebuildAction::None => {}
                         RebuildAction::RecoverStartup => state.request_startup_recovery(&myself),
@@ -1873,13 +1711,12 @@ impl Actor for RuntimeReconcilerActor {
                             }
                         }
                     }
-                    if recover && failed && !state.uncertain && !state.shutting_down {
+                    if recover && failed && !state.mailbox.uncertain && !state.mailbox.shutting_down
+                    {
                         tracing::error!("failed to recover core; scheduling retry");
-                        let actor = myself.clone();
-                        tokio::spawn(async move {
-                            tokio::time::sleep(Duration::from_secs(5)).await;
-                            let _ = actor.cast(Message::RecoverCore);
-                        });
+                        state
+                            .timers
+                            .after(&myself, Duration::from_secs(5), || Message::RecoverCore);
                     }
                     state.follow_service().await;
                     state.rearm_deferred_dirty_after_owner(&myself);
@@ -1888,10 +1725,13 @@ impl Actor for RuntimeReconcilerActor {
                         reconciled,
                         failed,
                         verified_running,
-                        state.uncertain,
-                        state.startup_owner_unproven
-                            || state.startup_owner_unproven_shared.load(Ordering::Acquire),
-                        state.shutting_down,
+                        state.mailbox.uncertain,
+                        state.mailbox.startup_owner_unproven
+                            || state
+                                .mailbox
+                                .startup_owner_unproven_shared
+                                .load(Ordering::Acquire),
+                        state.mailbox.shutting_down,
                     ) {
                         HandoffContinuation::None => {}
                         HandoffContinuation::ClearMaintenance => state.publish_maintenance(),
@@ -1934,10 +1774,9 @@ impl Actor for RuntimeReconcilerActor {
                 state.schedule_service_release(false).await;
             }
             Message::ServiceRecoveryTick => {
-                let can_recover = !state.uncertain
-                    && !state.shutting_down
-                    && state.active.is_none()
-                    && state.pending.is_empty()
+                let can_recover = !state.mailbox.uncertain
+                    && !state.mailbox.shutting_down
+                    && state.mailbox.idle()
                     && !state.service_recovery_inflight;
                 let recovery_due = if can_recover {
                     match state.workflow.as_ref() {
@@ -1954,7 +1793,7 @@ impl Actor for RuntimeReconcilerActor {
                     state.publish_maintenance();
                     let service = state.service.clone();
                     let actor = myself.clone();
-                    let operation_id = state.allocate_operation_id();
+                    let operation_id = state.mailbox.allocate_operation_id();
                     tokio::spawn(async move {
                         match service.begin_transition().await {
                             Ok(transition) => {
@@ -1985,10 +1824,10 @@ impl Actor for RuntimeReconcilerActor {
                 state.publish_maintenance();
             }
             Message::RecoverCore => {
-                if state.uncertain || state.shutting_down {
+                if state.mailbox.uncertain || state.mailbox.shutting_down {
                     tracing::warn!(
-                        uncertain = state.uncertain,
-                        shutting_down = state.shutting_down,
+                        uncertain = state.mailbox.uncertain,
+                        shutting_down = state.mailbox.shutting_down,
                         "ignoring crash recovery because lifecycle is unavailable"
                     );
                 } else {
@@ -2047,13 +1886,13 @@ impl Actor for RuntimeReconcilerActor {
             }
             Message::RuntimeDirty => {
                 if state.runtime.run_intent == RunIntent::Stopped
-                    || state.uncertain
-                    || state.shutting_down
+                    || state.mailbox.uncertain
+                    || state.mailbox.shutting_down
                 {
                     tracing::debug!(
                         ?state.runtime.run_intent,
-                        uncertain = state.uncertain,
-                        shutting_down = state.shutting_down,
+                        uncertain = state.mailbox.uncertain,
+                        shutting_down = state.mailbox.shutting_down,
                         "ignoring runtime dirty signal while stopped or unavailable"
                     );
                 } else {
@@ -2083,30 +1922,16 @@ impl Actor for RuntimeReconcilerActor {
                 }));
             }
             Message::DirtyTick => {
-                state.runtime.dirty_tick_scheduled = false;
-                if state.runtime.run_intent == RunIntent::Stopped
-                    || state.uncertain
-                    || state.shutting_down
-                {
-                    state.runtime.dirty = false;
-                } else if state.owner_transition_pending() {
-                    // Do not consume dirty/source_dirty or dispatch a runtime
-                    // submit while Startup or FollowService owns the host.
-                    // A resolved transition will rearm this same dirty state.
-                } else if state.pending.len() >= MAX_PENDING {
-                    // Do not consume a durable source apply intent until its
-                    // serialized Core command can actually be admitted.
-                    // The next completed lifecycle command will rearm this
-                    // dirty tick as queue capacity becomes available.
-                    tracing::debug!("deferring runtime dirty while lifecycle queue is full");
-                } else if state.runtime.dirty {
-                    state.runtime.dirty = false;
-                    let source_round = std::mem::take(&mut state.runtime.source_dirty);
-                    state.push_background(if source_round {
-                        Command::ReconcileSource
-                    } else {
-                        Command::Reconcile
-                    });
+                let owner_transition = state.owner_transition_pending();
+                match state.runtime.dirty_tick(
+                    state.mailbox.uncertain,
+                    state.mailbox.shutting_down,
+                    owner_transition,
+                    state.mailbox.queue_full(),
+                ) {
+                    DirtyTick::None => {}
+                    DirtyTick::Reconcile => state.push_background(Command::Reconcile),
+                    DirtyTick::SourceCommitted => state.push_background(Command::ReconcileSource),
                 }
             }
             Message::StartupRecoveryFinished { succeeded } => {
@@ -2121,8 +1946,8 @@ impl Actor for RuntimeReconcilerActor {
                 // The serialized RetryStartup command has its own stop gate,
                 // but that alone cannot undo an already acquired lease.
                 if state.runtime.run_intent == RunIntent::Running
-                    && !state.uncertain
-                    && !state.shutting_down
+                    && !state.mailbox.uncertain
+                    && !state.mailbox.shutting_down
                 {
                     if state.workflow.is_none() {
                         state.schedule_startup_retry(
@@ -2138,7 +1963,7 @@ impl Actor for RuntimeReconcilerActor {
                         if should_retry {
                             let service = state.service.clone();
                             let actor = myself.clone();
-                            let operation_id = state.allocate_operation_id();
+                            let operation_id = state.mailbox.allocate_operation_id();
                             #[cfg(test)]
                             let observer = state.startup_retry_lease_failure_observer.take();
                             tokio::spawn(async move {
@@ -2248,8 +2073,8 @@ impl Actor for RuntimeReconcilerActor {
                 let result =
                     result.ok_or_else(|| anyhow::anyhow!("application workflow is unavailable"));
                 if let Ok((_, digest)) = &result {
-                    let id = state.allocate_operation_id();
-                    state.pending.push_back(Request {
+                    let id = state.mailbox.allocate_operation_id();
+                    state.mailbox.pending.push_back(Request {
                         command: Command::RetryDeferredProfiles {
                             digest: digest.clone(),
                         },
@@ -2278,7 +2103,7 @@ impl Actor for RuntimeReconcilerActor {
                 let _ = reply.send(state);
             }
             Message::DeferredRetry { digest } => {
-                if state.uncertain || state.shutting_down {
+                if state.mailbox.uncertain || state.mailbox.shutting_down {
                     if let Some(application_workflow) = state.workflow.as_mut() {
                         application_workflow
                             .finish_deferred_retry(
@@ -2286,7 +2111,7 @@ impl Actor for RuntimeReconcilerActor {
                                 false,
                                 false,
                                 false,
-                                state.uncertain,
+                                state.mailbox.uncertain,
                                 None,
                             )
                             .await;
@@ -2297,8 +2122,8 @@ impl Actor for RuntimeReconcilerActor {
                         digest,
                         tokio::time::Instant::now() + DIRTY_WINDOW,
                     );
-                } else if state.active.is_some()
-                    || !state.pending.is_empty()
+                } else if state.mailbox.active.is_some()
+                    || !state.mailbox.pending.is_empty()
                     || state
                         .workflow
                         .as_ref()
@@ -2359,23 +2184,14 @@ impl Actor for RuntimeReconcilerActor {
         _myself: ActorRef<Self::Msg>,
         state: &mut Self::State,
     ) -> Result<(), ActorProcessingErr> {
-        state.service_recovery_timer.abort();
+        state.timers.cancel();
         // The workflow (and its transaction/Service lease) is moved into the
         // active task. An unexpected Actor stop cannot drop that owner while
         // it might still be mutating Core or committing a profile decision.
         // The outcome is unproven because its Completed message was not
         // handled; do not publish a successful runtime conclusion.
-        if let Some(active) = state.active.take() {
-            state.uncertain = true;
-            state
-                .startup_owner_unproven_shared
-                .store(true, Ordering::Release);
-            {
-                let mut status = state.status.lock();
-                status.active = None;
-                status.uncertain = true;
-                status.shutting_down = true;
-            }
+        if let Some(active) = state.mailbox.active.take() {
+            state.mailbox.mark_worker_lost();
             if let Err(error) = active.task.await {
                 match error.try_into_panic() {
                     Ok(panic) => std::panic::resume_unwind(panic),

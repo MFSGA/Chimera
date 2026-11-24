@@ -48,3 +48,5 @@ pub mod completion;
 pub mod mutation_policy;
 pub mod workflow_mutation;
 pub mod workflow_progress;
+
+pub mod mailbox;
