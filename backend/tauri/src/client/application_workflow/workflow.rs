@@ -530,15 +530,10 @@ impl ApplicationWorkflow {
                 operation_id,
                 reason,
             } => {
-                if self.progress.startup_report.is_none() {
-                    self.progress.startup.mark_owner_unproven();
-                    self.progress.startup_report = Some(StartupReport {
-                        operation_id,
-                        observation: None,
-                        outcome: StartupOutcome::Unsettled {
-                            reason: reason.clone(),
-                        },
-                    });
+                if self
+                    .progress
+                    .cache_startup_unsettled(operation_id, reason.clone())
+                {
                     if let Some(notifications) = &self.notifications {
                         let ports = self.lifecycle().effect_port_binding().await;
                         notifications.publish_full(ports);
@@ -557,17 +552,9 @@ impl ApplicationWorkflow {
                     } if !chimera_core::state::mutation::impact::
                         application_patch_requires_reconcile(patch, *service_connected)
                 );
-                let preserve_unresolved_attempt = (source_only_patch
-                    || matches!(&command, CoreCommand::Shutdown))
-                    && self.progress.has_unresolved_attempt();
-                if !preserve_unresolved_attempt {
-                    debug_assert!(
-                        self.progress.live.is_none(),
-                        "an unresolved attempt is never replaced"
-                    );
-                    self.progress.live = Some(LiveAttempt::lifecycle(OperationId::generate()));
-                    self.progress.advance_attempt(AttemptStage::TryingCritical);
-                }
+                let preserve_unresolved_attempt = self.progress.begin_lifecycle_attempt(
+                    source_only_patch || matches!(&command, CoreCommand::Shutdown),
+                );
                 let refresh_startup_retry_identity =
                     matches!(&command, CoreCommand::PatchApplicationConfig { .. });
                 let service_endpoint_recovery =
@@ -608,18 +595,11 @@ impl ApplicationWorkflow {
                     self.reschedule_startup_retry_after_committed_config_patch(&lifecycle)
                         .await;
                 }
-                if !preserve_unresolved_attempt {
-                    if lifecycle.outcome_uncertain() {
-                        let reason = result
-                            .as_ref()
-                            .err()
-                            .map(ToString::to_string)
-                            .unwrap_or_else(|| "core lifecycle outcome remains uncertain".into());
-                        self.conclude_attempt(Some(reason));
-                    } else {
-                        self.conclude_attempt(None);
-                    }
-                }
+                self.progress.finish_lifecycle_attempt(
+                    preserve_unresolved_attempt,
+                    lifecycle.outcome_uncertain(),
+                    &result,
+                );
                 let recovered = service_endpoint_recovery
                     && result.is_ok()
                     && lifecycle.take_service_recovery_reconnected();
@@ -655,39 +635,7 @@ impl ApplicationWorkflow {
         &mut self,
         message: String,
     ) -> RecoveryContext {
-        if self.progress.live.is_some() {
-            self.conclude_attempt(Some(message.clone()));
-            if let Some(context) = self.progress.publish_recovery_context().await {
-                return context;
-            }
-            let attempt = self
-                .progress
-                .live
-                .as_ref()
-                .expect("the unresolved attempt remains live");
-            return RecoveryContext {
-                operation_id: Some(attempt.operation_id),
-                runtime_operation: None,
-                domain: ConfigDomain::Profiles,
-                stage: MutationStage::TryingCritical,
-                decision: None,
-                baseline: None,
-                target: None,
-                error: message,
-            };
-        }
-        let context = RecoveryContext {
-            operation_id: None,
-            runtime_operation: None,
-            domain: ConfigDomain::Profiles,
-            stage: MutationStage::TryingCritical,
-            decision: None,
-            baseline: None,
-            target: None,
-            error: message,
-        };
-        *self.progress.recovery_required.lock().await = Some(context.clone());
-        context
+        self.progress.mark_recovery_required(message).await
     }
 
     #[cfg(test)]

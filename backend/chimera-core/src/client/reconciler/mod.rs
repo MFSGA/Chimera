@@ -50,3 +50,5 @@ pub mod workflow_mutation;
 pub mod workflow_progress;
 
 pub mod mailbox;
+
+pub mod worker;

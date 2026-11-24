@@ -324,6 +324,100 @@ impl WorkflowProgress {
         *self.recovery_required.lock().await = context.clone();
         context
     }
+    pub async fn mark_recovery_required(&mut self, message: String) -> RecoveryContext {
+        if self.live.is_some() {
+            super::reestablish::conclude_attempt(
+                &mut self.live,
+                &mut self.deferred,
+                Some(message.clone()),
+                true,
+            );
+            if let Some(context) = self.publish_recovery_context().await {
+                return context;
+            }
+            let attempt = self
+                .live
+                .as_ref()
+                .expect("the unresolved attempt remains live");
+            return RecoveryContext {
+                operation_id: Some(attempt.operation_id),
+                runtime_operation: None,
+                domain: ConfigDomain::Profiles,
+                stage: MutationStage::TryingCritical,
+                decision: None,
+                baseline: None,
+                target: None,
+                error: message,
+            };
+        }
+        let context = RecoveryContext {
+            operation_id: None,
+            runtime_operation: None,
+            domain: ConfigDomain::Profiles,
+            stage: MutationStage::TryingCritical,
+            decision: None,
+            baseline: None,
+            target: None,
+            error: message,
+        };
+        *self.recovery_required.lock().await = Some(context.clone());
+        context
+    }
+
+    /// Cache startup refusal once; late callers must not replace proven startup.
+    pub fn cache_startup_unsettled(&mut self, operation_id: u64, reason: String) -> bool {
+        use super::startup_policy::StartupOutcome;
+        if self.startup_report.is_some() {
+            return false;
+        }
+        self.startup.mark_owner_unproven();
+        self.startup_report = Some(StartupReport {
+            operation_id,
+            observation: None,
+            outcome: StartupOutcome::Unsettled { reason },
+        });
+        true
+    }
+
+    /// Source-only saves and Shutdown cannot discard an unresolved attempt.
+    /// Return whether this command borrowed the existing unresolved attempt.
+    pub fn begin_lifecycle_attempt(&mut self, may_preserve: bool) -> bool {
+        let preserve = may_preserve && self.has_unresolved_attempt();
+        if !preserve {
+            debug_assert!(
+                self.live.is_none(),
+                "an unresolved attempt is never replaced"
+            );
+            self.live = Some(LiveAttempt::lifecycle(OperationId::generate()));
+            self.advance_attempt(AttemptStage::TryingCritical);
+        }
+        preserve
+    }
+
+    pub fn finish_lifecycle_attempt(
+        &mut self,
+        preserve: bool,
+        lower_uncertain: bool,
+        result: &anyhow::Result<()>,
+    ) {
+        if preserve {
+            return;
+        }
+        let reason = lower_uncertain.then(|| {
+            result
+                .as_ref()
+                .err()
+                .map(ToString::to_string)
+                .unwrap_or_else(|| "core lifecycle outcome remains uncertain".into())
+        });
+        super::reestablish::conclude_attempt(
+            &mut self.live,
+            &mut self.deferred,
+            reason,
+            lower_uncertain,
+        );
+    }
+
     pub fn advance_attempt(&mut self, stage: AttemptStage) {
         if let Some(attempt) = &mut self.live {
             attempt.stage = stage;

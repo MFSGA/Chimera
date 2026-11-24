@@ -2,7 +2,6 @@
 //! The desktop compatibility client is re-exported by core_lifecycle.
 use std::{
     collections::VecDeque,
-    panic::AssertUnwindSafe,
     sync::{
         Arc,
         atomic::{AtomicBool, AtomicU64, Ordering},
@@ -23,13 +22,20 @@ use crate::client::reconciler::{
     status::ReconcilerStatus,
     workflow::{RuntimeAdmission, RuntimeReconcilerState, runtime_trigger},
 };
+#[cfg(test)]
+use chimera_core::client::reconciler::worker::{WorkerResult, run_lifecycle};
 use chimera_core::client::reconciler::{
     completion::{
         CompletionFence, HandoffContinuation, RebuildAction, checked_clash_notice,
         rebuild_after_completion, refresh_effect_ports,
     },
     plan::RunIntent,
+    service_evidence::{service_followup_evidence_changed, startup_recovery_evidence_changed},
     source_dispatch::{SourceAction, SourceDispatch, SourceDispatchFacts},
+    worker::{
+        WorkerCompletion, WorkerEvidence, WorkerPlan, WorkerWorkflow, schedule_startup_recovery,
+        spawn_worker,
+    },
 };
 use ractor::{Actor, ActorProcessingErr, ActorRef, RpcReplyPort, rpc::CallResult};
 use tokio_util::{sync::CancellationToken, task::TaskTracker};
@@ -54,9 +60,8 @@ use crate::client::{
 #[cfg(test)]
 use chimera_core::client::reconciler::mailbox::MAX_PENDING;
 
-const CALL_WAIT: Duration = Duration::from_secs(180);
 use chimera_core::client::core_lifecycle::RECOVERY_INTERVAL;
-const STARTUP_RECOVERY_LEASE_ATTEMPTS: usize = 3;
+use chimera_core::client::reconciler::worker::CALL_WAIT;
 
 use chimera_core::client::reconciler::mailbox::{
     ActiveOperation, AdmissionFailure, DIRTY_WINDOW, DirtyTick, Mailbox, MailboxTimers,
@@ -76,80 +81,76 @@ fn completed_from_startup_report(report: StartupReport) -> CompletedLifecycleOpe
     CompletedLifecycleOperation { result, report }
 }
 
-fn schedule_startup_recovery(
-    actor_ref: ActorRef<Message>,
-    next_id: Arc<AtomicU64>,
-    service: Arc<dyn ServiceLifecyclePort>,
-    startup_recovery_pending: Arc<AtomicBool>,
-    is_needed: impl Fn() -> bool + Send + Sync + 'static,
-) {
-    if startup_recovery_pending
-        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-        .is_err()
-    {
-        return;
+#[async_trait::async_trait]
+impl WorkerWorkflow<Command> for ApplicationWorkflow {
+    async fn execute_lifecycle_command(&mut self, command: Command) -> anyhow::Result<bool> {
+        self.execute_lifecycle(command).await
     }
 
-    tokio::spawn(async move {
-        let result = async {
-            for attempt in 0..STARTUP_RECOVERY_LEASE_ATTEMPTS {
-                // Acquire the host lease before asking the serialized actor to
-                // run recovery, preserving the global host-lock/mailbox order.
-                let transition = match service.begin_transition().await {
-                    Ok(transition) => transition,
-                    Err(error) if attempt + 1 < STARTUP_RECOVERY_LEASE_ATTEMPTS => {
-                        tracing::debug!(%error, "startup owner recovery lease busy; retrying");
-                        tokio::time::sleep(RECOVERY_INTERVAL).await;
-                        continue;
+    async fn recover_worker_panic(&mut self, message: String) {
+        self.mark_recovery_required(message).await;
+    }
+
+    fn observe_worker(&self) -> WorkerEvidence {
+        WorkerEvidence {
+            lower_outcome_uncertain: self.lifecycle().outcome_uncertain(),
+            startup_owner_unproven: self.startup_owner_unproven(),
+            service_restart_policy: self.lifecycle().service_restart_policy(),
+        }
+    }
+
+    async fn probe_worker_service(
+        &self,
+    ) -> anyhow::Result<chimera_ipc::types::StatusInfo<'static>> {
+        self.lifecycle().probe_service().await
+    }
+
+    #[cfg(test)]
+    async fn run_command(&mut self, command: Command) -> WorkerResult {
+        match command {
+            Command::ProfileMutation(mut mutation) => {
+                // Ref's recoverable panic flag must cover each future
+                // poll, not remain set across a Tokio .await. Preserve
+                // the uncertainty/recovery settlement on panic.
+                let run = chimera_panics::catch_recoverable_future(
+                    self.run_profile_mutation(&mut mutation),
+                )
+                .await;
+                let (result, panicked, rebuild) = match run {
+                    Ok((request_runtime_rebuild, settlement)) => (
+                        settlement.map_err(anyhow::Error::msg),
+                        false,
+                        request_runtime_rebuild,
+                    ),
+                    Err(_) => {
+                        let message = format!(
+                            "application workflow operation {} panicked; runtime outcome requires recovery",
+                            mutation.operation_id
+                        );
+                        self.mark_recovery_required(message.clone()).await;
+                        mutation.answer(
+                            crate::client::application_workflow::mutation::TryAck::Failed(
+                                message.clone(),
+                            ),
+                        );
+                        let _ = tokio::time::timeout(
+                            crate::client::application_workflow::tcc::MUTATION_DECISION_TIMEOUT,
+                            mutation.decision.wait(),
+                        )
+                        .await;
+                        mutation.settle(Err(message.clone()));
+                        (Err::<(), _>(anyhow::anyhow!(message)), true, false)
                     }
-                    Err(error) => return Err(error),
                 };
-                if !is_needed() {
-                    return Ok(());
+                WorkerResult {
+                    result,
+                    workflow_panicked: panicked,
+                    request_runtime_rebuild: rebuild,
                 }
-                let operation_id = next_id.fetch_add(1, Ordering::Relaxed);
-                return match actor_ref
-                    .call(
-                        |reply| {
-                            Message::Request(Request {
-                                command: Command::RecoverStartup {
-                                    operation_id,
-                                    transition,
-                                },
-                                response: Response {
-                                    id: operation_id,
-                                    reply: Some(reply),
-                                },
-                                deferred_retry: None,
-                            })
-                        },
-                        Some(CALL_WAIT),
-                    )
-                    .await?
-                {
-                    CallResult::Success(result) => result,
-                    CallResult::Timeout => Err(anyhow::anyhow!("startup owner recovery timed out")),
-                    CallResult::SenderError => {
-                        Err(anyhow::anyhow!("startup owner recovery reply was dropped"))
-                    }
-                };
             }
-            unreachable!("startup recovery lease retry loop always returns or exhausts")
+            command => run_lifecycle(self, command).await,
         }
-        .await;
-        startup_recovery_pending.store(false, Ordering::Release);
-        // A source commit may reach the mailbox after RecoverStartup has
-        // settled but before the caller's source observation. Only a
-        // successfully resolved Startup dependency can wake its retained
-        // source: a lease failure or timed-out recovery grants no authority
-        // to proceed, even if the shared owner flag changed meanwhile.
-        let _ = actor_ref.cast(Message::StartupRecoveryFinished {
-            succeeded: result.is_ok(),
-        });
-        if let Err(error) = result {
-            tracing::warn!(%error, "automatic startup owner recovery did not complete");
-        }
-    });
+    }
 }
 
 fn is_source_only_application_patch(command: &Command) -> bool {
@@ -201,42 +202,6 @@ fn classify_service_probe(info: chimera_ipc::types::StatusInfo<'static>) -> Serv
     ServiceHostStatus::from_probe(info, owned)
 }
 
-fn startup_recovery_evidence_changed(
-    previous: &ServiceHostStatus,
-    current: &ServiceHostStatus,
-    owner_unproven: bool,
-) -> bool {
-    let readiness_changed = previous.phase.readiness() != current.phase.readiness()
-        || current.ready_generation != previous.ready_generation;
-    let owner_evidence_changed = owner_unproven
-        && crate::client::application_workflow::startup::ServiceEvidence::from_status(previous)
-            != crate::client::application_workflow::startup::ServiceEvidence::from_status(current);
-    readiness_changed || owner_evidence_changed
-}
-
-/// A service watch can republish an unchanged daemon observation on each poll.
-/// Every redundant message otherwise enters the sole CoreLifecycle mailbox,
-/// where service follow-up performs async Core/source reads and can starve
-/// Checked admission. Match ref's evidence-driven Service ownership planning:
-/// only changes that can affect a host handoff, generation, or retry are events.
-///
-/// Deliberately compare projected *semantic evidence*, not the raw server DTO
-/// (which can contain volatile reporting fields unrelated to Core ownership).
-fn service_followup_evidence_changed(
-    previous: &ServiceHostStatus,
-    current: &ServiceHostStatus,
-) -> bool {
-    previous.phase != current.phase
-        || previous.ready_generation != current.ready_generation
-        || previous.settled_ready != current.settled_ready
-        || previous.status != current.status
-        || previous.runtime_owned != current.runtime_owned
-        || previous.compat != current.compat
-        || previous.restart_attempts != current.restart_attempts
-        || crate::client::application_workflow::startup::ServiceEvidence::from_status(previous)
-            != crate::client::application_workflow::startup::ServiceEvidence::from_status(current)
-}
-
 enum Message {
     /// Pinned ref RuntimeReconciler::Message::Checked, kept in the existing
     /// single CoreLifecycle mailbox until its prepared-apply path is ported.
@@ -264,21 +229,7 @@ enum Message {
     },
     Request(Request),
     Completed {
-        id: OperationId,
-        workflow: ApplicationWorkflow,
-        result: anyhow::Result<()>,
-        workflow_panicked: bool,
-        lower_outcome_uncertain: bool,
-        startup_owner_unproven: bool,
-        service_restart_policy: ServiceRestartPolicySnapshot,
-        service_probe: Option<Result<chimera_ipc::types::StatusInfo<'static>, String>>,
-        retry_reconcile_on_failure: bool,
-        recover: bool,
-        service_endpoint_recovery: bool,
-        shutdown: bool,
-        request_runtime_rebuild: bool,
-        deferred_retry: Option<String>,
-        reconciled: bool,
+        completion: WorkerCompletion<ApplicationWorkflow>,
     },
     #[cfg(test)]
     ProbeService {
@@ -647,6 +598,12 @@ impl RuntimeReconcilerMailbox {
             self.service.clone(),
             self.startup_recovery_pending.clone(),
             move || startup_owner_unproven.load(Ordering::Acquire),
+            |operation_id, transition| Command::RecoverStartup {
+                operation_id,
+                transition,
+            },
+            Message::Request,
+            |succeeded| Message::StartupRecoveryFinished { succeeded },
         );
     }
 
@@ -845,15 +802,10 @@ impl RuntimeReconcilerMailbox {
         }
         if let Command::ReplaceCoreBinary(artifact) = &request.command {
             let message = error.to_string();
-            // A UI progress observer is allowed to fail without making the
-            // core mutation's result uncertain. This closure is synchronous.
-            if chimera_panics::catch_recoverable(AssertUnwindSafe(|| {
-                artifact.progress.finished(Some(&message));
-            }))
-            .is_err()
-            {
-                tracing::error!("binary installation progress observer panicked");
-            }
+            chimera_core::client::reconciler::worker::finish_binary_progress(
+                artifact.progress.as_ref(),
+                Some(&message),
+            );
         }
         self.mailbox.settle(request.response, Err(error));
     }
@@ -1082,129 +1034,21 @@ impl RuntimeReconcilerMailbox {
             self.publish_service_phase(phase);
         }
 
-        let command = request.command;
-        let actor = myself.clone();
-        let task = tokio::spawn(async move {
-            let (result, workflow_panicked, request_runtime_rebuild) = match command {
-                #[cfg(test)]
-                Command::ProfileMutation(mut mutation) => {
-                    // Ref's recoverable panic flag must cover each future
-                    // poll, not remain set across a Tokio .await. Preserve
-                    // the uncertainty/recovery settlement on panic.
-                    let run = chimera_panics::catch_recoverable_future(
-                        workflow.run_profile_mutation(&mut mutation),
-                    )
-                    .await;
-                    match run {
-                        Ok((request_runtime_rebuild, settlement)) => (
-                            settlement.map_err(anyhow::Error::msg),
-                            false,
-                            request_runtime_rebuild,
-                        ),
-                        Err(_) => {
-                            let message = format!(
-                                "application workflow operation {} panicked; runtime outcome requires recovery",
-                                mutation.operation_id
-                            );
-                            workflow.mark_recovery_required(message.clone()).await;
-                            mutation.answer(
-                                crate::client::application_workflow::mutation::TryAck::Failed(
-                                    message.clone(),
-                                ),
-                            );
-                            let _ = tokio::time::timeout(
-                                crate::client::application_workflow::tcc::MUTATION_DECISION_TIMEOUT,
-                                mutation.decision.wait(),
-                            )
-                            .await;
-                            mutation.settle(Err(message.clone()));
-                            (Err::<(), _>(anyhow::anyhow!(message)), true, false)
-                        }
-                    }
-                }
-                command => {
-                    match chimera_panics::catch_recoverable_future(
-                        workflow.execute_lifecycle(command),
-                    )
-                    .await
-                    {
-                        Ok(Ok(request_runtime_rebuild)) => {
-                            (Ok::<(), anyhow::Error>(()), false, request_runtime_rebuild)
-                        }
-                        Ok(Err(error)) => (Err(error), false, false),
-                        Err(_) => {
-                            let message =
-                                "core lifecycle workflow panicked; execution state is uncertain";
-                            workflow.mark_recovery_required(message.into()).await;
-                            (
-                                Err::<(), anyhow::Error>(anyhow::anyhow!(message)),
-                                true,
-                                false,
-                            )
-                        }
-                    }
-                }
-            };
-            if let Some(progress) = progress {
-                let error = result.as_ref().err().map(ToString::to_string);
-                // Do not let a synchronous notification callback override
-                // the actual lifecycle outcome or trigger fatal panic UI.
-                if chimera_panics::catch_recoverable(AssertUnwindSafe(|| {
-                    progress.finished(error.as_deref())
-                }))
-                .is_err()
-                {
-                    tracing::error!("binary installation progress observer panicked");
-                }
-            }
-            let lifecycle = workflow.lifecycle();
-            let lower_outcome_uncertain = lifecycle.outcome_uncertain();
-            let startup_owner_unproven = workflow.startup_owner_unproven();
-            let service_restart_policy = lifecycle.service_restart_policy();
-            // Ref ServiceActor performs its own bounded probe and publishes
-            // its watch after Service commands. Do not issue a second probe
-            // merely to refresh CoreLifecycle's unused compatibility cache.
-            let service_probe = if service_mutation && !workflow_panicked && publish_legacy_service
-            {
-                Some(
-                    match chimera_panics::catch_recoverable_future(lifecycle.probe_service()).await
-                    {
-                        Ok(Ok(info)) => Ok(info),
-                        Ok(Err(error)) => Err(error.to_string()),
-                        Err(_) => Err("service status probe panicked".to_string()),
-                    },
-                )
-            } else {
-                None
-            };
-            if actor
-                .cast(Message::Completed {
-                    id,
-                    workflow,
-                    result,
-                    workflow_panicked,
-                    lower_outcome_uncertain,
-                    startup_owner_unproven,
-                    service_restart_policy,
-                    service_probe,
-                    retry_reconcile_on_failure,
-                    recover,
-                    service_endpoint_recovery,
-                    shutdown,
-                    request_runtime_rebuild,
-                    deferred_retry,
-                    reconciled: reconciled
-                        && runtime_converged
-                            .as_ref()
-                            .is_none_or(|converged| converged.load(Ordering::Acquire)),
-                })
-                .is_err()
-            {
-                tracing::error!(
-                    id,
-                    "core lifecycle actor stopped before operation completion"
-                );
-            }
+        let plan = WorkerPlan {
+            id,
+            shutdown,
+            deferred_retry,
+            reconciled,
+            runtime_converged,
+            service_mutation,
+            publish_legacy_service,
+            retry_reconcile_on_failure,
+            recover,
+            service_endpoint_recovery,
+            progress,
+        };
+        let task = spawn_worker(myself, workflow, request.command, plan, |completion| {
+            Message::Completed { completion }
         });
 
         self.mailbox.active = Some(ActiveOperation {
@@ -1419,23 +1263,24 @@ impl Actor for RuntimeReconcilerActor {
                 }
             }
 
-            Message::Completed {
-                id,
-                workflow,
-                result,
-                workflow_panicked,
-                lower_outcome_uncertain,
-                startup_owner_unproven,
-                service_restart_policy,
-                service_probe,
-                retry_reconcile_on_failure,
-                recover,
-                service_endpoint_recovery,
-                shutdown,
-                request_runtime_rebuild,
-                deferred_retry,
-                reconciled,
-            } => {
+            Message::Completed { completion } => {
+                let WorkerCompletion {
+                    id,
+                    workflow,
+                    result,
+                    workflow_panicked,
+                    lower_outcome_uncertain,
+                    startup_owner_unproven,
+                    service_restart_policy,
+                    service_probe,
+                    retry_reconcile_on_failure,
+                    recover,
+                    service_endpoint_recovery,
+                    shutdown,
+                    request_runtime_rebuild,
+                    deferred_retry,
+                    reconciled,
+                } = completion;
                 if state
                     .mailbox
                     .active
@@ -3540,6 +3385,12 @@ impl RuntimeReconcilerClient {
             service.clone(),
             startup_recovery_pending.clone(),
             move || client.startup_recovery_needed(),
+            |operation_id, transition| Command::RecoverStartup {
+                operation_id,
+                transition,
+            },
+            Message::Request,
+            |succeeded| Message::StartupRecoveryFinished { succeeded },
         );
     }
 

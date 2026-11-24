@@ -170,3 +170,37 @@ pub fn reconciler_service_evidence(service: &ServiceEvidence) -> ReconcilerServi
         },
     }
 }
+
+pub fn startup_recovery_evidence_changed(
+    previous: &ServiceHostStatus,
+    current: &ServiceHostStatus,
+    owner_unproven: bool,
+) -> bool {
+    let readiness_changed = previous.phase.readiness() != current.phase.readiness()
+        || current.ready_generation != previous.ready_generation;
+    let owner_evidence_changed = owner_unproven
+        && ServiceEvidence::from_status(previous) != ServiceEvidence::from_status(current);
+    readiness_changed || owner_evidence_changed
+}
+
+/// A service watch can republish an unchanged daemon observation on each poll.
+/// Every redundant message otherwise enters the sole CoreLifecycle mailbox,
+/// where service follow-up performs async Core/source reads and can starve
+/// Checked admission. Match ref's evidence-driven Service ownership planning:
+/// only changes that can affect a host handoff, generation, or retry are events.
+///
+/// Deliberately compare projected *semantic evidence*, not the raw server DTO
+/// (which can contain volatile reporting fields unrelated to Core ownership).
+pub fn service_followup_evidence_changed(
+    previous: &ServiceHostStatus,
+    current: &ServiceHostStatus,
+) -> bool {
+    previous.phase != current.phase
+        || previous.ready_generation != current.ready_generation
+        || previous.settled_ready != current.settled_ready
+        || previous.status != current.status
+        || previous.runtime_owned != current.runtime_owned
+        || previous.compat != current.compat
+        || previous.restart_attempts != current.restart_attempts
+        || ServiceEvidence::from_status(previous) != ServiceEvidence::from_status(current)
+}
