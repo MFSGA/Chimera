@@ -1471,3 +1471,11 @@ backend/Cargo.toml -p chimera --lib core::clash::proxies::tests:: -- --nocapture
 - **证据**：Windows/Edge 157 的 settings layout spec 通过 WebDriver 点击侧栏链接后，目标路径和页面内容已到达，但活动链接仍没有 `data-active="true"` / `aria-current="page"`。这是用例运行时的可见断言结果；清理后采集的截图没有用于归因。
 - **修正**：`SettingsNavigationItem` 保留 ref 的 `useLinkProps` 处理目标和点击，用 `useMatchRoute` 按 `activeOptions.exact` 计算 `data-active` 与 `aria-current`。这是一条 Chimera 当前运行时适配，不宣称为 ref 缺陷。ref checkout 的 `node_modules` 为 Router 1.170.18，而 ref 与 Chimera 锁文件均固定 1.170.46，因此需要同版本 ref 环境复核后再决定是否移除。
 - **验证与防复发**：在最新 `04c668a` worktree 的构建二进制上，现有 settings layout spec **6/6** 通过。后续改动应保留真实可见链接点击、目标路由及活动属性断言；移除适配前先用相同锁定依赖和点击路径验证 ref 行为。
+
+### LESSON-20261124-001：Ref S4 迁移后测试必须提供真实候选与权威来源
+
+- 证据：master `05fcd9bf` 的 CI run `45420928092` 在 macOS、Linux、Windows 均报告相同 32 个后端单测失败；E2E run `45420927796` 通过。取消期间 SystemProxy 应返回 ShutDown 而非 Stopped；GeoIP fixture 应使用强类型 source_geo_ip，不再写旧 extra 字段。
+- Ref 的 BackendUnavailable 属于等待依赖而非消耗 application retry 次数。测试有界 Apply 重试时注入可重试的 ApplyFailed；保留 ref 的依赖错误分类。权威来源校验的测试应检查新增的紧邻 Core 提交的 fence，同时保留提交次数、候选字节及过期来源拒绝断言。
+- 剩余 14 个 Reconciler 用例涉及旧 fixture 缺少 canonical CandidateCheck 与 ProfileContentReader/source authority；S4 拒绝 legacy Core submit。迁移 fixture 时必须以已校验的冻结输入构建候选，并让模拟 Core 从提交的 prepared bytes 读取内容；禁止为通过测试恢复 inline fallback、跳过校验或删除行为断言。该观察不证明生产路径没有其他问题。
+- 在保留前述修复后快进整合 `a55fc9c0`（4 个共享 Runtime 提交），仍复现 14 个 Reconciler 失败。将这组用例接入真实 CandidateCheck 与 LiveSourceAuthority，并让 fake builder 序列化冻结 Profiles，fake Core 从 exact prepared bytes 解码而不回读当前源文档。Ref `plan.rs` 对 Running + verified 的新 target 直接 S4 Apply，只有 unverified Running 才需 S3 Stop；拒绝同 target 应保留 NotInEffect 及原始 cause，显式 Retry 方可重试。测试保留提交次数、来源版本、拒绝原因及所有权保护断言。
+- macOS 回归：SystemProxy 2/2、Traffic 3/3、整合后的 Reconciler 161/161；CI 对应 rustfmt 和 git diff --check 通过。候选 fixture 是合成产品，不证明真实 Core 启动或跨平台 E2E；完整 workspace 与远端 CI 结果另行记录。

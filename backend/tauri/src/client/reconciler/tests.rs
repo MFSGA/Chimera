@@ -586,7 +586,7 @@ async fn explicit_reconcile_keeps_committed_profiles_active_after_deferred_retry
         fail_next_reconcile: AtomicBool::new(false),
         active_profiles: Mutex::new(None),
     });
-    let client = spawn_startup_client_with_profiles(
+    let client = spawn_prepared_client_with_profiles(
         core.clone(),
         Arc::new(RecordingService {
             events: events.clone(),
@@ -1601,6 +1601,71 @@ async fn spawn_startup_client_with_profiles(
     )
     .await
     .unwrap()
+}
+
+/// Canonical committed-source fixture. The fake builder serializes the frozen
+/// Profiles document into a test product, so the fake Core sees only the
+/// submitted bytes (never a second read of the live source).
+async fn spawn_prepared_client_with_profiles(
+    core: Arc<dyn CoreLifecyclePort>,
+    service: Arc<dyn ServiceLifecyclePort>,
+    profiles: chimera_core::state::StateSnapshot<chimera_config::profile::Profiles>,
+) -> RuntimeReconcilerClient {
+    use crate::client::{
+        ports::{RuntimePreparationSession, SessionPortResolver},
+        reconciler::check::{Args, CandidateCheck},
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let path = |name: &str| Utf8PathBuf::from_path_buf(dir.path().join(name)).unwrap();
+    let application = ApplicationClient::legacy().unwrap();
+    let clash = ClashConfigClient::legacy().unwrap();
+    let app_manager = chimera_state_engine::PersistentStateManagerSetup::<
+        chimera_config::application::ChimeraAppConfig,
+    >::builder()
+    .config_path(path("application.yaml"))
+    .assemble()
+    .from_state(application.get_typed());
+    let clash_manager = chimera_state_engine::PersistentStateManagerSetup::<ClashConfig>::builder()
+        .config_path(path("clash.yaml"))
+        .assemble()
+        .from_state(clash.get().unwrap());
+    let reader = crate::state::mutation::ProfileContentReader::new(
+        profiles.clone(),
+        crate::state::mutation::ProfileContentLock::default(),
+    );
+    let lifecycle = Arc::new(crate::client::runtime::RuntimeLifecycle::default());
+    let gate = Arc::new(CandidateCheck::new(Args {
+        application: app_manager.snapshot_handle(),
+        clash: clash_manager.snapshot_handle(),
+        profile_content: reader.clone(),
+        builder: Arc::new(PreparedProfilesBuild),
+        session: RuntimePreparationSession {
+            revisions: lifecycle.revision_allocator(),
+            ports: Arc::new(SessionPortResolver::new(lifecycle)),
+        },
+        validator: Arc::new(UnusedPreparedCheck),
+        workflow: Arc::new(UnusedPreparedInbox),
+    }));
+    let installer = Arc::new(chimera_os::core_install::FsBinaryInstaller::new(Arc::new(
+        chimera_os::elevation::RefuseElevation,
+    )));
+    let client = RuntimeReconcilerClient::spawn_with_profiles_and_content(
+        core,
+        application,
+        clash,
+        Some(profiles),
+        Some(reader),
+        Some(Arc::new(EmptyManagedFiles)),
+        RuntimePaths::from_config_root(dir.path().to_path_buf()),
+        installer,
+        service,
+        CancellationToken::new(),
+        &TaskTracker::new(),
+    )
+    .await
+    .unwrap();
+    client.install_candidate_gate(gate).await.unwrap();
+    client
 }
 
 async fn startup_target_for(
@@ -3109,8 +3174,10 @@ impl CoreLifecyclePort for StartupTransientCore {
                 .unwrap()
                 .push("rebuild-transient-failure");
             return Err(anyhow::Error::new(chimera_core_manager::CoreError::new(
-                chimera_core_manager::CoreErrorKind::BackendUnavailable,
-                "temporary backend outage",
+                // BackendUnavailable is a dependency wait in ref. This fixture
+                // exercises the bounded application retry after a failed apply.
+                chimera_core_manager::CoreErrorKind::ApplyFailed,
+                "temporary runtime apply failure",
                 true,
             )));
         }
@@ -3631,6 +3698,20 @@ impl CoreLifecyclePort for ConfirmedStoppedCore {
 
 #[async_trait]
 impl CoreLifecyclePort for ProfileTccCore {
+    async fn reconcile_prepared(
+        &self,
+        prepared: ports::PreparedRuntime,
+        _: chimera_core_manager::CoreSpec,
+    ) -> anyhow::Result<()> {
+        let profiles = submitted_profiles(&prepared)?;
+        self.attempts.fetch_add(1, AtomicOrdering::AcqRel);
+        if self.fail_next_reconcile.swap(false, AtomicOrdering::AcqRel) {
+            anyhow::bail!("injected current Profiles reconcile failure");
+        }
+        *self.active_profiles.lock().unwrap() = Some(profiles);
+        Ok(())
+    }
+
     fn effective_clash_info(&self) -> chimera_core::client::clash_info::ClashInfo {
         crate::config::core::Config::clash()
             .latest()
@@ -6394,13 +6475,17 @@ async fn startup_retries_a_retryable_core_failure_through_the_lifecycle_actor() 
     .await;
 
     let initial = client.startup_reconcile().await.unwrap();
-    assert!(matches!(
-        initial.report.outcome,
-        StartupOutcome::ReadyDegraded {
-            health: crate::client::convergence::ConvergenceHealth::RetryScheduled,
-            ..
-        }
-    ));
+    assert!(
+        matches!(
+            initial.report.outcome,
+            StartupOutcome::ReadyDegraded {
+                health: crate::client::convergence::ConvergenceHealth::RetryScheduled,
+                ..
+            }
+        ),
+        "unexpected initial startup report: {:?}",
+        initial.report
+    );
     assert!(initial.result.is_err());
     assert!(
         events
@@ -6808,7 +6893,7 @@ async fn reconcile_preserves_an_undecided_profile_source_attempt_until_commit() 
         active_profiles: Mutex::new(None),
     });
     let events = Arc::new(Mutex::new(Vec::new()));
-    let client = spawn_startup_client_with_profiles(
+    let client = spawn_prepared_client_with_profiles(
         core.clone(),
         Arc::new(RecordingService {
             events: events.clone(),
@@ -6941,7 +7026,7 @@ async fn reconcile_preserves_a_profile_source_attempt_after_resource_recovery_fa
         active_profiles: Mutex::new(None),
     });
     let events = Arc::new(Mutex::new(Vec::new()));
-    let client = spawn_startup_client_with_profiles(
+    let client = spawn_prepared_client_with_profiles(
         core.clone(),
         Arc::new(RecordingService {
             events: events.clone(),
@@ -7830,6 +7915,24 @@ struct PausedProfilesCore {
 
 #[async_trait]
 impl CoreLifecyclePort for PausedProfilesCore {
+    async fn reconcile_prepared(
+        &self,
+        prepared: ports::PreparedRuntime,
+        _: chimera_core_manager::CoreSpec,
+    ) -> anyhow::Result<()> {
+        let profiles = submitted_profiles(&prepared)?;
+        self.seen.lock().unwrap().push(profiles.valid.clone());
+        let started = self.first_started.lock().unwrap().take();
+        if let Some(started) = started {
+            let release = self.release_first.lock().unwrap().take().unwrap();
+            let _ = started.send(());
+            release
+                .await
+                .map_err(|_| anyhow::anyhow!("source test release dropped"))?;
+        }
+        Ok(())
+    }
+
     fn effective_clash_info(&self) -> chimera_core::client::clash_info::ClashInfo {
         crate::config::core::Config::clash()
             .latest()
@@ -7914,7 +8017,7 @@ async fn source_advancing_during_apply_reconciles_latest_in_a_new_round() {
         first_started: Mutex::new(Some(started)),
         release_first: Mutex::new(Some(resume)),
     });
-    let client = spawn_startup_client_with_profiles(
+    let client = spawn_prepared_client_with_profiles(
         core.clone(),
         Arc::new(RecordingService {
             events: Arc::new(Mutex::new(Vec::new())),
@@ -8005,7 +8108,7 @@ async fn a_new_committed_target_unblocks_a_previous_core_refusal() {
         fail_next_reconcile: AtomicBool::new(true),
         active_profiles: Mutex::new(None),
     });
-    let client = spawn_startup_client_with_profiles(
+    let client = spawn_prepared_client_with_profiles(
         core.clone(),
         Arc::new(RecordingService {
             events: Arc::new(Mutex::new(Vec::new())),
@@ -8080,7 +8183,7 @@ async fn refused_committed_target_waits_until_explicit_retry_without_repeating_c
         fail_next_reconcile: AtomicBool::new(true),
         active_profiles: Mutex::new(None),
     });
-    let client = spawn_startup_client_with_profiles(
+    let client = spawn_prepared_client_with_profiles(
         core.clone(),
         Arc::new(RecordingService {
             events: Arc::new(Mutex::new(Vec::new())),
@@ -8104,15 +8207,22 @@ async fn refused_committed_target_waits_until_explicit_retry_without_repeating_c
 
     // A second publication of the exact same target is not an
     // instruction to repeatedly hammer a Core that already refused it.
+    let completed = client.status().completed.len();
     client.source_committed(SourceDomain::Profiles, 1, true);
     tokio::time::timeout(Duration::from_secs(3), async {
         loop {
-            if client.status().completed.iter().any(|round| {
-                round
-                    .error
-                    .as_deref()
-                    .is_some_and(|message| message.contains("previously refused"))
-            }) {
+            if client
+                .status()
+                .completed
+                .iter()
+                .skip(completed)
+                .any(|round| {
+                    round.error.as_deref().is_some_and(|message| {
+                        message.contains("committed Runtime target is not in effect")
+                            && message.contains("injected current Profiles reconcile failure")
+                    })
+                })
+            {
                 break;
             }
             tokio::task::yield_now().await;
@@ -8157,7 +8267,7 @@ async fn failed_postcommit_profiles_apply_preserves_the_source_document() {
         fail_next_reconcile: AtomicBool::new(true),
         active_profiles: Mutex::new(None),
     });
-    let client = spawn_startup_client_with_profiles(
+    let client = spawn_prepared_client_with_profiles(
         core.clone(),
         Arc::new(RecordingService {
             events: Arc::new(Mutex::new(Vec::new())),
@@ -8414,7 +8524,7 @@ async fn release_owed_is_independent_and_only_retry_replays_a_failed_daemon_stop
             retire_calls: AtomicUsize::new(0),
         });
         let client =
-            spawn_startup_client_with_profiles(core, service, manager.snapshot_handle()).await;
+            spawn_prepared_client_with_profiles(core, service, manager.snapshot_handle()).await;
         client.start_core().await.unwrap();
 
         tokio::time::timeout(Duration::from_secs(3), async {
@@ -9036,7 +9146,7 @@ async fn queued_source_dirty_tick_waits_for_startup_owner_recovery() {
         service_to_retire: None,
         retire_calls: AtomicUsize::new(0),
     });
-    let client = spawn_startup_client_with_profiles(
+    let client = spawn_prepared_client_with_profiles(
         core.clone(),
         Arc::new(RecordingService {
             events: Arc::new(Mutex::new(Vec::new())),
@@ -9095,7 +9205,7 @@ async fn queued_source_dirty_tick_waits_for_startup_owner_recovery() {
         loop {
             let status = client.reconciler_status();
             if core.submissions.load(AtomicOrdering::Acquire) == 2
-                && core.stops.load(AtomicOrdering::Acquire) == 1
+                && core.stops.load(AtomicOrdering::Acquire) == 0
                 && status
                     .recent
                     .iter()
@@ -9145,7 +9255,7 @@ async fn deferred_startup_source_commits_resume_once_or_cancel_on_stop() {
             service_to_retire: None,
             retire_calls: AtomicUsize::new(0),
         });
-        let client = spawn_startup_client_with_profiles(
+        let client = spawn_prepared_client_with_profiles(
             core.clone(),
             Arc::new(RecordingService {
                 events: Arc::new(Mutex::new(Vec::new())),
@@ -9280,7 +9390,7 @@ async fn deferred_startup_source_commits_resume_once_or_cancel_on_stop() {
                 loop {
                     let status = client.reconciler_status();
                     if core.submissions.load(AtomicOrdering::Acquire) == 2
-                        && core.stops.load(AtomicOrdering::Acquire) == 1
+                        && core.stops.load(AtomicOrdering::Acquire) == 0
                         && status.seen.version(SourceDomain::Profiles) == Some(2)
                         && status
                             .recent
@@ -9346,7 +9456,7 @@ async fn source_handoff_lease_wait_resumes_on_service_readiness_change() {
         service_to_retire: None,
         retire_calls: AtomicUsize::new(0),
     });
-    let client = spawn_startup_client_with_profiles(
+    let client = spawn_prepared_client_with_profiles(
         core.clone(),
         Arc::new(LeaseBlockedToggleService {
             inner: ToggleStartupServiceProbe {
@@ -9441,7 +9551,11 @@ async fn source_handoff_lease_wait_resumes_on_service_readiness_change() {
     assert!(!other_service_core.load(AtomicOrdering::Acquire));
     assert_eq!(core.retire_calls.load(AtomicOrdering::Acquire), 0);
     assert_eq!(core.submissions.load(AtomicOrdering::Acquire), 2);
-    assert_eq!(core.stops.load(AtomicOrdering::Acquire), 1);
+    assert_eq!(
+        core.stops.load(AtomicOrdering::Acquire),
+        0,
+        "ref S3 must not stop a verified running owner before S4 applies a new target"
+    );
     assert!(client.reconciler_status().maintenance.is_none());
     // A successful latest-source round already consumed the continuation.
     // It must not schedule a redundant third SourceCommitted after 500ms.
@@ -9486,7 +9600,7 @@ async fn source_committed_waits_for_second_service_owner_before_core_apply() {
         retire_calls: AtomicUsize::new(0),
     });
     let other_service_core = Arc::new(AtomicBool::new(false));
-    let client = spawn_startup_client_with_profiles(
+    let client = spawn_prepared_client_with_profiles(
         core.clone(),
         Arc::new(ToggleStartupServiceProbe {
             events: Arc::new(Mutex::new(Vec::new())),
@@ -9519,13 +9633,13 @@ async fn source_committed_waits_for_second_service_owner_before_core_apply() {
 
     // A new, fresh Service probe proves the other owned Core stopped.
     // The source is still durable; a repeated notification now proceeds
-    // through S3/S4 to stop the outdated Local Core before reapplying.
+    // through S3/S4 to apply to the verified Local Core without stopping it.
     other_service_core.store(false, AtomicOrdering::Release);
     client.source_committed(SourceDomain::Profiles, 1, true);
     tokio::time::timeout(Duration::from_secs(3), async {
         loop {
             if core.submissions.load(AtomicOrdering::Acquire) == 2
-                && core.stops.load(AtomicOrdering::Acquire) == 1
+                && core.stops.load(AtomicOrdering::Acquire) == 0
                 && client.status().active.is_none()
             {
                 break;
@@ -9543,10 +9657,10 @@ async fn source_committed_waits_for_second_service_owner_before_core_apply() {
 }
 
 /// Ref S3/S4 is now called from the real committed-source actor route:
-/// the same proven target is a no-op; a different accepted target requires
-/// stopping the old Core before a single fresh application.
+/// the same proven target is a no-op; a different target is submitted once
+/// to the verified running owner without a speculative S3 Stop.
 #[tokio::test]
-async fn ref_plan_skips_identical_commits_and_stops_outdated_accepted_core() {
+async fn ref_plan_skips_identical_commits_and_applies_new_target_to_verified_core() {
     use chimera_core::client::reconciler::plan::Conclusion;
 
     let dir = tempfile::tempdir().unwrap();
@@ -9570,7 +9684,7 @@ async fn ref_plan_skips_identical_commits_and_stops_outdated_accepted_core() {
         service_to_retire: None,
         retire_calls: AtomicUsize::new(0),
     });
-    let client = spawn_startup_client_with_profiles(
+    let client = spawn_prepared_client_with_profiles(
         core.clone(),
         Arc::new(RecordingService {
             events: Arc::new(Mutex::new(Vec::new())),
@@ -9614,7 +9728,7 @@ async fn ref_plan_skips_identical_commits_and_stops_outdated_accepted_core() {
     tokio::time::timeout(Duration::from_secs(3), async {
         loop {
             if core.submissions.load(AtomicOrdering::Acquire) == 2
-                && core.stops.load(AtomicOrdering::Acquire) == 1
+                && core.stops.load(AtomicOrdering::Acquire) == 0
                 && client.status().active.is_none()
             {
                 break;
@@ -9623,7 +9737,7 @@ async fn ref_plan_skips_identical_commits_and_stops_outdated_accepted_core() {
         }
     })
     .await
-    .expect("changed committed target must stop old Core and apply once");
+    .expect("changed committed target must apply once without stopping the verified Core");
     assert!(matches!(
         client.reconciler_status().conclusion,
         Conclusion::Converged
@@ -9790,7 +9904,7 @@ async fn profiles_source_commit_applies_latest_document_not_notified_version() {
         fail_next_reconcile: AtomicBool::new(false),
         active_profiles: Mutex::new(None),
     });
-    let client = spawn_startup_client_with_profiles(
+    let client = spawn_prepared_client_with_profiles(
         core.clone(),
         Arc::new(RecordingService {
             events: Arc::new(Mutex::new(Vec::new())),
@@ -10753,6 +10867,64 @@ impl crate::client::reconciler::authority::RuntimeSourceAuthority for TestSource
 /// A build-only gate for the legacy stable-Local bridge. Production uses
 /// RuntimeBuildService from the active Core-owned preparation session;
 /// this fake records whether the workflow submitted *prepared* bytes.
+struct PreparedProfilesBuild;
+
+#[async_trait]
+impl crate::client::reconciler::ports::RuntimeBuildPort for PreparedProfilesBuild {
+    async fn capture_content(
+        &self,
+        _: &chimera_config::profile::Profiles,
+    ) -> crate::client::reconciler::inputs::FrozenProfileContent {
+        Default::default()
+    }
+
+    fn core_spec(
+        &self,
+        core: &ClashCore,
+    ) -> Result<chimera_core_manager::CoreSpec, chimera_core::client::core_spec::CoreSpecError>
+    {
+        PreparedLocalBuild.core_spec(core)
+    }
+
+    async fn build(
+        &self,
+        revision: crate::client::runtime::RuntimeRevision,
+        inputs: crate::client::reconciler::inputs::RuntimeInputs,
+        _: chimera_config::runtime::executor::ResolvedPortBindings,
+        _: bool,
+    ) -> Result<
+        Arc<crate::client::runtime::RuntimeSnapshot>,
+        chimera_core::client::runtime_build::RuntimeBuildError,
+    > {
+        let bytes = serde_yaml::to_string(inputs.profiles.as_ref())
+            .unwrap()
+            .into_bytes();
+        Ok(Arc::new(crate::client::runtime::RuntimeSnapshot::new(
+            revision,
+            inputs.app.core,
+            bytes,
+            serde_yaml::Mapping::new(),
+        )))
+    }
+
+    async fn publish(
+        &self,
+        _: &crate::client::runtime::RuntimeSnapshot,
+    ) -> Result<(), chimera_contracts::publish::PublishRuntimeError> {
+        panic!("the Core owns publication after confirming a prepared apply")
+    }
+}
+
+fn submitted_profiles(
+    prepared: &ports::PreparedRuntime,
+) -> anyhow::Result<chimera_config::profile::Profiles> {
+    anyhow::ensure!(
+        prepared.intent.config_text.as_bytes() == prepared.snapshot.product_bytes(),
+        "submitted bytes differ from the prepared product"
+    );
+    Ok(serde_yaml::from_slice(prepared.snapshot.product_bytes())?)
+}
+
 struct PreparedLocalBuild;
 
 #[async_trait]
@@ -11175,7 +11347,7 @@ async fn service_startup_submits_one_prepared_core_only_for_ready_owned_service(
         chimera_core_manager::payload_digest(b"mode: rule\n")
     );
     assert_eq!(workflow.applied_selection_for_tests(), Some(selection));
-    assert_eq!(authority.reads.load(AtomicOrdering::Relaxed), 3);
+    assert_eq!(authority.reads.load(AtomicOrdering::Relaxed), 4);
     assert!(workflow.take_checked_connection_effect().is_none());
     assert!(
         !workflow.startup_service_refusal_stopped().await,
@@ -11453,8 +11625,8 @@ async fn stable_local_reconcile_uses_one_prepared_core_submission_and_source_fen
     assert!(workflow.take_checked_connection_effect().is_none());
     assert_eq!(
         authority.reads.load(AtomicOrdering::Relaxed),
-        3,
-        "source target must be proved before the build, before Core, and after apply"
+        4,
+        "source target must be proved before build, after build, immediately before Core, and after apply"
     );
 
     // A later source promotion cannot replay old prepared bytes or send
@@ -11692,7 +11864,7 @@ async fn explicit_clash_mode_effect_prepares_old_instance_without_applied_select
         .unwrap();
     assert_eq!(core.captures.load(AtomicOrdering::Relaxed), 1);
     assert_eq!(core.applies.load(AtomicOrdering::Relaxed), 1);
-    assert_eq!(authority.reads.load(AtomicOrdering::Relaxed), 2);
+    assert_eq!(authority.reads.load(AtomicOrdering::Relaxed), 3);
     assert!(workflow.applied_selection_for_tests().is_none());
     let effect = workflow
         .take_checked_connection_effect()
@@ -11799,7 +11971,7 @@ async fn checked_profile_selection_interrupts_only_after_confirmed_core_apply() 
         .unwrap();
     assert_eq!(core.captures.load(AtomicOrdering::Relaxed), 1);
     assert_eq!(core.applies.load(AtomicOrdering::Relaxed), 1);
-    assert_eq!(authority.reads.load(AtomicOrdering::Relaxed), 2);
+    assert_eq!(authority.reads.load(AtomicOrdering::Relaxed), 3);
     let effect = workflow
         .take_checked_connection_effect()
         .expect("Profile selection change must retain pre-apply Core API");
@@ -11921,8 +12093,8 @@ async fn checked_runtime_refuses_latest_source_convergence_after_core_succeeded_
         .expect("the original bytes should have reached Core");
     assert_eq!(
         observed.reads.load(AtomicOrdering::Relaxed),
-        1,
-        "pre-Core source verification must precede the actual mutation"
+        2,
+        "interruption-policy verification and the immediate pre-Core source fence must precede mutation"
     );
     // An independent source commit occurred while Core was applying.
     observed.current.lock().unwrap().1 = 8;
@@ -11939,7 +12111,7 @@ async fn checked_runtime_refuses_latest_source_convergence_after_core_succeeded_
             .is_some(),
         "the proven older Core receipt is not an applied latest target"
     );
-    assert_eq!(observed.reads.load(AtomicOrdering::Relaxed), 2);
+    assert_eq!(observed.reads.load(AtomicOrdering::Relaxed), 3);
     assert_eq!(
         core.submits.lock().unwrap().as_slice(),
         &[(original_bytes, binary)],
@@ -11991,7 +12163,7 @@ async fn checked_apply_records_only_authoritatively_confirmed_selection() {
         )
         .await
         .unwrap();
-    assert_eq!(selected.reads.load(AtomicOrdering::Relaxed), 2);
+    assert_eq!(selected.reads.load(AtomicOrdering::Relaxed), 3);
     assert_eq!(submits.lock().unwrap().len(), 1);
     assert_eq!(workflow.applied_selection_for_tests(), Some(selection));
 
@@ -12096,7 +12268,7 @@ async fn legacy_lifecycle_operation_invalidates_checked_selection_baseline() {
 }
 
 #[tokio::test]
-async fn checked_runtime_can_converge_only_after_two_matching_authoritative_reads() {
+async fn checked_runtime_can_converge_only_after_matching_pre_and_post_core_source_reads() {
     let accepted = Arc::new(Notify::new());
     let release = Arc::new(Notify::new());
     let core = Arc::new(DelayedCheckedCore {
@@ -12136,14 +12308,14 @@ async fn checked_runtime_can_converge_only_after_two_matching_authoritative_read
     tokio::time::timeout(Duration::from_secs(2), accepted.notified())
         .await
         .unwrap();
-    assert_eq!(observed.reads.load(AtomicOrdering::Relaxed), 1);
+    assert_eq!(observed.reads.load(AtomicOrdering::Relaxed), 2);
     release.notify_one();
     tokio::time::timeout(Duration::from_secs(2), applying)
         .await
         .unwrap()
         .unwrap()
         .unwrap();
-    assert_eq!(observed.reads.load(AtomicOrdering::Relaxed), 2);
+    assert_eq!(observed.reads.load(AtomicOrdering::Relaxed), 3);
     assert_eq!(core.submits.lock().unwrap().len(), 1);
 }
 
@@ -12436,8 +12608,8 @@ async fn checked_source_dispatch_uses_single_lifecycle_core_queue_and_exact_byte
     assert_eq!(submits.lock().unwrap().len(), 1);
     assert_eq!(
         authority.reads.load(AtomicOrdering::Relaxed),
-        2,
-        "the executed checked candidate requires both pre- and post-Core source reads"
+        3,
+        "the executed candidate requires interruption-policy, immediate pre-Core, and post-Core source reads"
     );
 }
 

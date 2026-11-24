@@ -134,9 +134,7 @@ fn frame_with_geo(instance_id: &str, connection_id: &str) -> ClashConnectionsFra
         .as_mut()
         .unwrap();
     metadata.known.source_ip = Some("8.8.8.8".into());
-    metadata
-        .extra
-        .insert("sourceGeoIP".into(), serde_json::json!(["ca"]));
+    metadata.known.source_geo_ip = Some(vec!["ca".into()]);
     frame
 }
 
