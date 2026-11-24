@@ -494,3 +494,33 @@ pub(crate) trait CoreLifecyclePort: Send + Sync {
 
     async fn on_profile_change(&self, break_when: bool);
 }
+
+#[async_trait]
+impl RuntimeApplyPort for dyn CoreLifecyclePort + '_ {
+    async fn reconcile_prepared_submission(
+        &self,
+        prepared: PreparedRuntime,
+        spec: chimera_core_manager::CoreSpec,
+    ) -> anyhow::Result<PreparedSubmission> {
+        CoreLifecyclePort::reconcile_prepared_submission(self, prepared, spec).await
+    }
+    async fn capture_interruption_source(
+        &self,
+    ) -> anyhow::Result<Option<chimera_core::actor_v2::api::ApiClient>> {
+        CoreLifecyclePort::capture_interruption_source(self)
+            .await
+            .map(|api| api.map(|api| api.core_client()))
+    }
+    async fn active_runtime_receipt(&self) -> anyhow::Result<Option<Arc<RuntimeApplyReceipt>>> {
+        CoreLifecyclePort::active_runtime_receipt(self).await
+    }
+    fn outcome_uncertain(&self) -> bool {
+        CoreLifecyclePort::outcome_uncertain(self)
+    }
+    fn pending_runtime_product_target(&self) -> Option<String> {
+        CoreLifecyclePort::pending_runtime_product_target(self)
+    }
+    async fn republish_pending_runtime_product(&self, target: &str) -> anyhow::Result<bool> {
+        CoreLifecyclePort::republish_pending_runtime_product(self, target).await
+    }
+}

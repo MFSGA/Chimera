@@ -3,3 +3,5 @@ pub mod workflow;
 pub const RECOVERY_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5);
 
 pub mod ports;
+
+pub mod apply;

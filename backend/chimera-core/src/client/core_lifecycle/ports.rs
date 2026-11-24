@@ -162,3 +162,20 @@ pub struct PreparedRuntime {
     /// when it has one.
     pub target: Option<String>,
 }
+
+/// Runtime execution capability consumed by the single reconciler.
+#[async_trait]
+pub trait RuntimeApplyPort: Send + Sync {
+    async fn reconcile_prepared_submission(
+        &self,
+        prepared: PreparedRuntime,
+        spec: chimera_core_manager::CoreSpec,
+    ) -> anyhow::Result<PreparedSubmission>;
+    async fn capture_interruption_source(
+        &self,
+    ) -> anyhow::Result<Option<crate::actor_v2::api::ApiClient>>;
+    async fn active_runtime_receipt(&self) -> anyhow::Result<Option<Arc<RuntimeApplyReceipt>>>;
+    fn outcome_uncertain(&self) -> bool;
+    fn pending_runtime_product_target(&self) -> Option<String>;
+    async fn republish_pending_runtime_product(&self, target: &str) -> anyhow::Result<bool>;
+}
