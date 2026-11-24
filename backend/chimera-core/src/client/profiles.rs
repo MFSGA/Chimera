@@ -38,6 +38,7 @@ struct ProfilesClientInner {
     snapshot: StateSnapshot<Profiles>,
     content_lock: ProfileContentLock,
     jobs: crate::state::profiles::jobs::ProfileJobs,
+    sources: tokio::sync::watch::Receiver<crate::state::profiles::sources::SourcesSnapshot>,
     // Shared with the actor; a probe downloads without touching its state.
     fetcher: Arc<dyn SubscriptionFetcher>,
     #[cfg(any(test, feature = "test-support"))]
@@ -168,6 +169,9 @@ impl ProfilesClient {
             .validate()
             .map_err(|errors| anyhow::anyhow!("profiles.yaml failed validation: {errors:?}"))?;
 
+        let (sources_tx, sources) = tokio::sync::watch::channel(
+            crate::state::profiles::sources::SourcesSnapshot::default(),
+        );
         let actor_ref = Actor::spawn(
             None,
             ProfilesActor,
@@ -179,6 +183,8 @@ impl ProfilesClient {
                 fetcher: fetcher.clone(),
                 materialization,
                 jobs: jobs.clone(),
+                sources: sources_tx,
+                shutdown: shutdown.clone(),
             },
         )
         .await
@@ -192,11 +198,23 @@ impl ProfilesClient {
                 snapshot,
                 content_lock,
                 jobs,
+                sources,
                 fetcher,
                 #[cfg(any(test, feature = "test-support"))]
                 _test_owner: test_owner,
             }),
         })
+    }
+
+    /// Latest background source receipt per profile, read without actor RPC.
+    pub fn sources(&self) -> crate::state::profiles::sources::SourcesSnapshot {
+        self.inner.sources.borrow().clone()
+    }
+
+    pub fn subscribe_sources(
+        &self,
+    ) -> tokio::sync::watch::Receiver<crate::state::profiles::sources::SourcesSnapshot> {
+        self.inner.sources.clone()
     }
 
     /// The last committed profiles document. Reads bypass the mailbox, so an
@@ -548,6 +566,7 @@ pub struct ProfileSyncStatus {
     pub journal_degraded: bool,
     pub registration_error: Option<String>,
     pub history_limit: usize,
+    pub source: Option<crate::client::configuration::SourceStatus>,
 }
 
 impl ProfilesClient {
@@ -602,6 +621,11 @@ impl ProfilesClient {
                 .get(crate::state::profiles::jobs::SCOPE)
                 .and_then(|scope| scope.last_error.clone()),
             history_limit: DEFAULT_HISTORY_LIMIT,
+            source: self
+                .sources()
+                .entries
+                .into_iter()
+                .find(|entry| entry.profile == uid),
         })
     }
 

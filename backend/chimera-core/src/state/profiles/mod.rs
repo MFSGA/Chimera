@@ -8,3 +8,5 @@ mod scheduler;
 pub use actor::*;
 
 pub use chimera_core_manager::control::payload_digest;
+
+pub mod sources;

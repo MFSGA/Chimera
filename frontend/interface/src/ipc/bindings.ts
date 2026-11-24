@@ -2130,6 +2130,14 @@ export type ControlSource_Deserialize = 'profile' | 'chimera' | 'nyanpasu';
 
 export type ControlSource_Serialize = 'profile' | 'chimera';
 
+export type ConvergenceHealth =
+  | 'healthy'
+  | 'pending'
+  | 'retry_scheduled'
+  | 'waiting_dependency'
+  | 'blocked'
+  | 'recovery_required';
+
 /**  The active core's controller endpoint without its private credential. */
 export type CoreControllerInfo =
   | ({ NamedPipe: string } & { Http?: never; UnixSocket?: never })
@@ -3694,6 +3702,7 @@ export type ProfileSyncStatus = {
   journal_degraded: boolean;
   registration_error: string | null;
   history_limit: number;
+  source: SourceStatus | null;
 };
 
 /**
@@ -4280,6 +4289,30 @@ export type SnapshotDiffHunk = {
   new_lines: number;
   /**  Unified diff lines, including their space, plus, or minus prefix. */
   lines: string[];
+};
+
+export type SourceOrigin =
+  'scheduled_refresh' | 'manual_refresh' | 'external_file';
+
+export type SourceOutcome =
+  | { kind: 'committed'; operation_id: string | null }
+  /**  Its result no longer applied to the profile and was dropped (V31). */
+  | { kind: 'superseded'; reason: string }
+  | { kind: 'failed'; message: string }
+  /**
+   *  The content reached the source transaction and was refused; nothing
+   *  was committed and an external file is never rewritten (V33).
+   */
+  | { kind: 'rejected'; code: string; message: string };
+
+export type SourceStatus = {
+  profile: ProfileId;
+  name: string;
+  origin: SourceOrigin;
+  outcome: SourceOutcome;
+  health: ConvergenceHealth;
+  /**  Unix milliseconds. */
+  at: number;
 };
 
 export type StateChanged =

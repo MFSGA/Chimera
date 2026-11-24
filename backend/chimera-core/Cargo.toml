@@ -72,6 +72,7 @@ snafu = { workspace = true }
 strum = { version = "0.28", features = ["derive"] }
 
 [dev-dependencies]
+chimera-profile-transform = { path = "../chimera-profile-transform", features = ["test-support"] }
 tracing-subscriber = "0.3"
 chimera-observers = { path = "../chimera-observers", features = ["test-support"] }
 mockall = "0.15"

@@ -361,6 +361,7 @@ mod summary_tests {
             journal_degraded: true,
             registration_error: Some(secret.into()),
             history_limit: DEFAULT_HISTORY_LIMIT,
+            source: None,
         };
         let summary = ProfileSyncSummary::from(&status);
         let page = SyncRunPageSummary::from(&RunPageDto {

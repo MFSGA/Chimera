@@ -8,11 +8,12 @@ use crate::{
     state::{PersistentStateManager, ReplaceIfVersionResult, Version},
 };
 use chimera_config::profile::{
-    ExternalMode, FolderId, LocalBinding, ManagedProfilePath, NewProfileRequest, ProfileDefinition,
-    ProfileDependencyIndex, ProfileFolder, ProfileId, ProfileItem, ProfileLayout, ProfileMetadata,
-    ProfileMetadataPatch, ProfileRevisionError, ProfileSource, ProfileValidationError, Profiles,
-    ProxyGroupFolder, ProxyGroupLayout, RemoteProfileOptions, RemoteProfileOptionsPatch,
-    RemoteSyncInterval, ScriptRuntime, SubscriptionInfo, TransformDefinition, TransformKind,
+    ExternalMode, ExternalProfilePath, FolderId, LocalBinding, ManagedProfilePath,
+    NewProfileRequest, ProfileDefinition, ProfileDependencyIndex, ProfileFolder, ProfileId,
+    ProfileItem, ProfileLayout, ProfileMetadata, ProfileMetadataPatch, ProfileRevisionError,
+    ProfileSource, ProfileValidationError, Profiles, ProxyGroupFolder, ProxyGroupLayout,
+    RemoteProfileOptions, RemoteProfileOptionsPatch, RemoteSyncInterval, ScriptRuntime,
+    SubscriptionInfo, TransformDefinition, TransformKind,
 };
 use chimera_contracts::profiles::{
     command_failure::{
@@ -24,12 +25,14 @@ use chimera_contracts::{mutation::CommitAborted, runtime_error::RuntimeError};
 use chimera_core_manager::OperationId;
 use ractor::{Actor, ActorProcessingErr, ActorRef, RpcReplyPort};
 
+use super::sources::{SourceLedger, SourcesSnapshot};
+use crate::client::configuration::{SourceOrigin, SourceOutcome};
 use crate::state::{
     impact,
     mutation::{ProfileContentLock, ProfileMutationPort},
 };
 use chimera_migration::modules::profiles::ProfilesFormat;
-use tokio::task::JoinHandle;
+use tokio::{sync::watch, task::JoinHandle};
 
 use super::{
     jobs::{ProfileJobs, ProfileSyncContext},
@@ -268,6 +271,8 @@ pub struct ProfilesActorArgs {
     pub fetcher: Arc<dyn SubscriptionFetcher>,
     pub materialization: Arc<dyn ProfileMaterializationPort>,
     pub jobs: ProfileJobs,
+    pub sources: watch::Sender<SourcesSnapshot>,
+    pub shutdown: tokio_util::sync::CancellationToken,
 }
 
 pub struct ProfilesActorState {
@@ -288,6 +293,8 @@ pub struct ProfilesActorState {
     external_watchers: ExternalWatchers,
     /// Periodic journal recovery. Background task only casts; actor owns work.
     reconcile_task: Option<JoinHandle<()>>,
+    sources: SourceLedger,
+    shutdown: tokio_util::sync::CancellationToken,
 }
 
 /// Background profile producers stay held until core startup reconciliation
@@ -299,6 +306,7 @@ enum ProducerGate {
 }
 
 struct PendingRefresh {
+    origin: RefreshOrigin,
     context: Option<ProfileSyncContext>,
     token: u64,
     reply: Option<RpcReplyPort<Result<CommitReport, ProfilesError>>>,
@@ -310,6 +318,7 @@ struct PendingRefresh {
 pub struct ImportOperationToken(u64);
 
 struct PendingImport {
+    task: JoinHandle<()>,
     transform: Option<TransformKind>,
     reply: RpcReplyPort<Result<CommitReport, ProfilesError>>,
     metadata: ProfileMetadata,
@@ -323,6 +332,55 @@ struct PendingImport {
 pub enum RefreshOrigin {
     Manual,
     Scheduled,
+}
+impl RefreshOrigin {
+    fn source(self) -> SourceOrigin {
+        match self {
+            Self::Manual => SourceOrigin::ManualRefresh,
+            Self::Scheduled => SourceOrigin::ScheduledRefresh,
+        }
+    }
+}
+
+enum RefreshConclusion {
+    Committed(CommitReport),
+    Superseded(ProfilesError),
+    Failed(ProfilesError),
+    Rejected(ProfilesError),
+}
+
+impl RefreshConclusion {
+    // Source diagnostics are UI-visible. Do not persist URLs, subscription
+    // credentials, file paths or downloaded configuration from error chains.
+    fn settle(self) -> (SourceOutcome, Result<CommitReport, ProfilesError>) {
+        match self {
+            Self::Committed(report) => (
+                SourceOutcome::Committed {
+                    operation_id: report.receipt.operation_id.clone(),
+                },
+                Ok(report),
+            ),
+            Self::Superseded(error) => (
+                SourceOutcome::Superseded {
+                    reason: "profile definition changed during refresh".into(),
+                },
+                Err(error),
+            ),
+            Self::Failed(error) => (
+                SourceOutcome::Failed {
+                    message: "subscription download or validation failed".into(),
+                },
+                Err(error),
+            ),
+            Self::Rejected(error) => (
+                SourceOutcome::rejected(
+                    SourceOutcome::SUBSCRIPTION_REJECTED,
+                    "subscription source transaction refused",
+                ),
+                Err(error),
+            ),
+        }
+    }
 }
 
 /// A download/validation failure retains its original typed cause across
@@ -504,6 +562,53 @@ struct SourceHints {
     touched: Vec<ManagedProfilePath>,
     staged_content: std::collections::BTreeMap<String, String>,
 }
+impl ProfilesActorMessage {
+    /// Answers a message that reached the actor once the shutdown began: a
+    /// write is refused, and producer input is dropped. A completion's caller
+    /// is answered by `post_stop` with its pending entry.
+    fn refuse(self) {
+        match self {
+            Self::SaveFile { reply, .. }
+            | Self::SetCurrent { reply, .. }
+            | Self::SetGlobalTransforms { reply, .. }
+            | Self::SetValidFields { reply, .. }
+            | Self::Replace { reply, .. }
+            | Self::Add { reply, .. }
+            | Self::Delete { reply, .. }
+            | Self::Reorder { reply, .. }
+            | Self::SetLayout { reply, .. }
+            | Self::SetProxyGroupLayout { reply, .. }
+            | Self::PatchMetadata { reply, .. }
+            | Self::PatchRemoteOptions { reply, .. }
+            | Self::ImportRemote { reply, .. }
+            | Self::ReplaceDefinition { reply, .. } => {
+                let _ = reply.send(Err(ProfilesError::ShuttingDown));
+            }
+            Self::SetCurrentIfNone { reply, .. } => {
+                let _ = reply.send(Err(ProfilesError::ShuttingDown));
+            }
+            Self::CreateFolder { reply, .. } | Self::CreateProxyGroupFolder { reply, .. } => {
+                let _ = reply.send(Err(ProfilesError::ShuttingDown));
+            }
+            Self::SyncRemote { reply, .. } => {
+                let _ = reply.send(Err(ProfilesError::ShuttingDown));
+            }
+            Self::RefreshRemote { reply, .. } => {
+                if let Some(reply) = reply {
+                    let _ = reply.send(Err(ProfilesError::ShuttingDown));
+                }
+            }
+            Self::CommitRefreshed { .. }
+            | Self::CommitImported { .. }
+            | Self::ExternalFileChanged { .. }
+            | Self::ReconcileMaterializations => {}
+            Self::StartProducers { reply } => {
+                let _ = reply.send(Err(ProfilesError::ShuttingDown));
+            }
+        }
+    }
+}
+
 pub struct ProfilesActor;
 
 enum AffectsRule {
@@ -711,6 +816,7 @@ impl ProfilesActor {
         snapshot: &Profiles,
     ) {
         state.index = ProfileDependencyIndex::build(snapshot);
+        state.sources.reconcile(snapshot);
         state.jobs_revision = state.jobs_revision.saturating_add(1);
         if let Err(error) = state
             .jobs
@@ -758,6 +864,210 @@ impl ProfilesActor {
                 }
             }
         }));
+    }
+
+    fn record_source(
+        state: &mut ProfilesActorState,
+        uid: &ProfileId,
+        origin: SourceOrigin,
+        outcome: SourceOutcome,
+    ) {
+        let versioned = state.manager.snapshot_handle().load();
+        state.sources.record(&versioned.state, uid, origin, outcome);
+    }
+
+    /// Reads a changed Mirror target and commits its managed copy.
+    async fn sync_mirror(
+        myself: &ActorRef<ProfilesActorMessage>,
+        state: &mut ProfilesActorState,
+        uid: &ProfileId,
+        expected_target: ExternalProfilePath,
+        expected_path: ManagedProfilePath,
+        definition: ProfileDefinition,
+    ) -> SourceOutcome {
+        let expected_fingerprint = match serde_yaml::to_string(&definition) {
+            Ok(fingerprint) => fingerprint,
+            Err(_error) => {
+                return SourceOutcome::Failed {
+                    message: "external profile could not be read or fingerprinted".into(),
+                };
+            }
+        };
+        let fs = Arc::clone(&state.fs);
+        let read_target = expected_target.clone();
+        let content = match tokio::task::spawn_blocking(move || fs.read_external(&read_target))
+            .await
+            .map_err(anyhow::Error::from)
+            .and_then(|content| content)
+        {
+            Ok(content) => content,
+            Err(_error) => {
+                return SourceOutcome::Failed {
+                    message: "external profile could not be read or fingerprinted".into(),
+                };
+            }
+        };
+        if let Err(_error) = Self::validate_fetched_content(&definition, &content) {
+            return SourceOutcome::rejected(
+                SourceOutcome::EXTERNAL_SOURCE_REJECTED,
+                "external profile content failed validation",
+            );
+        }
+
+        let versioned = state.manager.snapshot_handle().load();
+        let expected_version = versioned.version;
+        let before = versioned.state.clone();
+        drop(versioned);
+        let still_current = before.items.get(uid).is_some_and(|current| {
+            matches!(
+                current.definition.source(),
+                Some(ProfileSource::Local {
+                    binding: LocalBinding::External {
+                        materialized,
+                        target,
+                        mode: ExternalMode::Mirror,
+                    },
+                }) if *target == expected_target && materialized.file == expected_path
+            ) && serde_yaml::to_string(&current.definition)
+                .is_ok_and(|fingerprint| fingerprint == expected_fingerprint)
+        });
+        if !still_current {
+            return SourceOutcome::Superseded {
+                reason: "external profile definition changed while it was read".into(),
+            };
+        }
+        let mut next = before.clone();
+        let item = next
+            .items
+            .get_mut(uid)
+            .expect("fenced external profile remains in the candidate snapshot");
+        let Some(ProfileSource::Local {
+            binding: LocalBinding::External { materialized, .. },
+        }) = item.definition.source_mut()
+        else {
+            return SourceOutcome::Superseded {
+                reason: "external profile definition changed while it was read".into(),
+            };
+        };
+        materialized.updated_at = Some(time::OffsetDateTime::now_utc());
+        match Self::commit_file_first(
+            myself,
+            state,
+            expected_version,
+            before,
+            next,
+            AffectsRule::Touched(uid.clone()),
+            expected_path,
+            content,
+        )
+        .await
+        {
+            Ok(report) => SourceOutcome::Committed {
+                operation_id: report.receipt.operation_id,
+            },
+            Err(_error) => SourceOutcome::rejected(
+                SourceOutcome::EXTERNAL_SOURCE_REJECTED,
+                "external profile source transaction refused",
+            ),
+        }
+    }
+
+    /// Fences a finished download against the live definition and commits it.
+    async fn conclude_refresh(
+        myself: &ActorRef<ProfilesActorMessage>,
+        state: &mut ProfilesActorState,
+        uid: &ProfileId,
+        url: url::Url,
+        definition_fingerprint: String,
+        outcome: RefreshOutcome,
+    ) -> RefreshConclusion {
+        let versioned = state.manager.snapshot_handle().load();
+        let expected_version = versioned.version;
+        let before = versioned.state.clone();
+        drop(versioned);
+        let changed = || {
+            RefreshConclusion::Superseded(ProfilesError::RefreshFailed {
+                message: "subscription definition changed during refresh".into(),
+            })
+        };
+        let Some(current) = before.items.get(uid) else {
+            return RefreshConclusion::Superseded(ProfilesError::RefreshFailed {
+                message: "profile deleted during refresh".into(),
+            });
+        };
+        let current_fingerprint = match serde_yaml::to_string(&current.definition) {
+            Ok(fingerprint) => fingerprint,
+            Err(error) => {
+                return RefreshConclusion::Failed(ProfilesError::RefreshFailed {
+                    message: format!("failed to fingerprint current definition: {error}"),
+                });
+            }
+        };
+        let path = match current.definition.source() {
+            Some(ProfileSource::Remote {
+                url: current_url,
+                materialized,
+                ..
+            }) if current_fingerprint == definition_fingerprint && *current_url == url => {
+                materialized.file.clone()
+            }
+            _ => return changed(),
+        };
+        // Fenced first: a download that failed for a definition that no
+        // longer exists says nothing about the current one.
+        let (subscription, content, filename) = match outcome {
+            RefreshOutcome::Failed { message, source } => {
+                return RefreshConclusion::Failed(Self::fetch_failure(message, source, false));
+            }
+            RefreshOutcome::Succeeded {
+                subscription,
+                suggested_update_interval_minutes: _,
+                content,
+                filename,
+            } => (subscription, content, filename),
+        };
+        if let Err(error) = Self::validate_fetched_content(&current.definition, &content) {
+            return RefreshConclusion::Superseded(ProfilesError::RefreshFailed {
+                message: format!(
+                    "stale download no longer valid for the current definition: {error}"
+                ),
+            });
+        }
+        let mut next = before.clone();
+        let item = next
+            .items
+            .get_mut(uid)
+            .expect("fenced profile remains in the candidate snapshot");
+        if let Some(name) = synced_name(item.metadata.custom_name, &filename) {
+            item.metadata.name = name;
+        }
+        let Some(ProfileSource::Remote {
+            materialized,
+            subscription: slot,
+            ..
+        }) = item.definition.source_mut()
+        else {
+            return changed();
+        };
+        materialized.updated_at = Some(time::OffsetDateTime::now_utc());
+        *slot = subscription;
+        // Manual/scheduled refresh never adopts server interval suggestions;
+        // import applies them only on first commit.
+        match Self::commit_file_first(
+            myself,
+            state,
+            expected_version,
+            before,
+            next,
+            AffectsRule::Touched(uid.clone()),
+            path,
+            content,
+        )
+        .await
+        {
+            Ok(report) => RefreshConclusion::Committed(report),
+            Err(error) => RefreshConclusion::Rejected(error),
+        }
     }
 
     async fn run_state_write<F>(
@@ -1643,6 +1953,8 @@ impl Actor for ProfilesActor {
             jobs_revision: 1,
             external_watchers: ExternalWatchers::default(),
             reconcile_task: None,
+            sources: SourceLedger::new(args.sources),
+            shutdown: args.shutdown,
         })
     }
 
@@ -1652,6 +1964,10 @@ impl Actor for ProfilesActor {
         message: Self::Msg,
         state: &mut Self::State,
     ) -> Result<(), ActorProcessingErr> {
+        if state.shutdown.is_cancelled() {
+            message.refuse();
+            return Ok(());
+        }
         let message = match message {
             ProfilesActorMessage::SyncRemote {
                 uid,
@@ -2115,6 +2431,15 @@ impl Actor for ProfilesActor {
                 let definition_fingerprint = match serde_yaml::to_string(&definition) {
                     Ok(fingerprint) => fingerprint,
                     Err(error) => {
+                        Self::record_source(
+                            state,
+                            &uid,
+                            origin.source(),
+                            SourceOutcome::Failed {
+                                message: "subscription definition could not be fingerprinted"
+                                    .into(),
+                            },
+                        );
                         if let Some(reply) = reply {
                             let _ = reply.send(Err(ProfilesError::RefreshFailed {
                                 message: format!(
@@ -2154,6 +2479,7 @@ impl Actor for ProfilesActor {
                 state.pending_refresh.insert(
                     uid,
                     PendingRefresh {
+                        origin,
                         context,
                         token,
                         reply,
@@ -2180,119 +2506,21 @@ impl Actor for ProfilesActor {
                 };
                 let context = pending.context;
                 let reply = pending.reply;
-                let commit = async {
-                    match outcome {
-                        RefreshOutcome::Failed { message, source } => {
-                            Err(Self::fetch_failure(message, source, false))
-                        }
-                        RefreshOutcome::Succeeded {
-                            subscription,
-                            suggested_update_interval_minutes: _,
-                            content,
-                            filename,
-                        } => {
-                            let versioned = state.manager.snapshot_handle().load();
-                            let expected_version = versioned.version;
-                            let before = versioned.state.clone();
-                            drop(versioned);
-                            match before.items.get(&uid) {
-                                None => Err(ProfilesError::RefreshFailed {
-                                    message: "profile deleted during refresh".into(),
-                                }),
-                                Some(current) => {
-                                    let current_fingerprint = serde_yaml::to_string(
-                                        &current.definition,
-                                    )
-                                    .map_err(|error| ProfilesError::RefreshFailed {
-                                        message: format!(
-                                            "failed to fingerprint current definition: {error}"
-                                        ),
-                                    });
-                                    match current_fingerprint {
-                                        Err(error) => Err(error),
-                                        Ok(current_fingerprint)
-                                            if current_fingerprint != definition_fingerprint =>
-                                        {
-                                            Err(ProfilesError::RefreshFailed {
-                                                message:
-                                                    "subscription definition changed during refresh"
-                                                        .into(),
-                                            })
-                                        }
-                                        Ok(_) => match current.definition.source() {
-                                            Some(ProfileSource::Remote {
-                                                url: current_url,
-                                                materialized,
-                                                ..
-                                            }) if *current_url == url => {
-                                                let path = materialized.file.clone();
-                                                if let Err(message) = Self::validate_fetched_content(
-                                                    &current.definition,
-                                                    &content,
-                                                ) {
-                                                    Err(ProfilesError::RefreshFailed {
-                                                        message: format!(
-                                                            "stale download no longer valid for the current definition: {message}"
-                                                        ),
-                                                    })
-                                                } else {
-                                                    let mut next = before.clone();
-                                                    let item = next
-                                                .items
-                                                .get_mut(&uid)
-                                                .expect("fenced profile remains in the candidate snapshot");
-                                                    if let Some(name) = synced_name(
-                                                        item.metadata.custom_name,
-                                                        &filename,
-                                                    ) {
-                                                        item.metadata.name = name;
-                                                    }
-                                                    match item.definition.source_mut() {
-                                                        Some(ProfileSource::Remote {
-                                                            materialized,
-                                                            subscription: slot,
-                                                            ..
-                                                        }) => {
-                                                            materialized.updated_at = Some(
-                                                                time::OffsetDateTime::now_utc(),
-                                                            );
-                                                            *slot = subscription;
-                                                            // Manual/scheduled refresh never adopts
-                                                            // server interval suggestions; import
-                                                            // applies them only on first commit.
-                                                            Self::commit_file_first(
-                                                                &myself,
-                                                                state,
-                                                                expected_version,
-                                                                before,
-                                                                next,
-                                                                AffectsRule::Touched(uid.clone()),
-                                                                path,
-                                                                content,
-                                                            )
-                                                            .await
-                                                        }
-                                                        _ => Err(ProfilesError::NotARemoteProfile),
-                                                    }
-                                                }
-                                            }
-                                            _ => Err(ProfilesError::RefreshFailed {
-                                                message:
-                                                    "subscription definition changed during refresh"
-                                                        .into(),
-                                            }),
-                                        },
-                                    }
-                                }
-                            }
-                        }
-                    }
-                };
-                let result = match context {
+                let origin = pending.origin.source();
+                let commit = Self::conclude_refresh(
+                    &myself,
+                    state,
+                    &uid,
+                    url,
+                    definition_fingerprint,
+                    outcome,
+                );
+                let conclusion = match context {
                     Some(context) => context.0.instrument(commit).await,
                     None => commit.await,
                 };
-
+                let (outcome, result) = conclusion.settle();
+                Self::record_source(state, &uid, origin, outcome);
                 if let Some(reply) = reply {
                     let _ = reply.send(result);
                 }
@@ -2321,19 +2549,6 @@ impl Actor for ProfilesActor {
 
                 let token = ImportOperationToken(state.next_import_token);
                 state.next_import_token = state.next_import_token.wrapping_add(1).max(1);
-                state.pending_imports.insert(
-                    token,
-                    PendingImport {
-                        transform,
-                        reply,
-                        metadata,
-                        url: url.clone(),
-                        option: option.clone(),
-                        update_interval_explicit,
-                        folder,
-                    },
-                );
-
                 let fetcher = Arc::clone(&state.fetcher);
                 let actor = myself.clone();
                 // Validate the exact caller-selected Config or Transform kind.
@@ -2345,30 +2560,40 @@ impl Actor for ProfilesActor {
                     SubscriptionInfo::default(),
                     None,
                 );
-                // Supervise the fetch future so a panic still produces one
-                // CommitImported outcome. Without this, an unsupervised panic
-                // leaves pending_imports and a timeout-less RPC stuck forever.
-                // Actor shutdown / cast failure remains safe: pending state drops.
-                tokio::spawn(async move {
-                    let fetch_result = tokio::spawn(async move {
-                        Self::download(fetcher.as_ref(), &url, &option, &definition_for_validation)
-                            .await
-                    })
-                    .await;
-                    let outcome = match fetch_result {
+                // Catch fetch panics inside the tracked task, so shutdown
+                // cancels the actual download, not just its join waiter.
+                use futures_util::FutureExt as _;
+                let download_url = url.clone();
+                let download_option = option.clone();
+                let task = tokio::spawn(async move {
+                    let fetch = Self::download(
+                        fetcher.as_ref(),
+                        &download_url,
+                        &download_option,
+                        &definition_for_validation,
+                    );
+                    let outcome = match std::panic::AssertUnwindSafe(fetch).catch_unwind().await {
                         Ok(outcome) => outcome,
-                        // Do not downcast panic payloads; emit a stable diagnostic.
-                        Err(join_error) => RefreshOutcome::Failed {
-                            message: if join_error.is_panic() {
-                                "subscription fetch task panicked".into()
-                            } else {
-                                "subscription fetch task cancelled".into()
-                            },
+                        Err(_) => RefreshOutcome::Failed {
+                            message: "subscription fetch task panicked".into(),
                             source: None,
                         },
                     };
                     let _ = actor.cast(ProfilesActorMessage::CommitImported { token, outcome });
                 });
+                state.pending_imports.insert(
+                    token,
+                    PendingImport {
+                        task,
+                        transform,
+                        reply,
+                        metadata,
+                        url: url.clone(),
+                        option: option.clone(),
+                        update_interval_explicit,
+                        folder,
+                    },
+                );
             }
             ProfilesActorMessage::CommitImported { token, outcome } => {
                 let Some(pending) = state.pending_imports.remove(&token) else {
@@ -2482,87 +2707,16 @@ impl Actor for ProfilesActor {
                 };
 
                 if *mode == ExternalMode::Mirror {
-                    let expected_target = target.clone();
-                    let expected_path = materialized.file.clone();
-                    let expected_fingerprint = match serde_yaml::to_string(&item.definition) {
-                        Ok(fingerprint) => fingerprint,
-                        Err(error) => {
-                            tracing::warn!(uid = %uid, %error, "failed to fingerprint external profile");
-                            return Ok(());
-                        }
-                    };
-                    let definition = item.definition.clone();
-                    let fs = Arc::clone(&state.fs);
-                    let read_target = expected_target.clone();
-                    let content =
-                        tokio::task::spawn_blocking(move || fs.read_external(&read_target))
-                            .await
-                            .map_err(|error| {
-                                anyhow::anyhow!("mirror source read task failed: {error}")
-                            })
-                            .and_then(|content| content);
-                    let content = match content {
-                        Ok(content) => content,
-                        Err(error) => {
-                            tracing::warn!(uid = %uid, %error, "failed to read changed external profile");
-                            return Ok(());
-                        }
-                    };
-                    if let Err(error) = Self::validate_fetched_content(&definition, &content) {
-                        tracing::warn!(uid = %uid, %error, "changed external profile failed validation");
-                        return Ok(());
-                    }
-
-                    let versioned = state.manager.snapshot_handle().load();
-                    let expected_version = versioned.version;
-                    let before = versioned.state.clone();
-                    drop(versioned);
-                    let Some(current) = before.items.get(&uid) else {
-                        return Ok(());
-                    };
-                    let still_current = matches!(
-                        current.definition.source(),
-                        Some(ProfileSource::Local {
-                            binding: LocalBinding::External {
-                                materialized,
-                                target,
-                                mode: ExternalMode::Mirror,
-                            },
-                        }) if *target == expected_target && materialized.file == expected_path
-                    ) && serde_yaml::to_string(&current.definition)
-                        .is_ok_and(|fingerprint| fingerprint == expected_fingerprint);
-                    if !still_current {
-                        return Ok(());
-                    }
-                    let mut next = before.clone();
-                    let item = next
-                        .items
-                        .get_mut(&uid)
-                        .expect("fenced external profile remains in the candidate snapshot");
-                    let Some(ProfileSource::Local {
-                        binding: LocalBinding::External { materialized, .. },
-                    }) = item.definition.source_mut()
-                    else {
-                        return Ok(());
-                    };
-                    materialized.updated_at = Some(time::OffsetDateTime::now_utc());
-                    match Self::commit_file_first(
+                    let outcome = Self::sync_mirror(
                         &myself,
                         state,
-                        expected_version,
-                        before,
-                        next,
-                        AffectsRule::Touched(uid.clone()),
-                        expected_path,
-                        content,
+                        &uid,
+                        target.clone(),
+                        materialized.file.clone(),
+                        item.definition.clone(),
                     )
-                    .await
-                    {
-                        Ok(_) => {}
-                        Err(error) => {
-                            tracing::warn!(uid = %uid, %error, "failed to commit external profile change")
-                        }
-                    }
+                    .await;
+                    Self::record_source(state, &uid, SourceOrigin::ExternalFile, outcome);
                     return Ok(());
                 }
 
@@ -2584,12 +2738,19 @@ impl Actor for ProfilesActor {
                     }
                 })
                 .await;
-                match result {
-                    Ok(_) => {}
+                let outcome = match result {
+                    Ok(report) => SourceOutcome::Committed {
+                        operation_id: report.receipt.operation_id,
+                    },
                     Err(error) => {
-                        tracing::warn!(uid = %uid, %error, "failed to commit external profile change")
+                        tracing::warn!(uid = %uid, %error, "failed to commit external profile change");
+                        SourceOutcome::rejected(
+                            SourceOutcome::EXTERNAL_SOURCE_REJECTED,
+                            "external profile source transaction refused",
+                        )
                     }
-                }
+                };
+                Self::record_source(state, &uid, SourceOrigin::ExternalFile, outcome);
             }
             ProfilesActorMessage::ReplaceDefinition {
                 uid,
@@ -2722,6 +2883,22 @@ impl Actor for ProfilesActor {
             if let Some(reply) = reply {
                 let _ = reply.send(Err(ProfilesError::ShuttingDown));
             }
+        }
+        let imports = state
+            .pending_imports
+            .drain()
+            .map(|(_, pending)| pending)
+            .collect::<Vec<_>>();
+        for pending in &imports {
+            pending.task.abort();
+        }
+        for pending in imports {
+            if let Err(error) = pending.task.await
+                && let Ok(panic) = error.try_into_panic()
+            {
+                std::panic::resume_unwind(panic);
+            }
+            let _ = pending.reply.send(Err(ProfilesError::ShuttingDown));
         }
         Ok(())
     }

@@ -1,7 +1,7 @@
 //! Shared vocabulary and bounded retry policy; no infrastructure or mutable globals.
 use std::time::Duration;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, specta::Type)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, specta::Type)]
 #[serde(rename_all = "snake_case")]
 pub enum ConvergenceHealth {
     Healthy,

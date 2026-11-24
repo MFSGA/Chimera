@@ -813,6 +813,96 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn failed_refresh_receipt_is_sanitized_and_pruned_on_delete() {
+        use chimera_core::client::configuration::{SourceOrigin, SourceOutcome};
+        use chimera_core::client::convergence::ConvergenceHealth;
+        let mut fetcher = MockSubscriptionFetcher::new();
+        fetcher
+            .expect_fetch()
+            .returning(|_, _| anyhow::bail!("https://example.invalid/token-private"));
+        let (client, _dir) = remote_seeded_client(MockProfileFsPort::new(), fetcher).await;
+        let uid = ProfileId("r1".into());
+        assert!(client.refresh(uid.clone(), None).await.is_err());
+        let ledger = client.sources();
+        assert_eq!(ledger.event_seq, 1);
+        assert_eq!(ledger.entries.len(), 1);
+        let receipt = &ledger.entries[0];
+        assert_eq!(receipt.origin, SourceOrigin::ManualRefresh);
+        assert_eq!(receipt.health, ConvergenceHealth::Blocked);
+        assert!(matches!(receipt.outcome, SourceOutcome::Failed { .. }));
+        assert!(
+            !serde_json::to_string(receipt)
+                .unwrap()
+                .contains("token-private")
+        );
+        let status = client.profile_sync_status(uid.clone()).await.unwrap();
+        assert_eq!(status.source.as_ref(), Some(receipt));
+        client.delete(uid).await.unwrap();
+        let after = client.sources();
+        assert_eq!(after.event_seq, 2);
+        assert!(after.entries.is_empty());
+    }
+
+    struct HoldingFailedFetcher {
+        started: std::sync::Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
+        release: Arc<tokio::sync::Notify>,
+    }
+
+    #[async_trait::async_trait]
+    impl SubscriptionFetcher for HoldingFailedFetcher {
+        async fn fetch(
+            &self,
+            _: &url::Url,
+            _: &RemoteProfileOptions,
+        ) -> anyhow::Result<FetchedSubscription> {
+            if let Some(started) = self.started.lock().unwrap().take() {
+                let _ = started.send(());
+            }
+            self.release.notified().await;
+            anyhow::bail!("old subscription failed")
+        }
+    }
+
+    #[tokio::test]
+    async fn obsolete_failed_download_is_superseded_not_a_current_source_failure() {
+        use chimera_core::client::configuration::SourceOutcome;
+        use chimera_core::client::convergence::ConvergenceHealth;
+        let (started, started_rx) = tokio::sync::oneshot::channel();
+        let release = Arc::new(tokio::sync::Notify::new());
+        let fetcher = HoldingFailedFetcher {
+            started: std::sync::Mutex::new(Some(started)),
+            release: release.clone(),
+        };
+        let (client, _dir) =
+            remote_seeded_client_with_fetcher(MockProfileFsPort::new(), Arc::new(fetcher)).await;
+        let uid = ProfileId("r1".into());
+        let caller = client.clone();
+        let pending =
+            tokio::spawn(async move { caller.refresh(ProfileId("r1".into()), None).await });
+        started_rx.await.unwrap();
+        let mut patch = RemoteProfileOptions::new_empty_patch();
+        patch.update_interval_minutes = Some(RemoteSyncInterval::from_minutes(60));
+        client
+            .patch_remote_options(uid.clone(), patch)
+            .await
+            .unwrap();
+        let revision = client.snapshot().revision();
+        release.notify_one();
+        let error = pending.await.unwrap().unwrap_err();
+        assert!(
+            matches!(error, ProfilesError::RefreshFailed { message } if message.contains("changed"))
+        );
+        let ledger = client.sources();
+        assert_eq!(ledger.entries.len(), 1);
+        assert!(matches!(
+            ledger.entries[0].outcome,
+            SourceOutcome::Superseded { .. }
+        ));
+        assert_eq!(ledger.entries[0].health, ConvergenceHealth::Healthy);
+        assert_eq!(client.snapshot().revision(), revision);
+    }
+
+    #[tokio::test]
     async fn import_is_not_committed_when_materialization_promote_fails() {
         let dir = tempdir().unwrap();
         let client = test_client_new(
@@ -1336,6 +1426,34 @@ mod tests {
         );
         let content = std::fs::read_to_string(mirrored).unwrap();
         assert!(content.contains("# touched"));
+        let mut sources = client.subscribe_sources();
+        let ledger = tokio::time::timeout(Duration::from_secs(5), async {
+            sources
+                .wait_for(|snapshot| {
+                    snapshot
+                        .entries
+                        .iter()
+                        .any(|entry| entry.profile == ProfileId("ext1".into()))
+                })
+                .await
+                .unwrap()
+                .clone()
+        })
+        .await
+        .expect("mirror commit publishes receipt");
+        let receipt = ledger
+            .entries
+            .iter()
+            .find(|entry| entry.profile == ProfileId("ext1".into()))
+            .unwrap();
+        assert_eq!(
+            receipt.origin,
+            chimera_core::client::configuration::SourceOrigin::ExternalFile
+        );
+        assert!(matches!(
+            receipt.outcome,
+            chimera_core::client::configuration::SourceOutcome::Committed { .. }
+        ));
     }
 
     #[tokio::test]

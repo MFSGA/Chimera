@@ -40,3 +40,5 @@ pub mod mutation_outcome;
 pub mod profiles;
 
 pub mod effects;
+
+pub mod configuration;
