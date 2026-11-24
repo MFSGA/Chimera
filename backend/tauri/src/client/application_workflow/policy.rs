@@ -102,26 +102,7 @@ pub(crate) fn policy_for(
     }
 }
 
-/// How a critical Try ended, as typed by the adapter that could observe it.
-///
-/// `CoreErrorKind::Internal`, wait timeouts and lost receipts belong in
-/// [`Unknown`], never in [`Transient`]: none of them says what the core did.
-///
-/// [`Unknown`]: TryCauseKind::Unknown
-/// [`Transient`]: TryCauseKind::Transient
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum TryCauseKind {
-    /// The outcome could not be observed. Never enters the retryable branch.
-    Unknown,
-    /// A check or the core itself rejected this candidate. The same desired
-    /// value cannot succeed later.
-    Deterministic,
-    /// Observed, finished, and permanent for now: a refused elevation, a
-    /// missing binary, an unsupported platform.
-    Permanent,
-    /// Observed, finished, and typed transient by the adapter that watched it.
-    Transient,
-}
+pub use chimera_core::client::reconciler::check_record::TryCauseKind;
 
 /// Whether the application knows what is running after the failure.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

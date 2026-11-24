@@ -1016,7 +1016,10 @@ impl RuntimeReconcilerMailbox {
             return;
         };
 
-        match self.runtime.admit(&request.command) {
+        match self
+            .runtime
+            .admit(super::workflow::admission_command(&request.command))
+        {
             RuntimeAdmission::Run => {}
             RuntimeAdmission::RejectStoppedChecked => {
                 self.reject(

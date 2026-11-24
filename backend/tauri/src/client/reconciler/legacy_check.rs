@@ -120,7 +120,7 @@ impl RuntimeGateVerdict {
                     host,
                     reason,
                 })) => RuntimeCheckUnavailable::HostUnsupported {
-                    host: format!("{host:?}"),
+                    host: host.clone(),
                     reason: reason.clone(),
                 },
                 _ => match &self.record {

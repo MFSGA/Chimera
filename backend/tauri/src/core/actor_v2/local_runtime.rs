@@ -1787,7 +1787,10 @@ fn profile_runtime_check_outcome(
             ),
         ),
         CheckSupport::Unsupported { reason } => Ok(RuntimeCheckOutcome::Unavailable(
-            RuntimeCheckUnavailable::HostUnsupported { host, reason },
+            RuntimeCheckUnavailable::HostUnsupported {
+                host: format!("{host:?}"),
+                reason,
+            },
         )),
     }
 }

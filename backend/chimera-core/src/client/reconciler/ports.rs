@@ -61,3 +61,26 @@ pub enum RuntimeCheckOutcome {
 pub trait RuntimeValidatorPort: Send + Sync + 'static {
     async fn check(&self, request: RuntimeCheckRequest<'_>) -> RuntimeCheckOutcome;
 }
+
+impl RuntimeCheckOutcome {
+    pub fn check_record(&self) -> super::check_record::CheckRecord {
+        use super::check_record::CheckRecord;
+
+        match self {
+            Self::Passed => CheckRecord::Passed,
+            Self::Rejected { message, .. } => CheckRecord::Rejected(message.clone()),
+            Self::Unavailable(
+                RuntimeCheckUnavailable::NoEndpoint { reason }
+                | RuntimeCheckUnavailable::HostUnsupported { reason, .. },
+            ) => CheckRecord::Skipped(reason.clone()),
+            Self::Unavailable(
+                RuntimeCheckUnavailable::CandidateUnavailable { reason }
+                | RuntimeCheckUnavailable::NotChecked { reason }
+                | RuntimeCheckUnavailable::Other { reason },
+            ) => CheckRecord::Unserviceable(reason.clone()),
+            Self::Unavailable(RuntimeCheckUnavailable::Backend { message, .. }) => {
+                CheckRecord::Unserviceable(message.clone())
+            }
+        }
+    }
+}
