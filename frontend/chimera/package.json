@@ -43,7 +43,7 @@
     "@mui/icons-material": "9.4.0",
     "@mui/material": "9.4.0",
     "@radix-ui/react-use-controllable-state": "1.2.6",
-    "@tailwindcss/postcss": "4.3.3",
+    "@tailwindcss/vite": "4.3.3",
     "@tanstack/react-table": "9.2.6",
     "@tanstack/react-virtual": "3.14.23",
     "@tauri-apps/api": "2.12.4",

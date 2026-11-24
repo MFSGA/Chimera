@@ -1,5 +1,4 @@
 export default {
-  plugins: {
-    '@tailwindcss/postcss': {},
-  },
+  // Tailwind is now compiled by the Vite plugin, as in ref.
+  plugins: {},
 };

@@ -1,5 +1,6 @@
 import path from 'node:path';
 import { paraglideVitePlugin } from '@inlang/paraglide-js';
+import tailwindPlugin from '@tailwindcss/vite';
 import { tanstackRouter } from '@tanstack/router-plugin/vite';
 import react from '@vitejs/plugin-react';
 import { NodePackageImporter } from 'sass-embedded';
@@ -8,22 +9,10 @@ import { defineConfig, UserConfig } from 'vite';
 import { createHtmlPlugin } from 'vite-plugin-html';
 import sassDts from 'vite-plugin-sass-dts';
 
-const devtools = () => {
-  return {
-    name: 'react-devtools',
-    transformIndexHtml(html: string) {
-      return html.replace(
-        /<\/head>/,
-        `<script src="http://localhost:8097"></script></head>`,
-      );
-    },
-  };
-};
-
 const IS_NIGHTLY = process.env.NIGHTLY?.toLowerCase() === 'true';
 
 // https://vitejs.dev/config/
-export default defineConfig(async ({ command, mode }) => {
+export default defineConfig(async ({ command }) => {
   const isDev = command === 'serve';
 
   const config = {
@@ -39,6 +28,7 @@ export default defineConfig(async ({ command, mode }) => {
       },
     },
     plugins: [
+      tailwindPlugin(),
       tanstackRouter({
         target: 'react',
         autoCodeSplitting: true,
@@ -50,17 +40,13 @@ export default defineConfig(async ({ command, mode }) => {
         inject: {
           data: {
             title: 'Clash Chimera',
-            injectScript:
-              mode === 'development'
-                ? '<script src="https://unpkg.com/react-scan/dist/auto.global.js"></script>'
-                : '',
+            injectScript: '',
           },
         },
       }),
       react({}),
       Icons({ compiler: 'jsx' }),
       sassDts({ esmExport: true, legacyFileFormat: true }),
-      isDev && devtools(),
       paraglideVitePlugin({
         project: './project.inlang',
         outdir: './src/paraglide',
@@ -85,11 +71,12 @@ export default defineConfig(async ({ command, mode }) => {
           replacement: 'monaco-editor/',
         },
       ],
-      dedupe: ['react', 'react-dom'],
+      dedupe: ['react', 'react-dom', '@tanstack/react-query'],
     },
 
     optimizeDeps: {
       entries: ['./src/main.tsx'],
+      // clsx is owned by @chimera/ui, not this application package.
       include: ['@tauri-apps/api', 'react', 'react-dom'],
     },
 
@@ -103,6 +90,10 @@ export default defineConfig(async ({ command, mode }) => {
       rolldownOptions: {
         output: {
           manualChunks: (id) => {
+            if (id.includes('monaco-editor/esm/vs/language/css/css.worker')) {
+              return 'css-worker';
+            }
+
             if (id.includes('monaco-editor/esm/vs/language/json/json.worker')) {
               return 'json-worker';
             }
