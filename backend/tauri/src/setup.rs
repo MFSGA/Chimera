@@ -398,7 +398,10 @@ pub fn setup(
             ))),
             traffic_store,
             jobs,
-            shutdown: shutdown.child_token(),
+            // The composed client inherits the root shutdown authority, as in
+            // ref. A child would leave setup-owned sibling tasks alive while
+            // the client waits on their shared TaskTracker.
+            shutdown: startup_owners.client_shutdown_token(),
             tasks: tasks.clone(),
             ui_sink: Arc::new(TauriUiEventSink::new(app.handle().clone())),
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -550,6 +553,11 @@ impl StartupFailureHost for TauriStartupFailureHost {
 }
 
 impl StartupOwners {
+    /// Transfer the same cancellation authority to the composed client.
+    fn client_shutdown_token(&self) -> tokio_util::sync::CancellationToken {
+        self.shutdown.clone()
+    }
+
     pub(crate) fn request_shutdown(&self) {
         self.shutdown.cancel();
         self.tasks.close();

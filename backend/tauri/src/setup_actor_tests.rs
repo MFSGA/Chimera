@@ -139,6 +139,52 @@ impl ServiceProcessControl for OfflineService {
     }
 }
 
+#[tokio::test]
+async fn composed_client_shutdown_cancels_setup_owned_siblings() {
+    let owners = super::StartupOwners::default();
+    let daemon = Arc::new(OfflineService::default());
+    let service = chimera_core::actor_v2::service_actor::ServiceClient::spawn(
+        daemon,
+        Arc::new(IpcServiceEndpointFactory::new(|| -> EndpointHandle {
+            panic!("an offline daemon must never create a Core endpoint")
+        })),
+        3,
+    )
+    .await
+    .expect("spawn production ServiceActor");
+    service.drain_on_shutdown(&owners.tasks, owners.shutdown.child_token());
+
+    let sibling = owners.shutdown.child_token();
+    let (done_tx, done_rx) = tokio::sync::oneshot::channel();
+    owners.tasks.spawn(async move {
+        sibling.cancelled().await;
+        let _ = done_tx.send(());
+    });
+
+    // Exercise the actual setup -> ClientSetupArgs token handoff. The
+    // composed client cancels this token and closes this same tracker.
+    let client_shutdown = owners.client_shutdown_token();
+    client_shutdown.cancel();
+    owners.tasks.close();
+    let root_cancelled = owners.shutdown.is_cancelled();
+    // Ensure the deliberately broken case cannot leak actors from the test.
+    if !root_cancelled {
+        owners.request_shutdown();
+    }
+    tokio::time::timeout(Duration::from_secs(5), owners.tasks.wait())
+        .await
+        .expect("setup-owned tasks must drain on client exit");
+    done_rx.await.expect("setup sibling observed cancellation");
+    assert!(
+        root_cancelled,
+        "the composed client must cancel the root, not a child"
+    );
+    assert!(
+        service.probe().await.is_err(),
+        "ServiceActor must be closed"
+    );
+}
+
 #[test]
 fn synchronous_tauri_setup_registers_service_drain_on_the_runtime() {
     // E2E regression: the real Tauri setup callback runs on the main thread.

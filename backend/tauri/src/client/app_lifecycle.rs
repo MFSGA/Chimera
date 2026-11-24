@@ -78,12 +78,22 @@ impl ChimeraClient {
     /// Unlike ref, retain the fallible shutdown result: Chimera's updater must
     /// not install a new binary if core shutdown is unconfirmed.
     pub(crate) async fn wait_shutdown(&self) -> anyhow::Result<()> {
+        tracing::debug!(
+            remaining = self.inner.tasks.len(),
+            "waiting for tracked shutdown tasks"
+        );
         self.inner.tasks.wait().await;
+        tracing::debug!("tracked shutdown tasks drained; stopping core lifecycle");
         let stopped = self.shutdown_core().await;
+        tracing::debug!(
+            success = stopped.is_ok(),
+            "core lifecycle shutdown returned; draining core executor"
+        );
         // Always drain the router and local executor, even when ordinary
         // stop has failed. Preserve the original stop uncertainty as the
         // error returned to the updater/exit boundary.
         let drained = self.inner.core.finish_shutdown().await;
+        tracing::debug!(success = drained.is_ok(), "core executor shutdown returned");
         // A compatibility adapter that claimed to finish shutdown but left
         // CoreActor connected cannot be treated as an updater-safe stop.
         // In tests constructed without ref actors this check is skipped.
