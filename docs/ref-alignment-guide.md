@@ -810,3 +810,8 @@ cargo clippy --manifest-path backend/Cargo.toml --all-targets --all-features
 
 - 基线 609d5a0c708d2ea61f2e7f1a681aa87a42be9a5d，master 7c5a2599，ref 375af277。将 Checked runtime apply、普通/严格 deferred prepared apply、实际 Core 提交 terminal 映射及 connection effect staging 的执行体迁入 chimera-core/client/reconciler/apply_executor.rs。ApplyHost 继承同一 StartupHost，使用现有 CoreLifecyclePort、RuntimeProgress、CandidateCheck 和 RuntimeSourceAuthority；Tauri 保留 host adapter、调用入口和测试，未新增 actor 或产品发布者。保留既有 source/receipt/Service generation fences 和 rollback/unknown 语义。本切片为既有 ref-shaped 执行体归属迁移，不等同于整套 ref Actor 源码替换。
 - L2。macOS workspace all-features/all-targets offline cargo check，Tauri client::reconciler:: 全部 196/196，rustfmt、diff--check；未执行完整 workspace、真实 Service 切换或 GUI E2E。
+
+### DIFF-REF-SHARED-SOURCE-DISPATCH：共享 Reconciler 源消息处理
+
+- 基线 48a7c54d813bac36c2ec8dc4359afcc2004f0c84，master 7c5a2599，ref 375af277。Checked admission/abort、SourceCommitted、CheckedSourceCommitted、显式 checked target dispatch 的生产状态决策迁入 chimera-core/client/reconciler/source_dispatch.rs。复用同一 RuntimeReconcilerState 与 bounded checked inbox；Tauri mailbox 仅同步采集事实、执行返回的调度动作、入队、RPC reply 和 watch publication。保留 source version 单调性、停止意图、owner handoff continuation、queue backpressure、单次 mode effect degradation；没有第二 actor 或额外 runtime state。本轮不宣称完整复制 ref Actor，Completed 归并、timer/command 调度仍在 Tauri。
+- L2。macOS workspace all-features/all-targets offline cargo check，共享 source_dispatch 3/3，Tauri reconciler 196/196，rustfmt、diff--check。初次 all-targets 检查发现测试通过父模块间接导入旧 helper，改为直接导入共享 helper 后通过。未执行全 workspace 测试、真实主机切换或 GUI E2E。

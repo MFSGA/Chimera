@@ -13,19 +13,23 @@ use std::{
 #[cfg(test)]
 use crate::client::reconciler::apply::checked_mode_effect_can_finish;
 #[cfg(test)]
-use crate::client::reconciler::checked::{CheckedRuntimeInbox, MAX_CHECKED_PENDING};
+use crate::client::reconciler::checked::{
+    CheckedRuntimeInbox, CheckedSelection, MAX_CHECKED_PENDING,
+};
 use crate::client::reconciler::{
-    checked::{CheckedRuntimeCandidate, CheckedSelection},
+    checked::CheckedRuntimeCandidate,
     committed::{SourceDomain, SourceVersions},
     release::ReleaseObservation,
     status::ReconcilerStatus,
     workflow::{
-        CheckedSourceNoticeKind, RuntimeAdmission, RuntimeReconcilerState,
-        checked_mode_effect_deferred, committed_target_advanced, deferred_mode_effect_degradation,
-        runtime_trigger, source_committed_during_round,
+        RuntimeAdmission, RuntimeReconcilerState, committed_target_advanced, runtime_trigger,
+        source_committed_during_round,
     },
 };
-use chimera_core::client::reconciler::plan::RunIntent;
+use chimera_core::client::reconciler::{
+    plan::RunIntent,
+    source_dispatch::{SourceAction, SourceDispatch, SourceDispatchFacts},
+};
 use ractor::{Actor, ActorProcessingErr, ActorRef, RpcReplyPort, rpc::CallResult};
 use tokio_util::{sync::CancellationToken, task::TaskTracker};
 
@@ -498,6 +502,77 @@ struct ActiveOperation {
 }
 
 impl RuntimeReconcilerMailbox {
+    fn source_dispatch_facts(&self) -> SourceDispatchFacts {
+        SourceDispatchFacts {
+            shutting_down: self.shutting_down,
+            uncertain: self.uncertain,
+            startup_owner_unproven: self.startup_owner_unproven
+                || self.startup_owner_unproven_shared.load(Ordering::Acquire),
+            owner_transition_pending: self.owner_transition_pending(),
+            queue_full: self.pending.len() >= MAX_PENDING,
+            authority_available: self.source_authority.is_some(),
+        }
+    }
+
+    fn enqueue_checked_source(
+        &mut self,
+        checked: CheckedRuntimeCandidate,
+        domain: SourceDomain,
+        version: u64,
+        authority: Arc<dyn crate::client::reconciler::authority::RuntimeSourceAuthority>,
+        reply: Option<RpcReplyPort<anyhow::Result<()>>>,
+    ) {
+        let id = self.allocate_operation_id();
+        self.pending.push_back(Request {
+            command: Command::ApplyChecked {
+                prepared: checked.prepared,
+                core_spec: checked.core_spec,
+                domain,
+                version,
+                authority,
+                interrupt_mode: checked.interrupt_mode,
+            },
+            response: Response { id, reply },
+            deferred_retry: None,
+        });
+    }
+
+    fn apply_source_dispatch(
+        &mut self,
+        myself: &ActorRef<Message>,
+        domain: SourceDomain,
+        version: u64,
+        dispatch: SourceDispatch,
+    ) {
+        if dispatch.observe_source_only {
+            self.reconciler
+                .send_modify(|status| status.observe_source_only(domain, version));
+        }
+        match dispatch.action {
+            SourceAction::None => {}
+            SourceAction::MarkDirty => self.mark_runtime_dirty(myself),
+            SourceAction::RecoverStartup => self.request_startup_recovery(myself),
+            SourceAction::ReplanAfterHandoff => {
+                self.replan_retained_source_on_service_change(myself)
+            }
+            SourceAction::ApplyChecked(checked) => {
+                // Source dispatch and enqueue are synchronous in the same
+                // mailbox turn: the authority cannot disappear between them.
+                let authority = self
+                    .source_authority
+                    .as_ref()
+                    .expect("dispatch requires source authority")
+                    .clone();
+                self.enqueue_checked_source(checked, domain, version, authority, None);
+            }
+        }
+        if let Some(degradation) = dispatch.degradation {
+            self.reconciler
+                .send_modify(|status| status.record_system_degradation(degradation));
+            self.publish_maintenance();
+        }
+    }
+
     fn allocate_operation_id(&self) -> OperationId {
         self.next_id.fetch_add(1, Ordering::Relaxed)
     }
@@ -1395,11 +1470,9 @@ impl Actor for RuntimeReconcilerActor {
         });
         match message {
             Message::AbortChecked { domain, request } => {
-                let count = if let Some(request) = request.as_deref() {
-                    state.runtime.checked.discard_request(domain, request)
-                } else {
-                    state.runtime.checked.discard_domain(domain)
-                };
+                let count = state
+                    .runtime
+                    .abort_checked_candidate(domain, request.as_deref());
                 tracing::debug!(
                     ?domain,
                     ?request,
@@ -1423,13 +1496,8 @@ impl Actor for RuntimeReconcilerActor {
                 // Unlike a bare cast, this acknowledgement proves that the
                 // owner actually retained the exact document and digest.
                 // Do not let a closed or uncertain owner authorize a commit.
-                let result = if state.shutting_down || state.uncertain {
-                    Err(Arc::new(
-                        chimera_contracts::runtime_error::RuntimeError::ShuttingDown,
-                    ))
-                } else {
-                    state.runtime.checked.accept(checked)
-                };
+                let facts = state.source_dispatch_facts();
+                let result = state.runtime.admit_checked_candidate(checked, facts);
                 let _ = reply.send(result);
             }
             #[cfg(test)]
@@ -2043,206 +2111,29 @@ impl Actor for RuntimeReconcilerActor {
                 reconcile_requested,
                 startup_recovery_required,
             } => {
-                // Domain owners have already published their source versions.
-                // Profiles source commits request the one CoreLifecycle runtime
-                // round; legacy inline domains pass false to avoid a second apply.
-                // Always load the latest source, not the notification payload.
-                state.runtime.seen_sources.observe(domain, version);
-                if !reconcile_requested || state.runtime.run_intent == RunIntent::Stopped {
-                    state.reconciler.send_modify(|status| {
-                        status.observe_source_only(domain, version);
-                    });
-                }
-                if reconcile_requested
-                    && state.runtime.run_intent == RunIntent::Running
-                    && !state.uncertain
-                    && !state.shutting_down
-                {
-                    if startup_recovery_required
-                        || state.startup_owner_unproven
-                        || state.startup_owner_unproven_shared.load(Ordering::Acquire)
-                        || state.owner_transition_pending()
-                    {
-                        // Ref's source commit stays durable even when S2 must
-                        // recover the initial owner first. Coalesce concurrent
-                        // commits behind ONE latest-source continuation;
-                        // successful verified Startup recovery will consume it.
-                        state.runtime.source_after_handoff = true;
-                        if state.startup_owner_unproven
-                            || state.startup_owner_unproven_shared.load(Ordering::Acquire)
-                        {
-                            state.request_startup_recovery(&myself);
-                        } else if !state.owner_transition_pending() {
-                            // The externally requested recovery may have
-                            // settled before this source message was read.
-                            // Replan through S2 rather than dropping its
-                            // durable apply intent.
-                            state.replan_retained_source_on_service_change(&myself);
-                        }
-                    } else {
-                        state.runtime.source_dirty = true;
-                        state.mark_runtime_dirty(&myself);
-                    }
-                }
+                let facts = state.source_dispatch_facts();
+                let dispatch = state.runtime.dispatch_source_committed(
+                    domain,
+                    version,
+                    reconcile_requested,
+                    startup_recovery_required,
+                    facts,
+                );
+                state.apply_source_dispatch(&myself, domain, version, dispatch);
             }
             Message::CheckedSourceCommitted {
                 domain,
                 version,
                 request,
             } => {
-                // This is a distinct source notification from the legacy
-                // SourceCommitted variant: a checked receipt must either be
-                // consumed by this single command queue or explicitly
-                // deferred; never run its prepared bytes *and* a legacy build.
-                let notice =
-                    state
-                        .runtime
-                        .observe_checked_source(domain, version, request.as_deref());
-                let previous = notice.previous;
-                let mode_requested = notice.mode_requested;
-                let mut checked_dispatched = false;
-                state.reconciler.send_modify(|status| {
-                    status.observe_source_only(domain, version);
-                });
-                if notice.kind == CheckedSourceNoticeKind::Duplicate {
-                    tracing::debug!(?domain, version, "duplicate checked commit ignored");
-                } else if notice.kind == CheckedSourceNoticeKind::Stale {
-                    if state.runtime.run_intent == RunIntent::Running
-                        && !state.uncertain
-                        && !state.shutting_down
-                    {
-                        if state.startup_owner_unproven
-                            || state.startup_owner_unproven_shared.load(Ordering::Acquire)
-                            || state.owner_transition_pending()
-                        {
-                            state.runtime.source_after_handoff = true;
-                            if state.startup_owner_unproven
-                                || state.startup_owner_unproven_shared.load(Ordering::Acquire)
-                            {
-                                state.request_startup_recovery(&myself);
-                            } else {
-                                state.replan_retained_source_on_service_change(&myself);
-                            }
-                        } else {
-                            state.runtime.source_dirty = true;
-                            state.mark_runtime_dirty(&myself);
-                        }
-                    }
-                    tracing::debug!(
-                        ?domain,
-                        version,
-                        ?previous,
-                        "stale checked receipt requires latest source recovery"
-                    );
-                } else if notice.kind == CheckedSourceNoticeKind::Superseded {
-                    tracing::debug!(
-                        ?domain,
-                        version,
-                        "ignoring superseded checked source notice"
-                    );
-                } else if state.runtime.run_intent == RunIntent::Stopped || state.shutting_down {
-                    tracing::debug!(
-                        ?domain,
-                        version,
-                        "checked commit observed while runtime stopped"
-                    );
-                } else if state.uncertain {
-                    tracing::warn!(
-                        ?domain,
-                        version,
-                        "checked commit deferred: Core outcome uncertain"
-                    );
-                } else if state.startup_owner_unproven
-                    || state.startup_owner_unproven_shared.load(Ordering::Acquire)
-                    || state.owner_transition_pending()
-                {
-                    // A durable source is not discarded while S2 owns the
-                    // Core; let the existing single-owner recovery replan the
-                    // latest committed target after the host is proven.
-                    state.runtime.source_after_handoff = true;
-                    if state.startup_owner_unproven
-                        || state.startup_owner_unproven_shared.load(Ordering::Acquire)
-                    {
-                        state.request_startup_recovery(&myself);
-                    } else {
-                        state.replan_retained_source_on_service_change(&myself);
-                    }
-                } else if state.pending.len() >= MAX_PENDING {
-                    // No lossy background cast: keep a latest-source dirty
-                    // intent with the only Core owner until queue capacity
-                    // frees up. Never submit a candidate outside this Actor.
-                    state.runtime.source_dirty = true;
-                    state.mark_runtime_dirty(&myself);
-                } else if let Some(authority) = state.source_authority.as_ref().cloned() {
-                    let (selection, checked) = state
-                        .runtime
-                        .checked
-                        .select_committed(domain, request.as_deref());
-                    match (selection, checked) {
-                        (
-                            CheckedSelection::Matched,
-                            Some(CheckedRuntimeCandidate {
-                                prepared,
-                                core_spec,
-                                interrupt_mode,
-                                ..
-                            }),
-                        ) => {
-                            checked_dispatched = true;
-                            let id = state.allocate_operation_id();
-                            state.pending.push_back(Request {
-                                command: Command::ApplyChecked {
-                                    prepared,
-                                    core_spec,
-                                    domain,
-                                    version,
-                                    authority,
-                                    interrupt_mode,
-                                },
-                                response: Response { id, reply: None },
-                                deferred_retry: None,
-                            });
-                        }
-                        (selection, _) => {
-                            // No proof which of several same-domain checks
-                            // became durable: do not guess from FIFO order.
-                            // Keep unrelated-domain candidates, and let the
-                            // *same* Core owner rebuild the latest source.
-                            tracing::debug!(
-                                ?domain,
-                                ?selection,
-                                "checked source requires latest-target recovery"
-                            );
-                            state.runtime.source_dirty = true;
-                            state.mark_runtime_dirty(&myself);
-                        }
-                    }
-                } else {
-                    // No authoritative reader: an ACKed checked candidate
-                    // must not become a Core submission. Retain it and
-                    // request a latest-source recovery in the same owner.
-                    state.runtime.source_dirty = true;
-                    state.mark_runtime_dirty(&myself);
-                }
-                if checked_mode_effect_deferred(
-                    previous,
+                let facts = state.source_dispatch_facts();
+                let dispatch = state.runtime.dispatch_checked_source(
+                    domain,
                     version,
-                    mode_requested,
-                    checked_dispatched,
-                    state.runtime.run_intent == RunIntent::Running && !state.shutting_down,
-                ) {
-                    // The old/recovery ReconcileSource may rebuild current
-                    // bytes, but has no guaranteed old Core API/replaced
-                    // result. Preserve the non-retryable one-shot effect debt
-                    // visibly instead of marking the interruption complete.
-                    let degradation = deferred_mode_effect_degradation(version);
-                    state.runtime.connection_interruption_maintenance =
-                        Some(degradation.message.clone());
-                    state.reconciler.send_modify(|status| {
-                        status.record_system_degradation(degradation);
-                    });
-                    state.publish_maintenance();
-                }
+                    request.as_deref(),
+                    facts,
+                );
+                state.apply_source_dispatch(&myself, domain, version, dispatch);
             }
             Message::ApplyCheckedCommitted {
                 domain,
@@ -2251,51 +2142,16 @@ impl Actor for RuntimeReconcilerActor {
                 authority,
                 reply,
             } => {
-                // Explicit target dispatch is valid only for the uniquely
-                // matching candidate in the specified source domain. Other
-                // checked candidates remain cached, never overwritten.
-                let valid = !state.shutting_down
-                    && !state.uncertain
-                    && state.runtime.run_intent == RunIntent::Running
-                    && !state.startup_owner_unproven
-                    && !state.startup_owner_unproven_shared.load(Ordering::Acquire)
-                    && !state.owner_transition_pending()
-                    && state.runtime.seen_sources.version(domain) == Some(version)
-                    && state
-                        .runtime
-                        .checked
-                        .matching_count(domain, Some(target.as_str()))
-                        == 1;
-                if !valid || state.pending.len() >= MAX_PENDING {
+                let facts = state.source_dispatch_facts();
+                if let Some(checked) = state
+                    .runtime
+                    .take_explicit_checked(domain, version, &target, facts)
+                {
+                    state.enqueue_checked_source(checked, domain, version, authority, Some(reply));
+                } else {
                     let _ = reply.send(Err(anyhow::anyhow!(
                         "checked candidate has no matching committed source or Core owner"
                     )));
-                } else {
-                    let (selection, checked) =
-                        state.runtime.checked.take_unique(domain, Some(&target));
-                    debug_assert_eq!(selection, CheckedSelection::Matched);
-                    let CheckedRuntimeCandidate {
-                        prepared,
-                        core_spec,
-                        interrupt_mode,
-                        ..
-                    } = checked.expect("uniquely matching checked candidate");
-                    let id = state.allocate_operation_id();
-                    state.pending.push_back(Request {
-                        command: Command::ApplyChecked {
-                            prepared,
-                            core_spec,
-                            domain,
-                            version,
-                            authority,
-                            interrupt_mode,
-                        },
-                        response: Response {
-                            id,
-                            reply: Some(reply),
-                        },
-                        deferred_retry: None,
-                    });
                 }
             }
             Message::RuntimeDirty => {

@@ -20,6 +20,7 @@ use tokio_util::{sync::CancellationToken, task::TaskTracker};
 
 use super::*;
 use crate::{config::chimera::ClashCore, core::RunType};
+use chimera_core::client::reconciler::workflow::checked_mode_effect_deferred;
 
 #[test]
 fn service_status_tracks_ready_generation_without_changing_ipc_fields() {
