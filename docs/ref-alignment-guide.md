@@ -794,3 +794,9 @@ cargo clippy --manifest-path backend/Cargo.toml --all-targets --all-features
 - 基线 076684bef718e365d840cc71b92e76429fa9b969，ref 375af2770f7928395c9db18998c17e3880d432ea。生产 Application host/core/runtime 配置变更严格预检、CAS 后直接通知唯一 Reconciler 的 SourceCommitted，按最新 source/owner 进入 S2/S3/S4，不在配置提交函数中调用旧 inline reconcile。新 source_requires_reconcile 通知与已 ACK 的 Checked receipt 明确区分，避免误用另一请求的候选；保留 isolated enhancement 的既有 checked path。Service mode 请求即使 daemon 未连接也由 canonical planner 决定，缺失 canonical session 在写入前拒绝。旧 inline postcommit apply 仅保留给测试 fixture。
 - 保存与生效分离，已通知的 durable CAS version 不再由 UI 重发，mutation receipt 对尚待收敛的 runtime 返回 Pending，保留既有 OS-effect/legacy mirror 逻辑。原 Service release、startup fallback 与显式 Profile 调度仍需进一步迁移；不声明完整 ref actor 替换。
 - L2。macOS CandidateCheck 17/17（新增预检不通知、已提交版本仅触发 fresh reconcile 的回归）、Reconciler Actor 161/161、workspace all-features/all-targets offline cargo check、rustfmt、diff--check。未运行完整 workspace、真实 Service/Local 主机切换及 GUI E2E；新增测试验证通知边界而非完整真实主机切换。
+
+### DIFF-REF-STARTUP-RELEASE-OWNER：共享 Service 释放与失败目标身份
+
+- 基线 master 7c5a2599d7109a2ba33b06267e718dc1c183a3d7（v0.29.1）；迁移分支原 1dee373569098a6f032f165e266d9e7758c3d01f 的八个提交已签名 rebase 至该基线，无冲突，ref 仍为 375af2770f7928395c9db18998c17e3880d432ea。
+- Service 实例条件退役、结果不确定检查和释放后重新观察迁入 shared core_lifecycle::ownership::release_service_owner；Tauri 仅提供 Core port 和 Service evidence。Startup/Service fallback 不再允许生产环境回到 inline runtime 构建提交；缺少 canonical preparation/authority 时返回等待。Service fallback 跨 lease 再验证 stopped-owner 与原提交目标；首次启动和恢复均在释放前保留原失败目标、readiness generation，Local 接管前拒绝已过期目标。仍保留已有 leased host transition 与 test-only fixture 入口，尚未完全替换 StartupExecutor/Actor 调度。
+- L2。macOS workspace all-features/all-targets offline cargo check、Reconciler Actor 161/161（包含过期失败目标时零 Local 接管/零 Core 提交断言）、rustfmt、diff--check；未执行完整 workspace、真实 Service/Local 切换或 GUI E2E。

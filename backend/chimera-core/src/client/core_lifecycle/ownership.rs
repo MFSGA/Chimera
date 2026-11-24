@@ -356,3 +356,47 @@ where
     }
     Ok(())
 }
+
+/// Release only the observed instance-owned Service Core. The caller holds
+/// the Service transition lease. Re-observe after a conditional retirement;
+/// an unreadable or uncertain result cannot authorize Local execution.
+pub async fn release_service_owner<F>(
+    core: &(impl CoreLifecyclePort + ?Sized),
+    observe: impl Fn() -> F,
+) -> Result<crate::client::reconciler::service_evidence::ServiceEvidence, String>
+where
+    F: std::future::Future<
+            Output = (
+                crate::client::reconciler::service_evidence::ServiceEvidence,
+                u64,
+            ),
+        >,
+{
+    use crate::client::reconciler::service_evidence::ServiceEvidence;
+    let (service, _) = observe().await;
+    match &service {
+        ServiceEvidence::CoreRunning { .. } => {
+            let expected_owner = service.expected_owner()?;
+            core.retire_service_core(expected_owner)
+                .await
+                .map_err(|error| format!("conditional Service Core stop failed: {error:#}"))?;
+            if core.outcome_uncertain() {
+                return Err("the Service Core stop outcome is uncertain".into());
+            }
+            let (after_stop, _) = observe().await;
+            if after_stop.proves_no_owned_core() {
+                Ok(after_stop)
+            } else {
+                Err(format!(
+                    "a fresh Service probe did not confirm release: {after_stop:?}"
+                ))
+            }
+        }
+        ServiceEvidence::Absent { .. }
+        | ServiceEvidence::CoreStopped { .. }
+        | ServiceEvidence::ForeignCore { .. } => Ok(service),
+        ServiceEvidence::CoreStoppedWithReason { .. } | ServiceEvidence::Unreadable { .. } => {
+            Err("the fresh Service owner probe was unreadable".into())
+        }
+    }
+}

@@ -11471,8 +11471,23 @@ async fn service_release_selects_local_before_one_prepared_core_apply() {
     .with_source_authority(Some(authority.clone()));
     workflow.install_checked_gate(gate).unwrap();
 
+    let stale = workflow
+        .startup_reconcile_application_after_service_release(
+            app.clone(),
+            Some("previous-refused-source"),
+        )
+        .await
+        .unwrap_err();
+    assert!(
+        stale
+            .downcast_ref::<crate::client::reconciler::attempt::CommittedTargetAdvanced>()
+            .is_some()
+    );
+    assert_eq!(inner.submissions.load(AtomicOrdering::Acquire), 0);
+    assert_eq!(core.handbacks.load(AtomicOrdering::Acquire), 0);
+
     let failure = workflow
-        .startup_reconcile_application_after_service_release(app.clone())
+        .startup_reconcile_application_after_service_release(app.clone(), Some(&target))
         .await
         .unwrap_err();
     assert!(
@@ -11488,7 +11503,7 @@ async fn service_release_selects_local_before_one_prepared_core_apply() {
     // source must abort before selecting or mutating the Local owner.
     authority.current.lock().unwrap().2 = "a-newer-committed-target".into();
     let advanced = workflow
-        .startup_reconcile_application_after_service_release(app.clone())
+        .startup_reconcile_application_after_service_release(app.clone(), Some(&target))
         .await
         .unwrap_err();
     assert!(
@@ -11502,7 +11517,7 @@ async fn service_release_selects_local_before_one_prepared_core_apply() {
     authority.current.lock().unwrap().2 = target.clone();
     core.block_handoff.store(false, AtomicOrdering::Release);
     workflow
-        .startup_reconcile_application_after_service_release(app)
+        .startup_reconcile_application_after_service_release(app, Some(&target))
         .await
         .expect("a released Service owner must hand back before submitting prepared bytes");
     assert_eq!(core.handbacks.load(AtomicOrdering::Acquire), 1);

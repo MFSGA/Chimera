@@ -485,6 +485,7 @@ impl CoreLifecycleWorkflow {
         .map_err(anyhow::Error::new)
     }
 
+    #[cfg(test)]
     pub(in crate::client) async fn reconcile_application(
         &self,
         app: ChimeraAppConfig,
@@ -517,19 +518,43 @@ impl CoreLifecycleWorkflow {
     pub(in crate::client) async fn reconcile_application_after_service_release(
         &self,
         app: ChimeraAppConfig,
+        expected_target: Option<&str>,
     ) -> anyhow::Result<()> {
         // The earlier rejected Service candidate is not the Local fallback's
         // terminal; a second admitted Core command must supersede its verdict.
         self.prepared_outcome.lock().take();
+        use crate::client::reconciler::attempt::{
+            CommittedTargetAdvanced, OwnershipTransitionPending,
+        };
+        if let Some(expected) = expected_target
+            && self.startup_target_identity().await? != expected
+        {
+            return Err(CommittedTargetAdvanced.into());
+        }
         let clash = self.clash.get()?;
+        #[cfg(test)]
         if self.profiles.is_none() {
+            if let Some(target) = expected_target {
+                self.progress
+                    .lock()
+                    .stage(target.to_owned(), ExecutionHost::Local);
+            }
             return self
                 .core
                 .reconcile_after_service_release(clash, app.core)
                 .await;
         }
+        #[cfg(not(test))]
+        anyhow::ensure!(
+            self.canonical_convergence_session(),
+            "Service release requires the canonical Reconciler"
+        );
         let (target, app, clash, profiles, staged_content) =
             self.capture_reconcile_committed_target(app, clash).await?;
+
+        if expected_target.is_some_and(|expected| expected != target) {
+            return Err(CommittedTargetAdvanced.into());
+        }
 
         if self.checked_gate.get().is_some()
             && let Some(authority) = self.source_authority.as_ref()
@@ -572,6 +597,20 @@ impl CoreLifecycleWorkflow {
                 });
         }
 
+        if self.canonical_convergence_session() {
+            return Err(OwnershipTransitionPending::waiting(
+                "Service release lost the canonical preparation or source authority",
+            )
+            .into());
+        }
+
+        #[cfg(not(test))]
+        return Err(OwnershipTransitionPending::waiting(
+            "Service release requires prepared runtime admission",
+        )
+        .into());
+
+        #[cfg(test)]
         self.core
             .reconcile_profiles_after_service_release(
                 clash,

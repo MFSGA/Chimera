@@ -499,8 +499,27 @@ impl CoreLifecycleWorkflow {
         let result = if let Some(result) = self.try_startup_prepared_selected(&app, selected).await
         {
             result
+        } else if self.canonical_convergence_session() {
+            Err(
+                crate::client::reconciler::attempt::OwnershipTransitionPending::waiting(
+                    "startup lost the prepared candidate or selected owner proof",
+                )
+                .into(),
+            )
         } else {
-            self.reconcile_application(app, service_connected).await
+            #[cfg(test)]
+            {
+                self.reconcile_application(app, service_connected).await
+            }
+            #[cfg(not(test))]
+            {
+                Err(
+                    crate::client::reconciler::attempt::OwnershipTransitionPending::waiting(
+                        "startup requires the installed Reconciler preparation session",
+                    )
+                    .into(),
+                )
+            }
         };
         self.refresh_service_recovery_host().await;
         result
@@ -509,8 +528,11 @@ impl CoreLifecycleWorkflow {
     pub(in crate::client) async fn startup_reconcile_application_after_service_release(
         &self,
         app: ChimeraAppConfig,
+        expected_target: Option<&str>,
     ) -> anyhow::Result<()> {
-        let result = self.reconcile_application_after_service_release(app).await;
+        let result = self
+            .reconcile_application_after_service_release(app, expected_target)
+            .await;
         self.refresh_service_recovery_host().await;
         result
     }
@@ -555,6 +577,14 @@ impl CoreLifecycleWorkflow {
                         "{refusal}; cannot acquire Service transition lease: {error:#}"
                     ),
                 })?;
+        if self.startup_target_identity().await? != target {
+            return Err(CommittedTargetAdvanced.into());
+        }
+        if !self.startup_service_refusal_stopped().await {
+            return Err(ServiceFallbackDeferred {
+                reason: format!("{refusal}; Service stopped-owner proof changed while acquiring the transition lease"),
+            }.into());
+        }
         let (_, generation) = self.service_evidence().await;
         let released =
             self.release_service_owner()
@@ -587,11 +617,8 @@ impl CoreLifecycleWorkflow {
         // This fallback has proved the old Service Core is released. Its
         // Local submission supersedes the staged Service attempt; Completed
         // alone may record the observed Local terminal.
-        self.progress
-            .lock()
-            .stage(target.to_owned(), ExecutionHost::Local);
         let local = self
-            .reconcile_application_after_service_release(self.application.get_typed())
+            .reconcile_application_after_service_release(self.application.get_typed(), Some(target))
             .await;
         self.refresh_service_recovery_host().await;
         if !self

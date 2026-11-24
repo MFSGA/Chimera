@@ -91,8 +91,14 @@ impl chimera_core::client::reconciler::startup_executor::StartupHost for CoreLif
     async fn startup_reconcile_application_after_service_release(
         &self,
         app: chimera_config::application::ChimeraAppConfig,
+        expected_target: Option<&str>,
     ) -> anyhow::Result<()> {
-        CoreLifecycleWorkflow::startup_reconcile_application_after_service_release(self, app).await
+        CoreLifecycleWorkflow::startup_reconcile_application_after_service_release(
+            self,
+            app,
+            expected_target,
+        )
+        .await
     }
     fn service_recovery_blocks_handoff(&self) -> bool {
         CoreLifecycleWorkflow::service_recovery_blocks_handoff(self)

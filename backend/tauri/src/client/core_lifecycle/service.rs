@@ -172,33 +172,11 @@ impl CoreLifecycleWorkflow {
     }
 
     pub(in crate::client) async fn release_service_owner(&self) -> Result<ServiceEvidence, String> {
-        let (service, _) = self.service_evidence().await;
-        match &service {
-            ServiceEvidence::CoreRunning { .. } => {
-                let expected_owner = service.expected_owner()?;
-                self.core
-                    .retire_service_core(expected_owner)
-                    .await
-                    .map_err(|error| format!("conditional Service Core stop failed: {error:#}"))?;
-                if self.core.outcome_uncertain() {
-                    return Err("the Service Core stop outcome is uncertain".into());
-                }
-                let (after_stop, _) = self.service_evidence().await;
-                if after_stop.proves_no_owned_core() {
-                    Ok(after_stop)
-                } else {
-                    Err(format!(
-                        "a fresh Service probe did not confirm release: {after_stop:?}"
-                    ))
-                }
-            }
-            ServiceEvidence::Absent { .. }
-            | ServiceEvidence::CoreStopped { .. }
-            | ServiceEvidence::ForeignCore { .. } => Ok(service),
-            ServiceEvidence::CoreStoppedWithReason { .. } | ServiceEvidence::Unreadable { .. } => {
-                Err("the fresh Service owner probe was unreadable".into())
-            }
-        }
+        chimera_core::client::core_lifecycle::ownership::release_service_owner(
+            self.core.as_ref(),
+            || self.service_evidence(),
+        )
+        .await
     }
 
     pub(in crate::client) async fn try_release_service_owner(

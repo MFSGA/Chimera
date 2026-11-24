@@ -47,6 +47,7 @@ pub trait StartupHost: Send + Sync {
     async fn startup_reconcile_application_after_service_release(
         &self,
         app: ChimeraAppConfig,
+        expected_target: Option<&str>,
     ) -> anyhow::Result<()>;
     fn service_recovery_blocks_handoff(&self) -> bool;
 }
@@ -555,22 +556,18 @@ impl<'a, H: StartupHost + ?Sized> StartupExecutor<'a, H> {
         // Recovery uses the shared S3/S4 executor after S2 has proved
         // either selected owner. The existing Service handback branch below
         // consumes its refusal while this same transition lease is held.
-        let recovery_target = if allow_receipt_reuse
-            && desired == ExecutionHost::Service
-            && lifecycle.canonical_convergence_session()
-            && current.state_changed_at > 0
-        {
-            lifecycle.startup_target_identity().await.ok()
-        } else {
-            None
-        };
+        let recovery_target =
+            if desired == ExecutionHost::Service && lifecycle.canonical_convergence_session() {
+                lifecycle.startup_target_identity().await.ok()
+            } else {
+                None
+            };
         let canonical_recovery = if allow_receipt_reuse && current.state_changed_at > 0 {
             lifecycle.recover_committed_startup(&current).await
         } else {
             None
         };
 
-        let used_canonical_recovery = canonical_recovery.is_some();
         let mut result = if let Some(result) = canonical_recovery {
             if !lifecycle.core().outcome_uncertain()
                 && !result
@@ -700,7 +697,7 @@ impl<'a, H: StartupHost + ?Sized> StartupExecutor<'a, H> {
                 // A Core submission can succeed and then fail to publish
                 // RuntimeProduct. Never release a Service host still running
                 // that accepted Core, even if the outer result is Refused.
-                if used_canonical_recovery {
+                if lifecycle.canonical_convergence_session() {
                     let (fresh_service, fresh_generation) = lifecycle.service_evidence().await;
                     if fresh_generation != service_ready_generation
                         || !matches!(
@@ -731,6 +728,7 @@ impl<'a, H: StartupHost + ?Sized> StartupExecutor<'a, H> {
                         result = lifecycle
                             .startup_reconcile_application_after_service_release(
                                 lifecycle.startup_application_config(),
+                                recovery_target.as_deref(),
                             )
                             .await;
                         return self.finish_startup_report(
