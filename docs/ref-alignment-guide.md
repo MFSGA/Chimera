@@ -734,3 +734,9 @@ cargo clippy --manifest-path backend/Cargo.toml --all-targets --all-features
 
 - 基线 05fcd9bfaebfe228dfe05363b3983eca98bc9b58，ref d95b44c05516a3e2e4eb24e2285a7eeaa70e1769。在独立 ref-alignment/runtime-convergence 分支迁移，不直接修改 master。将生产启动失败分类、Service fallback refusal、S2 owner plan/followup、RuntimeEvidence 与 readiness owner signal 迁入共享 Core startup_policy.rs，直接复用已有 ref planner、receipt host proof 及 startup outcome。原启动决策和 retry fixtures 随代码迁移；旧 StartupRetryTarget 仅为 test-support。保留单一 lifecycle owner，不增加前端兼容 DTO。
 - L2。Rustfmt、workspace Clippy all-targets/all-features offline、diff--check；未运行常规测试及真实 Core/Service/GUI E2E。完整 startup executor、Actor 与 legacy config mirror 尚未逐字替换。回滚撤销本轮提交，不改用户配置。
+
+### DIFF-REF-SHARED-STARTUP-EXECUTOR：共享启动执行器
+
+- 分支 ref-alignment/runtime-convergence，基线 252068b684941c2fa50a79b3bd3d7df2f93fe79f，ref d95b44c05516a3e2e4eb24e2285a7eeaa70e1769。完整迁移已有 S2/S3 startup executor 与 readiness 双向复核至 chimera-core/client/reconciler/startup_executor.rs，单一生产 reconciler worker 通过 StartupHost 连接真实宿主操作。直接复用共享 ownership/proof 函数，移除旧桌面重复转发。保留原有 owner 证据、generation/target fence、Service fallback 正向拒绝条件、root shutdown 生命周期和报告语义。
+- 本轮迁移是 ref 执行边界对齐，不是逐字复制完整 ref Actor。宿主仍负责实际 Service lease、host selection、Core apply 与 startup retry attempt；StartupHost 是目前的临时宿主边界，后续完整 lifecycle composition 迁移时应收敛，不增加前端兼容协议。
+- L2。Rustfmt、workspace Clippy all-targets/all-features offline、diff--check 与正常签名提交钩子；未运行常规测试、真实 Core/Service 或 GUI E2E，未主动修改 IPC schema。仅推送迁移分支；回滚撤销本轮代码，不改用户配置。
