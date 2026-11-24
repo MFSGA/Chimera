@@ -36,6 +36,9 @@ pub trait CheckedCandidatePort: Send + Sync + 'static {
         core_spec: chimera_core_manager::CoreSpec,
     ) -> Result<(), Arc<RuntimeError>>;
     fn source_committed(&self, domain: ConfigDomain, version: Version);
+    /// A validated durable source requiring a fresh ownership plan, not a
+    /// receipt authorizing direct submission to the currently selected host.
+    fn source_requires_reconcile(&self, domain: ConfigDomain, version: Version);
     fn source_only_committed(&self, _domain: ConfigDomain, _version: Version) {}
     /// Failed source CAS after an ACK must not leave a permanent proposal.
     /// Until the ref operation token travels through every source actor,
@@ -428,6 +431,10 @@ impl CandidateCheck {
             .source_committed_for_request(domain, version, request);
     }
 
+    pub fn committed_for_reconcile(&self, domain: ConfigDomain, version: Version) {
+        self.workflow.source_requires_reconcile(domain, version);
+    }
+
     pub fn abort_with_receipt(&self, domain: ConfigDomain, request: String) {
         self.workflow.abort_uncommitted_for_request(domain, request);
     }
@@ -579,6 +586,7 @@ mod tests {
         checked: Mutex<Vec<PreparedRuntime>>,
         domains: Mutex<Vec<ConfigDomain>>,
         committed: Mutex<Vec<(ConfigDomain, Version)>>,
+        reconcile: Mutex<Vec<(ConfigDomain, Version)>>,
         reject: bool,
     }
 
@@ -601,6 +609,9 @@ mod tests {
 
         fn source_committed(&self, domain: ConfigDomain, version: Version) {
             self.committed.lock().unwrap().push((domain, version));
+        }
+        fn source_requires_reconcile(&self, domain: ConfigDomain, version: Version) {
+            self.reconcile.lock().unwrap().push((domain, version));
         }
         fn abort_uncommitted(&self, _domain: ConfigDomain) {}
         async fn checked_for_request(
@@ -1160,6 +1171,35 @@ mod tests {
             inbox.domains.lock().unwrap().as_slice(),
             &[ConfigDomain::Clash]
         );
+    }
+
+    #[tokio::test]
+    async fn application_host_change_publishes_only_fresh_reconcile_after_validation() {
+        let (gate, builder, validator, inbox) = gate(RuntimeCheckOutcome::Passed, false).await;
+        let candidate = RuntimeCandidate {
+            change: DomainChange::Application {
+                candidate: Arc::new(ChimeraAppConfig {
+                    enable_service_mode: true,
+                    ..Default::default()
+                }),
+            },
+            staged: Default::default(),
+        };
+        gate.validate_only(candidate).await.unwrap();
+        assert_eq!(builder.prepared.lock().unwrap().len(), 1);
+        assert_eq!(validator.checked.lock().unwrap().len(), 1);
+        assert!(inbox.checked.lock().unwrap().is_empty());
+        assert!(inbox.committed.lock().unwrap().is_empty());
+        assert!(inbox.reconcile.lock().unwrap().is_empty());
+
+        // The source owner invokes this only after its durable CAS.
+        gate.committed_for_reconcile(ConfigDomain::Application, Version::new(7));
+        assert_eq!(
+            *inbox.reconcile.lock().unwrap(),
+            vec![(ConfigDomain::Application, Version::new(7))]
+        );
+        assert!(inbox.checked.lock().unwrap().is_empty());
+        assert!(inbox.committed.lock().unwrap().is_empty());
     }
 
     #[tokio::test]

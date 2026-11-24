@@ -14,8 +14,8 @@ use struct_patch::Patch;
 /// checked Core mailbox. Never report pending checked work as an inline apply.
 pub(in crate::client) struct ApplicationPatchResult {
     pub(in crate::client) degradations: Vec<crate::client::runtime::Degradation>,
-    /// Exact CAS version associated with the ACKed checked bytes.
-    pub(in crate::client) checked_version: Option<u64>,
+    /// Durable CAS version already delivered to the sole Reconciler.
+    pub(in crate::client) notified_version: Option<u64>,
 }
 
 /// Use ref checked-source handoff only for an isolated local-host runtime
@@ -264,21 +264,30 @@ impl CoreLifecycleWorkflow {
         patch: ChimeraAppConfigPatch,
         service_connected: bool,
     ) -> anyhow::Result<ApplicationPatchResult> {
+        let canonical = self.canonical_convergence_session();
         if !crate::client::application_workflow::impact::application_patch_requires_reconcile(
             &patch,
             service_connected,
-        ) {
+        ) && !(canonical && patch.enable_service_mode.is_some())
+        {
             self.application.patch_typed(patch).await?;
             return Ok(ApplicationPatchResult {
                 degradations: Vec::new(),
-                checked_version: None,
+                notified_version: None,
             });
         }
+
+        #[cfg(not(test))]
+        anyhow::ensure!(
+            canonical,
+            "Application runtime commit requires the canonical Reconciler"
+        );
 
         let previous = self.application.get().await?;
         // Unlike the old single-domain fence, ref reconciles the complete
         // committed runtime target. Track Clash and Profiles as well so an
         // overlapping domain commit cannot be claimed as a successful Apply.
+        #[cfg(test)]
         let expected_sources = self.committed_runtime_source_versions();
         let use_checked = self.checked_gate.get().is_some()
             && checked_application_patch_eligible(&patch, &previous.state, service_connected);
@@ -288,7 +297,7 @@ impl CoreLifecycleWorkflow {
 
         // The ref check ACKs *exact* prepared bytes with the one Core owner.
         // For an eligible local-host update we will notify CheckedSourceCommitted
-        // after durable CAS; all host switch paths retain their old apply.
+        // after durable CAS; host changes request a fresh ownership plan.
         let checked_request = self
             .check_application_candidate(candidate.clone(), service_connected, use_checked)
             .await?;
@@ -346,43 +355,67 @@ impl CoreLifecycleWorkflow {
             // Do not run the legacy inline reconcile on this same version.
             return Ok(ApplicationPatchResult {
                 degradations: Vec::new(),
-                checked_version: Some(committed_version),
+                notified_version: Some(committed_version),
             });
         }
 
-        // Source publication is complete. Ref's committed-target reconciler
-        // always consumes the latest version; until the full actor is ported,
-        // fence this compatibility apply before and after CoreLifecycle work.
-        // Failure to read the source after commit is deferred, not rolled back.
-        let degradation = crate::client::reconciler::committed::apply_committed(
-            "application",
-            committed_version,
-            || async { self.application.get().await.map(|latest| latest.version) },
-            || {
-                crate::client::reconciler::committed::apply_with_dependency_fence(
-                    crate::client::reconciler::committed::SourceDomain::Application,
-                    expected_sources,
-                    || async { self.committed_runtime_source_versions() },
-                    || self.reconcile_application(candidate, service_connected),
-                )
-            },
-        )
-        .await;
-        if let Some(degradation) = degradation {
-            tracing::warn!(
-                code = %degradation.code,
-                message = %degradation.message,
-                "application source committed; runtime reconcile deferred"
-            );
-            Ok(ApplicationPatchResult {
-                degradations: vec![degradation],
-                checked_version: None,
-            })
-        } else {
-            Ok(ApplicationPatchResult {
+        if canonical {
+            // Host changes cannot authorize an ApplyChecked on the old
+            // selected owner. Publish the durable version to ref S2/S3/S4;
+            // that actor will re-observe the actual owner and latest source.
+            self.checked_gate
+                .get()
+                .expect("canonical session has CandidateCheck")
+                .committed_for_reconcile(
+                    chimera_contracts::mutation::ConfigDomain::Application,
+                    chimera_core::state::Version::new(committed_version),
+                );
+            return Ok(ApplicationPatchResult {
                 degradations: Vec::new(),
-                checked_version: None,
-            })
+                notified_version: Some(committed_version),
+            });
+        }
+
+        #[cfg(not(test))]
+        return Err(anyhow::anyhow!(
+            "Application runtime commit requires the canonical Reconciler"
+        ));
+        #[cfg(test)]
+        {
+            // Source publication is complete. Ref's committed-target reconciler
+            // always consumes the latest version; until the full actor is ported,
+            // fence this compatibility apply before and after CoreLifecycle work.
+            // Failure to read the source after commit is deferred, not rolled back.
+            let degradation = crate::client::reconciler::committed::apply_committed(
+                "application",
+                committed_version,
+                || async { self.application.get().await.map(|latest| latest.version) },
+                || {
+                    crate::client::reconciler::committed::apply_with_dependency_fence(
+                        crate::client::reconciler::committed::SourceDomain::Application,
+                        expected_sources,
+                        || async { self.committed_runtime_source_versions() },
+                        || self.reconcile_application(candidate, service_connected),
+                    )
+                },
+            )
+            .await;
+            if let Some(degradation) = degradation {
+                tracing::warn!(
+                    code = %degradation.code,
+                    message = %degradation.message,
+                    "application source committed; runtime reconcile deferred"
+                );
+                Ok(ApplicationPatchResult {
+                    degradations: vec![degradation],
+                    notified_version: None,
+                })
+            } else {
+                Ok(ApplicationPatchResult {
+                    degradations: Vec::new(),
+                    notified_version: None,
+                })
+            }
         }
     }
 
@@ -421,8 +454,8 @@ impl CoreLifecycleWorkflow {
                     .map(Some)
                     .map_err(anyhow::Error::new);
             }
-            // Core selection and Service mode still use legacy postcommit
-            // transitions; avoid an orphaned Checked inbox entry for them.
+            // Core selection and Service mode require a fresh ownership
+            // plan; avoid an orphaned direct Checked inbox entry.
             return gate
                 .validate_only(candidate)
                 .await

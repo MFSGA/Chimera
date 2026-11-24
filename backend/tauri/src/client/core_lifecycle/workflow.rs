@@ -713,10 +713,10 @@ impl CoreLifecycleWorkflow {
                 .patch_application_config_with_result(patch, service_connected)
                 .await
                 .map(|result| {
-                    // Checked Apply is a separate queued Core operation. The
+                    // Notified source apply is a separate queued Core operation. The
                     // source-command completion cannot mark it Converged.
                     runtime_converged.store(
-                        result.checked_version.is_none() && result.degradations.is_empty(),
+                        result.notified_version.is_none() && result.degradations.is_empty(),
                         Ordering::Release,
                     );
                     let _ = degradations.send(result);

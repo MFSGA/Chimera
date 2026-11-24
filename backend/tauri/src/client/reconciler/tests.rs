@@ -11004,6 +11004,13 @@ impl crate::client::reconciler::check::CheckedCandidatePort for UnusedPreparedIn
     ) {
         panic!("legacy prepared apply cannot publish a source")
     }
+    fn source_requires_reconcile(
+        &self,
+        _: chimera_contracts::mutation::ConfigDomain,
+        _: chimera_core::state::Version,
+    ) {
+        panic!("legacy prepared apply cannot publish a source")
+    }
     fn abort_uncommitted(&self, _: chimera_contracts::mutation::ConfigDomain) {}
     async fn checked_for_request(
         &self,

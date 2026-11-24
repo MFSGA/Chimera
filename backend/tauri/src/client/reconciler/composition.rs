@@ -85,6 +85,15 @@ impl CheckedCandidatePort for ReconcilerCheckedInbox {
             .checked_source_committed(Self::source_domain(domain), *version);
     }
 
+    fn source_requires_reconcile(
+        &self,
+        domain: chimera_contracts::mutation::ConfigDomain,
+        version: chimera_core::state::Version,
+    ) {
+        self.owner
+            .source_committed(Self::source_domain(domain), *version, true);
+    }
+
     fn abort_uncommitted(&self, domain: chimera_contracts::mutation::ConfigDomain) {
         self.owner
             .abort_uncommitted_checked(Self::source_domain(domain));
@@ -301,6 +310,9 @@ mod tests {
             Ok(())
         }
         fn source_committed(&self, domain: ConfigDomain, version: Version) {
+            self.source_notices.lock().unwrap().push((domain, version));
+        }
+        fn source_requires_reconcile(&self, domain: ConfigDomain, version: Version) {
             self.source_notices.lock().unwrap().push((domain, version));
         }
         fn abort_uncommitted(&self, _domain: ConfigDomain) {}

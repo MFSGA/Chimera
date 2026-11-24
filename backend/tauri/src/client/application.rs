@@ -336,7 +336,7 @@ impl ChimeraClient {
             && !requires_reconcile
             && !chimera_core::state::impact::reaches_runtime(&before.state, &candidate, &[]);
         let native = native_checked || native_source_only;
-        let (mut degradations, checked_version, snapshot) = if native {
+        let (mut degradations, notified_version, snapshot) = if native {
             let requested = super::effects::plan::requested_owners(&patch);
             let snapshot = self
                 .inner
@@ -352,14 +352,14 @@ impl ChimeraClient {
                 .await?;
             (
                 report.degradations,
-                report.checked_version,
+                report.notified_version,
                 self.inner.application.get().await?,
             )
         } else {
             let snapshot = self.inner.application.patch_typed(patch).await?;
             (Vec::new(), None, snapshot)
         };
-        if checked_version.is_none() {
+        if notified_version.is_none() {
             // Already-applied legacy domains only publish their source version.
             // Retryable postcommit failures still request owner convergence.
             self.inner.core_lifecycle.source_committed(
@@ -420,10 +420,12 @@ impl ChimeraClient {
                 super::runtime::CommitReceipt {
                     operation_id: snapshot.operation_id.map(|id| id.to_string()),
                     domain: "application".into(),
-                    source_version: snapshot.version,
+                    source_version: notified_version.unwrap_or(snapshot.version),
                     runtime: if has_deferred_runtime {
                         super::runtime::RuntimeCommitStatus::Deferred
-                    } else if snapshot.reaches_runtime {
+                    } else if snapshot.reaches_runtime
+                        || (requires_reconcile && notified_version.is_some())
+                    {
                         super::runtime::RuntimeCommitStatus::Pending
                     } else {
                         super::runtime::RuntimeCommitStatus::Unchanged

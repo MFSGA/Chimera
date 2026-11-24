@@ -788,3 +788,9 @@ cargo clippy --manifest-path backend/Cargo.toml --all-targets --all-features
 - 基线 505231afaa25535f0a546c99db3e780e00e19fc8，ref 375af2770f7928395c9db18998c17e3880d432ea。生产 deferred retry 使用已提交目标的 S2/S3/S4 plan、同一 CandidateCheck 的严格 preparation 和 advisory validator、已准备候选的 S4 提交及前后 source/owner fence；不再先检查再重建另一份产品。旧独立 Profile validator 从 Tauri adapter、Facade、LocalRuntime 删除；legacy fixtures 的 port fallback 仅测试路径使用。
 - 目标已过期不再执行旧目标；未观测到 Running Core 或 ownership proof 时等待，不绕过 planner。保留原有 deferred retry budget、typed check rejection/unavailable 和事务边界。Application host switch/Service release 及旧 TCC 调度尚未完全替换；本切片未修改其主机切换逻辑。
 - L2。macOS shared CandidateCheck 16/16（新增严格一次构建/一次检查、过期目标不构建、拒绝保留 typed failure），workspace all-features/all-targets offline cargo check、rustfmt、diff--check；未重跑全 workspace、Tauri actor suite 或 GUI E2E。未更改 IPC schema。
+
+### DIFF-REF-APPLICATION-SOURCE-CONVERGENCE：Application 提交与主机收敛分离
+
+- 基线 076684bef718e365d840cc71b92e76429fa9b969，ref 375af2770f7928395c9db18998c17e3880d432ea。生产 Application host/core/runtime 配置变更严格预检、CAS 后直接通知唯一 Reconciler 的 SourceCommitted，按最新 source/owner 进入 S2/S3/S4，不在配置提交函数中调用旧 inline reconcile。新 source_requires_reconcile 通知与已 ACK 的 Checked receipt 明确区分，避免误用另一请求的候选；保留 isolated enhancement 的既有 checked path。Service mode 请求即使 daemon 未连接也由 canonical planner 决定，缺失 canonical session 在写入前拒绝。旧 inline postcommit apply 仅保留给测试 fixture。
+- 保存与生效分离，已通知的 durable CAS version 不再由 UI 重发，mutation receipt 对尚待收敛的 runtime 返回 Pending，保留既有 OS-effect/legacy mirror 逻辑。原 Service release、startup fallback 与显式 Profile 调度仍需进一步迁移；不声明完整 ref actor 替换。
+- L2。macOS CandidateCheck 17/17（新增预检不通知、已提交版本仅触发 fresh reconcile 的回归）、Reconciler Actor 161/161、workspace all-features/all-targets offline cargo check、rustfmt、diff--check。未运行完整 workspace、真实 Service/Local 主机切换及 GUI E2E；新增测试验证通知边界而非完整真实主机切换。
