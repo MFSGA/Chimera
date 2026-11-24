@@ -1,13 +1,19 @@
 //! Application mutation coordination and Profile workflow modules.
 
+#[cfg(test)]
 use std::{collections::HashMap, sync::Arc};
 
+#[cfg(test)]
 use chimera_core_manager::OperationId;
+#[cfg(test)]
 use tokio::sync::Mutex;
 
+#[cfg(test)]
 use crate::client::core_lifecycle::CoreLifecycleClient;
 
+#[cfg(test)]
 use mutation::MutationRequest;
+#[cfg(test)]
 use workflow::ApplicationWorkflow;
 pub(crate) use workflow::RecoveryContext;
 
@@ -15,6 +21,7 @@ pub(crate) mod attempt;
 pub(crate) mod impact;
 pub(in crate::client) mod inputs;
 pub(crate) mod mutation;
+#[cfg(test)]
 pub(crate) mod participant;
 pub(crate) mod policy;
 pub(crate) mod ports;
@@ -23,6 +30,7 @@ pub(crate) mod startup;
 pub(in crate::client) mod tcc;
 pub(in crate::client) mod workflow;
 
+#[cfg(test)]
 #[derive(Clone)]
 enum ApplicationWorkflowClientInner {
     CoreLifecycle(CoreLifecycleClient),
@@ -30,9 +38,11 @@ enum ApplicationWorkflowClientInner {
     TestActor(ractor::ActorRef<TestMessage>),
 }
 
+#[cfg(test)]
 #[derive(Clone)]
 pub(crate) struct ApplicationWorkflowClient(ApplicationWorkflowClientInner);
 
+#[cfg(test)]
 impl ApplicationWorkflowClient {
     pub(crate) async fn spawn(
         core: CoreLifecycleClient,

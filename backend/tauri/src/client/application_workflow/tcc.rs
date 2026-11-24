@@ -4,10 +4,14 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Context;
+#[cfg(test)]
 use chimera_config::profile::Profiles;
 use chimera_core::state::{AbortResourceState, StateDecision};
-use chimera_core_manager::{CoreError, CoreErrorKind, OperationId};
+use chimera_core_manager::OperationId;
+#[cfg(test)]
+use chimera_core_manager::{CoreError, CoreErrorKind};
 
+#[cfg(test)]
 use super::{
     attempt::{AppliedVerdict, AttemptOrigin, AttemptStage, LiveAttempt},
     impact::{ActivationIntent, RuntimeImpact, classify_profiles},
@@ -22,8 +26,16 @@ use super::{
     },
     workflow::{ApplicationWorkflow, ProfileRuntime, RecoveryContext},
 };
+#[cfg(not(test))]
+use super::{
+    attempt::{AppliedVerdict, AttemptOrigin, AttemptStage, LiveAttempt},
+    mutation::{KnownRuntimeState, MutationReceipt},
+    workflow::{ApplicationWorkflow, ProfileRuntime},
+};
+#[cfg(test)]
 use crate::client::runtime::{Degradation, DegradationPhase};
 
+#[cfg(test)]
 pub(in crate::client) const MUTATION_DECISION_TIMEOUT: Duration = Duration::from_secs(90);
 
 enum DecisionOutcome {
@@ -35,6 +47,7 @@ enum DecisionOutcome {
 impl ApplicationWorkflow {
     /// Runs prepare, awaits the transaction's authoritative decision, and
     /// confirms or restores the Profile runtime before releasing the workflow.
+    #[cfg(test)]
     pub(in crate::client) async fn run_mutation(
         &mut self,
         request: &mut MutationRequest,
@@ -393,6 +406,7 @@ impl ApplicationWorkflow {
         (request_runtime_rebuild, settlement)
     }
 
+    #[cfg(test)]
     async fn prepare_candidate(
         &mut self,
         core: &dyn ProfileRuntime,
@@ -731,6 +745,7 @@ impl ApplicationWorkflow {
         }
     }
 
+    #[cfg(test)]
     async fn cancel_mutation(
         &mut self,
         core: &dyn ProfileRuntime,
@@ -1118,35 +1133,12 @@ fn runtime_state_matches(expected: &KnownRuntimeState, actual: &KnownRuntimeStat
     }
 }
 
-pub(in crate::client) fn safe_to_defer_runtime_apply(error: &anyhow::Error) -> bool {
-    error.chain().any(|cause| {
-        cause
-            .downcast_ref::<CoreError>()
-            .is_some_and(|error| error.kind == Some(CoreErrorKind::QueueFull) && error.retryable)
-    })
-}
+pub use chimera_core::client::reconciler::check_record::{
+    deferred_runtime_waiting_dependency, safe_to_retry_deferred_runtime,
+};
 
-pub(in crate::client) fn safe_to_retry_deferred_runtime(error: &anyhow::Error) -> bool {
-    error.chain().any(|cause| {
-        cause
-            .downcast_ref::<crate::client::reconciler::attempt::CommittedTargetAdvanced>()
-            .is_some()
-            || cause.downcast_ref::<CoreError>().is_some_and(|error| {
-                error.kind == Some(CoreErrorKind::QueueFull) && error.retryable
-            })
-            || cause
-                .downcast_ref::<super::mutation::RuntimeCheckFailure>()
-                .is_some_and(|failure| failure.cause() == TryCauseKind::Transient)
-    })
-}
-
-pub(in crate::client) fn deferred_runtime_waiting_dependency(error: &anyhow::Error) -> bool {
-    error.chain().any(|cause| {
-        cause
-            .downcast_ref::<super::mutation::RuntimeCheckFailure>()
-            .is_some_and(|failure| matches!(failure.record(), CheckRecord::Unserviceable(_)))
-    })
-}
+#[cfg(test)]
+use chimera_core::client::reconciler::check_record::safe_to_defer_runtime_apply;
 
 #[cfg(test)]
 mod tests {
@@ -1157,6 +1149,7 @@ mod tests {
     };
 
     use camino::Utf8PathBuf;
+    #[cfg(test)]
     use chimera_config::profile::Profiles;
     use chimera_core::state::{
         PersistentStateManagerSetup, ReplaceIfVersionResult, StateParticipant,

@@ -26,7 +26,9 @@ use crate::client::reconciler::committed::Selection;
 use crate::client::reconciler::committed::SelectionChange;
 #[cfg(test)]
 use crate::client::reconciler::decision::service_prepared_owner_proven;
-use crate::client::reconciler::state::{RuntimeProgress, proven_selection_from_receipt};
+use crate::client::reconciler::state::RuntimeProgress;
+#[cfg(test)]
+use crate::client::reconciler::state::proven_selection_from_receipt;
 use crate::config::chimera::ClashCore;
 use tokio_util::sync::CancellationToken;
 
@@ -43,6 +45,7 @@ use super::{
 pub(in crate::client) use crate::client::reconciler::legacy_source::ApplicationPatchResult;
 
 pub(in crate::client) enum Command {
+    #[cfg(test)]
     ProfileMutation(Box<crate::client::application_workflow::mutation::MutationRequest>),
     Shutdown,
     /// Explicit user intent, distinct from automatic reconciliation.
@@ -267,22 +270,10 @@ impl CoreLifecycleWorkflow {
     ) -> Option<crate::client::reconciler::mutation::ApplyOutcome> {
         self.prepared_outcome.lock().take()
     }
-    /// Finalize the staged Runtime attempt only after this CoreLifecycle
-    /// mailbox has applied the latest-source and Running-receipt fences.
-    /// This is the same observed terminal used by ReconcilerStatus::finish.
-    pub(in crate::client) fn settle_observed_attempt(
-        &self,
-        verdict: &crate::client::reconciler::attempt::LegacyApplyVerdict,
-        verified_running: bool,
-    ) {
-        self.progress
-            .lock()
-            .settle_with_verdict(verdict, verified_running);
-    }
-
     /// Recover selection from a *proven* live Core receipt and two bounded
     /// committed source reads. RuntimeProgress, not the legacy workflow,
     /// owns the selected Mode/Profile and last attempted target/host.
+    #[cfg(test)]
     pub(in crate::client) async fn recover_applied_selection_from_receipt(&self) {
         let selection =
             proven_selection_from_receipt(self.core.as_ref(), self.source_authority.as_deref())
@@ -627,6 +618,7 @@ impl CoreLifecycleWorkflow {
             self.progress.lock().invalidate_selection();
         }
         let result = match command {
+            #[cfg(test)]
             Command::ProfileMutation(_) => {
                 anyhow::bail!("Profile mutations must run through RuntimeReconcilerActor")
             }

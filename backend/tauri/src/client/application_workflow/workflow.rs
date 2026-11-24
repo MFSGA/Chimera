@@ -89,6 +89,7 @@ pub(in crate::client) struct ApplicationWorkflow {
     /// Startup and Profile mutations share the application workflow actor;
     /// CoreLifecycleWorkflow adapts its existing runtime and Service ports.
     lifecycle: Option<Arc<CoreLifecycleWorkflow>>,
+    #[cfg(test)]
     mutation_connected: bool,
 }
 
@@ -327,6 +328,7 @@ impl ApplicationWorkflow {
             startup_report: None,
             startup: StartupWorkflowState::default(),
             lifecycle: None,
+            #[cfg(test)]
             mutation_connected: false,
         }
     }
@@ -358,6 +360,7 @@ impl ApplicationWorkflow {
             .expect("actor-owned application workflow has a lifecycle adapter")
     }
 
+    #[cfg(test)]
     pub(in crate::client) fn mutation_connected(&self) -> bool {
         self.mutation_connected
     }
@@ -449,6 +452,7 @@ impl ApplicationWorkflow {
         }
     }
 
+    #[cfg(test)]
     pub(in crate::client) fn attach_mutation_workflow(
         &mut self,
         workflow: ApplicationWorkflow,
@@ -464,6 +468,7 @@ impl ApplicationWorkflow {
         Ok(())
     }
 
+    #[cfg(test)]
     pub(in crate::client) fn validate_mutation_connection(
         &self,
         workflow: &ApplicationWorkflow,
@@ -649,6 +654,7 @@ impl ApplicationWorkflow {
         }
     }
 
+    #[cfg(test)]
     pub(in crate::client) async fn run_profile_mutation(
         &mut self,
         request: &mut super::mutation::MutationRequest,

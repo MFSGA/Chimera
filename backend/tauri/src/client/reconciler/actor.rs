@@ -271,6 +271,7 @@ enum Message {
         gate: Arc<crate::client::reconciler::check::CandidateCheck>,
         reply: RpcReplyPort<anyhow::Result<()>>,
     },
+    #[cfg(test)]
     ConnectApplicationWorkflow {
         workflow: ApplicationWorkflow,
         reply: RpcReplyPort<anyhow::Result<()>>,
@@ -412,6 +413,7 @@ struct RuntimeReconcilerActor;
 struct RuntimeReconcilerMailbox {
     reconciler: tokio::sync::watch::Sender<ReconcilerStatus>,
     workflow: Option<ApplicationWorkflow>,
+    #[cfg(test)]
     pending_mutation_connection: Option<(ApplicationWorkflow, RpcReplyPort<anyhow::Result<()>>)>,
     active: Option<ActiveOperation>,
     pending: VecDeque<Request>,
@@ -830,10 +832,13 @@ impl RuntimeReconcilerMailbox {
         }
     }
 
-    fn reject(&mut self, mut request: Request, error: anyhow::Error) {
+    fn reject(&mut self, request: Request, error: anyhow::Error) {
+        #[cfg(test)]
+        let mut request = request;
         if matches!(&request.command, Command::ServiceEndpointDown(_)) {
             self.service_recovery_inflight = false;
         }
+        #[cfg(test)]
         if let Command::ProfileMutation(mutation) = &mut request.command {
             let message = error.to_string();
             mutation.answer(
@@ -1056,7 +1061,9 @@ impl RuntimeReconcilerMailbox {
             return;
         };
 
+        #[cfg(test)]
         let profile_mutation = matches!(&request.command, Command::ProfileMutation(_));
+        #[cfg(test)]
         if profile_mutation && !workflow.mutation_connected() {
             self.workflow = Some(workflow);
             self.reject(
@@ -1160,6 +1167,7 @@ impl RuntimeReconcilerMailbox {
         let actor = myself.clone();
         let task = tokio::spawn(async move {
             let (result, workflow_panicked, request_runtime_rebuild) = match command {
+                #[cfg(test)]
                 Command::ProfileMutation(mut mutation) => {
                     // Ref's recoverable panic flag must cover each future
                     // poll, not remain set across a Tokio .await. Preserve
@@ -1343,6 +1351,7 @@ impl Actor for RuntimeReconcilerActor {
         Ok(RuntimeReconcilerMailbox {
             reconciler: args.reconciler,
             workflow: Some(args.workflow),
+            #[cfg(test)]
             pending_mutation_connection: None,
             active: None,
             pending: VecDeque::new(),
@@ -1423,6 +1432,7 @@ impl Actor for RuntimeReconcilerActor {
                 };
                 let _ = reply.send(result);
             }
+            #[cfg(test)]
             Message::ConnectApplicationWorkflow {
                 workflow: incoming,
                 reply,
@@ -1624,8 +1634,13 @@ impl Actor for RuntimeReconcilerActor {
                     }
                     #[cfg(feature = "e2e")]
                     tracing::warn!(target: "chimera::e2e_core_mailbox", stage = "completed_worker_joined", "CoreLifecycle completion stage");
-                    let round = crate::client::reconciler::workflow::Round::observe(
-                        workflow.lifecycle(),
+                    let lifecycle = workflow.lifecycle();
+                    let round = chimera_core::client::reconciler::round::Round::observe(
+                        lifecycle.convergence_core(),
+                        || lifecycle.startup_target_identity(),
+                        lifecycle.convergence_progress(),
+                        lifecycle.source_authority.as_deref(),
+                        || lifecycle.take_checked_connection_effect(),
                         &result,
                         active.trigger,
                         reconciled,
@@ -1684,6 +1699,7 @@ impl Actor for RuntimeReconcilerActor {
                     state
                         .startup_owner_unproven_shared
                         .store(startup_owner_unproven, Ordering::Release);
+                    #[cfg(test)]
                     if let Some((incoming, reply)) = state.pending_mutation_connection.take() {
                         let validation = if state.shutting_down {
                             Err(anyhow::anyhow!("core lifecycle is shutting down"))
@@ -1793,7 +1809,8 @@ impl Actor for RuntimeReconcilerActor {
                             .workflow
                             .as_ref()
                             .expect("completed workflow was restored")
-                            .lifecycle(),
+                            .lifecycle()
+                            .convergence_progress(),
                         &state.reconciler,
                         active.response.id,
                         active.trigger,
@@ -3026,6 +3043,7 @@ impl RuntimeReconcilerClient {
         }
     }
 
+    #[cfg(test)]
     pub(crate) async fn connect_application_workflow(
         &self,
         workflow: ApplicationWorkflow,
@@ -3034,6 +3052,7 @@ impl RuntimeReconcilerClient {
             .await
     }
 
+    #[cfg(test)]
     pub(in crate::client) async fn connect_application_workflow_with_registration(
         &self,
         workflow: ApplicationWorkflow,
@@ -3068,6 +3087,7 @@ impl RuntimeReconcilerClient {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn begin_profile_mutation(
         &self,
         request: crate::client::application_workflow::mutation::MutationRequest,

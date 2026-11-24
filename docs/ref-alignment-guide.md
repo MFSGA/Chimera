@@ -717,3 +717,9 @@ cargo clippy --manifest-path backend/Cargo.toml --all-targets --all-features
 - 基线 8fbcabe01eae1d239f1977033b898b4086f671bf，ref d95b44c05516a3e2e4eb24e2285a7eeaa70e1769。整体迁移实际 CandidateCheck、CheckedCandidatePort、严格候选构建/校验、精确请求回执及测试至 chimera-core/client/reconciler/check.rs；保留生产 Core-owned revision/port session 和 ACK 后 source CAS。消除旧 Profile workflow 重复 RuntimeCheckOutcome/Unavailable 定义，使用共享结果及 contracts 类型，CheckRecord/RuntimeCheckFailure/TryCauseKind 随之共享。保留 stopped TCC 对 unsupported check 的拒绝与 retry 分类，不将未运行的检查记作通过。
 - 实际 Reconciler mailbox 持有 shared RuntimeReconcilerState，统一 source version notice、checked admission、run intent、dirty 标记、maintenance debt、source advanced 分类与 effective host。宿主命令映射只传递准入意图及精确版本，未新增 actor 或前端兼容协议；本轮不声称完整 ref Actor 逐字替换，旧宿主命令集、完整 round dispatcher 与 legacy transaction 仍待迁移。
 - L2。Rustfmt、workspace Clippy all-targets/all-features offline、diff--check；保留并迁移原有测试，未运行常规测试或真实 Core/Service/GUI E2E。无主动 IPC wire 改动。回滚撤销本轮代码，不改用户配置。
+
+### DIFF-REF-SHARED-ROUND-RETIRE-TCC：共享轮次结算与退休旧 Profile 事务入口
+
+- 基线 f243240afaae2227432c808d6c7122e56835b019，ref d95b44c05516a3e2e4eb24e2285a7eeaa70e1769。将实际 Completed round 的运行回执验证、应用选择恢复、一次性连接中断、attempt/Conclusion 原子结算迁入 chimera-core/client/reconciler/round.rs；原唯一 Actor 直接使用共享 RuntimeObservationPort、RuntimeProgress 与 source authority。保持 worker join、source-version fence、E2E tracing 与已有状态发布顺序。
+- 原 ProfileMutation、ConnectApplicationWorkflow、动态事务接线、ApplicationWorkflowClient/participant 与 TCC prepare/cancel 入口仅保留在 cfg(test)，正式构建不再接受该旧事务。生产 Profiles 继续走共享 source owner 和 RuntimeGate；旧启动恢复依赖的 TCC recovery 辅助逻辑仍在，未删除现有恢复路径。重试错误分类进入 shared check_record。未新增前端兼容 DTO 或第二 actor。完整 ref Actor、CoreLifecycleWorkflow、legacy config mirror 仍待迁移。
+- L2。Rustfmt、workspace Clippy all-targets/all-features offline、diff--check；保留旧回归测试，未运行常规测试或真实 Core/Service/GUI E2E。未主动改变 wire schema。回滚撤销本轮代码，不改用户配置。
