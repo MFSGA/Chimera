@@ -1414,8 +1414,7 @@ pub async fn get_runtime_config(
     let state = client.promoted_runtime_snapshot();
     match state.as_ref() {
         Some(state) => {
-            let yaml_value = serde_yaml::to_value(&state.config)?;
-            let json_value = serde_json::to_value(&yaml_value).map_err(anyhow::Error::from)?;
+            let json_value = state.config_json()?;
             let wrapped: Any<serde_json::Value> =
                 serde_json::from_value(json_value).map_err(anyhow::Error::from)?;
             Ok(Some(wrapped))
@@ -1434,8 +1433,7 @@ pub async fn get_runtime_yaml(client: State<'_, ChimeraClient>) -> Result<String
         )
     })?;
 
-    Ok(serde_yaml::to_string(&state.config)
-        .context("failed to serialize runtime configuration to YAML")?)
+    Ok(state.runtime_yaml().to_owned())
 }
 
 #[tauri::command]

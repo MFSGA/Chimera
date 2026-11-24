@@ -10,4 +10,7 @@ pub struct PostProcessingOutput {
     pub scopes: IndexMap<String, IndexMap<String, Logs>>,
     /// 全局链的输出
     pub global: IndexMap<String, Logs>,
+    /// Pipeline diagnostics not belonging to a transform.
+    #[serde(default)]
+    pub advice: Logs,
 }

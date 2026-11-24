@@ -4,13 +4,10 @@
 mod paths;
 pub use paths::*;
 
-use super::{
-    clash_info::ClashInfo,
-    runtime_inspection::{RuntimeInspection, RuntimeInspectionContent},
-};
+use super::clash_info::ClashInfo;
 use anyhow::{Context, Result, bail};
 use chimera_config::application::ClashCore;
-use chimera_ipc::api::{core::v2::CoreEffectiveConfig, status::ConfigRevisionInfo};
+
 use chimera_profile_transform::PostProcessingOutput;
 use serde::{Deserialize, Serialize};
 use serde_yaml::Mapping;
@@ -100,6 +97,7 @@ pub fn render_runtime_bytes(config: &Mapping) -> Result<Vec<u8>, serde_yaml::Err
 
 #[derive(Debug, Clone)]
 pub struct RuntimeSnapshotData {
+    pub config_text: Arc<str>,
     pub config: Mapping,
     pub exists_keys: Vec<String>,
     pub postprocessing_output: PostProcessingOutput,
@@ -115,7 +113,7 @@ pub struct RuntimeSnapshot {
     pub config: Mapping,
     pub exists_keys: Vec<String>,
     pub postprocessing_output: PostProcessingOutput,
-    product_bytes: Arc<[u8]>,
+    config_text: Arc<str>,
     pub inspection: Arc<super::runtime_inspection::RuntimeInspectionData>,
     /// Core-reported effective document is an ephemeral view, never stored in the build graph.
     pub effective: Option<Arc<super::runtime_inspection::EffectiveInspection>>,
@@ -125,10 +123,9 @@ impl RuntimeSnapshot {
     pub fn from_data(
         revision: RuntimeRevision,
         target_core: ClashCore,
-        product_bytes: Arc<[u8]>,
         data: RuntimeSnapshotData,
     ) -> Self {
-        let product_sha256 = Sha256::digest(&product_bytes).into();
+        let product_sha256 = Sha256::digest(data.config_text.as_bytes()).into();
         Self {
             inspection_id: nanoid::nanoid!(),
             revision,
@@ -137,7 +134,7 @@ impl RuntimeSnapshot {
             config: data.config,
             exists_keys: data.exists_keys,
             postprocessing_output: data.postprocessing_output,
-            product_bytes,
+            config_text: data.config_text,
             inspection: data.inspection,
             effective: None,
         }
@@ -159,6 +156,7 @@ impl RuntimeSnapshot {
         )
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     pub fn new_with_transform_output(
         revision: RuntimeRevision,
         target_core: ClashCore,
@@ -176,6 +174,7 @@ impl RuntimeSnapshot {
         )
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     pub fn new_with_transform_output_and_exists_keys(
         revision: RuntimeRevision,
         target_core: ClashCore,
@@ -187,8 +186,10 @@ impl RuntimeSnapshot {
         Self::from_data(
             revision,
             target_core,
-            product_bytes.into(),
             RuntimeSnapshotData {
+                config_text: String::from_utf8(product_bytes)
+                    .expect("runtime fixture must be UTF-8")
+                    .into(),
                 config,
                 exists_keys,
                 postprocessing_output: transform_output,
@@ -197,6 +198,7 @@ impl RuntimeSnapshot {
         )
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     pub fn new_with_transform_output_and_inspection(
         revision: RuntimeRevision,
         target_core: ClashCore,
@@ -216,6 +218,7 @@ impl RuntimeSnapshot {
         )
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     pub fn new_with_transform_output_and_inspection_and_exists_keys(
         revision: RuntimeRevision,
         target_core: ClashCore,
@@ -228,8 +231,10 @@ impl RuntimeSnapshot {
         Self::from_data(
             revision,
             target_core,
-            product_bytes.into(),
             RuntimeSnapshotData {
+                config_text: String::from_utf8(product_bytes)
+                    .expect("runtime fixture must be UTF-8")
+                    .into(),
                 config,
                 exists_keys,
                 postprocessing_output: transform_output,
@@ -239,7 +244,19 @@ impl RuntimeSnapshot {
     }
 
     pub fn product_bytes(&self) -> &[u8] {
-        &self.product_bytes
+        self.config_text.as_bytes()
+    }
+
+    /// The same allocation submitted to Core and written to the product.
+    pub fn config_text(&self) -> Arc<str> {
+        self.config_text.clone()
+    }
+
+    /// YAML view of the built document (without the generated-file header).
+    pub fn runtime_yaml(&self) -> &str {
+        self.config_text
+            .strip_prefix(PRODUCT_HEADER)
+            .unwrap_or(&self.config_text)
     }
 
     pub fn clash_info(&self) -> ClashInfo {
@@ -256,8 +273,8 @@ impl RuntimeSnapshot {
         Self::from_data(
             revision,
             self.target_core,
-            self.product_bytes.clone(),
             RuntimeSnapshotData {
+                config_text: self.config_text.clone(),
                 config: self.config.clone(),
                 exists_keys: self.exists_keys.clone(),
                 postprocessing_output: self.postprocessing_output.clone(),
@@ -522,49 +539,6 @@ impl RuntimeSnapshotStore {
 pub struct RuntimeTransactionSnapshot {
     pub product: Option<Vec<u8>>,
     pub lifecycle: RuntimeLifecycleState,
-}
-
-impl RuntimeSnapshot {
-    /// Attach an authenticated effective document to a temporary inspection view.
-    pub fn with_effective_config(&self, effective: CoreEffectiveConfig) -> anyhow::Result<Self> {
-        let view = self.inspection.effective_config(effective)?;
-        let mut snapshot = self.clone();
-        snapshot.inspection_id = format!(
-            "{}:effective:{}:{}:{}",
-            self.inspection_id,
-            view.revision.epoch,
-            view.revision.generation,
-            view.revision.effective_hash,
-        );
-        snapshot.effective = Some(Arc::new(view));
-        Ok(snapshot)
-    }
-
-    pub fn inspection_summary(
-        &self,
-        bound_revision: Option<ConfigRevisionInfo>,
-    ) -> RuntimeInspection {
-        self.inspection.inspection_summary(
-            &self.inspection_id,
-            &self.revision.get().to_string(),
-            &self.target_core.to_string(),
-            self.effective.as_deref(),
-            bound_revision,
-        )
-    }
-
-    pub fn inspection_content(
-        &self,
-        snapshot_id: &str,
-        node_id: u32,
-    ) -> anyhow::Result<RuntimeInspectionContent> {
-        self.inspection.inspection_content(
-            &self.inspection_id,
-            self.effective.as_deref(),
-            snapshot_id,
-            node_id,
-        )
-    }
 }
 
 #[cfg(test)]

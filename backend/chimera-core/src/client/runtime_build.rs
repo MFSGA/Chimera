@@ -110,10 +110,10 @@ impl RuntimeBuildService {
             &builtins,
             strict_transforms,
         )?;
-        let (bytes, data) =
+        let data =
             runtime_snapshot_data_from_artifact(artifact, &input.profiles, core, builtin_enabled)?;
         Ok(Arc::new(runtime::RuntimeSnapshot::from_data(
-            revision, core, bytes, data,
+            revision, core, data,
         )))
     }
 }
@@ -298,6 +298,14 @@ mod tests {
             prepared.intent.config_text.as_bytes(),
             prepared.snapshot.product_bytes(),
             "the check must use the exact same bytes the builder would publish",
+        );
+        assert!(Arc::ptr_eq(
+            &prepared.intent.config_text,
+            &prepared.snapshot.config_text()
+        ));
+        assert_eq!(
+            serde_yaml::from_str::<serde_json::Value>(prepared.snapshot.runtime_yaml()).unwrap(),
+            prepared.snapshot.config_json().unwrap()
         );
         assert_eq!(
             prepared.intent.digest,

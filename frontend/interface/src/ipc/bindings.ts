@@ -3478,6 +3478,8 @@ export type PostProcessingOutput = {
   scopes: { [key in string]: { [key in string]: [LogSpan, string][] } };
   /**  全局链的输出 */
   global: { [key in string]: [LogSpan, string][] };
+  /**  Pipeline diagnostics not belonging to a transform. */
+  advice?: [LogSpan, string][];
 };
 
 /**  Top-level semantic split. */

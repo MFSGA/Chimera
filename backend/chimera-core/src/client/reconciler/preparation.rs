@@ -155,11 +155,9 @@ pub fn prepared_runtime_from_snapshot(
     target: Option<String>,
     local_ipc: LocalIpcSettings,
 ) -> Result<PreparedRuntime> {
-    let text = std::str::from_utf8(snapshot.product_bytes())
-        .context("the built runtime document is not UTF-8")?;
     let intent = RuntimeIntentBuilder::build(
         (&snapshot.target_core).into(),
-        Arc::<str>::from(text),
+        snapshot.config_text(),
         local_ipc,
     );
     Ok(PreparedRuntime {

@@ -82,7 +82,7 @@ pub fn map_postprocessing(
                     .unwrap_or_else(|| format!("builtin-{step_index}"));
                 output.global.insert(name, logs);
             }
-            _ => {}
+            _ => output.advice.extend(logs),
         }
     }
     output
@@ -154,15 +154,15 @@ pub fn artifact_to_snapshot_data(
     })
 }
 
-/// Ref's candidate-to-snapshot boundary. Retain Chimera's Mapping and exact
-/// product bytes until the remaining runtime value migration is complete.
+/// Ref's candidate-to-snapshot boundary. One canonical serialized product;
+/// retain the Mapping only for existing legacy config publication.
 pub fn runtime_snapshot_data_from_artifact(
     artifact: RuntimeArtifact,
     profiles: &Profiles,
     core: chimera_config::application::ClashCore,
     builtin_enabled: bool,
 ) -> std::result::Result<
-    (std::sync::Arc<[u8]>, super::runtime::RuntimeSnapshotData),
+    super::runtime::RuntimeSnapshotData,
     chimera_profile_transform::RuntimeBuildError,
 > {
     use chimera_profile_transform::{RuntimeBuildError, builtin_transforms_for};
@@ -178,15 +178,16 @@ pub fn runtime_snapshot_data_from_artifact(
         .map_err(RuntimeBuildError::ProjectArtifact)?;
     let bytes = super::runtime::render_runtime_bytes(&data.config)
         .map_err(RuntimeBuildError::SerializeFinalConfig)?;
-    Ok((
-        bytes.into(),
-        super::runtime::RuntimeSnapshotData {
-            config: data.config,
-            exists_keys: data.exists_keys,
-            postprocessing_output: data.postprocessing_output,
-            inspection: std::sync::Arc::new(data.inspection),
-        },
-    ))
+    // serde_yaml produces UTF-8; the header is also UTF-8. Reuse the
+    // exact serialized product as the one canonical text allocation.
+    let config_text = String::from_utf8(bytes).expect("serialized YAML is UTF-8");
+    Ok(super::runtime::RuntimeSnapshotData {
+        config_text: config_text.into(),
+        config: data.config,
+        exists_keys: data.exists_keys,
+        postprocessing_output: data.postprocessing_output,
+        inspection: std::sync::Arc::new(data.inspection),
+    })
 }
 
 #[cfg(test)]
@@ -258,15 +259,18 @@ mod tests {
             output.global["config_fixer"],
             [(LogSpan::Info, "built-in transform".into())]
         );
-        // The legacy frontend wire contract intentionally lacks ref's advice field.
         assert_eq!(output.global.len(), 2);
         assert_eq!(output.scopes.len(), 1);
-        assert!(
-            serde_json::to_value(&output)
-                .unwrap()
-                .get("advice")
-                .is_none()
+        assert_eq!(
+            output.advice,
+            [(LogSpan::Log, "nontransform diagnostic".into())]
         );
+        let wire = serde_json::to_value(&output).unwrap();
+        assert_eq!(wire["advice"][0][1], "nontransform diagnostic");
+        // Old persisted output can still be decoded.
+        let legacy: PostProcessingOutput =
+            serde_json::from_value(serde_json::json!({"scopes": {}, "global": {}})).unwrap();
+        assert!(legacy.advice.is_empty());
     }
 
     #[test]
