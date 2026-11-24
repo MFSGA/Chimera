@@ -1,4 +1,7 @@
+use crate::state::mutation::{MutationCoordinator, ports::CheckedReceipt};
+use chimera_contracts::mutation::ConfigDomain;
 use std::sync::Arc;
+use tokio_util::sync::CancellationToken;
 
 use anyhow::Context as _;
 use chimera_config::application::{ChimeraAppConfig, ChimeraAppConfigPatch, ReleaseChannel};
@@ -35,6 +38,8 @@ impl ApplicationSnapshot {
 }
 
 pub struct ApplicationActorArgs {
+    pub mutations: MutationCoordinator,
+    pub shutdown: CancellationToken,
     pub manager: PersistentStateManager<ChimeraAppConfig>,
     pub bridge: Arc<dyn VergeLegacyBridge>,
     pub build_channel: ReleaseChannel,
@@ -42,6 +47,8 @@ pub struct ApplicationActorArgs {
 }
 
 pub struct ApplicationActorState {
+    mutations: MutationCoordinator,
+    shutdown: CancellationToken,
     manager: PersistentStateManager<ChimeraAppConfig>,
     bridge: Arc<dyn VergeLegacyBridge>,
     build_channel: ReleaseChannel,
@@ -51,6 +58,13 @@ pub struct ApplicationActorState {
 #[derive(Debug)]
 #[allow(dead_code)]
 pub enum ApplicationActorMessage {
+    CommitNative {
+        expected_version: u64,
+        prepared: PreparedTypedReplace<ChimeraAppConfig>,
+        receipt: Option<CheckedReceipt>,
+        requested: Vec<crate::client::effects::plan::EffectKind>,
+        reply: RpcReplyPort<anyhow::Result<ApplicationSnapshot>>,
+    },
     Get(RpcReplyPort<anyhow::Result<ApplicationSnapshot>>),
     Patch {
         patch: ChimeraAppConfigPatch,
@@ -165,6 +179,76 @@ impl ApplicationActor {
         }
     }
 
+    /// Durable source settlement. Candidate admission runs outside this mailbox
+    /// so a legacy lifecycle command awaiting a source CAS cannot deadlock it.
+    async fn commit_native(
+        state: &mut ApplicationActorState,
+        expected_version: u64,
+        prepared: PreparedTypedReplace<ChimeraAppConfig>,
+        receipt: Option<CheckedReceipt>,
+        requested: Vec<crate::client::effects::plan::EffectKind>,
+    ) -> anyhow::Result<ApplicationSnapshot> {
+        state.mutations.ensure_ready()?;
+        anyhow::ensure!(
+            !state.shutdown.is_cancelled(),
+            "application owner is shutting down"
+        );
+        let current = state.manager.snapshot_handle().load();
+        anyhow::ensure!(
+            *current.version.as_ref() == expected_version,
+            "application config version conflict: expected {}, actual {}",
+            expected_version,
+            current.version.as_ref()
+        );
+        let (next, mirror) = prepared.into_parts();
+        let reaches_runtime = impact::reaches_runtime(&current.state, &next, &[]);
+        anyhow::ensure!(
+            !reaches_runtime || receipt.is_some(),
+            "runtime input changed without a checked proposal"
+        );
+        let version = current.version;
+        drop(current);
+        let gate = state.mutations.runtime_gate().map_err(anyhow::Error::new)?;
+        let result = state.manager.replace_if_version(version, next).await;
+        match result {
+            Ok(ReplaceIfVersionResult::Replaced) => {
+                mirror.apply();
+                let mut snapshot = Self::snapshot(state);
+                snapshot.reaches_runtime = reaches_runtime || receipt.is_some();
+                snapshot.operation_id = snapshot.reaches_runtime.then(OperationId::generate);
+                if let Some(receipt) = receipt {
+                    receipt.committed(crate::state::Version::new(snapshot.version));
+                } else {
+                    gate.source_only_committed(
+                        ConfigDomain::Application,
+                        crate::state::Version::new(snapshot.version),
+                    );
+                }
+                state
+                    .mutations
+                    .effects()
+                    .application_committed((&snapshot.state).into(), requested);
+                state.settings_changes.send_replace(snapshot.state.clone());
+                Ok(snapshot)
+            }
+            result => {
+                // Dropping the checked receipt cancels the precise proposal.
+                drop(receipt);
+                match result {
+                    Ok(ReplaceIfVersionResult::Conflict { actual_version }) => anyhow::bail!(
+                        "application config version conflict: expected {}, actual {}",
+                        expected_version,
+                        actual_version.as_ref()
+                    ),
+                    Err(error) => {
+                        Err(error).context("failed to persist checked application config")
+                    }
+                    Ok(ReplaceIfVersionResult::Replaced) => unreachable!(),
+                }
+            }
+        }
+    }
+
     async fn replace_prepared_if_version(
         state: &mut ApplicationActorState,
         expected_version: u64,
@@ -209,6 +293,8 @@ impl Actor for ApplicationActor {
         args: Self::Arguments,
     ) -> Result<Self::State, ActorProcessingErr> {
         Ok(ApplicationActorState {
+            mutations: args.mutations,
+            shutdown: args.shutdown,
             manager: args.manager,
             bridge: args.bridge,
             build_channel: args.build_channel,
@@ -223,6 +309,18 @@ impl Actor for ApplicationActor {
         state: &mut Self::State,
     ) -> Result<(), ActorProcessingErr> {
         match message {
+            ApplicationActorMessage::CommitNative {
+                expected_version,
+                prepared,
+                receipt,
+                requested,
+                reply,
+            } => {
+                let _ = reply.send(
+                    Self::commit_native(state, expected_version, prepared, receipt, requested)
+                        .await,
+                );
+            }
             ApplicationActorMessage::Get(reply) => {
                 let _ = reply.send(Ok(Self::snapshot(state)));
             }
@@ -326,6 +424,8 @@ mod tests {
             None,
             ApplicationActor,
             ApplicationActorArgs {
+                mutations: MutationCoordinator::isolated(),
+                shutdown: CancellationToken::new(),
                 manager,
                 bridge,
                 build_channel,

@@ -18,6 +18,10 @@ impl<T> PreparedTypedReplace<T> {
         Self { state, mirror }
     }
 
+    pub(crate) fn state(&self) -> &T {
+        &self.state
+    }
+
     pub fn into_parts(self) -> (T, Box<dyn PreparedLegacyMirror>) {
         (self.state, self.mirror)
     }

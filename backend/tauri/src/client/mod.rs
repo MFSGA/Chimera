@@ -141,12 +141,16 @@ async fn new_typed_config_clients(
     paths: &PathResolver,
     bridges: &LegacyBridgeSet,
     build_channel: ReleaseChannel,
+    mutations: chimera_core::state::mutation::MutationCoordinator,
+    shutdown: tokio_util::sync::CancellationToken,
 ) -> anyhow::Result<TypedConfigClients> {
-    let application = ApplicationClient::new(
+    let application = ApplicationClient::new_with_mutations(
         utf8_path(paths.application_config_path())?,
         bridges.verge.snapshot_legacy()?,
         bridges.verge.clone(),
         build_channel,
+        mutations.clone(),
+        shutdown.clone(),
     )
     .await?;
     let session_state = SessionStateClient::new(
@@ -155,10 +159,12 @@ async fn new_typed_config_clients(
         bridges.window.clone(),
     )
     .await?;
-    let clash_config = ClashConfigClient::new(
+    let clash_config = ClashConfigClient::new_with_mutations(
         utf8_path(paths.clash_config_path())?,
         bridges.clash.snapshot_legacy()?,
         bridges.clash.clone(),
+        mutations,
+        shutdown,
     )
     .await?;
 
@@ -267,10 +273,13 @@ impl ChimeraClient {
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
             window,
         } = args;
+        let mutations = chimera_core::state::mutation::MutationCoordinator::pending();
         let typed = tauri::async_runtime::block_on(new_typed_config_clients(
             &paths,
             &bridges,
             bundle_metadata.release_channel,
+            mutations.clone(),
+            shutdown.clone(),
         ))?;
         let streams_shutdown = shutdown.child_token();
         // Keep Core log shards in a dedicated subdirectory, never in the
@@ -330,7 +339,6 @@ impl ChimeraClient {
             })
             .await
         })?;
-        let mutations = chimera_core::state::mutation::MutationCoordinator::pending();
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
         let commit_notifications: Arc<dyn effects::ports::CommitNotifications> = Arc::new((
             effects.clone(),
@@ -338,7 +346,7 @@ impl ChimeraClient {
         ));
         #[cfg(any(target_os = "android", target_os = "ios"))]
         let commit_notifications: Arc<dyn effects::ports::CommitNotifications> =
-            Arc::new(effects::ports::NoopCommitNotifications);
+            Arc::new(event_sink::UiCommitNotifications(ui_sink.clone()));
         let typed_profiles =
             tauri::async_runtime::block_on(profiles::ProfilesClient::new_with_jobs(
                 Arc::new(mutations.clone()),

@@ -1,4 +1,7 @@
+use crate::state::mutation::{MutationCoordinator, ports::CheckedReceipt};
+use chimera_contracts::mutation::ConfigDomain;
 use std::sync::Arc;
+use tokio_util::sync::CancellationToken;
 
 use anyhow::Context as _;
 use chimera_config::clash::config::{ClashConfig, ClashConfigPatch};
@@ -34,11 +37,15 @@ impl ClashConfigSnapshot {
 }
 
 pub struct ClashConfigActorArgs {
+    pub mutations: MutationCoordinator,
+    pub shutdown: CancellationToken,
     pub manager: PersistentStateManager<ClashConfig>,
     pub bridge: Arc<dyn ClashLegacyBridge>,
 }
 
 pub struct ClashConfigActorState {
+    mutations: MutationCoordinator,
+    shutdown: CancellationToken,
     manager: PersistentStateManager<ClashConfig>,
     bridge: Arc<dyn ClashLegacyBridge>,
 }
@@ -46,6 +53,13 @@ pub struct ClashConfigActorState {
 #[derive(Debug)]
 #[allow(dead_code)]
 pub enum ClashConfigActorMessage {
+    CommitNative {
+        expected_version: u64,
+        prepared: PreparedTypedReplace<ClashConfig>,
+        receipt: Option<CheckedReceipt>,
+        requested: Vec<crate::client::effects::plan::EffectKind>,
+        reply: RpcReplyPort<anyhow::Result<ClashConfigSnapshot>>,
+    },
     Get(RpcReplyPort<anyhow::Result<ClashConfigSnapshot>>),
     Patch {
         patch: ClashConfigPatch,
@@ -115,6 +129,76 @@ impl ClashConfigActor {
         }
     }
 
+    /// Durable source settlement. Candidate admission runs outside this mailbox
+    /// so a legacy lifecycle command awaiting a source CAS cannot deadlock it.
+    async fn commit_native(
+        state: &mut ClashConfigActorState,
+        expected_version: u64,
+        prepared: PreparedTypedReplace<ClashConfig>,
+        receipt: Option<CheckedReceipt>,
+        _requested: Vec<crate::client::effects::plan::EffectKind>,
+    ) -> anyhow::Result<ClashConfigSnapshot> {
+        state.mutations.ensure_ready()?;
+        anyhow::ensure!(
+            !state.shutdown.is_cancelled(),
+            "clash_config owner is shutting down"
+        );
+        let current = state.manager.snapshot_handle().load();
+        anyhow::ensure!(
+            *current.version.as_ref() == expected_version,
+            "clash_config config version conflict: expected {}, actual {}",
+            expected_version,
+            current.version.as_ref()
+        );
+        let (next, mirror) = prepared.into_parts();
+        let reaches_runtime = impact::reaches_runtime(&current.state, &next, &[]);
+        anyhow::ensure!(
+            !reaches_runtime || receipt.is_some(),
+            "runtime input changed without a checked proposal"
+        );
+        let version = current.version;
+        drop(current);
+        let gate = state.mutations.runtime_gate().map_err(anyhow::Error::new)?;
+        let result = state.manager.replace_if_version(version, next).await;
+        match result {
+            Ok(ReplaceIfVersionResult::Replaced) => {
+                mirror.apply();
+                let mut snapshot = Self::snapshot(state);
+                snapshot.reaches_runtime = reaches_runtime || receipt.is_some();
+                snapshot.operation_id = snapshot.reaches_runtime.then(OperationId::generate);
+                if let Some(receipt) = receipt {
+                    receipt.committed(crate::state::Version::new(snapshot.version));
+                } else {
+                    gate.source_only_committed(
+                        ConfigDomain::Clash,
+                        crate::state::Version::new(snapshot.version),
+                    );
+                }
+                state
+                    .mutations
+                    .effects()
+                    .clash_committed((&snapshot.state).into());
+
+                Ok(snapshot)
+            }
+            result => {
+                // Dropping the checked receipt cancels the precise proposal.
+                drop(receipt);
+                match result {
+                    Ok(ReplaceIfVersionResult::Conflict { actual_version }) => anyhow::bail!(
+                        "clash_config config version conflict: expected {}, actual {}",
+                        expected_version,
+                        actual_version.as_ref()
+                    ),
+                    Err(error) => {
+                        Err(error).context("failed to persist checked clash_config config")
+                    }
+                    Ok(ReplaceIfVersionResult::Replaced) => unreachable!(),
+                }
+            }
+        }
+    }
+
     async fn replace_prepared_if_version(
         state: &mut ClashConfigActorState,
         expected_version: u64,
@@ -157,6 +241,8 @@ impl Actor for ClashConfigActor {
         args: Self::Arguments,
     ) -> Result<Self::State, ActorProcessingErr> {
         Ok(ClashConfigActorState {
+            mutations: args.mutations,
+            shutdown: args.shutdown,
             manager: args.manager,
             bridge: args.bridge,
         })
@@ -169,6 +255,18 @@ impl Actor for ClashConfigActor {
         state: &mut Self::State,
     ) -> Result<(), ActorProcessingErr> {
         match message {
+            ClashConfigActorMessage::CommitNative {
+                expected_version,
+                prepared,
+                receipt,
+                requested,
+                reply,
+            } => {
+                let _ = reply.send(
+                    Self::commit_native(state, expected_version, prepared, receipt, requested)
+                        .await,
+                );
+            }
             ClashConfigActorMessage::Get(reply) => {
                 let _ = reply.send(Ok(Self::snapshot(state)));
             }
@@ -248,7 +346,12 @@ mod tests {
         let (actor_ref, _handle) = Actor::spawn(
             None,
             ClashConfigActor,
-            ClashConfigActorArgs { manager, bridge },
+            ClashConfigActorArgs {
+                manager,
+                bridge,
+                mutations: MutationCoordinator::isolated(),
+                shutdown: CancellationToken::new(),
+            },
         )
         .await
         .expect("clash config actor should spawn");

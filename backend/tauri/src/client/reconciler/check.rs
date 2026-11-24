@@ -429,6 +429,20 @@ impl RuntimeGate for CandidateCheck {
         result
     }
 
+    async fn check_with_receipt(
+        &self,
+        candidate: RuntimeCandidate,
+        interrupt_mode: bool,
+    ) -> Result<String, Arc<RuntimeError>> {
+        self.check_with_receipt_effect(candidate, interrupt_mode)
+            .await
+    }
+    fn committed_with_receipt(&self, domain: ConfigDomain, version: Version, receipt: String) {
+        CandidateCheck::committed_with_receipt(self, domain, version, receipt);
+    }
+    fn abort_with_receipt(&self, domain: ConfigDomain, receipt: String) {
+        CandidateCheck::abort_with_receipt(self, domain, receipt);
+    }
     fn source_only_committed(&self, domain: ConfigDomain, version: Version) {
         self.workflow.source_only_committed(domain, version);
     }

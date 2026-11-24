@@ -15,6 +15,7 @@ use std::{sync::Arc, time::Duration};
 use struct_patch::Patch;
 #[derive(Clone)]
 pub struct ApplicationClient {
+    mutations: crate::state::mutation::MutationCoordinator,
     inner: Arc<ApplicationClientInner>,
     settings_changes: tokio::sync::watch::Receiver<ChimeraAppConfig>,
 }
@@ -43,6 +44,7 @@ impl ApplicationClient {
     pub fn static_state(state: ChimeraAppConfig) -> Self {
         let (settings_changes, receiver) = tokio::sync::watch::channel(state.clone());
         Self {
+            mutations: crate::state::mutation::MutationCoordinator::pending(),
             inner: Arc::new(ApplicationClientInner::Static {
                 state: parking_lot::RwLock::new((state, 0)),
                 settings_changes,
@@ -56,6 +58,25 @@ impl ApplicationClient {
         seed: ChimeraAppConfig,
         bridge: Arc<dyn VergeLegacyBridge>,
         build_channel: ReleaseChannel,
+    ) -> anyhow::Result<Self> {
+        Self::new_with_mutations(
+            config_path,
+            seed,
+            bridge,
+            build_channel,
+            crate::state::mutation::MutationCoordinator::pending(),
+            tokio_util::sync::CancellationToken::new(),
+        )
+        .await
+    }
+
+    pub async fn new_with_mutations(
+        config_path: Utf8PathBuf,
+        seed: ChimeraAppConfig,
+        bridge: Arc<dyn VergeLegacyBridge>,
+        build_channel: ReleaseChannel,
+        mutations: crate::state::mutation::MutationCoordinator,
+        shutdown: tokio_util::sync::CancellationToken,
     ) -> anyhow::Result<Self> {
         // An existing but unreadable node, including a dangling symlink, must
         // fail rather than silently substituting the legacy/default seed.
@@ -118,6 +139,8 @@ impl ApplicationClient {
             None,
             ApplicationActor,
             ApplicationActorArgs {
+                mutations: mutations.clone(),
+                shutdown,
                 manager,
                 bridge: bridge.clone(),
                 build_channel,
@@ -128,6 +151,7 @@ impl ApplicationClient {
         .context("failed to spawn application actor")?;
 
         let client = Self {
+            mutations,
             inner: Arc::new(ApplicationClientInner::Actor {
                 actor_ref,
                 snapshot,
@@ -249,6 +273,68 @@ impl ApplicationClient {
                 drop(source);
                 settings_changes.send_replace(snapshot.state.clone());
                 Ok(snapshot)
+            }
+        }
+    }
+
+    pub async fn commit_native(
+        &self,
+        expected_version: u64,
+        candidate: ChimeraAppConfig,
+        force_check: bool,
+        interrupt_mode: bool,
+        requested: Vec<crate::client::effects::plan::EffectKind>,
+    ) -> anyhow::Result<ApplicationSnapshot> {
+        use crate::state::mutation::{DomainChange, RuntimeCandidate, ports::CheckedReceipt};
+        self.mutations.ensure_ready()?;
+        let before = self.snapshot();
+        anyhow::ensure!(
+            before.version == expected_version,
+            "source version changed before candidate admission"
+        );
+        let prepared = self.prepare_replace(candidate).await?;
+        let reaches_runtime =
+            crate::state::impact::reaches_runtime(&before.state, prepared.state(), &[]);
+        let receipt = if reaches_runtime || force_check {
+            Some(
+                CheckedReceipt::check(
+                    self.mutations.runtime_gate().map_err(anyhow::Error::new)?,
+                    chimera_contracts::mutation::ConfigDomain::Application,
+                    RuntimeCandidate {
+                        change: DomainChange::Application {
+                            candidate: Arc::new(prepared.state().clone()),
+                        },
+                        staged: Default::default(),
+                    },
+                    interrupt_mode,
+                )
+                .await?,
+            )
+        } else {
+            None
+        };
+        match self.inner.as_ref() {
+            ApplicationClientInner::Actor { actor_ref, .. } => {
+                match actor_ref
+                    .call(
+                        |reply| ApplicationActorMessage::CommitNative {
+                            expected_version,
+                            prepared,
+                            receipt,
+                            requested,
+                            reply,
+                        },
+                        None,
+                    )
+                    .await?
+                {
+                    CallResult::Success(result) => result,
+                    _ => anyhow::bail!("checked application source owner did not reply"),
+                }
+            }
+            #[cfg(any(test, feature = "test-support"))]
+            ApplicationClientInner::Static { .. } => {
+                anyhow::bail!("native commits require the persistent source owner")
             }
         }
     }

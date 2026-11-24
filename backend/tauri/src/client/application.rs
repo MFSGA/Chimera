@@ -288,7 +288,8 @@ impl ChimeraClient {
         &self,
         patch: ChimeraAppConfigPatch,
     ) -> anyhow::Result<super::MutationOutcome<()>> {
-        let mut candidate = self.get_app_config()?;
+        let before = self.inner.application.snapshot();
+        let mut candidate = before.state.clone();
         candidate.apply(patch.clone());
         crate::state::application::validate_network_automation_policy(&candidate)?;
         chimera_config::application::validate_public_ip_probe_sources(
@@ -320,29 +321,44 @@ impl ChimeraClient {
         )?;
 
         let service_connected = crate::core::service::ipc::get_ipc_state().is_connected();
-        let (mut degradations, checked_version) =
-            if super::application_workflow::impact::application_patch_requires_reconcile(
+        let requires_reconcile =
+            super::application_workflow::impact::application_patch_requires_reconcile(
                 &patch,
                 service_connected,
-            ) || patch.enable_service_mode.is_some()
-            {
-                // Source commit is serialized by the one CoreLifecycle owner.
-                // Its post-commit Core errors return as degradations, never as a
-                // false report that the application.yaml write did not happen.
-                let report = self
-                    .inner
-                    .core_lifecycle
-                    .patch_application_config(patch)
-                    .await?;
-                (report.degradations, report.checked_version)
-            } else {
-                self.inner.application.patch_typed(patch).await?;
-                (Vec::new(), None)
-            };
-        // The source-owning lifecycle workflow already published a Checked
-        // notice for its exact CAS version. Do not replay it through the UI
-        // facade: an additional notice could race the next source commit.
-        let snapshot = self.inner.application.get().await?;
+            ) || patch.enable_service_mode.is_some();
+        let native_checked = self.inner.checked_gate.is_some()
+            && super::reconciler::legacy_source::checked_application_patch_eligible(
+                &patch,
+                &before.state,
+                service_connected,
+            );
+        let native_source_only = self.inner.checked_gate.is_some()
+            && !requires_reconcile
+            && !chimera_core::state::impact::reaches_runtime(&before.state, &candidate, &[]);
+        let native = native_checked || native_source_only;
+        let (mut degradations, checked_version, snapshot) = if native {
+            let requested = super::effects::plan::requested_owners(&patch);
+            let snapshot = self
+                .inner
+                .application
+                .commit_native(before.version, candidate, native_checked, false, requested)
+                .await?;
+            (Vec::new(), Some(snapshot.version), snapshot)
+        } else if requires_reconcile {
+            let report = self
+                .inner
+                .core_lifecycle
+                .patch_application_config(patch)
+                .await?;
+            (
+                report.degradations,
+                report.checked_version,
+                self.inner.application.get().await?,
+            )
+        } else {
+            let snapshot = self.inner.application.patch_typed(patch).await?;
+            (Vec::new(), None, snapshot)
+        };
         if checked_version.is_none() {
             // Already-applied legacy domains only publish their source version.
             // Retryable postcommit failures still request owner convergence.
@@ -377,11 +393,13 @@ impl ChimeraClient {
                 None,
             );
             self.publish_runtime_port_binding().await;
-            super::effects::ports::CommitNotifications::application_committed(
-                &self.inner.effects,
-                inputs.app,
-                Vec::new(),
-            );
+            if !native {
+                super::effects::ports::CommitNotifications::application_committed(
+                    &self.inner.effects,
+                    inputs.app,
+                    Vec::new(),
+                );
+            }
 
             if reconcile_hotkeys {
                 let status = self.reconcile_hotkeys().await;
@@ -391,20 +409,24 @@ impl ChimeraClient {
             }
         }
 
-        self.inner.ui_sink.refresh_verge();
+        if !native {
+            self.inner.ui_sink.refresh_verge();
+        }
         let has_deferred_runtime = degradations
             .iter()
             .any(|item| item.code == "application_runtime_deferred");
         Ok(
             super::MutationOutcome::from_parts((), degradations).with_commit(
                 super::runtime::CommitReceipt {
-                    operation_id: None,
+                    operation_id: snapshot.operation_id.map(|id| id.to_string()),
                     domain: "application".into(),
                     source_version: snapshot.version,
                     runtime: if has_deferred_runtime {
                         super::runtime::RuntimeCommitStatus::Deferred
-                    } else {
+                    } else if snapshot.reaches_runtime {
                         super::runtime::RuntimeCommitStatus::Pending
+                    } else {
+                        super::runtime::RuntimeCommitStatus::Unchanged
                     },
                 },
             ),
@@ -485,12 +507,16 @@ impl ChimeraClient {
             let clash = self.get_clash_config()?;
             let inputs = super::effects::plan::ApplicationEffectInputs::project(&app, &clash, None);
             self.publish_runtime_port_binding().await;
-            super::effects::ports::CommitNotifications::clash_committed(
-                &self.inner.effects,
-                inputs.clash,
-            );
+            if report.checked_version.is_none() {
+                super::effects::ports::CommitNotifications::clash_committed(
+                    &self.inner.effects,
+                    inputs.clash,
+                );
+            }
         }
-        self.inner.ui_sink.refresh_clash();
+        if report.checked_version.is_none() {
+            self.inner.ui_sink.refresh_clash();
+        }
 
         Ok(
             super::MutationOutcome::from_parts((), degradations).with_commit(

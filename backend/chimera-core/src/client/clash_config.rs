@@ -14,6 +14,7 @@ use ractor::{Actor, ActorRef, rpc::CallResult};
 use std::sync::Arc;
 #[derive(Clone)]
 pub struct ClashConfigClient {
+    mutations: crate::state::mutation::MutationCoordinator,
     state: Arc<ClashConfigStateBackend>,
 }
 
@@ -48,6 +49,23 @@ impl ClashConfigClient {
         seed: ClashConfig,
         bridge: Arc<dyn ClashLegacyBridge>,
     ) -> anyhow::Result<Self> {
+        Self::new_with_mutations(
+            config_path,
+            seed,
+            bridge,
+            crate::state::mutation::MutationCoordinator::pending(),
+            tokio_util::sync::CancellationToken::new(),
+        )
+        .await
+    }
+
+    pub async fn new_with_mutations(
+        config_path: Utf8PathBuf,
+        seed: ClashConfig,
+        bridge: Arc<dyn ClashLegacyBridge>,
+        mutations: crate::state::mutation::MutationCoordinator,
+        shutdown: tokio_util::sync::CancellationToken,
+    ) -> anyhow::Result<Self> {
         // Ref's typed client fails on malformed config; also keep existing
         // dangling links and inaccessible nodes from becoming default seeds.
         let should_load = chimera_migration::fs::config_node_exists(config_path.as_std_path())
@@ -68,6 +86,8 @@ impl ClashConfigClient {
             None,
             ClashConfigActor,
             ClashConfigActorArgs {
+                mutations: mutations.clone(),
+                shutdown,
                 manager,
                 bridge: bridge.clone(),
             },
@@ -75,10 +95,13 @@ impl ClashConfigClient {
         .await
         .context("failed to spawn clash config actor")?;
 
-        let client = Self::with_state(ClashConfigStateBackend::Actor {
-            actor_ref,
-            snapshot,
-        });
+        let client = Self {
+            mutations,
+            state: Arc::new(ClashConfigStateBackend::Actor {
+                actor_ref,
+                snapshot,
+            }),
+        };
         bridge
             .prepare(&client.get_typed())
             .context("failed to prepare loaded clash legacy mirror")?
@@ -86,8 +109,10 @@ impl ClashConfigClient {
         Ok(client)
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     fn with_state(state: ClashConfigStateBackend) -> Self {
         Self {
+            mutations: crate::state::mutation::MutationCoordinator::pending(),
             state: Arc::new(state),
         }
     }
@@ -148,6 +173,68 @@ impl ClashConfigClient {
     }
     pub async fn get_snapshot(&self) -> anyhow::Result<ClashConfigSnapshot> {
         Ok(self.snapshot())
+    }
+
+    pub async fn commit_native(
+        &self,
+        expected_version: u64,
+        candidate: ClashConfig,
+        force_check: bool,
+        interrupt_mode: bool,
+        requested: Vec<crate::client::effects::plan::EffectKind>,
+    ) -> anyhow::Result<ClashConfigSnapshot> {
+        use crate::state::mutation::{DomainChange, RuntimeCandidate, ports::CheckedReceipt};
+        self.mutations.ensure_ready()?;
+        let before = self.snapshot();
+        anyhow::ensure!(
+            before.version == expected_version,
+            "source version changed before candidate admission"
+        );
+        let prepared = self.prepare_replace(candidate).await?;
+        let reaches_runtime =
+            crate::state::impact::reaches_runtime(&before.state, prepared.state(), &[]);
+        let receipt = if reaches_runtime || force_check {
+            Some(
+                CheckedReceipt::check(
+                    self.mutations.runtime_gate().map_err(anyhow::Error::new)?,
+                    chimera_contracts::mutation::ConfigDomain::Clash,
+                    RuntimeCandidate {
+                        change: DomainChange::Clash {
+                            candidate: Arc::new(prepared.state().clone()),
+                        },
+                        staged: Default::default(),
+                    },
+                    interrupt_mode,
+                )
+                .await?,
+            )
+        } else {
+            None
+        };
+        match self.state.as_ref() {
+            ClashConfigStateBackend::Actor { actor_ref, .. } => {
+                match actor_ref
+                    .call(
+                        |reply| ClashConfigActorMessage::CommitNative {
+                            expected_version,
+                            prepared,
+                            receipt,
+                            requested,
+                            reply,
+                        },
+                        None,
+                    )
+                    .await?
+                {
+                    CallResult::Success(result) => result,
+                    _ => anyhow::bail!("checked clash_config source owner did not reply"),
+                }
+            }
+            #[cfg(any(test, feature = "test-support"))]
+            ClashConfigStateBackend::Static { .. } => {
+                anyhow::bail!("native commits require the persistent source owner")
+            }
+        }
     }
 
     pub async fn prepare_replace(

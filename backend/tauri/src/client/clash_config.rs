@@ -72,6 +72,20 @@ impl ClashConfigClient {
             chimera_core::client::clash_config::ClashConfigClient::new(path, seed, bridge).await?,
         ))
     }
+    pub(super) async fn new_with_mutations(
+        path: Utf8PathBuf,
+        seed: ClashConfig,
+        bridge: Arc<dyn ClashLegacyBridge>,
+        mutations: chimera_core::state::mutation::MutationCoordinator,
+        shutdown: tokio_util::sync::CancellationToken,
+    ) -> Result<Self> {
+        Ok(Self(
+            chimera_core::client::clash_config::ClashConfigClient::new_with_mutations(
+                path, seed, bridge, mutations, shutdown,
+            )
+            .await?,
+        ))
+    }
     #[cfg(test)]
     pub(crate) fn legacy() -> Result<Self> {
         Ok(Self(
@@ -128,14 +142,20 @@ impl ClashConfigClient {
         patch: ClashConfigPatch,
     ) -> Result<ClashCommitReport> {
         let expected_sources = owner.committed_runtime_source_versions();
-        if let Some(gate) = owner.inner.checked_gate.as_ref() {
+        if owner.inner.checked_gate.is_some() {
             let app = owner.get_app_config()?;
             let service_connected = crate::core::service::ipc::get_ipc_state().is_connected();
             // The same committed source snapshot decides DNS/Hosts ownership
             // and the exact expected CAS version; do not re-read independently.
             let before = self.get_snapshot().await?;
-            if checked_clash_patch_eligible(&patch, &before.state, &app, service_connected) {
-                return self.patch_typed_config_checked(before, patch, gate).await;
+            let mut next = before.state.clone();
+            next.apply(patch.clone());
+            let checked =
+                checked_clash_patch_eligible(&patch, &before.state, &app, service_connected);
+            if checked || !should_reconcile_clash_patch(&before.state, &next, &patch) {
+                return self
+                    .commit_native_candidate(before, next, checked, false)
+                    .await;
             }
         }
         let candidate_patch = patch.clone();
@@ -166,75 +186,24 @@ impl ClashConfigClient {
         .await
     }
 
-    /// Ref source-owner cutover for local config-builder flags and managed
-    /// DNS/Hosts. These inputs have no TUN/port/host/mode one-shot effects:
-    /// the sole Core owner receives the checked product after durable CAS.
-    async fn patch_typed_config_checked(
-        &self,
-        before: ClashConfigSnapshot,
-        patch: ClashConfigPatch,
-        gate: &Arc<super::reconciler::check::CandidateCheck>,
-    ) -> Result<ClashCommitReport> {
-        let mut next = before.state.clone();
-        next.apply(patch);
-        self.commit_checked_candidate(before, next, gate, false)
-            .await
-    }
-
-    /// One durable Clash commit implementation for ref-style typed and raw
-    /// source transitions. The caller must rule out host/port/controller
-    /// effects and explicitly tag any mode-interruption one-shot intent.
-    async fn commit_checked_candidate(
+    /// The shared source client admits the candidate and the Actor settles
+    /// its exact checked proposal. Only legacy file persistence remains here.
+    async fn commit_native_candidate(
         &self,
         before: ClashConfigSnapshot,
         next: ClashConfig,
-        gate: &Arc<super::reconciler::check::CandidateCheck>,
+        force_check: bool,
         interrupt_mode: bool,
     ) -> Result<ClashCommitReport> {
-        use crate::state::mutation::{DomainChange, RuntimeCandidate};
-        let prepared = self.prepare_replace(next.clone()).await?;
-        let checked_request = gate
-            .check_with_receipt_effect(
-                RuntimeCandidate {
-                    change: DomainChange::Clash {
-                        candidate: Arc::new(next),
-                    },
-                    staged: Default::default(),
-                },
+        let snapshot = self
+            .commit_native(
+                before.version,
+                next,
+                force_check,
                 interrupt_mode,
+                Vec::new(),
             )
-            .await
-            .map_err(anyhow::Error::new)?;
-        let snapshot = match self
-            .replace_prepared_if_version(before.version, prepared)
-            .await
-        {
-            Ok(ConditionalReplaceResult::Replaced(snapshot)) => snapshot,
-            Ok(ConditionalReplaceResult::Conflict { actual_version }) => {
-                gate.abort_with_receipt(
-                    chimera_contracts::mutation::ConfigDomain::Clash,
-                    checked_request.clone(),
-                );
-                bail!(
-                    "clash config version conflict: expected {}, actual {actual_version}",
-                    before.version,
-                );
-            }
-            Err(error) => {
-                gate.abort_with_receipt(
-                    chimera_contracts::mutation::ConfigDomain::Clash,
-                    checked_request.clone(),
-                );
-                return Err(error.context("checked Clash source CAS did not confirm a commit"));
-            }
-        };
-        // The source is now durable. Notify the only Core owner before any
-        // optional mirror write can fail; do not perform a legacy inline apply.
-        gate.committed_with_receipt(
-            chimera_contracts::mutation::ConfigDomain::Clash,
-            chimera_core::state::Version::new(snapshot.version),
-            checked_request,
-        );
+            .await?;
         let mut degradations = Vec::new();
         if let Err(error) = (|| {
             Config::clash().data().save_config()?;
@@ -252,8 +221,8 @@ impl ClashConfigClient {
         }
         Ok(ClashCommitReport {
             checked_version: Some(snapshot.version),
+            reaches_runtime: snapshot.reaches_runtime,
             snapshot,
-            reaches_runtime: true,
             degradations,
         })
     }
@@ -423,11 +392,11 @@ impl ClashConfigClient {
                 &owner.get_app_config()?,
                 crate::core::service::ipc::get_ipc_state().is_connected(),
             )
-            && let Some(gate) = owner.inner.checked_gate.as_ref()
+            && owner.inner.checked_gate.is_some()
         {
             let interrupt_mode = plan.mode_changed && plan.break_on_mode_change;
             let report = self
-                .commit_checked_candidate(before, next, gate, interrupt_mode)
+                .commit_native_candidate(before, next, true, interrupt_mode)
                 .await?;
             // The source owner has already sent its exact Checked commit
             // receipt, so do not send legacy SourceCommitted for this version.

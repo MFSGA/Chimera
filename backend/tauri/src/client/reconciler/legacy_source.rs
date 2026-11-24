@@ -22,7 +22,7 @@ pub(in crate::client) struct ApplicationPatchResult {
 /// enhancement patch. Core/Service ownership and other application settings
 /// may carry separate effects; admitting a combined patch would skip their
 /// legacy postcommit workflow after publishing CheckedSourceCommitted.
-fn checked_application_patch_eligible(
+pub(in crate::client) fn checked_application_patch_eligible(
     patch: &ChimeraAppConfigPatch,
     previous: &ChimeraAppConfig,
     service_connected: bool,
