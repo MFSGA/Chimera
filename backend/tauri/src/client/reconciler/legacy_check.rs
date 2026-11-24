@@ -40,14 +40,7 @@ pub(crate) async fn check_candidate(
             error.to_string(),
         ))
     })?;
-    let run_type = crate::core::RunType::classify(
-        app.enable_service_mode,
-        if service_connected {
-            crate::core::service::ipc::IpcState::Connected
-        } else {
-            crate::core::service::ipc::IpcState::Disconnected
-        },
-    );
+    let run_type = crate::core::RunType::classify(app.enable_service_mode, service_connected);
     core.validate_profile_runtime(clash, app.core, run_type, profiles, app, content)
         .await
 }

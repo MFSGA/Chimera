@@ -17,3 +17,9 @@ pub mod status;
 
 pub mod apply;
 pub mod state;
+
+pub mod decision;
+pub mod proof;
+pub mod release;
+pub mod service_evidence;
+pub mod startup;

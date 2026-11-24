@@ -311,7 +311,7 @@ impl CoreLifecycleWorkflow {
 
         let preferred = RunType::classify(
             enable_service_mode,
-            crate::core::service::ipc::get_ipc_state(),
+            crate::core::service::ipc::get_ipc_state().is_connected(),
         );
         if preferred != RunType::Service {
             return Ok(preferred);

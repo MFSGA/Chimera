@@ -179,3 +179,10 @@ pub trait RuntimeApplyPort: Send + Sync {
     fn pending_runtime_product_target(&self) -> Option<String>;
     async fn republish_pending_runtime_product(&self, target: &str) -> anyhow::Result<bool>;
 }
+
+/// Read-only observation used for runtime ownership proofs. The same
+/// instance-bound receipt authority supplies both the observation and the fence.
+#[async_trait]
+pub trait RuntimeObservationPort: RuntimeApplyPort {
+    async fn observe_core_status(&self) -> anyhow::Result<super::status::CoreStatusSnapshot>;
+}

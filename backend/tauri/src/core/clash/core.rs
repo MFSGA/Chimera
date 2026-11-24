@@ -44,53 +44,22 @@ use crate::{
     utils::dirs,
 };
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, Type)]
-#[serde(rename_all = "snake_case")]
-pub enum RunType {
-    /// Run as child process directly
-    Normal,
-    /// Run by Nyanpasu Service via a ipc call
-    Service,
-    // TODO: Not implemented yet
-    /// Run as elevated process, if profile advice to run as elevated
-    Elevated,
+pub use chimera_core::client::core_lifecycle::status::RunType;
+
+fn legacy_run_type(enable_service: bool) -> RunType {
+    RunType::classify(
+        enable_service,
+        crate::core::service::ipc::get_ipc_state().is_connected(),
+    )
 }
 
-impl RunType {
-    /// Classify the core launch mode from explicit inputs.
-    ///
-    /// Typed client paths should use this instead of `Default`, which remains
-    /// only for legacy callers that still read the combined verge state.
-    pub(crate) fn classify(
-        enable_service: bool,
-        ipc_state: crate::core::service::ipc::IpcState,
-    ) -> Self {
-        if enable_service && ipc_state.is_connected() {
-            Self::Service
-        } else {
-            Self::Normal
-        }
-    }
-
-    fn from_service_mode(enable_service: bool) -> Self {
-        let run_type = Self::classify(enable_service, crate::core::service::ipc::get_ipc_state());
-        if run_type == Self::Service {
-            tracing::info!("run core as service");
-        } else {
-            tracing::info!("run core as child process");
-        }
-        run_type
-    }
-}
-
-impl Default for RunType {
-    fn default() -> Self {
-        let enable_service = Config::verge()
+fn configured_run_type() -> RunType {
+    legacy_run_type(
+        Config::verge()
             .latest()
             .enable_service_mode
-            .unwrap_or(false);
-        Self::from_service_mode(enable_service)
-    }
+            .unwrap_or(false),
+    )
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -577,7 +546,7 @@ impl CoreManager {
             (
                 Cow::Owned(CoreState::Stopped(None)),
                 0_i64,
-                RunType::default(),
+                configured_run_type(),
             )
         }
     }
@@ -591,7 +560,7 @@ impl CoreManager {
 
     fn committed_run_type() -> RunType {
         let enable_service = Config::verge().data().enable_service_mode.unwrap_or(false);
-        RunType::from_service_mode(enable_service)
+        legacy_run_type(enable_service)
     }
 
     async fn stop_running_instance(&self) -> Result<()> {
@@ -792,7 +761,7 @@ impl CoreManager {
             &Config::verge().latest(),
             &Config::clash().latest().0,
         )?;
-        self.rebuild_and_run_locked_with(target_core, &clash, RunType::default())
+        self.rebuild_and_run_locked_with(target_core, &clash, configured_run_type())
             .await
     }
 
@@ -918,19 +887,19 @@ mod tests {
     #[test]
     fn run_type_classification_uses_only_explicit_inputs() {
         assert_eq!(
-            RunType::classify(false, IpcState::Disconnected),
+            RunType::classify(false, IpcState::Disconnected.is_connected()),
             RunType::Normal
         );
         assert_eq!(
-            RunType::classify(false, IpcState::Connected),
+            RunType::classify(false, IpcState::Connected.is_connected()),
             RunType::Normal
         );
         assert_eq!(
-            RunType::classify(true, IpcState::Disconnected),
+            RunType::classify(true, IpcState::Disconnected.is_connected()),
             RunType::Normal
         );
         assert_eq!(
-            RunType::classify(true, IpcState::Connected),
+            RunType::classify(true, IpcState::Connected.is_connected()),
             RunType::Service
         );
     }

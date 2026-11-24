@@ -460,27 +460,14 @@ impl CoreLifecycleWorkflow {
         let clash = self.clash.get()?;
         let Some(profiles) = &self.profiles else {
             let target_core = app.core;
-            let run_type = crate::core::RunType::classify(
-                app.enable_service_mode,
-                if service_connected {
-                    crate::core::service::ipc::IpcState::Connected
-                } else {
-                    crate::core::service::ipc::IpcState::Disconnected
-                },
-            );
+            let run_type =
+                crate::core::RunType::classify(app.enable_service_mode, service_connected);
             return self.core.reconcile(clash, target_core, run_type).await;
         };
         let (target, app, clash, profiles, staged_content) =
             self.capture_reconcile_committed_target(app, clash).await?;
         let target_core = app.core;
-        let run_type = crate::core::RunType::classify(
-            app.enable_service_mode,
-            if service_connected {
-                crate::core::service::ipc::IpcState::Connected
-            } else {
-                crate::core::service::ipc::IpcState::Disconnected
-            },
-        );
+        let run_type = crate::core::RunType::classify(app.enable_service_mode, service_connected);
         self.core
             .reconcile_profiles(
                 clash,
@@ -577,7 +564,7 @@ impl CoreLifecycleWorkflow {
         let target_core = app.core;
         let run_type = crate::core::RunType::classify(
             app.enable_service_mode,
-            crate::core::service::ipc::get_ipc_state(),
+            crate::core::service::ipc::get_ipc_state().is_connected(),
         );
         self.core
             .reconcile_profiles(
@@ -612,7 +599,7 @@ impl CoreLifecycleWorkflow {
         let target_core = app.core;
         let run_type = crate::core::RunType::classify(
             app.enable_service_mode,
-            crate::core::service::ipc::get_ipc_state(),
+            crate::core::service::ipc::get_ipc_state().is_connected(),
         );
         self.core
             .validate_profile_runtime(
@@ -658,7 +645,7 @@ impl CoreLifecycleWorkflow {
             .await?;
         let run_type = crate::core::RunType::classify(
             candidate_app.enable_service_mode,
-            crate::core::service::ipc::get_ipc_state(),
+            crate::core::service::ipc::get_ipc_state().is_connected(),
         );
 
         self.core

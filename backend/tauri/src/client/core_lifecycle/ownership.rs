@@ -16,26 +16,8 @@ impl CoreLifecycleWorkflow {
     /// with no accepted Core receipt. This independent proof also protects
     /// other errors that arrived after a concurrent owner transition.
     pub(in crate::client) async fn startup_service_refusal_stopped(&self) -> bool {
-        if self.core.outcome_uncertain() {
-            return false;
-        }
-        let Ok(before) = self.core.status().await else {
-            return false;
-        };
-        if before.run_type != crate::core::RunType::Service
-            || before.state_changed_at == 0
-            || !matches!(before.state, CoreState::Stopped(_))
-        {
-            return false;
-        }
-        if !matches!(self.core.active_runtime_receipt().await, Ok(None)) {
-            return false;
-        }
-        let Ok(after) = self.core.status().await else {
-            return false;
-        };
-        same_core_status(&before, &after)
-            && matches!(self.core.active_runtime_receipt().await, Ok(None))
+        chimera_core::client::reconciler::proof::startup_service_refusal_stopped(self.core.as_ref())
+            .await
     }
 
     pub(in crate::client) async fn startup_service_command_settled(&self) -> bool {

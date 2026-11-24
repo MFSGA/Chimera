@@ -524,3 +524,10 @@ impl RuntimeApplyPort for dyn CoreLifecyclePort + '_ {
         CoreLifecyclePort::republish_pending_runtime_product(self, target).await
     }
 }
+
+#[async_trait]
+impl RuntimeObservationPort for dyn CoreLifecyclePort + '_ {
+    async fn observe_core_status(&self) -> anyhow::Result<CoreStatusSnapshot> {
+        CoreLifecyclePort::status(self).await
+    }
+}

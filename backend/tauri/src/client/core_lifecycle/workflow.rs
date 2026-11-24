@@ -1117,7 +1117,7 @@ impl ProfileRuntime for CoreLifecycleWorkflow {
         }
         let run_type = crate::core::RunType::classify(
             inputs.app.enable_service_mode,
-            crate::core::service::ipc::get_ipc_state(),
+            crate::core::service::ipc::get_ipc_state().is_connected(),
         );
         let (prepared, core_spec) =
             gate.prepare_profile_tcc_candidate(inputs)
