@@ -96,6 +96,11 @@ impl SystemProxyClient {
         }
 
         let stopped = || {
+            let error = if self.shutdown.is_cancelled() {
+                SystemProxyError::ShutDown
+            } else {
+                SystemProxyError::Stopped
+            };
             kinds
                 .iter()
                 .copied()
@@ -103,7 +108,7 @@ impl SystemProxyClient {
                     kind,
                     desired_revision: revision,
                     applied_revision: EffectRevision::default(),
-                    health: SystemProxyError::Stopped.health(),
+                    health: error.health(),
                 })
                 .collect()
         };
