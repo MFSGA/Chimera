@@ -1,5 +1,8 @@
 {
   "$schema": "../../node_modules/@tauri-apps/cli/config.schema.json",
+  "build": {
+    "beforeDevCommand": "cd frontend/chimera && node node_modules/vite/bin/vite.js"
+  },
   "bundle": {
     "targets": ["nsis"]
   }
