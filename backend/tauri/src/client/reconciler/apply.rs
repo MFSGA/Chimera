@@ -4,13 +4,7 @@
 //! owner, revision allocator, RuntimeProduct writer, or action mailbox.
 use std::{future::Future, sync::Arc};
 
-use crate::client::{
-    core_lifecycle::{CoreLifecycleWorkflow, ports::PreparedCoreSettlement},
-    reconciler::{
-        attempt::{CommittedTargetAdvanced, OwnershipTransitionPending},
-        decision::{same_active_receipt, same_core_status, service_prepared_owner_proven},
-    },
-};
+use crate::client::core_lifecycle::CoreLifecycleWorkflow;
 use chimera_config::application::ChimeraAppConfig;
 use chimera_contracts::execution_host::ExecutionHost;
 use chimera_contracts::runtime_error::{CoreFailure, RuntimeError};
@@ -20,7 +14,6 @@ use chimera_core::{
 };
 use chimera_core_manager::{CoreError, CoreErrorKind};
 use chimera_ipc::api::core::v2::{OperationOutputInfo, ReconcileOutcomeKind};
-use chimera_ipc::api::status::CoreState;
 
 use super::{
     committed::{Selection, SelectionChange},
@@ -33,33 +26,26 @@ use crate::client::runtime::RuntimeSnapshot;
 
 pub use chimera_core::client::reconciler::apply::*;
 
-impl CoreLifecycleWorkflow {
-    /// Preserve the Core's exact terminal verdict through the sole lower-host
-    /// operation registry. RolledBack is a completed refusal with the old
-    /// revision still running; Unknown has a Core operation ID and must not
-    /// be submitted again. Legacy ports keep their explicit Unobserved result.
-    async fn submit_prepared_verdict(
+impl chimera_core::client::reconciler::apply_executor::ApplyHost for CoreLifecycleWorkflow {
+    fn convergence_authority(
         &self,
-        prepared: PreparedRuntime,
-        spec: chimera_core_manager::CoreSpec,
-    ) -> anyhow::Result<PreparedCoreSettlement> {
-        let (mapped, result) = crate::client::reconciler::apply::submit_prepared(
-            self.convergence_core(),
-            prepared,
-            spec,
-        )
-        .await;
-        // Only the single existing CoreLifecycle worker mutates the runtime.
-        // Keep ref's observed terminal for the Actor's final source/receipt
-        // fence, including rollback and unknown-operation evidence.
-        self.stage_prepared_outcome(mapped);
-        result
+    ) -> Option<&dyn crate::client::reconciler::authority::RuntimeSourceAuthority> {
+        CoreLifecycleWorkflow::convergence_authority(self)
     }
+    fn convergence_candidate_check(
+        &self,
+    ) -> Option<&crate::client::reconciler::check::CandidateCheck> {
+        CoreLifecycleWorkflow::convergence_candidate_check(self)
+    }
+    fn stage_prepared_outcome(&self, outcome: Option<ApplyOutcome>) {
+        CoreLifecycleWorkflow::stage_prepared_outcome(self, outcome);
+    }
+    fn stage_connection_effect(&self, effect: CheckedConnectionEffect) {
+        CoreLifecycleWorkflow::stage_connection_effect(self, effect);
+    }
+}
 
-    /// The sole Core owner's checked runtime execution. Carry the pre-apply
-    /// source-instance API and Core replacement verdict through this one
-    /// operation; never issue a second Core submit or interrupt a newly
-    /// started instance.
+impl CoreLifecycleWorkflow {
     pub(in crate::client) async fn apply_checked_runtime(
         &self,
         prepared: PreparedRuntime,
@@ -69,39 +55,16 @@ impl CoreLifecycleWorkflow {
         authority: Arc<dyn crate::client::reconciler::authority::RuntimeSourceAuthority>,
         interrupt_mode: bool,
     ) -> anyhow::Result<()> {
-        let previous = self.convergence_progress().lock().selection();
-        let result = apply_checked(
-            self.convergence_core(),
+        chimera_core::client::reconciler::apply_executor::apply_checked_runtime(
+            self,
             prepared,
             core_spec,
             domain,
             version,
-            authority.as_ref(),
+            authority,
             interrupt_mode,
-            previous.as_ref(),
-            |mapped| self.stage_prepared_outcome(mapped),
         )
-        .await;
-        match result {
-            Ok((selection, interruption, source, replaced)) => {
-                self.convergence_progress().lock().set_selection(selection);
-                // The worker cannot know about source notices that reached
-                // the Actor after its final read. Defer the one-shot mode
-                // effect to Completed; only that mailbox can settle it.
-                if let Some(change) = interruption {
-                    self.stage_connection_effect(CheckedConnectionEffect {
-                        change,
-                        replaced,
-                        prior: source.unwrap_or(Ok(None)),
-                    });
-                }
-                Ok(())
-            }
-            Err(error) => {
-                self.convergence_progress().lock().invalidate_selection();
-                Err(error)
-            }
-        }
+        .await
     }
 
     /// Ref's prepared submission for an S2-selected and S3-proven Core owner.
@@ -171,170 +134,10 @@ impl CoreLifecycleWorkflow {
         run_type: crate::core::RunType,
         deferred: bool,
     ) -> Option<anyhow::Result<()>> {
-        if self.convergence_core().outcome_uncertain() {
-            return None;
-        }
-        let authority = self.convergence_authority()?;
-        let gate = self.convergence_candidate_check()?;
-        let before = self.convergence_core().status().await.ok()?;
-        if before.run_type != run_type {
-            return None;
-        }
-        // An unverified Service probe is not proof of a stopped Core. This
-        // check is independent from the Core router's status projection.
-        let service_before = if run_type == crate::core::RunType::Service {
-            let (service, generation) = self.service_evidence().await;
-            if !service_prepared_owner_proven(&before, &service) {
-                return Some(Err(
-                    crate::client::reconciler::attempt::OwnershipTransitionPending::waiting(
-                        "Service owner is not Ready or does not match the selected Core state",
-                    )
-                    .into(),
-                ));
-            }
-            Some((service, generation))
-        } else {
-            None
-        };
-        let current_receipt = self
-            .convergence_core()
-            .active_runtime_receipt()
-            .await
-            .ok()?;
-        let (receipt, previous) = match &before.state {
-            CoreState::Running => {
-                let receipt = current_receipt?;
-                let expected_host = match run_type {
-                    crate::core::RunType::Normal => ExecutionHost::Local,
-                    crate::core::RunType::Service => ExecutionHost::Service,
-                    crate::core::RunType::Elevated => return None,
-                };
-                if receipt.host != expected_host {
-                    return None;
-                }
-                // Upstream selection.interruption accepts an unknown prior
-                // selection. It must not block a valid live apply or invent
-                // a Mode/Profile change when the old selection is unknown.
-                (
-                    Some(receipt),
-                    self.convergence_progress().lock().selection(),
-                )
-            }
-            CoreState::Stopped(_) if current_receipt.is_none() => (None, None),
-            _ => return None,
-        };
-
-        let expected = match authority
-            .verify_committed_prepared_target(target, previous.as_ref())
-            .await
-        {
-            Ok(Some(expected)) => expected,
-            Ok(None) => return None,
-            Err(error) => return Some(Err(error)),
-        };
-        let result = async {
-            let (candidate, core_spec) = if deferred {
-                gate.prepare_deferred_committed_candidate(
-                    app.clone(), clash.clone(), target, previous.as_ref(),
-                ).await?
-            } else {
-                gate.prepare_committed_candidate(
-                    app.clone(), clash.clone(), target, previous.as_ref(),
-                ).await?
-            };
-            let current = authority
-                .verify_committed_prepared_target(target, previous.as_ref())
-                .await?
-                .ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "committed source authority cannot prove the prepared target"
-                    )
-                })?;
-            // ref's prepared S4 candidate carries selection and interruption
-            // from the same frozen inputs as its product. The independent
-            // source authority must agree before that candidate can submit.
-            if current != expected
-                || candidate.selection != expected.0
-                || candidate.interruption != expected.1
-            {
-                return Err(anyhow::Error::new(CommittedTargetAdvanced).context(
-                    "committed selection or interruption policy advanced during runtime build",
-                ));
-            }
-            let observed = self.convergence_core().status().await?;
-            if let Some((service_before, generation_before)) = service_before.as_ref() {
-                let (service_after, generation_after) = self.service_evidence().await;
-                if generation_after != *generation_before
-                    || service_after != *service_before
-                    || !service_prepared_owner_proven(&observed, &service_after)
-                {
-                    return Err(
-                        crate::client::reconciler::attempt::OwnershipTransitionPending::waiting(
-                            "Service readiness or Core ownership changed while building the committed product",
-                        )
-                        .into(),
-                    );
-                }
-            }
-            let latest_receipt = self.convergence_core().active_runtime_receipt().await?;
-            let still_receipted = same_active_receipt(receipt.as_ref(), latest_receipt.as_ref());
-            if !same_core_status(&before, &observed) || !still_receipted {
-                return Err(
-                    crate::client::reconciler::attempt::OwnershipTransitionPending::waiting(
-                        "selected Core owner changed while preparing the committed product",
-                    )
-                    .into(),
-                );
-            }
-            let old_api = if candidate.interruption.is_some() {
-                Some(self.convergence_core().capture_interruption_source().await)
-            } else {
-                None
-            };
-            let final_owner = self.convergence_core().status().await?;
-            let final_receipt = self.convergence_core().active_runtime_receipt().await?;
-            if self.outcome_uncertain()
-                || !same_core_status(&before, &final_owner)
-                || !same_active_receipt(receipt.as_ref(), final_receipt.as_ref())
-            {
-                return Err(OwnershipTransitionPending::waiting(
-                    "the selected Core changed immediately before S4 submission",
-                ).into());
-            }
-            if authority.verify_committed_prepared_target(target, previous.as_ref()).await?
-                .as_ref() != Some(&expected)
-            {
-                return Err(CommittedTargetAdvanced.into());
-            }
-            let applied = self
-                .submit_prepared_verdict(candidate.runtime, core_spec)
-                .await?;
-            applied.validate_identity(target)?;
-            let latest = authority
-                .verify_committed_prepared_target(target, previous.as_ref())
-                .await?
-                .ok_or_else(|| {
-                    anyhow::anyhow!("committed source authority was lost after Core apply")
-                })?;
-            if latest != expected {
-                return Err(anyhow::Error::new(CommittedTargetAdvanced)
-                    .context("committed selection or policy advanced after prepared Core apply"));
-            }
-            self.convergence_progress().lock().set_selection(Some(candidate.selection));
-            if let Some(change) = candidate.interruption {
-                self.stage_connection_effect(CheckedConnectionEffect {
-                    change,
-                    replaced: applied.replaced,
-                    prior: old_api.unwrap_or(Ok(None)),
-                });
-            }
-            Ok(())
-        }
-        .await;
-        if result.is_err() {
-            self.convergence_progress().lock().invalidate_selection();
-        }
-        Some(result)
+        chimera_core::client::reconciler::apply_executor::reconcile_prepared_selected_with_policy(
+            self, target, app, clash, run_type, deferred,
+        )
+        .await
     }
 }
 
