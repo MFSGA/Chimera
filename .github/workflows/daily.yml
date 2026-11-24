@@ -46,13 +46,19 @@ jobs:
           else
             echo "has-changes=false" >> "$GITHUB_OUTPUT"
           fi
-      # Keep an expected-head fence so a stale scheduled run cannot overwrite
-      # a newer maintainer commit.
-      - name: Commit manifest
+      - uses: oleksiyrudenko/gha-git-credentials@v2.1.2
         if: steps.git-check.outputs.has-changes == 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: bash scripts/ci/commit-manifest.sh master
+        with:
+          token: '${{ secrets.GITHUB_TOKEN }}'
+          name: 'github-actions[bot]'
+          email: '41898282+github-actions[bot]@users.noreply.github.com'
+
+      - name: Commit Manifest
+        if: steps.git-check.outputs.has-changes == 'true'
+        run: |
+          git add -- manifest/version.json
+          git commit -m "chore(manifest): update manifest [skip ci]"
+          git push origin master
   generate_manifest_v1:
     name: Generate Manifest V1
     runs-on: ubuntu-latest
@@ -90,7 +96,7 @@ jobs:
           else
             echo "has-changes=false" >> "$GITHUB_OUTPUT"
           fi
-      - uses: oleksiyrudenko/gha-git-credentials@v2.1
+      - uses: oleksiyrudenko/gha-git-credentials@v2.1.2
         if: steps.git-check.outputs.has-changes == 'true'
         with:
           token: '${{ secrets.GITHUB_TOKEN }}'
@@ -102,4 +108,4 @@ jobs:
         run: |
           git add -- manifest/version.json
           git commit -m "chore(manifest): update manifest [skip ci]"
-          git push
+          git push origin dev
