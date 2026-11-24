@@ -33,7 +33,7 @@ use crate::{
     enhance::PostProcessingOutput,
     feat,
     network_probe::{NetworkProbeRequest, NetworkProbeResult},
-    utils::{candy, collect::EnvInfo, dirs, help, resolve},
+    utils::{dirs, help, resolve},
 };
 
 type Result<T = ()> = StdResult<T, IpcError>;
@@ -1136,28 +1136,21 @@ pub async fn get_core_version(
 
 #[tauri::command]
 #[specta::specta]
-pub async fn collect_logs(app_handle: AppHandle) -> Result {
-    let now = chrono::Local::now().format("%Y-%m-%d");
-    let fname = format!("{now}-log.zip");
-    let Some(path) = app_handle
-        .dialog()
-        .file()
-        .add_filter("archive files", &["zip"])
-        .set_file_name(fname)
-        .set_title("Save log archive")
-        .blocking_save_file()
-        .and_then(|path| path.as_path().map(PathBuf::from))
-    else {
-        return Ok(());
-    };
-    candy::collect_logs(&path)?;
-    Ok(())
+pub async fn collect_logs(client: State<'_, ChimeraClient>) -> Result<String> {
+    let (_, archive) =
+        crate::utils::collect::collect(client.inner().clone(), Default::default(), true).await?;
+    let archive = archive.ok_or_else(|| anyhow::anyhow!("diagnostic archive unavailable"))?;
+    Ok(archive.to_string_lossy().into_owned())
 }
 
 #[tauri::command]
 #[specta::specta]
-pub fn collect_envs() -> Result<EnvInfo> {
-    Ok(crate::utils::collect::collect_envs())
+pub async fn collect_envs(client: State<'_, ChimeraClient>) -> Result<String> {
+    Ok(
+        crate::utils::collect::collect(client.inner().clone(), Default::default(), false)
+            .await?
+            .0,
+    )
 }
 
 #[tauri::command]

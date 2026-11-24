@@ -1044,11 +1044,7 @@ impl AppUpdateClient {
             .await
             .map_err(|source| Error::SpawnActor { source })?;
         let shutdown = args.shutdown.clone();
-        let cell = actor.get_cell();
-        tasks.spawn(async move {
-            shutdown.cancelled().await;
-            let _ = cell.drain_and_wait(None).await;
-        });
+        chimera_owner_support::shutdown::drain_on_shutdown(tasks, shutdown, actor.get_cell());
         Ok(Self(Arc::new(Inner(actor))))
     }
 

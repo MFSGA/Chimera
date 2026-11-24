@@ -42,27 +42,19 @@ struct State {
     timer: Option<JoinHandle<()>>,
 }
 
-async fn joined<T>(task: JoinHandle<T>) -> T {
-    match task.await {
-        Ok(value) => value,
-        Err(error) => match error.try_into_panic() {
-            Ok(panic) => std::panic::resume_unwind(panic),
-            Err(error) => panic!("Core log owner task cancelled: {error}"),
-        },
-    }
-}
-
 impl State {
     async fn blocking<T: Send + 'static>(
         &mut self,
         operation: impl FnOnce(&mut dyn CoreLogStore) -> CoreLogResult<T> + Send + 'static,
     ) -> CoreLogResult<T> {
         let mut store = self.store.take().expect("the actor owns its log store");
-        let (store, result) = joined(tokio::task::spawn_blocking(move || {
-            let result = operation(store.as_mut());
-            (store, result)
-        }))
-        .await;
+        let (store, result) = chimera_owner_support::blocking::join(
+            tokio::task::spawn_blocking(move || {
+                let result = operation(store.as_mut());
+                (store, result)
+            })
+            .await,
+        );
         self.store = Some(store);
         result
     }
@@ -332,7 +324,9 @@ impl Actor for CoreLogsActor {
             tracing::warn!(%error, "Core log shutdown flush failed");
         }
         let store = state.store.take();
-        joined(tokio::task::spawn_blocking(move || drop(store))).await;
+        chimera_owner_support::blocking::join(
+            tokio::task::spawn_blocking(move || drop(store)).await,
+        );
         Ok(())
     }
 }
@@ -374,11 +368,7 @@ impl CoreLogsClient {
         )
         .await
         .map_err(|source| Error::SpawnActor { source })?;
-        let cell = actor.get_cell();
-        tasks.spawn(async move {
-            shutdown.cancelled().await;
-            let _ = cell.drain_and_wait(None).await;
-        });
+        chimera_owner_support::shutdown::drain_on_shutdown(tasks, shutdown, actor.get_cell());
         Ok(Self(Arc::new(Inner { actor, changed })))
     }
 

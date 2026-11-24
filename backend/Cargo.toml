@@ -3,6 +3,8 @@ members = [
   "chimera-config",
   "chimera-core",
   "chimera-observers",
+  "chimera-owner-support",
+  "chimera-diagnose",
   "chimera-state-engine",
   "chimera-persistence",
   "chimera-profile-io",

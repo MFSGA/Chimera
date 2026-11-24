@@ -1052,11 +1052,7 @@ impl ServiceClient {
         tasks: &tokio_util::task::TaskTracker,
         shutdown: tokio_util::sync::CancellationToken,
     ) {
-        let cell = self.actor.get_cell();
-        tasks.spawn(async move {
-            shutdown.cancelled().await;
-            let _ = cell.drain_and_wait(None).await;
-        });
+        chimera_owner_support::shutdown::drain_on_shutdown(tasks, shutdown, self.actor.get_cell());
     }
 
     pub async fn spawn(

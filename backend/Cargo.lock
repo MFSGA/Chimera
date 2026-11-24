@@ -164,6 +164,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7d902e3d592a523def97af8f317b08ce16b7ab854c1985a0c671e6f15cebc236"
 
 [[package]]
+name = "ash"
+version = "0.38.0+1.3.281"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0bb44936d800fea8f016d7f2311c6a4f97aebd5dc86f09906139ec848cf3a46f"
+dependencies = [
+ "libloading 0.8.9",
+]
+
+[[package]]
 name = "async-broadcast"
 version = "0.7.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1053,6 +1062,7 @@ dependencies = [
  "chimera-contracts",
  "chimera-core",
  "chimera-core-manager",
+ "chimera-diagnose",
  "chimera-geodata",
  "chimera-ipc",
  "chimera-jobs",
@@ -1076,6 +1086,7 @@ dependencies = [
  "deelevate",
  "derive_builder",
  "dhat",
+ "dirs 6.0.0",
  "dispatch2",
  "dunce",
  "enumflags2",
@@ -1263,9 +1274,11 @@ dependencies = [
  "chimera-config",
  "chimera-contracts",
  "chimera-core-manager",
+ "chimera-diagnose",
  "chimera-geodata",
  "chimera-ipc",
  "chimera-observers",
+ "chimera-owner-support",
  "chimera-persistence",
  "chimera-profile-transform",
  "chimera-traffic",
@@ -1331,6 +1344,22 @@ dependencies = [
  "uuid",
  "windows 0.62.2",
  "zerocopy",
+]
+
+[[package]]
+name = "chimera-diagnose"
+version = "0.1.0"
+dependencies = [
+ "chimera-config",
+ "chrono",
+ "gpu-info",
+ "serde",
+ "serde_json",
+ "specta",
+ "sysinfo 0.39.6",
+ "tempfile",
+ "windows-registry 0.6.1",
+ "zip 8.6.0",
 ]
 
 [[package]]
@@ -1468,6 +1497,7 @@ dependencies = [
  "chimera-config",
  "chimera-contracts",
  "chimera-geodata",
+ "chimera-owner-support",
  "chimera-traffic",
  "chimera-tsdb",
  "mockall",
@@ -1517,6 +1547,15 @@ dependencies = [
  "whoami",
  "windows-sys 0.61.2",
  "zbus",
+]
+
+[[package]]
+name = "chimera-owner-support"
+version = "0.1.0"
+dependencies = [
+ "ractor",
+ "tokio",
+ "tokio-util",
 ]
 
 [[package]]
@@ -2155,7 +2194,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d045de693cb712d0b22c6a64be5b953f67b3ce00ab5ad3dd5d8b441886ab8e1a"
 dependencies = [
  "quote",
- "syn 3.0.6",
+ "syn 2.0.119",
 ]
 
 [[package]]
@@ -3588,6 +3627,23 @@ dependencies = [
  "glib-sys 0.21.5",
  "libc",
  "system-deps 7.0.8",
+]
+
+[[package]]
+name = "gpu-info"
+version = "0.2.1"
+source = "git+https://github.com/libnyanpasu/gpu-info?rev=c4952b528bbf8eb4bd33101c9900e48fb02febf9#c4952b528bbf8eb4bd33101c9900e48fb02febf9"
+dependencies = [
+ "ash",
+ "log",
+ "objc2",
+ "objc2-core-foundation",
+ "objc2-io-kit",
+ "objc2-metal",
+ "scopeguard",
+ "serde",
+ "thiserror 2.0.21",
+ "windows 0.62.2",
 ]
 
 [[package]]
@@ -5523,7 +5579,11 @@ version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "33fafba39597d6dc1fb709123dfa8289d39406734be322956a69f0931c73bb15"
 dependencies = [
+ "bitflags 2.13.1",
+ "block2",
+ "dispatch2",
  "libc",
+ "objc2",
  "objc2-core-foundation",
 ]
 
@@ -5546,6 +5606,20 @@ checksum = "2a1e6550c4caed348956ce3370c9ffeca70bb1dbed4fa96112e7c6170e074586"
 dependencies = [
  "objc2",
  "objc2-core-foundation",
+]
+
+[[package]]
+name = "objc2-metal"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a0125f776a10d00af4152d74616409f0d4a2053a6f57fa5b7d6aa2854ac04794"
+dependencies = [
+ "bitflags 2.13.1",
+ "block2",
+ "dispatch2",
+ "objc2",
+ "objc2-core-foundation",
+ "objc2-foundation",
 ]
 
 [[package]]
@@ -10547,6 +10621,17 @@ dependencies = [
  "windows-link 0.1.3",
  "windows-result 0.3.4",
  "windows-strings 0.4.2",
+]
+
+[[package]]
+name = "windows-registry"
+version = "0.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "02752bf7fbdcce7f2a27a742f798510f3e5ad88dbe84871e5168e2120c3d5720"
+dependencies = [
+ "windows-link 0.2.1",
+ "windows-result 0.4.1",
+ "windows-strings 0.5.1",
 ]
 
 [[package]]

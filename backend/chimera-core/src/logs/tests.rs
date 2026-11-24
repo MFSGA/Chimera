@@ -805,8 +805,9 @@ fn diagnostic_export_stops_at_the_three_day_boundary() {
     let directory = TempDir::new().unwrap();
     let mut store = RedbCoreLogStore::open(directory.path().into()).unwrap();
     let mut old = record(0, 32);
-    old.received_at =
-        chrono::Utc::now().timestamp_millis() - crate::logs::LOG_AGE.as_millis() as i64 - 1000;
+    old.received_at = chrono::Utc::now().timestamp_millis()
+        - chimera_diagnose::archive::LOG_AGE.as_millis() as i64
+        - 1000;
     let mut recent = record(1, 32);
     recent.received_at = chrono::Utc::now().timestamp_millis();
     store
@@ -876,7 +877,7 @@ fn diagnostic_export_large_store_measurement() {
     let export = store.export(None).unwrap();
     let bulk = started.elapsed();
     assert!(export.truncated);
-    assert!(export.lines.concat().len() as u64 <= crate::logs::LOG_CAP);
+    assert!(export.lines.concat().len() as u64 <= chimera_diagnose::archive::LOG_CAP);
     assert!(!export.lines.concat().contains("token=secret"));
     assert!(export.lines.concat().contains("000000012287"));
     assert!(!export.lines.concat().contains("000000000000"));
@@ -907,7 +908,7 @@ fn diagnostic_export_large_store_measurement() {
                 record.log_type,
                 chimera_config::redact::redact_text(&record.payload, None)
             );
-            if bytes + line.len() as u64 > crate::logs::LOG_CAP {
+            if bytes + line.len() as u64 > chimera_diagnose::archive::LOG_CAP {
                 break 'pages;
             }
             bytes += line.len() as u64;

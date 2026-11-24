@@ -10,7 +10,6 @@ import type { PropsWithChildren } from 'react';
 import { useUiSwitch } from '@/features/ui-switch/use-ui-switch';
 import { useLockFn } from '@/hooks/use-lock-fn';
 import * as m from '@/paraglide/messages';
-import { formatEnvInfos } from '@/utils';
 
 const CHIMERA_REPOSITORY_URL = 'https://github.com/MFSGA/Chimera';
 
@@ -35,7 +34,7 @@ const IssuesItem = () => {
     }
 
     const formattedEnv = encodeURIComponent(
-      formatEnvInfos(envs.data)
+      envs.data
         .split('\n')
         .map((value) => `> ${value}`)
         .join('\n'),
@@ -62,7 +61,11 @@ const IssuesItem = () => {
 
 const CollectLogItem = () => {
   const handleClick = useLockFn(async () => {
-    await commands.collectLogs();
+    const result = await commands.collectLogs();
+    if (result.status === 'ok') {
+      // Open the locally generated archive only after the user's explicit action.
+      await commands.openThat(result.data);
+    }
   });
 
   return (

@@ -10,6 +10,7 @@ authors.workspace = true
 test-support = ["dep:mockall"]
 
 [dependencies]
+chimera-owner-support = { path = "../chimera-owner-support" }
 mockall = { version = "0.15", optional = true }
 chimera-traffic = { path = "../chimera-traffic" }
 chimera-tsdb = { path = "../chimera-tsdb" }

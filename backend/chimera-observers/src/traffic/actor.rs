@@ -102,14 +102,9 @@ impl<S: Storage> Actor for TrafficActor<S> {
         // An unreadable store must not start an empty session: the stored live connections would
         // be recorded again and the store diverge from what the session knows.
         let opener = storage.clone();
-        let (mut db, restored) =
-            match tokio::task::spawn_blocking(move || opener.initialize(profile)).await {
-                Ok(result) => result?,
-                Err(error) => match error.try_into_panic() {
-                    Ok(panic) => std::panic::resume_unwind(panic),
-                    Err(error) => return Err(error.into()),
-                },
-            };
+        let (mut db, restored) = chimera_owner_support::blocking::join(
+            tokio::task::spawn_blocking(move || opener.initialize(profile)).await,
+        )?;
         db.set_retention(retention.retention());
         let session = restored.map_or_else(Session::new, |(meta, active)| {
             Session::restore(meta, active)

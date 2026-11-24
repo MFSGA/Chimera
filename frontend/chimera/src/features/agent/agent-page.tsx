@@ -19,7 +19,6 @@ import { writeText } from '@tauri-apps/plugin-clipboard-manager';
 import { useState } from 'react';
 import { Notice } from '@/components/base';
 import * as m from '@/paraglide/messages';
-import { formatEnvInfos } from '@/utils';
 import { AuditHistoryCard } from './components/audit-history-card';
 import { DiagnosisOverview } from './components/diagnosis-overview';
 import { DiagnosticHistoryCard } from './components/diagnostic-history-card';
@@ -201,7 +200,7 @@ export function AgentPage() {
   const reportIssue = async () => {
     let envInfos = 'Environment information unavailable.';
     try {
-      envInfos = formatEnvInfos(await collectEnvs())
+      envInfos = (await collectEnvs())
         .split('\n')
         .map((value) => `> ${value}`)
         .join('\n');

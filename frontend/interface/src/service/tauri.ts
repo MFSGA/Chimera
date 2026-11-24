@@ -1,6 +1,5 @@
 import {
   commands,
-  type EnvInfo,
   type IpsbResponse,
   type UpdaterSummary,
 } from '../ipc/bindings';
@@ -17,7 +16,7 @@ export const openThat = async (path: string) => {
   unwrapResult(await commands.openThat(path));
 };
 
-export const collectEnvs = async (): Promise<EnvInfo> => {
+export const collectEnvs = async (): Promise<string> => {
   return unwrapResult(await commands.collectEnvs());
 };
 

@@ -232,8 +232,8 @@ impl RedbCoreLogStore {
     }
 
     fn export_logs(&self, home: Option<String>) -> Result<CoreLogExport> {
-        use crate::logs::{LOG_AGE, LOG_CAP};
         use chimera_config::redact::redact_text;
+        use chimera_diagnose::archive::{LOG_AGE, LOG_CAP};
         let cutoff = chrono::Utc::now().timestamp_millis() - LOG_AGE.as_millis() as i64;
         let mut lines = Vec::new();
         let mut bytes = 0;

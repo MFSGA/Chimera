@@ -39,11 +39,7 @@ impl TrafficClient {
         let (actor, _) = Actor::spawn(None, TrafficActor::<S>(std::marker::PhantomData), args)
             .await
             .map_err(|source| Error::SpawnActor { source })?;
-        let cell = actor.get_cell();
-        tasks.spawn(async move {
-            shutdown.cancelled().await;
-            let _ = cell.drain_and_wait(None).await;
-        });
+        chimera_owner_support::shutdown::drain_on_shutdown(tasks, shutdown, actor.get_cell());
         Ok(Self(Arc::new(Inner { actor })))
     }
 

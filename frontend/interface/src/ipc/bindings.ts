@@ -374,9 +374,8 @@ export const commands = {
     typedError<IpsbResponse, string>(__TAURI_INVOKE('get_ipsb_asn')),
   invokeUwpTool: () =>
     typedError<null, string>(__TAURI_INVOKE('invoke_uwp_tool')),
-  collectLogs: () => typedError<null, string>(__TAURI_INVOKE('collect_logs')),
-  collectEnvs: () =>
-    typedError<EnvInfo, string>(__TAURI_INVOKE('collect_envs')),
+  collectLogs: () => typedError<string, string>(__TAURI_INVOKE('collect_logs')),
+  collectEnvs: () => typedError<string, string>(__TAURI_INVOKE('collect_envs')),
   getCustomAppDir: () =>
     typedError<string | null, string>(__TAURI_INVOKE('get_custom_app_dir')),
   setCustomAppDir: (path: string) =>
@@ -1125,20 +1124,6 @@ export type BreakConnectionStrategyPatch_Serialize = {
 };
 
 export type BreakWhenProxyChange = 'none' | 'chain' | 'all';
-
-export type BuildInfo = {
-  app_name: string;
-  app_version: string;
-  pkg_version: string;
-  commit_hash: string;
-  commit_author: string;
-  commit_date: string;
-  build_date: string;
-  build_profile: string;
-  build_platform: string;
-  rustc_version: string;
-  llvm_version: string;
-};
 
 /**  Built-in post-processing steps applied to the selected config. */
 export type BuiltinStepKind =
@@ -2419,11 +2404,6 @@ export type DelayRes = {
   delay: number;
 };
 
-export type DeviceInfo = {
-  cpu: string[];
-  memory: string;
-};
-
 /**  A way to slice usage: ranking, filtering and topology layers all name dimensions. */
 export type Dimension =
   /**  Derived: the process when known, else the source. */
@@ -2595,14 +2575,6 @@ export type EndpointConnectivity =
   | { kind: 'degraded'; desired: ExecutionHost; reason: string };
 
 export type EnhancedMode = 'normal' | 'fake-ip' | 'redir-host';
-
-export type EnvInfo = {
-  os: string;
-  arch: string;
-  core: { [key in string]: string };
-  device: DeviceInfo;
-  build_info: BuildInfo;
-};
 
 /**
  *  Which controller owns the runtime. The app perceives the difference in

@@ -1,5 +1,4 @@
 import { collectEnvs, openThat } from '@chimera/interface';
-import { formatEnvInfos } from '@/utils';
 
 const CHIMERA_REPOSITORY_URL = 'https://github.com/MFSGA/Chimera';
 const CHIMERA_BUG_REPORT_URL =
@@ -19,7 +18,7 @@ export const openBugReport = async () => {
   }
 
   const formattedEnv = encodeURIComponent(
-    formatEnvInfos(envs)
+    envs
       .split('\n')
       .map((value) => `> ${value}`)
       .join('\n'),
