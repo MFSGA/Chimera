@@ -1,5 +1,3 @@
-import { OS } from '@/consts';
-import '@/services/monaco';
 import { openThat } from '@chimera/interface';
 import { cn } from '@chimera/ui';
 import MonacoEditor from '@monaco-editor/react';
@@ -11,6 +9,8 @@ import * as monaco from 'monaco-editor';
 import { configureMonacoYaml } from 'monaco-yaml';
 import { nanoid } from 'nanoid';
 import { useCallback, useMemo, useRef } from 'react';
+import { OS } from '@/consts';
+import { yamlMonaco } from '@/services/monaco';
 // schema
 import { themeMode } from '@/store';
 
@@ -42,19 +42,19 @@ export const beforeEditorMount = () => {
     allowJs: true,
   });
 
-  configureMonacoYaml(monaco, {
+  configureMonacoYaml(yamlMonaco, {
     validate: true,
     enableSchemaRequest: true,
     completion: true,
     schemas: [
       {
-        uri: 'http://example.com/schema-name.json',
-        fileMatch: ['**/*.clash.yaml'],
+        uri: 'https://chimera.invalid/schemas/clash.json',
+        fileMatch: ['**/*.clash.yaml', '**/*.runtime.yaml'],
         // @ts-expect-error JSONSchema7 as JSONSchema
         schema: clashMetaSchema as JSONSchema7,
       },
       {
-        uri: 'http://example.com/schema-name.json',
+        uri: 'https://chimera.invalid/schemas/merge.json',
         fileMatch: ['**/*.merge.yaml'],
         // @ts-expect-error JSONSchema7 as JSONSchema
         schema: nyanpasuMergeSchema as JSONSchema7,

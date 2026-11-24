@@ -37,6 +37,40 @@ self.MonacoEnvironment = {
   },
 };
 
+// monaco-yaml 5.5.1 uses monaco-worker-manager 2.0.1, which still calls
+// createWebWorker({ label, moduleId, createData }). Monaco 0.57 requires
+// a Worker instead. Adapt only the YAML plugin, without mutating the global
+// editor API. The two initialization messages follow Monaco's own
+// internal/common/workers.js compatibility implementation.
+type LegacyYamlWorkerOptions = {
+  label: 'yaml';
+  moduleId: string;
+  createData: unknown;
+};
+
+export const yamlMonaco = {
+  ...monaco,
+  editor: {
+    ...monaco.editor,
+    createWebWorker<T extends object>(
+      options:
+        monaco.editor.IInternalWebWorkerOptions | LegacyYamlWorkerOptions,
+    ): monaco.editor.MonacoWebWorker<T> {
+      if ('worker' in options) {
+        return monaco.editor.createWebWorker<T>(options);
+      }
+
+      const worker = Promise.resolve().then(() => {
+        const instance = new yamlWorker();
+        instance.postMessage('ignore');
+        instance.postMessage(options.createData);
+        return instance;
+      });
+      return monaco.editor.createWebWorker<T>({ worker });
+    },
+  },
+};
+
 loader.config({ monaco });
 
 loader
@@ -47,5 +81,3 @@ loader
   .catch((error) => {
     console.error('Monaco initialization failed', error);
   });
-
-export {};
