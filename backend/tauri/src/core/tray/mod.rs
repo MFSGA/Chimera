@@ -255,6 +255,12 @@ impl Tray {
             }
             None => {
                 let mut builder = TrayIconBuilder::with_id(TRAY_ID);
+                // A real native tray icon still receives the real menu event.
+                // The unique E2E tooltip identifies only the launched test process.
+                #[cfg(all(windows, feature = "e2e"))]
+                {
+                    builder = builder.tooltip(format!("Chimera E2E {}", std::process::id()));
+                }
                 if let Some(icon) = app_handle.default_window_icon().cloned() {
                     builder = builder.icon(icon);
                 }

@@ -9,5 +9,5 @@
     "allowImportingTsExtensions": true,
     "types": ["node", "@wdio/globals/types", "@wdio/mocha-framework"],
   },
-  "include": ["wdio.conf.ts", "specs/**/*.ts", "*.test.ts"],
+  "include": ["wdio.conf.ts", "specs/**/*.ts", "*.test.ts", "tray-quit.e2e.ts"],
 }

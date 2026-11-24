@@ -55,6 +55,19 @@ pnpm --filter @chimera/tauri-e2e test:system
 
 The WDIO configuration rejects the suite _before launching the test application_ unless opt-in, dedicated-VM acknowledgment, Windows elevation, a readable current Service executable and a not-installed Service are all confirmed. The spec also refuses to overwrite pre-enabled TUN/Service settings. Any failed or interrupted host-level cleanup must be resolved in that VM before reusing it. The ordinary `test:unit` command tests the fail-closed preflight logic without installing Service or changing network settings. Real Service/TUN behavior remains **unverified** until this dedicated VM suite is actually executed and its result recorded.
 
+## Native Windows tray Quit (manual isolated desktop)
+
+Run on a disposable Windows VM with an unlocked interactive Explorer desktop, no other Chimera instance or installed Chimera Service/TUN use, and a freshly rebuilt E2E binary. The dedicated runner is separate from WebdriverIO because Quit intentionally destroys the application and its WebDriver session.
+
+```powershell
+pnpm e2e:tauri:build
+$env:CHIMERA_E2E_DEDICATED_VM = '1'
+$env:CHIMERA_E2E_TRAY_QUIT = '1'
+pnpm --filter @chimera/tauri-e2e test:tray-quit
+```
+
+The runner launches the actual E2E binary with fresh config/data directories. Its PID-specific native tooltip identifies the tray icon; Windows UI Automation finds the icon (including the overflow menu), right-clicks it, and clicks the Quit menu item owned by that process. It requires a normal exit within 30 seconds after the click, no remaining Chimera application process, and the original Windows proxy snapshot before harness cleanup. On failure it retains the app log and restores the proxy snapshot as a safety measure, not as a passing assertion. This is not a WebView IPC shortcut. It is not automatically run in CI: an interactive Explorer desktop is required. The current test does not enable proxy/TUN or install Service, nor prove shutdown of every sidecar or persistence after relaunch.
+
 ## Runtime and isolation
 
 - The E2E build uses `backend/target/e2e` and the Cargo `e2e` feature. The embedded WebDriver is feature-gated; the normal release build should not include that test interface.

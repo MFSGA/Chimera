@@ -19,6 +19,7 @@
     "test:main": "wdio run ./wdio.conf.ts --suite main",
     "test:network": "wdio run ./wdio.conf.ts --suite network",
     "test:system": "wdio run ./wdio.conf.ts --suite system",
+    "test:tray-quit": "node ./tray-quit.e2e.ts",
     "test:hermetic": "wdio run ./wdio.conf.ts --suite hermetic && wdio run ./wdio.conf.ts --suite subscription-onboarding",
     "test:all": "wdio run ./wdio.conf.ts --suite all && wdio run ./wdio.conf.ts --suite subscription-onboarding && wdio run ./wdio.conf.ts --suite profile-auto-update-main",
     "test:lan": "pnpm run test:network",
