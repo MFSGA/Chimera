@@ -5,17 +5,21 @@ use std::{collections::BTreeMap, sync::Arc};
 use crate::client::core_spec::CoreSpecError;
 use crate::client::reconciler::ports::ScriptRunnerFactory;
 use async_trait::async_trait;
-use chimera_config::runtime::executor::ProfileContentSource;
+use chimera_config::runtime::executor::{
+    BuiltinTransform, PortError, ProfileContentSource, RuntimeArtifact, ScriptRunner,
+};
 use chimera_contracts::publish::PublishRuntimeError;
 pub use chimera_profile_transform::{
     RuntimeBuildError, RuntimeBuildInput, RuntimeBuildLog, RuntimeBuilder, builtin_transforms_for,
     derive_tun_flavor,
 };
-mod executor;
-pub use executor::RuntimeBuildExecutor;
+#[cfg(test)]
+mod build_tests;
 
 use crate::client::{
-    artifact_snapshot::runtime_snapshot_data_from_artifact,
+    artifact_snapshot::{
+        ArtifactSnapshotData, artifact_to_snapshot_data, runtime_snapshot_data_from_artifact,
+    },
     reconciler::{inputs, ports::RuntimeBuildPort},
     runtime,
 };
@@ -29,6 +33,28 @@ pub struct RuntimeBuildService {
     core_specs: Arc<CoreSpecResolver>,
     paths: runtime::RuntimePaths,
     scripts: Arc<ScriptRunnerFactory>,
+}
+
+fn selected_builtins(input: &RuntimeBuildInput) -> Vec<BuiltinTransform> {
+    if input.app.enable_builtin_enhanced {
+        builtin_transforms_for(input.app.core)
+    } else {
+        Vec::new()
+    }
+}
+
+fn build_artifact(
+    input: &RuntimeBuildInput,
+    content: &dyn ProfileContentSource,
+    scripts: &dyn ScriptRunner,
+    builtins: &[BuiltinTransform],
+    strict_transforms: bool,
+) -> Result<RuntimeArtifact, RuntimeBuildError> {
+    let artifact = RuntimeBuilder::build_with_builtins(input, builtins, content, scripts)?;
+    if strict_transforms {
+        RuntimeBuilder::validate_transforms(&artifact)?;
+    }
+    Ok(artifact)
 }
 
 impl RuntimeBuildService {
@@ -45,6 +71,51 @@ impl RuntimeBuildService {
             paths,
             scripts,
         }
+    }
+
+    /// Build from a typed source before a runtime revision is assigned. The
+    /// source is frozen on the blocking worker before scripts are constructed;
+    /// this path has no product publication or runtime ownership.
+    pub async fn build_from_source(
+        input: RuntimeBuildInput,
+        source: Arc<dyn ProfileContentSource + Send + Sync>,
+        staged_content: BTreeMap<String, String>,
+        scripts: Arc<ScriptRunnerFactory>,
+        strict_transforms: bool,
+    ) -> Result<ArtifactSnapshotData, RuntimeBuildError> {
+        let builtins = selected_builtins(&input);
+        let built = tokio::task::spawn_blocking(move || {
+            let content = inputs::FrozenProfileContent::capture_content(
+                &input.profiles,
+                source.as_ref(),
+                staged_content,
+            );
+            Self::build_candidate_data(input, &content, || scripts(), &builtins, strict_transforms)
+        });
+        chimera_owner_support::blocking::join(built.await)
+    }
+
+    fn build_candidate_data(
+        input: RuntimeBuildInput,
+        content: &dyn ProfileContentSource,
+        make_scripts: impl FnOnce() -> Result<Box<dyn ScriptRunner>, PortError>,
+        builtins: &[BuiltinTransform],
+        strict_transforms: bool,
+    ) -> Result<ArtifactSnapshotData, RuntimeBuildError> {
+        let scripts = make_scripts().map_err(RuntimeBuildError::StartScriptRunner)?;
+        let artifact = build_artifact(
+            &input,
+            content,
+            scripts.as_ref(),
+            builtins,
+            strict_transforms,
+        )?;
+        let names = builtins
+            .iter()
+            .map(|builtin| builtin.name.clone())
+            .collect::<Vec<_>>();
+        artifact_to_snapshot_data(artifact, &input.profiles, &names)
+            .map_err(RuntimeBuildError::ProjectArtifact)
     }
 }
 
@@ -92,10 +163,14 @@ impl RuntimeBuildPort for RuntimeBuildService {
                 app,
                 resolved_ports,
             };
-            let artifact = RuntimeBuilder::build(&input, &content, scripts.as_ref())?;
-            if strict_transforms {
-                RuntimeBuilder::validate_transforms(&artifact)?;
-            }
+            let builtins = selected_builtins(&input);
+            let artifact = build_artifact(
+                &input,
+                &content,
+                scripts.as_ref(),
+                &builtins,
+                strict_transforms,
+            )?;
             let (bytes, data) =
                 runtime_snapshot_data_from_artifact(artifact, &profiles, core, builtin_enabled)?;
             Ok(Arc::new(runtime::RuntimeSnapshot::from_data(

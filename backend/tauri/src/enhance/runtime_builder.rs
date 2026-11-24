@@ -58,20 +58,14 @@ pub(crate) async fn build_from_profiles_with_inspection(
     };
     let profiles_dir = dirs::app_profiles_dir()?;
 
-    let builtin_transforms = if input.app.enable_builtin_enhanced {
-        builtin_transforms_for(input.app.core)
-    } else {
-        Vec::new()
-    };
-    // Ref runtime_build.rs: host ports are injected once, not discovered
-    // behind a build. The script runner is created inside spawn_blocking.
-    let builder = chimera_core::client::runtime_build::RuntimeBuildExecutor::new(
+    let data = chimera_core::client::runtime_build::RuntimeBuildService::build_from_source(
+        input,
         Arc::new(FsProfileContentSource::new(profiles_dir)),
+        staged_content,
         Arc::new(|| Ok(Box::new(EnhanceScriptRunner::new()?))),
-    );
-    let data = builder
-        .build(input, staged_content, builtin_transforms, strict_transforms)
-        .await?;
+        strict_transforms,
+    )
+    .await?;
     Ok((
         data.config,
         data.exists_keys,
@@ -204,12 +198,11 @@ mod tests {
             resolved_ports: input.resolved_ports.clone(),
         };
         let staged = "proxies: []\nmode: global\nextra-key: staged\n".to_string();
-        let data = chimera_core::client::runtime_build::RuntimeBuildExecutor::build_with_capture(
+        let data = chimera_core::client::runtime_build::RuntimeBuildService::build_from_source(
             input,
-            FsProfileContentSource::new(directory.path().to_path_buf()),
+            Arc::new(FsProfileContentSource::new(directory.path().to_path_buf())),
             BTreeMap::from([("active.yaml".into(), staged)]),
-            Vec::new(),
-            || Ok(Box::new(EchoRunner)),
+            Arc::new(|| Ok(Box::new(EchoRunner))),
             true,
         )
         .await
@@ -225,29 +218,32 @@ mod tests {
         let path_to_remove = path.clone();
         // Exercise the new injected service that the production Tauri builder
         // also uses, rather than only the earlier static compatibility helper.
-        let builder = chimera_core::client::runtime_build::RuntimeBuildExecutor::new(
-            Arc::new(FsProfileContentSource::new(directory.path().to_path_buf())),
-            Arc::new(move || {
-                // This closure is called on the blocking build thread, after
-                // the managed file has been captured into FrozenProfileContent.
-                std::fs::remove_file(&path_to_remove)?;
-                Ok(Box::new(EchoRunner))
-            }),
-        );
-        let frozen = builder
-            .capture_content(Arc::clone(&after_input.profiles), BTreeMap::new())
-            .await
-            .unwrap();
+        let source = Arc::new(FsProfileContentSource::new(directory.path().to_path_buf()));
+        let frozen =
+            chimera_core::client::reconciler::inputs::FrozenProfileContent::capture_content(
+                &after_input.profiles,
+                source.as_ref(),
+                BTreeMap::new(),
+            );
         assert_eq!(
             frozen
                 .read(&ManagedProfilePath::new("active.yaml").unwrap())
                 .unwrap(),
             disk,
         );
-        let second = builder
-            .build(after_input, BTreeMap::new(), Vec::new(), true)
-            .await
-            .unwrap();
+        let second = chimera_core::client::runtime_build::RuntimeBuildService::build_from_source(
+            after_input,
+            source,
+            BTreeMap::new(),
+            Arc::new(move || {
+                // The same production worker freezes bytes before creating the runner.
+                std::fs::remove_file(&path_to_remove)?;
+                Ok(Box::new(EchoRunner))
+            }),
+            true,
+        )
+        .await
+        .unwrap();
         assert_eq!(
             second
                 .config
