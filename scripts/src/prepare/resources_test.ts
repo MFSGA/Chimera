@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
-import * as path from 'jsr:@std/path';
+import { mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises';
+import * as path from 'node:path';
+import { test } from 'node:test';
 import {
   isSidecarCacheValid,
   isVersionManagedTarget,
@@ -11,6 +13,10 @@ import {
 } from './resources.ts';
 import { withTempFetch } from './test_utils.ts';
 import type { BinInfo } from './types.ts';
+
+function readTextFile(file: string): Promise<string> {
+  return readFile(file, 'utf8');
+}
 
 function context(root: string): ResourceResolverOptions {
   return {
@@ -34,7 +40,7 @@ function info(overrides: Partial<BinInfo> = {}): BinInfo {
   };
 }
 
-Deno.test('version-managed sidecars require a matching version stamp', () => {
+test('version-managed sidecars require a matching version stamp', () => {
   assert.equal(isVersionManagedTarget('mihomo-alpha'), true);
   assert.equal(isVersionManagedTarget('chimera-client-alpha'), true);
   assert.equal(isVersionManagedTarget('chimera-service'), true);
@@ -49,18 +55,18 @@ Deno.test('version-managed sidecars require a matching version stamp', () => {
   assert.equal(isSidecarCacheValid('mihomo', true, null, 'v1.19.32'), true);
 });
 
-Deno.test({
-  name: 'interrupted resource download preserves the existing cache file',
-  timeout: 5_000,
-  fn: async () =>
+test(
+  'interrupted resource download preserves the existing cache file',
+  { timeout: 5_000 },
+  async () =>
     withTempFetch(async (root) => {
       const resolverContext = context(root);
       const targetPath = path.join(
         resolverContext.resourcesDir,
         'Country.mmdb',
       );
-      await Deno.mkdir(resolverContext.resourcesDir, { recursive: true });
-      await Deno.writeTextFile(targetPath, 'previous-good-resource');
+      await mkdir(resolverContext.resourcesDir, { recursive: true });
+      await writeFile(targetPath, 'previous-good-resource');
       globalThis.fetch = (() =>
         Promise.resolve(
           new Response(
@@ -85,22 +91,21 @@ Deno.test({
           ),
         /connection reset/,
       );
-      assert.equal(
-        await Deno.readTextFile(targetPath),
-        'previous-good-resource',
-      );
+      assert.equal(await readTextFile(targetPath), 'previous-good-resource');
       const remainingFiles = [];
-      for await (const entry of Deno.readDir(resolverContext.resourcesDir)) {
+      for await (const entry of await readdir(resolverContext.resourcesDir, {
+        withFileTypes: true,
+      })) {
         remainingFiles.push(entry.name);
       }
       assert.deepEqual(remainingFiles, ['Country.mmdb']);
     }),
-});
+);
 
-Deno.test({
-  name: 'Wintun retries discard a partial archive and preserve the installed DLL',
-  timeout: 5_000,
-  fn: async () =>
+test(
+  'Wintun retries discard a partial archive and preserve the installed DLL',
+  { timeout: 5_000 },
+  async () =>
     withTempFetch(async (root) => {
       const resolverContext: ResourceResolverOptions = {
         ...context(root),
@@ -108,8 +113,8 @@ Deno.test({
         arch: 'x64',
       };
       const targetPath = path.join(resolverContext.resourcesDir, 'wintun.dll');
-      await Deno.mkdir(resolverContext.resourcesDir, { recursive: true });
-      await Deno.writeTextFile(targetPath, 'previous-good-wintun');
+      await mkdir(resolverContext.resourcesDir, { recursive: true });
+      await writeFile(targetPath, 'previous-good-wintun');
       let fetchCalls = 0;
       globalThis.fetch = (() => {
         fetchCalls++;
@@ -137,22 +142,22 @@ Deno.test({
         /wintun hash not match/,
       );
       assert.equal(fetchCalls, 2);
-      assert.equal(await Deno.readTextFile(targetPath), 'previous-good-wintun');
+      assert.equal(await readTextFile(targetPath), 'previous-good-wintun');
       let tempDirExists = true;
       try {
-        await Deno.stat(path.join(root, 'temp/wintun'));
+        await stat(path.join(root, 'temp/wintun'));
       } catch (error) {
-        if (!(error instanceof Deno.errors.NotFound)) throw error;
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
         tempDirExists = false;
       }
       assert.equal(tempDirExists, false);
     }),
-});
+);
 
-Deno.test({
-  name: 'resolveSidecar retries a missing rolling asset with refreshed metadata',
-  timeout: 5_000,
-  fn: async () =>
+test(
+  'resolveSidecar retries a missing rolling asset with refreshed metadata',
+  { timeout: 5_000 },
+  async () =>
     withTempFetch(async (root) => {
       const calls: string[] = [];
       let refreshCalls = 0;
@@ -190,18 +195,18 @@ Deno.test({
       assert.equal(result.version, refreshed.version);
       assert.equal(result.cached, false);
       assert.deepEqual(
-        await Deno.readFile(
+        await readFile(
           path.join(resolverContext.sidecarDir, refreshed.targetFile),
         ),
-        new Uint8Array([1, 2, 3]),
+        Buffer.from([1, 2, 3]),
       );
     }),
-});
+);
 
-Deno.test({
-  name: 'resolveSidecar retries rolling Alpha 404s within the configured budget',
-  timeout: 5_000,
-  fn: async () =>
+test(
+  'resolveSidecar retries rolling Alpha 404s within the configured budget',
+  { timeout: 5_000 },
+  async () =>
     withTempFetch(async (root) => {
       const resolverContext = context(root);
       const delays: number[] = [];
@@ -264,24 +269,24 @@ Deno.test({
       assert.equal(result.version, refreshed.version);
       assert.equal(result.cached, false);
       assert.deepEqual(
-        await Deno.readFile(
+        await readFile(
           path.join(resolverContext.sidecarDir, refreshed.targetFile),
         ),
-        new Uint8Array([1, 2, 3]),
+        Buffer.from([1, 2, 3]),
       );
       assert.equal(
-        await Deno.readTextFile(
+        await readTextFile(
           `${path.join(resolverContext.sidecarDir, refreshed.targetFile)}.version`,
         ),
         refreshed.version,
       );
     }),
-});
+);
 
-Deno.test({
-  name: 'resolveSidecar preserves the original 404 when refresh fails with 503',
-  timeout: 5_000,
-  fn: async () =>
+test(
+  'resolveSidecar preserves the original 404 when refresh fails with 503',
+  { timeout: 5_000 },
+  async () =>
     withTempFetch(async (root) => {
       let refreshCalls = 0;
       const delays: number[] = [];
@@ -315,12 +320,12 @@ Deno.test({
       assert.equal(refreshCalls, 1);
       assert.deepEqual(delays, []);
     }),
-});
+);
 
-Deno.test({
-  name: 'resolveSidecar stops after the configured rolling Alpha 404 budget',
-  timeout: 5_000,
-  fn: async () =>
+test(
+  'resolveSidecar stops after the configured rolling Alpha 404 budget',
+  { timeout: 5_000 },
+  async () =>
     withTempFetch(async (root) => {
       const resolverContext = context(root);
       const delays: number[] = [];
@@ -341,12 +346,9 @@ Deno.test({
         resolverContext.sidecarDir,
         info().targetFile,
       );
-      await Deno.mkdir(resolverContext.sidecarDir, { recursive: true });
-      await Deno.writeTextFile(oldTargetPath, 'previous-good-sidecar');
-      await Deno.writeTextFile(
-        `${oldTargetPath}.version`,
-        '0.26.2-alpha+sha.old',
-      );
+      await mkdir(resolverContext.sidecarDir, { recursive: true });
+      await writeFile(oldTargetPath, 'previous-good-sidecar');
+      await writeFile(`${oldTargetPath}.version`, '0.26.2-alpha+sha.old');
 
       await assert.rejects(
         () =>
@@ -373,21 +375,18 @@ Deno.test({
       assert.deepEqual(delays, [10, 20]);
       assert.equal(refreshCalls, 3);
       assert.equal(assetCalls, 4);
+      assert.equal(await readTextFile(oldTargetPath), 'previous-good-sidecar');
       assert.equal(
-        await Deno.readTextFile(oldTargetPath),
-        'previous-good-sidecar',
-      );
-      assert.equal(
-        await Deno.readTextFile(`${oldTargetPath}.version`),
+        await readTextFile(`${oldTargetPath}.version`),
         '0.26.2-alpha+sha.old',
       );
     }),
-});
+);
 
-Deno.test({
-  name: 'checksum failure preserves the previous sidecar and version stamp',
-  timeout: 5_000,
-  fn: async () =>
+test(
+  'checksum failure preserves the previous sidecar and version stamp',
+  { timeout: 5_000 },
+  async () =>
     withTempFetch(async (root) => {
       const resolverContext = context(root);
       const current = info({
@@ -403,9 +402,9 @@ Deno.test({
         current.targetFile,
       );
       const versionStampPath = `${targetPath}.version`;
-      await Deno.mkdir(resolverContext.sidecarDir, { recursive: true });
-      await Deno.writeTextFile(targetPath, 'previous-good-sidecar');
-      await Deno.writeTextFile(versionStampPath, 'v1.2.2');
+      await mkdir(resolverContext.sidecarDir, { recursive: true });
+      await writeFile(targetPath, 'previous-good-sidecar');
+      await writeFile(versionStampPath, 'v1.2.2');
       globalThis.fetch = ((input: RequestInfo | URL) => {
         const url = String(input);
         if (url.endsWith('service.tar.gz')) {
@@ -423,10 +422,7 @@ Deno.test({
         () => resolveSidecar(resolverContext, current, { force: true }),
         /SHA-256 mismatch/,
       );
-      assert.equal(
-        await Deno.readTextFile(targetPath),
-        'previous-good-sidecar',
-      );
-      assert.equal(await Deno.readTextFile(versionStampPath), 'v1.2.2');
+      assert.equal(await readTextFile(targetPath), 'previous-good-sidecar');
+      assert.equal(await readTextFile(versionStampPath), 'v1.2.2');
     }),
-});
+);

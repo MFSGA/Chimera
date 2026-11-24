@@ -1,55 +1,50 @@
 import assert from 'node:assert/strict';
+import { test } from 'node:test';
 import { prepareRetryDelayMs } from './retry.ts';
 
-Deno.test(
-  'transient 504 and 429 download errors use bounded exponential backoff',
-  () => {
-    const gatewayTimeout = new Error('download failed: Gateway Timeout (504)');
+test('transient 504 and 429 download errors use bounded exponential backoff', () => {
+  const gatewayTimeout = new Error('download failed: Gateway Timeout (504)');
+  assert.deepEqual(
+    [0, 1, 2, 3, 4, 5].map((attempt) =>
+      prepareRetryDelayMs(gatewayTimeout, attempt),
+    ),
+    [2_000, 4_000, 8_000, 16_000, 16_000, 16_000],
+  );
+  assert.equal(
+    prepareRetryDelayMs(
+      new Error('download failed: Too Many Requests (429)'),
+      1,
+    ),
+    4_000,
+  );
+});
+
+test('rolling Alpha 404s back off while stable and unrelated 404s do not', () => {
+  const missing = new Error('download failed: Not Found (404)');
+  for (const name of ['mihomo-alpha', 'clash-rs-alpha']) {
     assert.deepEqual(
-      [0, 1, 2, 3, 4, 5].map((attempt) =>
-        prepareRetryDelayMs(gatewayTimeout, attempt),
+      [0, 1, 2, 3, 4].map((attempt) =>
+        prepareRetryDelayMs(missing, attempt, name),
       ),
-      [2_000, 4_000, 8_000, 16_000, 16_000, 16_000],
+      [1_000, 2_000, 4_000, 8_000, 8_000],
     );
-    assert.equal(
-      prepareRetryDelayMs(
-        new Error('download failed: Too Many Requests (429)'),
-        1,
-      ),
-      4_000,
-    );
-  },
-);
+  }
+  for (const name of [
+    undefined,
+    'mihomo',
+    'clash-rs',
+    'chimera-client-alpha',
+    'chimera-service',
+  ]) {
+    assert.equal(prepareRetryDelayMs(missing, 2, name), 0);
+  }
+  assert.equal(
+    prepareRetryDelayMs(new Error('invalid archive'), 0, 'mihomo-alpha'),
+    0,
+  );
+});
 
-Deno.test(
-  'rolling Alpha 404s back off while stable and unrelated 404s do not',
-  () => {
-    const missing = new Error('download failed: Not Found (404)');
-    for (const name of ['mihomo-alpha', 'clash-rs-alpha']) {
-      assert.deepEqual(
-        [0, 1, 2, 3, 4].map((attempt) =>
-          prepareRetryDelayMs(missing, attempt, name),
-        ),
-        [1_000, 2_000, 4_000, 8_000, 8_000],
-      );
-    }
-    for (const name of [
-      undefined,
-      'mihomo',
-      'clash-rs',
-      'chimera-client-alpha',
-      'chimera-service',
-    ]) {
-      assert.equal(prepareRetryDelayMs(missing, 2, name), 0);
-    }
-    assert.equal(
-      prepareRetryDelayMs(new Error('invalid archive'), 0, 'mihomo-alpha'),
-      0,
-    );
-  },
-);
-
-Deno.test('permanent errors do not incur a transient backoff', () => {
+test('permanent errors do not incur a transient backoff', () => {
   assert.equal(
     prepareRetryDelayMs(new Error('download failed: Not Found (404)'), 2),
     0,

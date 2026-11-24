@@ -1,12 +1,14 @@
 import assert from 'node:assert/strict';
-import * as path from 'jsr:@std/path';
+import { readFile, stat } from 'node:fs/promises';
+import * as path from 'node:path';
+import { test } from 'node:test';
 import { downloadFile } from './download.ts';
 import { withTempFetch } from './test_utils.ts';
 
-Deno.test({
-  name: 'downloadFile writes streamed chunks and reports bounded progress',
-  timeout: 5_000,
-  fn: async () =>
+test(
+  'downloadFile writes streamed chunks and reports bounded progress',
+  { timeout: 5_000 },
+  async () =>
     withTempFetch(async (root) => {
       const filePath = path.join(root, 'asset.bin');
       globalThis.fetch = (() =>
@@ -31,22 +33,19 @@ Deno.test({
           progress.push({ downloaded: value.downloaded, total: value.total });
         },
       );
-      assert.deepEqual(
-        await Deno.readFile(filePath),
-        new Uint8Array([1, 2, 3, 4, 5]),
-      );
+      assert.deepEqual(await readFile(filePath), Buffer.from([1, 2, 3, 4, 5]));
       assert.equal(result.size, 5);
       assert.deepEqual(progress, [
         { downloaded: 2, total: 5 },
         { downloaded: 5, total: 5 },
       ]);
     }),
-});
+);
 
-Deno.test({
-  name: 'downloadFile rejects unsuccessful HTTP responses',
-  timeout: 5_000,
-  fn: async () =>
+test(
+  'downloadFile rejects unsuccessful HTTP responses',
+  { timeout: 5_000 },
+  async () =>
     withTempFetch(async (root) => {
       const filePath = path.join(root, 'missing.bin');
       globalThis.fetch = (() =>
@@ -58,6 +57,6 @@ Deno.test({
         () => downloadFile('https://example.test/missing.bin', filePath),
         /download failed/,
       );
-      assert.equal(await Deno.stat(filePath).catch(() => undefined), undefined);
+      assert.equal(await stat(filePath).catch(() => undefined), undefined);
     }),
-});
+);

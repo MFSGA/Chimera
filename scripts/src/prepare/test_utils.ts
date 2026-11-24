@@ -1,7 +1,11 @@
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import * as path from 'node:path';
+
 export async function withTempFetch(
   run: (root: string) => Promise<void>,
 ): Promise<void> {
-  const root = await Deno.makeTempDir();
+  const root = await mkdtemp(path.join(tmpdir(), 'chimera-prepare-'));
   const originalFetch = globalThis.fetch;
   let testFailed = false;
   let testError: unknown;
@@ -20,7 +24,7 @@ export async function withTempFetch(
     cleanupErrors.push(error);
   }
   try {
-    await Deno.remove(root, { recursive: true });
+    await rm(root, { recursive: true, force: true });
   } catch (error) {
     cleanupErrors.push(error);
   }

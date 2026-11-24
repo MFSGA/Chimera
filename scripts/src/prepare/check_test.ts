@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { test } from 'node:test';
 import { createBinaryResolvers } from './binaries.ts';
 import type { SidecarRefreshRetryPolicy } from './resources.ts';
 import { createPrepareTasks, selectPrepareTasks } from './tasks.ts';
@@ -40,54 +41,48 @@ function createTasks(platform: string) {
   });
 }
 
-Deno.test(
-  'prepare task registry includes supported cores and resources',
-  () => {
-    const tasks = createTasks('linux');
+test('prepare task registry includes supported cores and resources', () => {
+  const tasks = createTasks('linux');
 
-    assert.deepEqual(
-      tasks.map((task) => task.name),
-      [
-        'clash',
-        'mihomo',
-        'mihomo-alpha',
-        'clash-rs',
-        'clash-rs-alpha',
-        'chimera-client',
-        'chimera-client-alpha',
-        'wintun',
-        'chimera-service',
-        'mmdb',
-        'geoip',
-        'geosite',
-        'enableLoopback',
-      ],
-    );
-    assert(tasks.every((task) => task.retry === 5));
-    assert.deepEqual(
-      tasks.filter((task) => task.winOnly).map((task) => task.name),
-      ['wintun', 'enableLoopback'],
-    );
-  },
-);
+  assert.deepEqual(
+    tasks.map((task) => task.name),
+    [
+      'clash',
+      'mihomo',
+      'mihomo-alpha',
+      'clash-rs',
+      'clash-rs-alpha',
+      'chimera-client',
+      'chimera-client-alpha',
+      'wintun',
+      'chimera-service',
+      'mmdb',
+      'geoip',
+      'geosite',
+      'enableLoopback',
+    ],
+  );
+  assert(tasks.every((task) => task.retry === 5));
+  assert.deepEqual(
+    tasks.filter((task) => task.winOnly).map((task) => task.name),
+    ['wintun', 'enableLoopback'],
+  );
+});
 
-Deno.test(
-  'prepare task selection excludes Windows resources on other platforms',
-  () => {
-    const tasks = createTasks('darwin');
+test('prepare task selection excludes Windows resources on other platforms', () => {
+  const tasks = createTasks('darwin');
 
-    assert.deepEqual(
-      selectPrepareTasks(tasks, 'darwin').map((task) => task.name),
-      tasks.filter((task) => !task.winOnly).map((task) => task.name),
-    );
-    assert.equal(selectPrepareTasks(tasks, 'win32').length, tasks.length);
-  },
-);
+  assert.deepEqual(
+    selectPrepareTasks(tasks, 'darwin').map((task) => task.name),
+    tasks.filter((task) => !task.winOnly).map((task) => task.name),
+  );
+  assert.equal(selectPrepareTasks(tasks, 'win32').length, tasks.length);
+});
 
-Deno.test({
-  name: 'rolling Alpha retry policy is wired only to the Chimera Client task',
-  timeout: 5_000,
-  fn: async () =>
+test(
+  'rolling Alpha retry policy is wired only to the Chimera Client task',
+  { timeout: 5_000 },
+  async () =>
     withTempFetch(async (root) => {
       let alphaRequests = 0;
       let alphaRefreshes = 0;
@@ -192,4 +187,4 @@ Deno.test({
       assert.equal(mihomoAlphaRefreshes, 1);
       assert.deepEqual(delays, [0]);
     }),
-});
+);
