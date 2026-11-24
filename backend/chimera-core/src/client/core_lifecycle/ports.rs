@@ -186,3 +186,39 @@ pub trait RuntimeApplyPort: Send + Sync {
 pub trait RuntimeObservationPort: RuntimeApplyPort {
     async fn observe_core_status(&self) -> anyhow::Result<super::status::CoreStatusSnapshot>;
 }
+
+#[async_trait]
+pub trait ServiceTransitionLease: Send {
+    async fn report_endpoint_down(&mut self) -> anyhow::Result<()> {
+        Ok(())
+    }
+    async fn install_daemon(&mut self) -> anyhow::Result<()>;
+    async fn uninstall_daemon(&mut self) -> anyhow::Result<()>;
+    async fn update_daemon(&mut self) -> anyhow::Result<()>;
+    async fn start_daemon(&mut self) -> anyhow::Result<()>;
+    async fn restart_daemon(&mut self) -> anyhow::Result<()>;
+    async fn stop_daemon(&mut self) -> anyhow::Result<()>;
+    async fn confirm_ready(&mut self, timeout: std::time::Duration) -> anyhow::Result<()>;
+    async fn confirm_stopped(&mut self) -> anyhow::Result<()>;
+}
+
+/// Runtime ownership operations on the existing selected Core and Service
+/// manager. The reconciler remains the sole caller of mutating operations.
+#[async_trait]
+pub trait RuntimeOwnershipPort: RuntimeObservationPort {
+    async fn stop_core(&self) -> anyhow::Result<()>;
+    async fn baseline_stopped(&self) -> anyhow::Result<bool>;
+    async fn retire_service_core(
+        &self,
+        expected: chimera_core_manager::CoreOwner,
+    ) -> anyhow::Result<()>;
+    async fn recover_service_quarantine(&self) -> anyhow::Result<()>;
+    fn service_endpoint_degraded(&self) -> bool;
+    fn service_endpoint_recovery_supported(&self) -> bool;
+    async fn settle_service_recovery_action(&self) -> Option<Result<(), String>>;
+    async fn recover_service_endpoint(
+        &self,
+        closing: &tokio_util::sync::CancellationToken,
+    ) -> Option<Result<(), chimera_core_manager::CoreError>>;
+    fn startup_failure_is_retryable(&self, error: &anyhow::Error) -> bool;
+}

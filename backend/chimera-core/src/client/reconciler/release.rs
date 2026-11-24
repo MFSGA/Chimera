@@ -235,3 +235,76 @@ mod tests {
         assert!(debt.maintenance().is_none());
     }
 }
+
+/// Execute a release only while a verified Local instance and the stopped
+/// Service owner remain stable through the nonblocking transition lease.
+pub async fn maintain_service_release<R, S, L>(
+    core: &(impl crate::client::core_lifecycle::ports::RuntimeObservationPort + ?Sized),
+    recovery: &parking_lot::Mutex<crate::client::core_lifecycle::workflow::ServiceRecovery>,
+    observe_release: impl Fn() -> R,
+    observe_service: impl Fn() -> S,
+    begin_transition: impl FnOnce() -> L,
+) -> anyhow::Result<()>
+where
+    R: std::future::Future<Output = ReleaseObservation>,
+    S: std::future::Future<Output = (ServiceEvidence, u64)>,
+    L: std::future::Future<
+            Output = anyhow::Result<
+                Box<dyn crate::client::core_lifecycle::ports::ServiceTransitionLease>,
+            >,
+        >,
+{
+    use super::decision::same_core_status;
+    use chimera_ipc::api::status::CoreState;
+    let before = core.observe_core_status().await?;
+    anyhow::ensure!(
+        observe_release().await == ReleaseObservation::Owed,
+        "Service daemon release is not authorized by a verified Local owner"
+    );
+    let (service_before, generation_before) = observe_service().await;
+    anyhow::ensure!(
+        observation(false, true, &service_before) == ReleaseObservation::Owed,
+        "Service daemon stopped-owner evidence was lost before acquiring the transition lease"
+    );
+    // Nonblocking lock acquisition preserves ServiceActor -> CoreLifecycle
+    // ordering: a UI command can hold this lock while awaiting our mailbox.
+    let mut lease = begin_transition().await?;
+    let local_after_lease = core.observe_core_status().await?;
+    anyhow::ensure!(
+        same_core_status(&before, &local_after_lease)
+            && matches!(local_after_lease.state, CoreState::Running),
+        "Local Core instance changed before the queued Service release was admitted"
+    );
+    anyhow::ensure!(
+        observe_release().await == ReleaseObservation::Owed,
+        "Service owner evidence changed after acquiring the transition lease"
+    );
+    let (service_after_lease, generation_after_lease) = observe_service().await;
+    anyhow::ensure!(
+        same_release_owner(
+            &service_before,
+            generation_before,
+            &service_after_lease,
+            generation_after_lease,
+        ),
+        "Service daemon owner or readiness generation changed before the queued release"
+    );
+    // The lease proves the stop still targets the same stopped, locally
+    // owned daemon. A newer readiness generation must use a new release
+    // decision rather than reusing an older convergence observation.
+    recovery.lock().suppress();
+    lease.stop_daemon().await?;
+    lease.confirm_stopped().await?;
+    let (after, _) = observe_service().await;
+    anyhow::ensure!(
+        matches!(after, ServiceEvidence::Absent { .. }),
+        "Service stop was acknowledged but a fresh probe did not prove daemon shutdown: {after:?}"
+    );
+    let current = core.observe_core_status().await?;
+    anyhow::ensure!(
+        same_core_status(&before, &current) && matches!(current.state, CoreState::Running),
+        "Local Core changed while retiring the Service daemon"
+    );
+
+    Ok(())
+}

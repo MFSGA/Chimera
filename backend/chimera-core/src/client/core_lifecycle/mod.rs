@@ -7,3 +7,6 @@ pub mod ports;
 pub mod apply;
 
 pub mod status;
+
+pub mod ownership;
+pub mod service;

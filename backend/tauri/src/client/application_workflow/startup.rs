@@ -78,14 +78,6 @@ pub(crate) fn startup_failure_waits_for_dependency(error: &anyhow::Error) -> boo
     })
 }
 
-pub(crate) fn startup_stop_error_is_idempotent(error: &anyhow::Error) -> bool {
-    error.chain().any(|cause| {
-        cause
-            .downcast_ref::<CoreError>()
-            .is_some_and(|error| error.kind == Some(CoreErrorKind::NotStarted))
-    })
-}
-
 fn host_for_run_type(
     run_type: crate::core::RunType,
 ) -> crate::core::actor_v2::control_endpoint::ExecutionHost {
@@ -109,36 +101,19 @@ fn runtime_evidence(status: &CoreStatusSnapshot) -> RuntimeEvidence {
     }
 }
 
-#[derive(Debug)]
-pub(crate) enum StartupOwnerFailure {
-    WaitingDependency(String),
-    Blocked(String),
-    RecoveryRequired(String),
-}
-
-impl StartupOwnerFailure {
-    pub(crate) fn outcome(self) -> StartupOutcome {
-        match self {
-            Self::WaitingDependency(reason) => StartupOutcome::ReadyDegraded {
-                health: ConvergenceHealth::WaitingDependency,
-                reason,
-            },
-            Self::Blocked(reason) => StartupOutcome::ReadyDegraded {
-                health: ConvergenceHealth::Blocked,
-                reason,
-            },
-            Self::RecoveryRequired(reason) => StartupOutcome::RecoveryRequired { reason },
-        }
-    }
-
-    pub(crate) fn stop_rejected(error: anyhow::Error, uncertain: bool) -> Self {
-        let reason = format!("the Core owner could not be stopped: {error:#}");
-        if uncertain {
-            Self::RecoveryRequired(reason)
-        } else if startup_failure_is_retryable(&error) {
-            Self::WaitingDependency(reason)
-        } else {
-            Self::Blocked(reason)
+pub use chimera_core::client::core_lifecycle::ownership::StartupOwnerFailure;
+pub(crate) fn startup_owner_outcome(failure: StartupOwnerFailure) -> StartupOutcome {
+    match failure {
+        StartupOwnerFailure::WaitingDependency(reason) => StartupOutcome::ReadyDegraded {
+            health: ConvergenceHealth::WaitingDependency,
+            reason,
+        },
+        StartupOwnerFailure::Blocked(reason) => StartupOutcome::ReadyDegraded {
+            health: ConvergenceHealth::Blocked,
+            reason,
+        },
+        StartupOwnerFailure::RecoveryRequired(reason) => {
+            StartupOutcome::RecoveryRequired { reason }
         }
     }
 }
@@ -1833,7 +1808,7 @@ impl ApplicationWorkflow {
         StartupReport {
             operation_id,
             observation: Some(observation),
-            outcome: failure.outcome(),
+            outcome: startup_owner_outcome(failure),
         }
     }
 

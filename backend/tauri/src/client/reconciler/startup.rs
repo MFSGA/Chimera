@@ -11,30 +11,18 @@ use chimera_core_manager::OperationId;
 use chimera_ipc::api::status::CoreState;
 
 use crate::client::{
-    application_workflow::startup::{
-        ServiceEvidence as ObservedServiceEvidence, startup_stop_error_is_idempotent,
-    },
+    application_workflow::startup::ServiceEvidence as ObservedServiceEvidence,
     convergence::ConvergenceHealth,
     core_lifecycle::{CoreLifecycleWorkflow, ports::CoreStatusSnapshot},
     reconciler::{
         attempt::CommittedTargetAdvanced,
-        decision::{
-            confirmed_planned_stop, same_core_status, service_prepared_owner_proven,
-            stable_owner_facts,
-        },
+        decision::{same_core_status, service_prepared_owner_proven, stable_owner_facts},
     },
 };
 
 pub use chimera_core::client::reconciler::startup::*;
 
 impl CoreLifecycleWorkflow {
-    /// Ref S3 Stop must observe a settled, stopped Core before S4 can
-    /// apply the next committed target. A successful command reply alone
-    /// cannot prove that the selected endpoint stopped, nor that the
-    /// sources or accepted Core revision stayed fixed across the stop.
-    ///
-    /// The existing CoreLifecycle actor remains the only executor; no new
-    /// Runtime writer or host-selection operation is introduced here.
     async fn stop_planned_unverified_core(
         &self,
         target: &str,
@@ -42,127 +30,17 @@ impl CoreLifecycleWorkflow {
         accepted: Option<&Arc<crate::client::runtime::RuntimeApplyReceipt>>,
         startup_service: Option<(&ObservedServiceEvidence, u64)>,
     ) -> anyhow::Result<()> {
-        use crate::client::reconciler::attempt::OwnershipTransitionPending;
-
-        // The old source may have advanced while S2/S3 sampled its owner.
-        // Do not stop a real Core for a candidate no longer committed.
-        if self.startup_target_identity().await? != target {
-            return Err(CommittedTargetAdvanced.into());
-        }
-        let before = self.convergence_core().status().await?;
-        if !same_core_status(observed, &before) || !matches!(before.state, CoreState::Running) {
-            return Err(OwnershipTransitionPending::waiting(
-                "the selected Core changed before its S3 stop could begin",
-            )
-            .into());
-        }
-        let current = self
-            .convergence_core()
-            .active_runtime_receipt()
-            .await
-            .map_err(|_| {
-                OwnershipTransitionPending::waiting(
-                    "the accepted Core receipt became unreadable before S3 Stop",
-                )
-            })?;
-        if accepted.is_some_and(|receipt| {
-            receipt.host != crate::client::reconciler::proof::host_for(before.run_type)
-        }) || !crate::client::reconciler::decision::same_active_receipt(
+        chimera_core::client::core_lifecycle::ownership::stop_planned_unverified_core(
+            self.convergence_core(),
+            || self.startup_target_identity(),
+            || self.service_evidence(),
+            || self.convergence_progress().lock().invalidate_selection(),
+            target,
+            observed,
             accepted,
-            current.as_ref(),
-        ) {
-            return Err(OwnershipTransitionPending::waiting(
-                "the accepted Core revision changed before the S3 stop",
-            )
-            .into());
-        }
-        if self.convergence_core().outcome_uncertain() {
-            return Err(OwnershipTransitionPending::waiting(
-                "the Core outcome became uncertain before S3 Stop",
-            )
-            .into());
-        }
-        let stop = if let Some((expected, generation)) = startup_service {
-            let (fresh, fresh_generation) = self.service_evidence().await;
-            if &fresh != expected
-                || fresh_generation != generation
-                || !same_core_status(&before, &self.convergence_core().status().await?)
-                || self.startup_target_identity().await? != target
-                || self.outcome_uncertain()
-            {
-                return Err(OwnershipTransitionPending::waiting(
-                    "the Service owner changed before its conditional S3 retirement",
-                )
-                .into());
-            }
-            let final_receipt = self
-                .convergence_core()
-                .active_runtime_receipt()
-                .await
-                .map_err(|_| {
-                    OwnershipTransitionPending::waiting(
-                        "the Service receipt became unreadable before S3 retirement",
-                    )
-                })?;
-            if !crate::client::reconciler::decision::same_active_receipt(
-                accepted,
-                final_receipt.as_ref(),
-            ) {
-                return Err(OwnershipTransitionPending::waiting(
-                    "the Service receipt changed before its conditional S3 retirement",
-                )
-                .into());
-            }
-            self.retire_service_startup_owner(&fresh, true)
-                .await
-                .map(|_| ())
-                .map_err(|failure| {
-                    // S3 failure must not become an S4 Service refusal and authorize fallback.
-                    anyhow::Error::new(OwnershipTransitionPending::waiting(format!(
-                        "Service S3 retirement did not settle: {:?}",
-                        failure.outcome()
-                    )))
-                })
-        } else {
-            self.convergence_core().stop().await
-        };
-        if self.convergence_core().outcome_uncertain() {
-            anyhow::bail!("S3 Core stop outcome is uncertain; do not apply a second runtime");
-        }
-        let stopped = self.convergence_core().status().await?;
-        if !confirmed_planned_stop(&before, &stopped) {
-            // A failed Stop RPC retains its actual error; a successful reply
-            // without a stopped observation is a dependency wait.
-            if let Err(error) = stop {
-                return Err(error);
-            }
-            return Err(OwnershipTransitionPending::waiting(
-                "the Core stop reply had no stable stopped-state proof",
-            )
-            .into());
-        }
-        // Ref stop_owner permits NotStarted only after independent stopped
-        // proof. Every other error must retain the original refusal.
-        if let Err(error) = stop
-            && !startup_stop_error_is_idempotent(&error)
-        {
-            return Err(error);
-        }
-        let confirmed = self.convergence_core().status().await?;
-        if !same_core_status(&stopped, &confirmed) {
-            return Err(OwnershipTransitionPending::waiting(
-                "the selected Core changed while confirming its S3 stop",
-            )
-            .into());
-        }
-        self.convergence_progress().lock().invalidate_selection();
-        // The stop is now proven, but the previously captured source target
-        // could have been superseded while the external Core action ran.
-        // In that case only a latest-source round may perform the next Apply.
-        if self.startup_target_identity().await? != target {
-            return Err(CommittedTargetAdvanced.into());
-        }
-        Ok(())
+            startup_service,
+        )
+        .await
     }
 
     /// Consume ref's stable S2/S3/S4 decision. A concrete Step::Apply,

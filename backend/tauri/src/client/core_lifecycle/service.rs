@@ -59,13 +59,10 @@ impl CoreLifecycleWorkflow {
     }
 
     pub(in crate::client) async fn settle_service_recovery_action(&self) -> bool {
-        match self.core.settle_service_recovery_action().await {
-            Some(Ok(())) | None => true,
-            Some(Err(reason)) => {
-                tracing::debug!(%reason, "Service endpoint recovery deferred until the previous Core action settles");
-                false
-            }
-        }
+        chimera_core::client::core_lifecycle::service::settle_service_recovery_action(
+            self.core.as_ref(),
+        )
+        .await
     }
 
     pub(in crate::client) async fn report_service_endpoint_down(
@@ -76,39 +73,12 @@ impl CoreLifecycleWorkflow {
             self.service.report_endpoint_down(transition).await?;
             return Ok(false);
         }
-        if !self.service_recovery_due_now() || !self.settle_service_recovery_action().await {
-            return Ok(false);
-        }
-        let endpoint_degraded = self.core.service_endpoint_degraded();
-        {
-            let mut recovery = self.service_recovery.lock();
-            if !recovery.begin(endpoint_degraded, self.shutdown.is_cancelled()) {
-                return Ok(false);
-            }
-        }
-
-        let result = self
-            .core
-            .recover_service_endpoint(&self.shutdown)
-            .await
-            .unwrap_or_else(|| {
-                Err(chimera_core_manager::CoreError::new(
-                    chimera_core_manager::CoreErrorKind::BackendUnavailable,
-                    "the shared Core router does not support Service endpoint recovery",
-                    true,
-                ))
-            });
-        let failed = result.is_err();
-        let terminal_error = result.as_ref().err().is_some_and(|error| !error.retryable);
-        let endpoint_degraded = self.core.service_endpoint_degraded();
-        self.service_recovery
-            .lock()
-            .finish_attempt(failed, terminal_error, endpoint_degraded);
-        if let Err(error) = result {
-            tracing::warn!(%error, "Service endpoint recovery attempt failed");
-            return Err(error.into());
-        }
-        Ok(true)
+        chimera_core::client::core_lifecycle::service::report_service_endpoint_down(
+            self.core.as_ref(),
+            &self.service_recovery,
+            &self.shutdown,
+        )
+        .await
     }
 
     pub(in crate::client) async fn uninstall_service(

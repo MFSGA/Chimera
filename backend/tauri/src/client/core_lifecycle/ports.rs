@@ -39,20 +39,7 @@ pub(crate) trait BinaryInstallProgress: Send + Sync + 'static {
 // Upstream core_install owns the port; the legacy UI keeps its progress wrapper.
 pub(crate) use chimera_contracts::core_install::BinaryInstaller;
 
-#[async_trait]
-pub(crate) trait ServiceTransitionLease: Send {
-    async fn report_endpoint_down(&mut self) -> anyhow::Result<()> {
-        Ok(())
-    }
-    async fn install_daemon(&mut self) -> anyhow::Result<()>;
-    async fn uninstall_daemon(&mut self) -> anyhow::Result<()>;
-    async fn update_daemon(&mut self) -> anyhow::Result<()>;
-    async fn start_daemon(&mut self) -> anyhow::Result<()>;
-    async fn restart_daemon(&mut self) -> anyhow::Result<()>;
-    async fn stop_daemon(&mut self) -> anyhow::Result<()>;
-    async fn confirm_ready(&mut self, timeout: std::time::Duration) -> anyhow::Result<()>;
-    async fn confirm_stopped(&mut self) -> anyhow::Result<()>;
-}
+pub use chimera_core::client::core_lifecycle::ports::ServiceTransitionLease;
 
 #[async_trait]
 pub(crate) trait ServiceLifecyclePort: Send + Sync + 'static {
@@ -529,5 +516,45 @@ impl RuntimeApplyPort for dyn CoreLifecyclePort + '_ {
 impl RuntimeObservationPort for dyn CoreLifecyclePort + '_ {
     async fn observe_core_status(&self) -> anyhow::Result<CoreStatusSnapshot> {
         CoreLifecyclePort::status(self).await
+    }
+}
+
+#[async_trait]
+impl RuntimeOwnershipPort for dyn CoreLifecyclePort + '_ {
+    async fn stop_core(&self) -> anyhow::Result<()> {
+        CoreLifecyclePort::stop(self).await
+    }
+    async fn baseline_stopped(&self) -> anyhow::Result<bool> {
+        Ok(matches!(
+            CoreLifecyclePort::observe_runtime_baseline(self).await?,
+            KnownRuntimeState::Stopped
+        ))
+    }
+    async fn retire_service_core(
+        &self,
+        expected: chimera_core_manager::CoreOwner,
+    ) -> anyhow::Result<()> {
+        CoreLifecyclePort::retire_service_core(self, expected).await
+    }
+    async fn recover_service_quarantine(&self) -> anyhow::Result<()> {
+        CoreLifecyclePort::recover_service_quarantine(self).await
+    }
+    fn service_endpoint_degraded(&self) -> bool {
+        CoreLifecyclePort::service_endpoint_degraded(self)
+    }
+    fn service_endpoint_recovery_supported(&self) -> bool {
+        CoreLifecyclePort::service_endpoint_recovery_supported(self)
+    }
+    async fn settle_service_recovery_action(&self) -> Option<Result<(), String>> {
+        CoreLifecyclePort::settle_service_recovery_action(self).await
+    }
+    async fn recover_service_endpoint(
+        &self,
+        closing: &tokio_util::sync::CancellationToken,
+    ) -> Option<Result<(), chimera_core_manager::CoreError>> {
+        CoreLifecyclePort::recover_service_endpoint(self, closing).await
+    }
+    fn startup_failure_is_retryable(&self, error: &anyhow::Error) -> bool {
+        crate::client::application_workflow::startup::startup_failure_is_retryable(error)
     }
 }
