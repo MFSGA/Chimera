@@ -124,6 +124,7 @@ pub fn on_exit_requested(app_handle: &AppHandle, code: Option<i32>, api: &ExitRe
         .gate
         .lock()
         .on_exit_requested(code);
+    tracing::debug!(?code, ?decision, "application exit request");
     match decision {
         ExitDecision::Prevent => api.prevent_exit(),
         ExitDecision::Shutdown => {
@@ -154,8 +155,12 @@ fn start_shutdown(app_handle: &AppHandle) {
         if let Err(error) = crate::utils::help::cleanup_processes_async(&app_handle).await {
             tracing::error!(%error, "application cleanup failed during exit");
         }
-        tracing::debug!("application cleanup finished; releasing exit gate");
         let intent = app_handle.state::<ExitBoundary>().gate.lock().finish();
+        tracing::debug!(
+            exit_code = intent.code(),
+            ?intent,
+            "application cleanup finished; releasing exit gate"
+        );
         #[cfg(windows)]
         crate::shutdown_hook::set_ready_for_shutdown();
         if intent == ExitIntent::Restart {
