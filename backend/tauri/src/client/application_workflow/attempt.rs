@@ -20,47 +20,11 @@ pub use chimera_core::client::reconciler::reestablish::{
 };
 
 impl ApplicationWorkflow {
-    pub(crate) fn advance_attempt(&mut self, stage: AttemptStage) {
-        if let Some(attempt) = &mut self.live {
-            attempt.stage = stage;
-        }
-    }
-
-    pub(crate) fn advance_attempt_for(&mut self, operation_id: &OperationId, stage: AttemptStage) {
-        if let Some(attempt) = self
-            .live
-            .as_mut()
-            .filter(|attempt| &attempt.operation_id == operation_id)
-        {
-            attempt.stage = stage;
-        }
-    }
-
-    pub(crate) fn record_attempt_baseline(&mut self, baseline: &KnownRuntimeState) {
-        if let Some(attempt) = &mut self.live {
-            attempt.baseline = Some(baseline.clone());
-        }
-    }
-
-    pub(crate) fn record_attempt_verdict(
-        &mut self,
-        operation_id: &OperationId,
-        verdict: AppliedVerdict,
-    ) {
-        if let Some(attempt) = self
-            .live
-            .as_mut()
-            .filter(|attempt| &attempt.operation_id == operation_id)
-        {
-            attempt.verdict = Some(verdict);
-        }
-    }
-
     pub(crate) fn conclude_attempt(&mut self, unresolved: Option<String>) -> bool {
         let lower_outcome_uncertain = self.lower_outcome_uncertain();
         chimera_core::client::reconciler::reestablish::conclude_attempt(
-            &mut self.live,
-            &mut self.deferred,
+            &mut self.progress.live,
+            &mut self.progress.deferred,
             unresolved,
             lower_outcome_uncertain,
         )
@@ -139,10 +103,10 @@ mod tests {
             Arc::new(Mutex::new(None)),
             None,
         );
-        workflow.live = Some(LiveAttempt::lifecycle(OperationId::generate()));
+        workflow.progress.live = Some(LiveAttempt::lifecycle(OperationId::generate()));
         assert!(!workflow.conclude_attempt(Some("runtime outcome is unresolved".into())));
 
-        assert!(workflow.has_unresolved_attempt());
+        assert!(workflow.progress.has_unresolved_attempt());
         assert!(
             workflow.recovery_command_allowed(&crate::client::core_lifecycle::Command::RecoverCore)
         );
@@ -158,11 +122,11 @@ mod tests {
             Arc::new(Mutex::new(None)),
             None,
         );
-        workflow.live = Some(LiveAttempt::lifecycle(OperationId::generate()));
+        workflow.progress.live = Some(LiveAttempt::lifecycle(OperationId::generate()));
 
         assert!(workflow.conclude_attempt(None));
-        assert!(workflow.live.is_none());
-        assert!(!workflow.has_unresolved_attempt());
+        assert!(workflow.progress.live.is_none());
+        assert!(!workflow.progress.has_unresolved_attempt());
     }
 
     #[test]
@@ -178,7 +142,7 @@ mod tests {
             "startup-target".into(),
             super::super::mutation::ReestablishCause::Recovery,
         );
-        workflow.live = Some(LiveAttempt::committed_target(operation_id, target));
+        workflow.progress.live = Some(LiveAttempt::committed_target(operation_id, target));
         workflow.conclude_attempt(Some("startup result is unresolved".into()));
 
         let recover = crate::client::core_lifecycle::Command::RecoverStartup {
@@ -202,14 +166,18 @@ mod tests {
             Arc::new(Mutex::new(None)),
             None,
         );
-        workflow.live = Some(LiveAttempt::lifecycle(OperationId::generate()));
-        workflow.advance_attempt(AttemptStage::Confirming);
+        workflow.progress.live = Some(LiveAttempt::lifecycle(OperationId::generate()));
+        workflow.progress.advance_attempt(AttemptStage::Confirming);
 
         workflow
             .mark_recovery_required("operation was interrupted".into())
             .await;
 
-        let attempt = workflow.live.as_ref().expect("attempt remains recoverable");
+        let attempt = workflow
+            .progress
+            .live
+            .as_ref()
+            .expect("attempt remains recoverable");
         assert_eq!(attempt.stage, AttemptStage::Confirming);
         assert!(attempt.unresolved.is_some());
     }

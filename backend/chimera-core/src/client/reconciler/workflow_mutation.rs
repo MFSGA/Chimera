@@ -6,19 +6,20 @@
 
 use std::sync::Arc;
 
+use crate::state::{Ack, DecisionHandle, StateChange};
 use chimera_config::profile::Profiles;
-use chimera_core::state::{Ack, DecisionHandle, StateChange};
 use chimera_core_manager::OperationId;
 use tokio::sync::oneshot;
 
-use super::{
-    impact::RuntimeImpact,
-    policy::{CommandPolicy, TryCauseKind},
+use super::mutation_policy::{CommandPolicy, TryCauseKind};
+use crate::client::{
+    mutation_outcome::Degradation,
+    runtime::{RuntimeApplyReceipt, RuntimeSnapshot},
 };
-use crate::client::runtime::{Degradation, RuntimeApplyReceipt, RuntimeSnapshot};
+use crate::state::mutation::impact::RuntimeImpact;
 
 #[derive(Debug, Clone)]
-pub(crate) enum DomainChange {
+pub enum DomainChange {
     Profiles {
         previous: Option<Arc<Profiles>>,
         candidate: Arc<Profiles>,
@@ -28,14 +29,14 @@ pub(crate) enum DomainChange {
 pub use chimera_contracts::mutation::ConfigDomain;
 
 impl DomainChange {
-    pub(crate) fn domain(&self) -> ConfigDomain {
+    pub fn domain(&self) -> ConfigDomain {
         match self {
             Self::Profiles { .. } => ConfigDomain::Profiles,
         }
     }
 }
 
-pub(crate) trait MutationDomain: Clone + Send + Sync + 'static {
+pub trait MutationDomain: Clone + Send + Sync + 'static {
     fn domain_change(change: StateChange<Self>) -> DomainChange;
 }
 
@@ -54,24 +55,24 @@ impl MutationDomain for Profiles {
 ///
 /// The source transaction owns the authoritative decision. The workflow owns
 /// the runtime attempt and answers prepare before it waits for that decision.
-pub(crate) struct MutationRequest {
-    pub(crate) operation_id: OperationId,
-    pub(crate) change: DomainChange,
-    pub(crate) hints: super::impact::MutationHints,
-    pub(crate) class: super::policy::CommandClass,
-    pub(crate) decision: DecisionHandle,
-    pub(crate) ack: Option<oneshot::Sender<TryAck>>,
-    pub(crate) completion: Option<oneshot::Sender<Result<(), String>>>,
+pub struct MutationRequest {
+    pub operation_id: OperationId,
+    pub change: DomainChange,
+    pub hints: crate::state::mutation::impact::MutationHints,
+    pub class: super::mutation_policy::CommandClass,
+    pub decision: DecisionHandle,
+    pub ack: Option<oneshot::Sender<TryAck>>,
+    pub completion: Option<oneshot::Sender<Result<(), String>>>,
 }
 
 impl MutationRequest {
-    pub(crate) fn answer(&mut self, ack: TryAck) {
+    pub fn answer(&mut self, ack: TryAck) {
         if let Some(channel) = self.ack.take() {
             let _ = channel.send(ack);
         }
     }
 
-    pub(crate) fn settle(&mut self, result: Result<(), String>) {
+    pub fn settle(&mut self, result: Result<(), String>) {
         if let Some(channel) = self.completion.take() {
             let _ = channel.send(result);
         }
@@ -79,7 +80,7 @@ impl MutationRequest {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum TryAck {
+pub enum TryAck {
     Ok,
     Degraded(String),
     Rejected(String),
@@ -97,7 +98,7 @@ impl From<TryAck> for Ack {
     }
 }
 
-pub use chimera_core::client::reconciler::reestablish::{
+pub use crate::client::reconciler::reestablish::{
     AppliedCandidate, ApplyFailure, DEFERRED_RETRY_BUDGET, DeferredTarget, EvidenceGap,
     KnownRuntimeState, MutationDeferredContext, MutationStage, ReestablishCause, RefusalCause,
     RetryableCause, TargetOrigin,
@@ -107,7 +108,7 @@ pub use chimera_core::client::reconciler::reestablish::{
 /// through source settlement; the ACK string is only its transaction-facing
 /// projection, as in ref.
 #[derive(Debug, Clone)]
-pub(crate) enum RuntimePrepareOutcome {
+pub enum RuntimePrepareOutcome {
     Applied(AppliedCandidate),
     Deferred {
         baseline: KnownRuntimeState,
@@ -120,11 +121,11 @@ pub(crate) enum RuntimePrepareOutcome {
         cause: ApplyFailure,
         restored: Option<KnownRuntimeState>,
     },
-    RecoveryRequired(Box<super::workflow::RecoveryContext>),
+    RecoveryRequired(Box<super::workflow_progress::RecoveryContext>),
 }
 
 impl RuntimePrepareOutcome {
-    pub(crate) fn ack(&self) -> TryAck {
+    pub fn ack(&self) -> TryAck {
         match self {
             Self::Applied(_) | Self::SavedInactive | Self::Saved => TryAck::Ok,
             Self::Deferred { cause, .. } => TryAck::Degraded(cause.message.clone()),
@@ -133,14 +134,14 @@ impl RuntimePrepareOutcome {
         }
     }
 
-    pub(crate) fn refusal(&self) -> Option<RefusalCause> {
+    pub fn refusal(&self) -> Option<RefusalCause> {
         match self {
             Self::Rejected { cause, .. } => Some(cause.cause),
             _ => None,
         }
     }
 
-    pub(crate) fn kind(&self) -> MutationOutcomeKind {
+    pub fn kind(&self) -> MutationOutcomeKind {
         match self {
             Self::Applied(_) => MutationOutcomeKind::Applied,
             Self::Deferred { .. } => MutationOutcomeKind::Deferred,
@@ -153,7 +154,7 @@ impl RuntimePrepareOutcome {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum MutationOutcomeKind {
+pub enum MutationOutcomeKind {
     Applied,
     Deferred,
     SavedInactive,
@@ -163,34 +164,34 @@ pub(crate) enum MutationOutcomeKind {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum MutationConclusion {
+pub enum MutationConclusion {
     Confirmed,
     Cancelled,
     Withdrawn,
     RecoveryRequired,
 }
 
-pub use chimera_core::client::reconciler::check_record::{CheckRecord, RuntimeCheckFailure};
+pub use crate::client::reconciler::check_record::{CheckRecord, RuntimeCheckFailure};
 
 /// Structured record for one Profile mutation, parallel to ref's
 /// `MutationReceipt`. Its public wire projection remains `CommitReceipt`.
 #[derive(Debug, Clone)]
-pub(crate) struct MutationReceipt {
-    pub(crate) degradations: Vec<Degradation>,
-    pub(crate) operation_id: OperationId,
-    pub(crate) domain: ConfigDomain,
-    pub(crate) impact: RuntimeImpact,
-    pub(crate) policy: CommandPolicy,
-    pub(crate) check: CheckRecord,
-    pub(crate) outcome: MutationOutcomeKind,
-    pub(crate) refusal: Option<RefusalCause>,
-    pub(crate) conclusion: MutationConclusion,
-    pub(crate) detail: Option<String>,
+pub struct MutationReceipt {
+    pub degradations: Vec<Degradation>,
+    pub operation_id: OperationId,
+    pub domain: ConfigDomain,
+    pub impact: RuntimeImpact,
+    pub policy: CommandPolicy,
+    pub check: CheckRecord,
+    pub outcome: MutationOutcomeKind,
+    pub refusal: Option<RefusalCause>,
+    pub conclusion: MutationConclusion,
+    pub detail: Option<String>,
 }
 
 impl MutationReceipt {
-    pub(crate) fn runtime_status(&self) -> crate::client::runtime::RuntimeCommitStatus {
-        use crate::client::runtime::RuntimeCommitStatus;
+    pub fn runtime_status(&self) -> chimera_contracts::runtime::RuntimeCommitStatus {
+        use chimera_contracts::runtime::RuntimeCommitStatus;
 
         match (self.conclusion, self.outcome) {
             (MutationConclusion::RecoveryRequired, _)
@@ -217,10 +218,9 @@ impl MutationReceipt {
 
 #[cfg(test)]
 mod tests {
+    use super::super::ports::RuntimeCheckOutcome;
     use super::*;
-    use crate::client::application_workflow::ports::{
-        RuntimeCheckOutcome, RuntimeCheckUnavailable,
-    };
+    use chimera_contracts::runtime_error::RuntimeCheckUnavailable;
 
     #[test]
     fn config_check_rejection_keeps_its_typed_verdict() {

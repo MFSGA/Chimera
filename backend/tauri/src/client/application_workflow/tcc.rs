@@ -88,8 +88,7 @@ impl ApplicationWorkflow {
         } else {
             match self.recover_previous(core).await {
                 Err(error) => {
-                    let context = self
-                        .recovery_required
+                    let context = self.progress.recovery_required
                         .lock()
                         .await
                         .clone()
@@ -106,11 +105,11 @@ impl ApplicationWorkflow {
                     RuntimePrepareOutcome::RecoveryRequired(Box::new(context))
                 }
                 Ok(()) => {
-                    self.live = Some(LiveAttempt::source_decision(
+                    self.progress.live = Some(LiveAttempt::source_decision(
                         operation_id,
                         request.decision.clone(),
                     ));
-                    self.advance_attempt(AttemptStage::Preparing);
+                    self.progress.advance_attempt(AttemptStage::Preparing);
                     self.prepare_candidate(
                         core,
                         &operation_id,
@@ -136,17 +135,18 @@ impl ApplicationWorkflow {
                 == chimera_core::actor_v2::endpoint::ExecutionHost::Local;
             let verdict = AppliedVerdict::new(candidate, releases_service);
             if let Some(attempt) = self
+                .progress
                 .live
                 .as_mut()
                 .filter(|attempt| attempt.operation_id == operation_id)
             {
                 attempt.target = Some(candidate.receipt.clone());
             }
-            self.record_attempt_verdict(&operation_id, verdict);
+            self.progress.record_attempt_verdict(&operation_id, verdict);
         }
         request.answer(outcome.ack());
         if !matches!(&outcome, RuntimePrepareOutcome::RecoveryRequired(_)) {
-            self.advance_attempt(AttemptStage::AwaitDecision);
+            self.progress.advance_attempt(AttemptStage::AwaitDecision);
         }
 
         let decision =
@@ -184,10 +184,12 @@ impl ApplicationWorkflow {
         let mut conclusion = MutationConclusion::Confirmed;
         let settlement = match decision {
             DecisionOutcome::Committed => {
-                self.advance_attempt_for(&operation_id, AttemptStage::Confirming);
+                self.progress
+                    .advance_attempt_for(&operation_id, AttemptStage::Confirming);
                 match &outcome {
                     RuntimePrepareOutcome::Applied(_) => {
                         let verdict = self
+                            .progress
                             .live
                             .as_ref()
                             .filter(|attempt| attempt.operation_id == operation_id)
@@ -245,7 +247,8 @@ impl ApplicationWorkflow {
                 }
             }
             DecisionOutcome::Aborted => {
-                self.advance_attempt_for(&operation_id, AttemptStage::Cancelling);
+                self.progress
+                    .advance_attempt_for(&operation_id, AttemptStage::Cancelling);
                 let target = match &outcome {
                     RuntimePrepareOutcome::Applied(candidate) => Some(candidate.receipt.clone()),
                     _ => None,
@@ -267,7 +270,7 @@ impl ApplicationWorkflow {
                         MutationConclusion::Withdrawn
                     }
                 } else {
-                    let context = self.recovery_required.lock().await.clone();
+                    let context = self.progress.recovery_required.lock().await.clone();
                     if let Some(context) = context {
                         outcome = RuntimePrepareOutcome::RecoveryRequired(Box::new(context));
                     }
@@ -276,7 +279,8 @@ impl ApplicationWorkflow {
                 result
             }
             DecisionOutcome::Unresolved(message) => {
-                self.advance_attempt_for(&operation_id, AttemptStage::AwaitDecision);
+                self.progress
+                    .advance_attempt_for(&operation_id, AttemptStage::AwaitDecision);
                 let target = match &outcome {
                     RuntimePrepareOutcome::Applied(candidate) => Some(candidate.receipt.clone()),
                     _ => None,
@@ -299,7 +303,7 @@ impl ApplicationWorkflow {
         if conclusion == MutationConclusion::Confirmed {
             match &outcome {
                 RuntimePrepareOutcome::Applied(_) | RuntimePrepareOutcome::SavedInactive => {
-                    self.deferred = None;
+                    self.progress.deferred = None;
                 }
                 RuntimePrepareOutcome::Deferred {
                     baseline,
@@ -307,6 +311,7 @@ impl ApplicationWorkflow {
                     cause,
                 } => {
                     let previous = self
+                        .progress
                         .deferred
                         .take()
                         .filter(|previous| previous.identity == *digest);
@@ -321,7 +326,7 @@ impl ApplicationWorkflow {
                             .and_then(|previous| previous.next_attempt)
                             .unwrap_or_else(|| tokio::time::Instant::now() + Duration::from_secs(1))
                     });
-                    self.deferred = Some(super::mutation::DeferredTarget {
+                    self.progress.deferred = Some(super::mutation::DeferredTarget {
                         operation_id: operation_id.clone(),
                         origin: super::mutation::TargetOrigin::Mutation,
                         identity: digest.clone(),
@@ -394,6 +399,7 @@ impl ApplicationWorkflow {
         request.settle(settlement.clone());
         if conclusion == MutationConclusion::RecoveryRequired {
             let reason = self
+                .progress
                 .live
                 .as_ref()
                 .and_then(|attempt| attempt.unresolved.clone())
@@ -403,7 +409,7 @@ impl ApplicationWorkflow {
         } else {
             self.conclude_attempt(None);
         }
-        self.publish_recovery_context().await;
+        self.progress.publish_recovery_context().await;
         (request_runtime_rebuild, settlement)
     }
 
@@ -506,10 +512,10 @@ impl ApplicationWorkflow {
         match &observed_baseline {
             KnownRuntimeState::Applied(_) => {
                 *baseline = Some(observed_baseline.clone());
-                self.record_attempt_baseline(&observed_baseline);
+                self.progress.record_attempt_baseline(&observed_baseline);
             }
             KnownRuntimeState::Stopped => {
-                self.record_attempt_baseline(&observed_baseline);
+                self.progress.record_attempt_baseline(&observed_baseline);
                 *policy = policy_for(
                     request.class,
                     impact,
@@ -597,7 +603,7 @@ impl ApplicationWorkflow {
         };
 
         *attempted_runtime = true;
-        self.advance_attempt(AttemptStage::TryingCritical);
+        self.progress.advance_attempt(AttemptStage::TryingCritical);
         match core.prepare_profile_runtime(inputs, operation_id).await {
             Ok((candidate, record)) => {
                 *check = record;
@@ -829,6 +835,7 @@ impl ApplicationWorkflow {
         current_target_reconciled: bool,
     ) -> anyhow::Result<()> {
         let Some(attempt) = self
+            .progress
             .live
             .as_ref()
             .filter(|attempt| attempt.unresolved.is_some())
@@ -861,7 +868,7 @@ impl ApplicationWorkflow {
             if let Some(decision) = source_decision
                 && let Err(error) = ensure_reconciled_source_decision(decision)
             {
-                self.publish_recovery_context().await;
+                self.progress.publish_recovery_context().await;
                 return Err(error);
             }
             let release_service = source_decision.is_some_and(|decision| {
@@ -878,7 +885,7 @@ impl ApplicationWorkflow {
                             "could not verify the current runtime before releasing Service: {error:#}"
                         );
                         self.conclude_attempt(Some(message.clone()));
-                        self.publish_recovery_context().await;
+                        self.progress.publish_recovery_context().await;
                         return Err(anyhow::anyhow!(message));
                     }
                 };
@@ -893,14 +900,14 @@ impl ApplicationWorkflow {
                         "Service owner release after current Profile reconciliation failed: {reason}"
                     );
                     self.conclude_attempt(Some(message.clone()));
-                    self.publish_recovery_context().await;
+                    self.progress.publish_recovery_context().await;
                     return Err(anyhow::anyhow!(message));
                 }
             }
             core.discard_profile_runtime(&attempt.operation_id).await;
-            self.live = None;
-            self.deferred = None;
-            self.publish_recovery_context().await;
+            self.progress.live = None;
+            self.progress.deferred = None;
+            self.progress.publish_recovery_context().await;
             return Ok(());
         }
         anyhow::ensure!(
@@ -911,11 +918,11 @@ impl ApplicationWorkflow {
             "a committed Profile target requires explicit runtime reconciliation before recovery"
         );
         if matches!(&attempt.origin, AttemptOrigin::Lifecycle) {
-            self.live = None;
-            self.publish_recovery_context().await;
+            self.progress.live = None;
+            self.progress.publish_recovery_context().await;
             return Ok(());
         }
-        self.advance_attempt(AttemptStage::Recovering);
+        self.progress.advance_attempt(AttemptStage::Recovering);
         let decision = match &attempt.origin {
             AttemptOrigin::SourceDecision { decision } => Some(decision),
             AttemptOrigin::CommittedTarget(target) => {
@@ -1000,15 +1007,16 @@ impl ApplicationWorkflow {
         if let Err(error) = recovery {
             let reason = format!("{error:#}");
             self.conclude_attempt(Some(reason));
-            self.publish_recovery_context().await;
+            self.progress.publish_recovery_context().await;
             return Err(error);
         }
 
         core.discard_profile_runtime(&attempt.operation_id).await;
-        if let Some(target) = self.live.take().and_then(LiveAttempt::into_target) {
-            self.deferred = Some(*target);
+        if let Some(target) = self.progress.live.take().and_then(LiveAttempt::into_target) {
+            self.progress.deferred = Some(*target);
         }
         if let Some(deferred) = self
+            .progress
             .deferred
             .as_mut()
             .filter(|deferred| deferred.is_mutation())
@@ -1016,7 +1024,7 @@ impl ApplicationWorkflow {
             deferred.health = crate::client::convergence::ConvergenceHealth::Blocked;
             deferred.next_attempt = None;
         }
-        self.publish_recovery_context().await;
+        self.progress.publish_recovery_context().await;
         Ok(())
     }
 
@@ -1030,8 +1038,8 @@ impl ApplicationWorkflow {
         core.confirm_profile_runtime(operation_id, applied.candidate())
             .await
             .context("could not publish the committed Profile runtime product")?;
-        self.deferred = None;
-        self.clear_startup_retry_target();
+        self.progress.deferred = None;
+        self.progress.clear_startup_retry_target();
         if let Some(notifications) = &self.notifications {
             notifications.runtime_bound(core.effect_port_binding().await, false);
         }

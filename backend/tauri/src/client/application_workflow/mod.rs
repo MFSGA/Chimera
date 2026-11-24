@@ -20,10 +20,10 @@ pub(crate) use workflow::RecoveryContext;
 pub(crate) mod attempt;
 pub(crate) use chimera_core::state::mutation::impact;
 pub(in crate::client) mod inputs;
-pub(crate) mod mutation;
+pub(crate) use chimera_core::client::reconciler::workflow_mutation as mutation;
 #[cfg(test)]
 pub(crate) mod participant;
-pub(crate) mod policy;
+pub(crate) use chimera_core::client::reconciler::mutation_policy as policy;
 pub(crate) mod ports;
 pub(in crate::client) mod profiles;
 pub(crate) mod startup;

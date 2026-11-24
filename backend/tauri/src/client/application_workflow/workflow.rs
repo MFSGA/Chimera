@@ -24,19 +24,7 @@ use super::{
 use crate::client::reconciler::inputs::RuntimeInputs;
 use crate::client::runtime::RuntimeApplyReceipt;
 
-/// What recovery needs to restore one Profile mutation after its source
-/// decision and runtime effect stopped agreeing.
-#[derive(Debug, Clone)]
-pub(crate) struct RecoveryContext {
-    pub(crate) operation_id: Option<OperationId>,
-    pub(crate) runtime_operation: Option<OperationId>,
-    pub(crate) domain: ConfigDomain,
-    pub(crate) stage: MutationStage,
-    pub(crate) decision: Option<DecisionHandle>,
-    pub(crate) baseline: Option<KnownRuntimeState>,
-    pub(crate) target: Option<Arc<RuntimeApplyReceipt>>,
-    pub(crate) error: String,
-}
+pub use chimera_core::client::reconciler::workflow_progress::RecoveryContext;
 
 #[async_trait::async_trait]
 pub(crate) trait ProfileRuntime: Send + Sync + 'static {
@@ -79,13 +67,8 @@ pub(crate) trait ProfileRuntime: Send + Sync + 'static {
 
 pub(in crate::client) struct ApplicationWorkflow {
     pub(super) outcomes: Arc<Mutex<HashMap<OperationId, MutationReceipt>>>,
-    pub(super) recovery_required: Arc<Mutex<Option<RecoveryContext>>>,
     pub(super) notifications: Option<Arc<dyn crate::client::effects::ports::CommitNotifications>>,
-    pub(super) deferred: Option<DeferredTarget>,
-    /// The attempt running now, or the last one that did not settle.
-    pub(super) live: Option<LiveAttempt>,
-    pub(super) startup_report: Option<StartupReport>,
-    pub(super) startup: StartupWorkflowState,
+    pub(super) progress: chimera_core::client::reconciler::workflow_progress::WorkflowProgress,
     /// Startup and Profile mutations share the application workflow actor;
     /// CoreLifecycleWorkflow adapts its existing runtime and Service ports.
     lifecycle: Option<Arc<CoreLifecycleWorkflow>>,
@@ -94,6 +77,74 @@ pub(in crate::client) struct ApplicationWorkflow {
 }
 
 impl ApplicationWorkflow {
+    pub(in crate::client) fn has_unresolved_attempt(&self) -> bool {
+        self.progress.has_unresolved_attempt()
+    }
+    pub(in crate::client) fn startup_owner_unproven(&self) -> bool {
+        self.progress.startup_owner_unproven()
+    }
+    pub(in crate::client) fn clear_startup_retry_target(&mut self) {
+        self.progress.clear_startup_retry_target()
+    }
+    pub(in crate::client) fn startup_report(&self) -> Option<StartupReport> {
+        self.progress.startup_report()
+    }
+    pub(in crate::client) fn startup_retry_schedule(
+        &self,
+    ) -> Option<(String, tokio::time::Instant)> {
+        self.progress.startup_retry_schedule()
+    }
+    pub(in crate::client) fn startup_retry_due(&self, identity: &str) -> bool {
+        self.progress.startup_retry_due(identity)
+    }
+    pub(in crate::client) fn begin_startup_retry(&mut self, identity: &str) -> bool {
+        self.progress.begin_startup_retry(identity)
+    }
+    pub(in crate::client) fn defer_startup_retry(&mut self, identity: &str, reason: String) {
+        self.progress.defer_startup_retry(identity, reason)
+    }
+    pub(in crate::client) fn deferred_retry(&self) -> Option<(String, tokio::time::Instant)> {
+        self.progress.deferred_retry()
+    }
+    pub(in crate::client) fn begin_deferred_retry(&mut self, digest: &str) -> bool {
+        self.progress.begin_deferred_retry(digest)
+    }
+    pub(in crate::client) async fn finish_deferred_retry(
+        &mut self,
+        digest: &str,
+        succeeded: bool,
+        retryable: bool,
+        waiting_dependency: bool,
+        uncertain: bool,
+        error: Option<String>,
+    ) -> Option<tokio::time::Instant> {
+        self.progress
+            .finish_deferred_retry(
+                digest,
+                succeeded,
+                retryable,
+                waiting_dependency,
+                uncertain,
+                error,
+            )
+            .await
+    }
+    pub(in crate::client) fn reschedule_deferred_retry(
+        &mut self,
+        digest: &str,
+        delay: std::time::Duration,
+    ) -> Option<tokio::time::Instant> {
+        self.progress.reschedule_deferred_retry(digest, delay)
+    }
+    pub(in crate::client) fn wait_for_deferred_dependency(&mut self, digest: &str) {
+        self.progress.wait_for_deferred_dependency(digest)
+    }
+    pub(in crate::client) fn runtime_reconciled(&mut self) {
+        self.progress.runtime_reconciled()
+    }
+    pub(in crate::client) async fn publish_recovery_context(&self) -> Option<RecoveryContext> {
+        self.progress.publish_recovery_context().await
+    }
     /// Ref's positive clearance rule consults the lower Core owner before
     /// releasing an attempt. A pure Workflow test has no lifecycle adapter.
     pub(super) fn lower_outcome_uncertain(&self) -> bool {
@@ -102,14 +153,8 @@ impl ApplicationWorkflow {
             .is_some_and(|lifecycle| lifecycle.outcome_uncertain())
     }
 
-    pub(in crate::client) fn has_unresolved_attempt(&self) -> bool {
-        self.live
-            .as_ref()
-            .is_some_and(|attempt| attempt.unresolved.is_some())
-    }
-
     pub(in crate::client) async fn service_endpoint_recovery_due(&self) -> bool {
-        if self.has_unresolved_attempt() {
+        if self.progress.has_unresolved_attempt() {
             return false;
         }
         let Some(lifecycle) = &self.lifecycle else {
@@ -137,7 +182,7 @@ impl ApplicationWorkflow {
         let operation_id = chimera_core_manager::OperationId::generate();
         let mut attempt = LiveAttempt::lifecycle(operation_id.clone());
         attempt.unresolved = Some("test runtime outcome is unresolved".into());
-        self.live = Some(attempt);
+        self.progress.live = Some(attempt);
         operation_id
     }
 
@@ -150,7 +195,7 @@ impl ApplicationWorkflow {
         let mut attempt = LiveAttempt::source_decision(operation_id.clone(), decision);
         attempt.stage = AttemptStage::AwaitDecision;
         attempt.unresolved = Some("test Profile source decision is unsettled".into());
-        self.live = Some(attempt);
+        self.progress.live = Some(attempt);
         operation_id
     }
 
@@ -162,7 +207,7 @@ impl ApplicationWorkflow {
         let operation_id = chimera_core_manager::OperationId::generate();
         let target_id = chimera_core_manager::OperationId::generate();
         let digest = "test-deferred-profile-target".to_owned();
-        self.deferred = Some(DeferredTarget {
+        self.progress.deferred = Some(DeferredTarget {
             operation_id: target_id,
             origin: TargetOrigin::Mutation,
             identity: digest.clone(),
@@ -184,8 +229,8 @@ impl ApplicationWorkflow {
         });
         let mut attempt = LiveAttempt::source_decision(operation_id.clone(), decision);
         attempt.unresolved = Some("test Profile source decision is unsettled".into());
-        self.live = Some(attempt);
-        assert!(self.begin_deferred_retry(&digest));
+        self.progress.live = Some(attempt);
+        assert!(self.progress.begin_deferred_retry(&digest));
         (operation_id, digest)
     }
 
@@ -221,7 +266,7 @@ impl ApplicationWorkflow {
         attempt.stage = AttemptStage::TryingCritical;
         attempt.baseline = Some(baseline);
         attempt.unresolved = Some("test committed Profile retry outcome is unresolved".into());
-        self.live = Some(attempt);
+        self.progress.live = Some(attempt);
         operation_id
     }
 
@@ -234,15 +279,18 @@ impl ApplicationWorkflow {
         Option<(u8, u32)>,
     ) {
         let attempt = self
+            .progress
             .live
             .as_ref()
             .map(|attempt| (attempt.operation_id.clone(), attempt.unresolved.is_some()));
         let retry_budget = self
+            .progress
             .deferred
             .as_ref()
             .filter(|target| target.is_mutation())
             .or_else(|| {
-                self.live
+                self.progress
+                    .live
                     .as_ref()
                     .and_then(|attempt| match &attempt.origin {
                         AttemptOrigin::CommittedTarget(target) if target.is_mutation() => {
@@ -254,64 +302,31 @@ impl ApplicationWorkflow {
                     })
             })
             .map(|target| (target.attempts_remaining, target.attempts));
-        (attempt, self.deferred_retry(), retry_budget)
+        (attempt, self.progress.deferred_retry(), retry_budget)
     }
 
     pub(in crate::client) fn recovery_command_allowed(&self, command: &CoreCommand) -> bool {
-        let Some(attempt) = self
-            .live
-            .as_ref()
-            .filter(|attempt| attempt.unresolved.is_some())
-        else {
-            return true;
-        };
-        if matches!(command, CoreCommand::CacheStartupUnsettled { .. })
-            || matches!(
-                command,
-                CoreCommand::PatchApplicationConfig {
-                    patch,
-                    service_connected,
-                    ..
-                } if !super::impact::application_patch_requires_reconcile(
-                    patch,
-                    *service_connected,
-                )
-            )
-        {
-            return true;
-        }
-        match &attempt.origin {
-            AttemptOrigin::SourceDecision { .. } => {
-                matches!(
-                    command,
-                    CoreCommand::RecoverCore
-                        | CoreCommand::Reconcile
-                        | CoreCommand::ReconcileSource
-                )
-            }
-            AttemptOrigin::CommittedTarget(target) if target.is_mutation() => {
-                matches!(
-                    command,
-                    CoreCommand::RecoverCore
-                        | CoreCommand::Reconcile
-                        | CoreCommand::ReconcileSource
-                )
-            }
-            AttemptOrigin::CommittedTarget(target)
-                if matches!(target.origin, TargetOrigin::Reestablish(_)) =>
+        use chimera_core::client::reconciler::workflow_progress::RecoveryCommand;
+        let command = match command {
+            CoreCommand::CacheStartupUnsettled { .. } => RecoveryCommand::SourceOnly,
+            CoreCommand::PatchApplicationConfig {
+                patch,
+                service_connected,
+                ..
+            } if !super::impact::application_patch_requires_reconcile(
+                patch,
+                *service_connected,
+            ) =>
             {
-                matches!(command, CoreCommand::RecoverStartup { .. })
+                RecoveryCommand::SourceOnly
             }
-            AttemptOrigin::Lifecycle => {
-                matches!(
-                    command,
-                    CoreCommand::RecoverCore
-                        | CoreCommand::Reconcile
-                        | CoreCommand::ReconcileSource
-                )
+            CoreCommand::RecoverCore | CoreCommand::Reconcile | CoreCommand::ReconcileSource => {
+                RecoveryCommand::RecoverRuntime
             }
-            AttemptOrigin::CommittedTarget(_) => false,
-        }
+            CoreCommand::RecoverStartup { .. } => RecoveryCommand::RecoverStartup,
+            _ => RecoveryCommand::Other,
+        };
+        self.progress.recovery_command_allowed(command)
     }
 
     pub(super) fn new(
@@ -321,12 +336,10 @@ impl ApplicationWorkflow {
     ) -> Self {
         Self {
             outcomes,
-            recovery_required,
             notifications,
-            deferred: None,
-            live: None,
-            startup_report: None,
-            startup: StartupWorkflowState::default(),
+            progress: chimera_core::client::reconciler::workflow_progress::WorkflowProgress::new(
+                recovery_required,
+            ),
             lifecycle: None,
             #[cfg(test)]
             mutation_connected: false,
@@ -336,15 +349,14 @@ impl ApplicationWorkflow {
     pub(in crate::client) fn with_lifecycle(lifecycle: CoreLifecycleWorkflow) -> Self {
         let startup =
             StartupWorkflowState::with_owner_signal(lifecycle.startup_owner_unproven_handle());
-        Self {
-            lifecycle: Some(Arc::new(lifecycle)),
-            startup,
-            ..Self::new(
-                Arc::new(Mutex::new(HashMap::new())),
-                Arc::new(Mutex::new(None)),
-                None,
-            )
-        }
+        let mut workflow = Self::new(
+            Arc::new(Mutex::new(HashMap::new())),
+            Arc::new(Mutex::new(None)),
+            None,
+        );
+        workflow.lifecycle = Some(Arc::new(lifecycle));
+        workflow.progress.startup = startup;
+        workflow
     }
 
     pub(in crate::client) fn lifecycle(&self) -> &CoreLifecycleWorkflow {
@@ -365,20 +377,6 @@ impl ApplicationWorkflow {
         self.mutation_connected
     }
 
-    pub(in crate::client) fn startup_owner_unproven(&self) -> bool {
-        self.startup.owner_unproven()
-    }
-
-    pub(in crate::client) fn clear_startup_retry_target(&mut self) {
-        if self
-            .deferred
-            .as_ref()
-            .is_some_and(DeferredTarget::is_reestablish)
-        {
-            self.deferred = None;
-        }
-    }
-
     #[cfg(test)]
     pub(crate) fn for_startup_retry_tests() -> Self {
         Self::new(
@@ -393,63 +391,20 @@ impl ApplicationWorkflow {
         &mut self,
         target: super::startup::StartupRetryTarget,
     ) {
-        self.deferred = Some(target.into());
+        self.progress.deferred = Some(target.into());
     }
 
     #[cfg(test)]
     pub(crate) fn startup_retry_target_for_tests(
         &self,
     ) -> Option<super::startup::StartupRetryTarget> {
-        self.deferred
+        self.progress
+            .deferred
             .as_ref()
             .filter(|target| target.is_reestablish())
             .cloned()
             .map(TryInto::try_into)
             .and_then(Result::ok)
-    }
-
-    pub(in crate::client) fn startup_report(&self) -> Option<StartupReport> {
-        self.startup_report.clone()
-    }
-
-    pub(in crate::client) fn startup_retry_schedule(
-        &self,
-    ) -> Option<(String, tokio::time::Instant)> {
-        self.deferred
-            .as_ref()
-            .filter(|target| target.is_reestablish())
-            .and_then(|target| {
-                target
-                    .next_attempt
-                    .map(|deadline| (target.identity.clone(), deadline))
-            })
-    }
-
-    pub(in crate::client) fn startup_retry_due(&self, identity: &str) -> bool {
-        self.deferred.as_ref().is_some_and(|target| {
-            target.is_reestablish()
-                && target.identity == identity
-                && target
-                    .next_attempt
-                    .is_some_and(|deadline| deadline <= tokio::time::Instant::now())
-                && target.attempts_remaining > 0
-        })
-    }
-
-    pub(in crate::client) fn begin_startup_retry(&mut self, identity: &str) -> bool {
-        self.deferred
-            .as_mut()
-            .is_some_and(|target| target.begin(identity, tokio::time::Instant::now()))
-    }
-
-    pub(in crate::client) fn defer_startup_retry(&mut self, identity: &str, reason: String) {
-        if let Some(target) = self
-            .deferred
-            .as_mut()
-            .filter(|target| target.is_reestablish() && target.identity == identity)
-        {
-            target.schedule_dependency(reason);
-        }
     }
 
     #[cfg(test)]
@@ -459,10 +414,10 @@ impl ApplicationWorkflow {
     ) -> anyhow::Result<()> {
         self.validate_mutation_connection(&workflow)?;
         self.outcomes = workflow.outcomes;
-        self.recovery_required = workflow.recovery_required;
+        self.progress.recovery_required = workflow.progress.recovery_required;
         self.notifications = workflow.notifications;
-        if workflow.deferred.is_some() {
-            self.deferred = workflow.deferred;
+        if workflow.progress.deferred.is_some() {
+            self.progress.deferred = workflow.progress.deferred;
         }
         self.mutation_connected = true;
         Ok(())
@@ -479,7 +434,7 @@ impl ApplicationWorkflow {
         if self.mutation_connected {
             anyhow::bail!("application workflow is already connected")
         }
-        if self.deferred.is_some() && workflow.deferred.is_some() {
+        if self.progress.deferred.is_some() && workflow.progress.deferred.is_some() {
             anyhow::bail!("startup and Profile workflows both have an outstanding deferred target")
         }
         Ok(())
@@ -489,14 +444,14 @@ impl ApplicationWorkflow {
     async fn recover_after_reconcile(&mut self, core: &dyn ProfileRuntime) -> anyhow::Result<()> {
         if let Some(operation_id) =
             chimera_core::client::reconciler::reestablish::reconciled_native_attempt(
-                self.live.as_ref(),
+                self.progress.live.as_ref(),
                 core.status().uncertain,
             )?
         {
             core.discard_profile_runtime(&operation_id).await;
-            self.live = None;
-            self.deferred = None;
-            self.publish_recovery_context().await;
+            self.progress.live = None;
+            self.progress.deferred = None;
+            self.progress.publish_recovery_context().await;
         }
         Ok(())
     }
@@ -553,7 +508,7 @@ impl ApplicationWorkflow {
                 Ok(false)
             }
             command @ (CoreCommand::Reconcile | CoreCommand::ReconcileSource)
-                if self.has_unresolved_attempt() =>
+                if self.progress.has_unresolved_attempt() =>
             {
                 // Preserve the original ref trigger when recovering a legacy
                 // committed target: explicit Retry is forced, whereas a
@@ -575,9 +530,9 @@ impl ApplicationWorkflow {
                 operation_id,
                 reason,
             } => {
-                if self.startup_report.is_none() {
-                    self.startup.mark_owner_unproven();
-                    self.startup_report = Some(StartupReport {
+                if self.progress.startup_report.is_none() {
+                    self.progress.startup.mark_owner_unproven();
+                    self.progress.startup_report = Some(StartupReport {
                         operation_id,
                         observation: None,
                         outcome: StartupOutcome::Unsettled {
@@ -604,14 +559,14 @@ impl ApplicationWorkflow {
                 );
                 let preserve_unresolved_attempt = (source_only_patch
                     || matches!(&command, CoreCommand::Shutdown))
-                    && self.has_unresolved_attempt();
+                    && self.progress.has_unresolved_attempt();
                 if !preserve_unresolved_attempt {
                     debug_assert!(
-                        self.live.is_none(),
+                        self.progress.live.is_none(),
                         "an unresolved attempt is never replaced"
                     );
-                    self.live = Some(LiveAttempt::lifecycle(OperationId::generate()));
-                    self.advance_attempt(AttemptStage::TryingCritical);
+                    self.progress.live = Some(LiveAttempt::lifecycle(OperationId::generate()));
+                    self.progress.advance_attempt(AttemptStage::TryingCritical);
                 }
                 let refresh_startup_retry_identity =
                     matches!(&command, CoreCommand::PatchApplicationConfig { .. });
@@ -687,18 +642,6 @@ impl ApplicationWorkflow {
         self.run_mutation(request, lifecycle.as_ref()).await
     }
 
-    pub(in crate::client) fn deferred_retry(&self) -> Option<(String, tokio::time::Instant)> {
-        self.deferred.as_ref().and_then(|deferred| {
-            (deferred.is_mutation())
-                .then(|| {
-                    deferred
-                        .next_attempt
-                        .map(|next_attempt| (deferred.identity.clone(), next_attempt))
-                })
-                .flatten()
-        })
-    }
-
     pub(in crate::client) fn runtime_bound(
         &self,
         ports: Option<chimera_config::runtime::executor::ResolvedPortBindings>,
@@ -708,141 +651,17 @@ impl ApplicationWorkflow {
         }
     }
 
-    pub(in crate::client) fn begin_deferred_retry(&mut self, digest: &str) -> bool {
-        let Some(deferred) = &mut self.deferred else {
-            return false;
-        };
-        if !deferred.is_mutation()
-            || deferred.identity != digest
-            || deferred.attempts_remaining == 0
-            || deferred.health != crate::client::convergence::ConvergenceHealth::RetryScheduled
-            || deferred
-                .next_attempt
-                .is_none_or(|next_attempt| next_attempt > tokio::time::Instant::now())
-        {
-            return false;
-        }
-        deferred.next_attempt = None;
-        deferred.health = crate::client::convergence::ConvergenceHealth::Pending;
-        true
-    }
-
-    pub(in crate::client) async fn finish_deferred_retry(
-        &mut self,
-        digest: &str,
-        succeeded: bool,
-        retryable: bool,
-        waiting_dependency: bool,
-        uncertain: bool,
-        error: Option<String>,
-    ) -> Option<tokio::time::Instant> {
-        let deferred = self.deferred.as_mut()?;
-        if !deferred.is_mutation() || deferred.identity != digest {
-            return None;
-        }
-        if succeeded {
-            self.deferred = None;
-            return None;
-        }
-        if let Some(error) = &error {
-            deferred.cause.message = error.clone();
-        }
-        if uncertain {
-            deferred.health = crate::client::convergence::ConvergenceHealth::RecoveryRequired;
-            deferred.next_attempt = None;
-            let target = self
-                .deferred
-                .take()
-                .expect("the mutation target remains available during retry completion");
-            let baseline = target
-                .mutation
-                .as_ref()
-                .expect("mutation deferred target carries its transaction context")
-                .baseline
-                .clone();
-            self.live = Some(LiveAttempt::committed_target(target.operation_id, target));
-            self.advance_attempt(AttemptStage::TryingCritical);
-            self.record_attempt_baseline(&baseline);
-            let reason = error.unwrap_or_else(|| {
-                "deferred Profile runtime retry has an uncertain outcome".into()
-            });
-            self.conclude_attempt(Some(reason));
-            self.publish_recovery_context().await;
-            return None;
-        }
-        if waiting_dependency {
-            deferred.health = crate::client::convergence::ConvergenceHealth::WaitingDependency;
-            let next_attempt = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
-            deferred.next_attempt = Some(next_attempt);
-            return Some(next_attempt);
-        }
-        if !retryable {
-            deferred.health = crate::client::convergence::ConvergenceHealth::Blocked;
-            deferred.next_attempt = None;
-            return None;
-        }
-        let mut budget = crate::client::convergence::RetryBudget {
-            remaining: deferred.attempts_remaining,
-            attempts: deferred.attempts,
-        };
-        let delay = budget.record_automatic_attempt();
-        deferred.attempts = budget.attempts;
-        deferred.attempts_remaining = budget.remaining;
-        if let Some(delay) = delay {
-            deferred.health = crate::client::convergence::ConvergenceHealth::RetryScheduled;
-            let next_attempt = tokio::time::Instant::now() + delay;
-            deferred.next_attempt = Some(next_attempt);
-            Some(next_attempt)
-        } else {
-            deferred.health = crate::client::convergence::ConvergenceHealth::Blocked;
-            deferred.next_attempt = None;
-            None
-        }
-    }
-
-    pub(in crate::client) fn reschedule_deferred_retry(
-        &mut self,
-        digest: &str,
-        delay: std::time::Duration,
-    ) -> Option<tokio::time::Instant> {
-        let deferred = self.deferred.as_mut()?;
-        if !deferred.is_mutation()
-            || deferred.identity != digest
-            || deferred.attempts_remaining == 0
-        {
-            return None;
-        }
-        let next_attempt = tokio::time::Instant::now() + delay;
-        deferred.health = crate::client::convergence::ConvergenceHealth::RetryScheduled;
-        deferred.next_attempt = Some(next_attempt);
-        Some(next_attempt)
-    }
-
-    pub(in crate::client) fn wait_for_deferred_dependency(&mut self, digest: &str) {
-        if let Some(deferred) = self
-            .deferred
-            .as_mut()
-            .filter(|deferred| deferred.is_mutation() && deferred.identity == digest)
-        {
-            deferred.health = crate::client::convergence::ConvergenceHealth::WaitingDependency;
-            deferred.next_attempt = None;
-        }
-    }
-
-    pub(in crate::client) fn runtime_reconciled(&mut self) {
-        self.deferred = None;
-    }
-
     pub(in crate::client) async fn mark_recovery_required(
         &mut self,
         message: String,
     ) -> RecoveryContext {
-        if self.live.is_some() {
+        if self.progress.live.is_some() {
             self.conclude_attempt(Some(message.clone()));
-            if let Some(context) = self.publish_recovery_context().await {
+            if let Some(context) = self.progress.publish_recovery_context().await {
                 return context;
             }
             let attempt = self
+                .progress
                 .live
                 .as_ref()
                 .expect("the unresolved attempt remains live");
@@ -867,7 +686,7 @@ impl ApplicationWorkflow {
             target: None,
             error: message,
         };
-        *self.recovery_required.lock().await = Some(context.clone());
+        *self.progress.recovery_required.lock().await = Some(context.clone());
         context
     }
 
@@ -882,62 +701,23 @@ impl ApplicationWorkflow {
         message: String,
     ) -> RecoveryContext {
         if self
+            .progress
             .live
             .as_ref()
             .is_none_or(|attempt| attempt.operation_id != operation_id)
         {
-            self.live = Some(LiveAttempt::source_decision(operation_id, decision));
+            self.progress.live = Some(LiveAttempt::source_decision(operation_id, decision));
         }
-        if let Some(attempt) = &mut self.live {
+        if let Some(attempt) = &mut self.progress.live {
             attempt.baseline = baseline;
             attempt.target = target;
             attempt.stage = stage.into();
         }
         self.conclude_attempt(Some(message));
-        self.publish_recovery_context()
+        self.progress
+            .publish_recovery_context()
             .await
             .expect("an unresolved live attempt has a recovery projection")
-    }
-
-    pub(in crate::client) async fn publish_recovery_context(&self) -> Option<RecoveryContext> {
-        let context = self.live.as_ref().and_then(|attempt| {
-            let error = attempt.unresolved.clone()?;
-            let (decision, domain, baseline) = match &attempt.origin {
-                AttemptOrigin::SourceDecision { decision } => (
-                    Some(decision.clone()),
-                    ConfigDomain::Profiles,
-                    attempt.baseline.clone(),
-                ),
-                AttemptOrigin::CommittedTarget(target) => {
-                    let mutation = target.mutation.as_ref()?;
-                    (
-                        Some(mutation.decision.clone()),
-                        mutation.domain,
-                        Some(mutation.baseline.clone()),
-                    )
-                }
-                AttemptOrigin::Lifecycle => return None,
-            };
-            Some(RecoveryContext {
-                operation_id: Some(attempt.operation_id),
-                runtime_operation: None,
-                domain,
-                stage: match attempt.stage {
-                    AttemptStage::Preparing => MutationStage::Preparing,
-                    AttemptStage::TryingCritical => MutationStage::TryingCritical,
-                    AttemptStage::AwaitDecision => MutationStage::AwaitDecision,
-                    AttemptStage::Confirming => MutationStage::Confirming,
-                    AttemptStage::Cancelling => MutationStage::Cancelling,
-                    AttemptStage::Recovering => MutationStage::TryingCritical,
-                },
-                decision,
-                baseline,
-                target: attempt.target.clone(),
-                error,
-            })
-        });
-        *self.recovery_required.lock().await = context.clone();
-        context
     }
 }
 

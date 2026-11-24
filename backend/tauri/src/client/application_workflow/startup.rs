@@ -31,7 +31,7 @@ impl ApplicationWorkflow {
         let lifecycle = self.lifecycle_handle();
         chimera_core::client::reconciler::startup_executor::StartupExecutor::new(
             lifecycle.as_ref(),
-            &self.startup,
+            &self.progress.startup,
         )
         .run(operation_id, allow_receipt_reuse)
         .await
@@ -39,8 +39,8 @@ impl ApplicationWorkflow {
 
     fn begin_reestablish_attempt(&mut self, cause: ReestablishCause) {
         chimera_core::client::reconciler::reestablish::begin_reestablish_attempt(
-            &mut self.live,
-            &mut self.deferred,
+            &mut self.progress.live,
+            &mut self.progress.deferred,
             cause,
         );
     }
@@ -53,8 +53,8 @@ impl ApplicationWorkflow {
         cause: ReestablishCause,
     ) -> StartupReport {
         let report = chimera_core::client::reconciler::reestablish::update_reestablish_attempt(
-            &mut self.live,
-            &mut self.deferred,
+            &mut self.progress.live,
+            &mut self.progress.deferred,
             || lifecycle.startup_target_identity(),
             || lifecycle.unresolved_startup_target_identity(),
             || lifecycle.outcome_uncertain(),
@@ -67,7 +67,7 @@ impl ApplicationWorkflow {
             &report.outcome,
             StartupOutcome::RecoveryRequired { .. } | StartupOutcome::Unsettled { .. }
         ) {
-            self.publish_recovery_context().await;
+            self.progress.publish_recovery_context().await;
         }
         report
     }
@@ -77,12 +77,12 @@ impl ApplicationWorkflow {
         operation_id: u64,
         _transition: Box<dyn ServiceTransitionLease>,
     ) -> StartupReport {
-        if let Some(report) = &self.startup_report {
+        if let Some(report) = &self.progress.startup_report {
             return report.clone();
         }
-        self.startup.mark_owner_unproven();
+        self.progress.startup.mark_owner_unproven();
         self.begin_reestablish_attempt(ReestablishCause::Startup);
-        if let Some(attempt) = &mut self.live {
+        if let Some(attempt) = &mut self.progress.live {
             attempt.stage = AttemptStage::TryingCritical;
         }
         let lifecycle = self.lifecycle_handle();
@@ -90,7 +90,7 @@ impl ApplicationWorkflow {
         let report = self
             .update_reestablish_attempt(&lifecycle, report, false, ReestablishCause::Startup)
             .await;
-        self.startup_report = Some(report.clone());
+        self.progress.startup_report = Some(report.clone());
         report
     }
 
@@ -99,9 +99,9 @@ impl ApplicationWorkflow {
         operation_id: u64,
         _transition: Box<dyn ServiceTransitionLease>,
     ) -> StartupReport {
-        self.startup.mark_owner_unproven();
+        self.progress.startup.mark_owner_unproven();
         self.begin_reestablish_attempt(ReestablishCause::Recovery);
-        if let Some(attempt) = &mut self.live {
+        if let Some(attempt) = &mut self.progress.live {
             attempt.stage = AttemptStage::Recovering;
         }
         let lifecycle = self.lifecycle_handle();
@@ -109,8 +109,8 @@ impl ApplicationWorkflow {
         let report = self
             .update_reestablish_attempt(&lifecycle, report, false, ReestablishCause::Recovery)
             .await;
-        if self.startup_report.is_none() {
-            self.startup_report = Some(report.clone());
+        if self.progress.startup_report.is_none() {
+            self.progress.startup_report = Some(report.clone());
         }
         report
     }
@@ -121,7 +121,7 @@ impl ApplicationWorkflow {
         identity: String,
         _transition: Box<dyn ServiceTransitionLease>,
     ) -> StartupReport {
-        let target = self.deferred.as_ref().filter(|target| {
+        let target = self.progress.deferred.as_ref().filter(|target| {
             target.is_reestablish()
                 && target.identity == identity
                 && target.health == ConvergenceHealth::Pending
@@ -138,9 +138,9 @@ impl ApplicationWorkflow {
         };
         let allow_receipt_reuse = target.allows_receipt_reuse();
 
-        self.startup.mark_owner_unproven();
+        self.progress.startup.mark_owner_unproven();
         self.begin_reestablish_attempt(cause);
-        if let Some(attempt) = &mut self.live {
+        if let Some(attempt) = &mut self.progress.live {
             attempt.stage = AttemptStage::TryingCritical;
         }
         let lifecycle = self.lifecycle_handle();
@@ -152,10 +152,13 @@ impl ApplicationWorkflow {
     }
 
     pub(in crate::client) async fn service_host_change_due(&self) -> bool {
-        if self.startup_report.is_none() || self.live.is_some() || self.startup.owner_unproven() {
+        if self.progress.startup_report.is_none()
+            || self.progress.live.is_some()
+            || self.progress.startup.owner_unproven()
+        {
             return false;
         }
-        if self.deferred.as_ref().is_some_and(|target| {
+        if self.progress.deferred.as_ref().is_some_and(|target| {
             target.is_reestablish()
                 && (matches!(
                     target.health,
@@ -169,7 +172,7 @@ impl ApplicationWorkflow {
         }
         chimera_core::client::reconciler::startup_executor::StartupExecutor::new(
             self.lifecycle(),
-            &self.startup,
+            &self.progress.startup,
         )
         .service_host_change_due()
         .await
@@ -183,9 +186,9 @@ impl ApplicationWorkflow {
         if !self.service_host_change_due().await {
             return Ok(());
         }
-        self.startup.mark_owner_unproven();
+        self.progress.startup.mark_owner_unproven();
         self.begin_reestablish_attempt(ReestablishCause::ServiceReadiness);
-        if let Some(attempt) = &mut self.live {
+        if let Some(attempt) = &mut self.progress.live {
             attempt.stage = AttemptStage::TryingCritical;
         }
         let lifecycle = self.lifecycle_handle();
@@ -207,6 +210,7 @@ impl ApplicationWorkflow {
         result: &anyhow::Result<()>,
     ) {
         let Some(target) = self
+            .progress
             .deferred
             .as_ref()
             .filter(|target| target.is_reestablish())
@@ -214,7 +218,7 @@ impl ApplicationWorkflow {
             return;
         };
         if result.is_ok() {
-            self.clear_startup_retry_target();
+            self.progress.clear_startup_retry_target();
             return;
         }
         let cause = match target.origin {
@@ -252,7 +256,8 @@ impl ApplicationWorkflow {
             observation: None,
             outcome,
         };
-        update_reestablish_target(lifecycle, report, false, cause, &mut self.deferred).await;
+        update_reestablish_target(lifecycle, report, false, cause, &mut self.progress.deferred)
+            .await;
     }
 
     pub(super) async fn reschedule_startup_retry_after_committed_config_patch(
@@ -260,7 +265,7 @@ impl ApplicationWorkflow {
         lifecycle: &CoreLifecycleWorkflow,
     ) {
         chimera_core::client::reconciler::reestablish::reschedule_after_source_commit(
-            &mut self.deferred,
+            &mut self.progress.deferred,
             || lifecycle.startup_target_identity(),
             || lifecycle.unresolved_startup_target_identity(),
         )

@@ -5,7 +5,7 @@
 //! critical part does not apply ([`CommandPolicy`]), and given what the Try
 //! actually reported, may the commit still go ahead ([`disposition`]).
 
-use super::impact::{ChangedOwnerInputs, RuntimeImpact};
+use crate::state::mutation::impact::{ChangedOwnerInputs, RuntimeImpact};
 
 /// What a command may do when the runtime part of it cannot be applied.
 ///
@@ -13,7 +13,7 @@ use super::impact::{ChangedOwnerInputs, RuntimeImpact};
 /// The frontend cannot pick it: a request must not be able to declare itself
 /// exempt from confirming that a core switch took effect.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum CommandPolicy {
+pub enum CommandPolicy {
     /// The target has to be confirmed in effect before the source config is
     /// committed. A refused elevation is a plain rejection, not a reason to
     /// keep prompting in the background.
@@ -48,7 +48,7 @@ impl CommandPolicy {
 /// its diff: asking for a specific core, host or profile to be running is a
 /// different promise from saving a value.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum CommandClass {
+pub enum CommandClass {
     /// `select_core`, `set_execution_host`, and profile activation or
     /// deactivation: the user named something that has to be running.
     ExplicitSwitch,
@@ -59,10 +59,10 @@ pub(crate) enum CommandClass {
     Save,
 }
 
-pub(crate) use chimera_core::client::runtime::CoreRunIntent;
+pub use crate::client::runtime::CoreRunIntent;
 
 /// The static policy for one candidate.
-pub(crate) fn policy_for(
+pub fn policy_for(
     class: CommandClass,
     impact: RuntimeImpact,
     peripheral: &ChangedOwnerInputs,
@@ -102,11 +102,11 @@ pub(crate) fn policy_for(
     }
 }
 
-pub use chimera_core::client::reconciler::check_record::TryCauseKind;
+pub use crate::client::reconciler::check_record::TryCauseKind;
 
 /// Whether the application knows what is running after the failure.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum BaselineAvailability {
+pub enum BaselineAvailability {
     /// A known-good runtime is still running, or the core is confirmed stopped.
     Known,
     /// The real state could not be confirmed. A backend that answers
@@ -116,7 +116,7 @@ pub(crate) enum BaselineAvailability {
 
 /// The typed facts a deferral decision may read.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct TryFailureFacts {
+pub struct TryFailureFacts {
     pub cause: TryCauseKind,
     pub baseline: BaselineAvailability,
     pub policy: CommandPolicy,
@@ -127,7 +127,7 @@ pub(crate) struct TryFailureFacts {
 
 /// What the commit decision may be after a critical Try failed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum FailureDisposition {
+pub enum FailureDisposition {
     /// Every condition holds: commit the new desired value and mark the target
     /// deferred. What is applied stays at the baseline.
     Deferrable,
@@ -142,7 +142,7 @@ pub(crate) enum FailureDisposition {
 ///
 /// Deferring means committing a value the core is not running, so it takes all
 /// the typed failure, safe baseline, command policy and valid candidate.
-pub(crate) fn disposition(facts: &TryFailureFacts) -> FailureDisposition {
+pub fn disposition(facts: &TryFailureFacts) -> FailureDisposition {
     // An unobserved outcome decides nothing: the candidate may already run.
     if facts.cause == TryCauseKind::Unknown {
         return FailureDisposition::RecoveryRequired;
