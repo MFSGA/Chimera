@@ -3363,6 +3363,16 @@ impl RuntimeReconcilerClient {
         }
     }
 
+    pub(crate) fn subscribe_reconciler(
+        &self,
+    ) -> Option<tokio::sync::watch::Receiver<ReconcilerStatus>> {
+        match self.0.as_ref() {
+            ClientInner::Actor { reconciler, .. } => Some(reconciler.clone()),
+            #[cfg(test)]
+            ClientInner::Direct { .. } => None,
+        }
+    }
+
     /// Ref-shaped outcome projection; unlike the legacy lifecycle status,
     /// this carries the last sampled source versions and runtime conclusion.
     pub(crate) fn reconciler_status(&self) -> ReconcilerStatus {

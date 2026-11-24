@@ -1,6 +1,8 @@
 //! Ref source convergence receipts. The ProfilesActor is their only writer.
 use super::convergence::ConvergenceHealth;
+pub use super::effects::plan::EffectKind;
 use chimera_config::profile::ProfileId;
+use serde::Serialize;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, specta::Type)]
 #[serde(rename_all = "snake_case")]
@@ -59,4 +61,90 @@ pub struct SourceStatus {
     pub health: ConvergenceHealth,
     /// Unix milliseconds.
     pub at: i64,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, specta::Type)]
+pub struct ConfigurationStatus {
+    pub event_seq: u64,
+    pub maintenance: Option<String>,
+    pub source_versions: SourceVersions,
+    pub runtime: RuntimeConvergence,
+    pub effects: Vec<EffectConvergence>,
+    /// The latest background-source receipt per profile.
+    pub sources: Vec<SourceStatus>,
+    pub active: Option<String>,
+    pub recent_operations: Vec<OperationStatus>,
+}
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, specta::Type)]
+pub struct SourceVersions {
+    pub application: u64,
+    pub clash: u64,
+    pub session: u64,
+    pub profiles: u64,
+}
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, specta::Type)]
+pub struct RuntimeConvergence {
+    pub health: ConvergenceHealth,
+    pub operation_id: Option<String>,
+    pub message: Option<String>,
+}
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, specta::Type)]
+pub struct EffectConvergence {
+    pub kind: EffectKind,
+    pub health: ConvergenceHealth,
+    pub desired_revision: u64,
+    pub applied_revision: u64,
+    pub attempts: u32,
+    pub automatic_remaining: u8,
+    /// What kind of failure the effect is in, for the UI to localize.
+    pub code: Option<EffectFailureCode>,
+    /// The failure's diagnostic text, as the owner reported it.
+    pub message: Option<String>,
+}
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, specta::Type)]
+pub struct OperationStatus {
+    pub operation_id: String,
+    pub domain: String,
+    pub outcome: String,
+    pub message: Option<String>,
+}
+
+/// Why an effect is not in its desired state, in the terms the UI localizes.
+///
+/// One value per kind of failure, named after the effect that failed, or
+/// after the capability a shell lacks when several effects share it. The
+/// owner that classifies a failure is the one that picks the code; the
+/// message beside it is only the diagnostic text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, serde::Deserialize, specta::Type)]
+#[serde(rename_all = "snake_case")]
+pub enum EffectFailureCode {
+    Other,
+    PresentationUnsupported,
+    HotkeyInvalidBindings,
+    HotkeyPartialRegistration,
+    HotkeyShutDown,
+    HotkeyStopped,
+    LoggerRefreshFailed,
+    CoreLogStorageFailed,
+    TransparentProxyFailed,
+    WidgetUnavailable,
+    WidgetApplyFailed,
+    TrayRefreshFailed,
+    EffectOwnerSilent,
+    ProxyGuardWaitingDependency,
+    AutoLaunchFailed,
+    PacDisableFailed,
+    PacApplyFailed,
+    PacUnsupported,
+    SystemProxyApplyFailed,
+    SystemProxyPortUnresolved,
+    SystemProxyRestoreFailed,
+    SystemProxyShutDown,
+    SystemProxyStopped,
+}
+
+impl EffectFailureCode {
+    pub fn from_owner_code(code: &str) -> Self {
+        serde_json::from_value(serde_json::Value::String(code.into())).unwrap_or(Self::Other)
+    }
 }

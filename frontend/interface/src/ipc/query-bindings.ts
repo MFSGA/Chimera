@@ -19,6 +19,16 @@ import {
  * only, so keep typed query metadata outside generated bindings.
  */
 export const queries = {
+  getConfigurationStatus: () =>
+    queryOptions({
+      queryKey: ['getConfigurationStatus'],
+      queryFn: () => commands.getConfigurationStatus(),
+    }),
+  getConfigurationStatusSummary: () =>
+    queryOptions({
+      queryKey: ['getConfigurationStatusSummary'],
+      queryFn: () => commands.getConfigurationStatusSummary(),
+    }),
   getConfigFeatures: () =>
     queryOptions({
       queryKey: ['getConfigFeatures'],

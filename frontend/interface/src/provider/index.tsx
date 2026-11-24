@@ -107,3 +107,9 @@ const ConnectionDetailsBridge = ({ children }: PropsWithChildren) => {
 };
 
 export { useClashWSContext, useClashConnectionDetails };
+
+export {
+  ConfigurationStatusProvider,
+  useConfigurationStatus,
+  CONFIGURATION_STATUS_QUERY_KEY,
+} from './configuration-status-provider';

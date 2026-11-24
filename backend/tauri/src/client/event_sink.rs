@@ -29,7 +29,19 @@ pub struct StateChangedEvent(pub StateChanged);
 #[serde(transparent)]
 pub struct CoreStatusChangedEvent(pub chimera_core::actor_v2::router::CoreStatusInfo);
 
+#[derive(Debug, Clone, serde::Serialize, specta::Type, tauri_specta::Event)]
+#[serde(transparent)]
+pub struct ConfigurationStatusSummaryChanged(
+    pub chimera_core::client::configuration_observation::ConfigurationStatusSummary,
+);
+
 pub(crate) trait UiEventSink: Send + Sync + 'static {
+    fn configuration_status_summary_changed(
+        &self,
+        _status: chimera_core::client::configuration_observation::ConfigurationStatusSummary,
+    ) {
+    }
+
     fn core_status_changed(&self, _status: chimera_core::actor_v2::router::CoreStatusInfo) {}
 
     fn state_changed(&self, state: StateChanged) {
@@ -106,6 +118,13 @@ impl<R: Runtime> TauriUiEventSink<R> {
 }
 
 impl<R: Runtime> UiEventSink for TauriUiEventSink<R> {
+    fn configuration_status_summary_changed(
+        &self,
+        status: chimera_core::client::configuration_observation::ConfigurationStatusSummary,
+    ) {
+        crate::log_err!(ConfigurationStatusSummaryChanged(status).emit(&self.app_handle));
+    }
+
     fn core_status_changed(&self, status: chimera_core::actor_v2::router::CoreStatusInfo) {
         crate::log_err!(CoreStatusChangedEvent(status).emit(&self.app_handle));
     }

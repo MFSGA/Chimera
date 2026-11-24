@@ -1,0 +1,199 @@
+import {
+  useMutation,
+  useMutationState,
+  useQuery,
+  useQueryClient,
+} from '@tanstack/react-query';
+import {
+  createContext,
+  useContext,
+  useEffect,
+  type PropsWithChildren,
+} from 'react';
+import {
+  commands,
+  events,
+  type ConfigurationStatusSummary,
+  type EffectKind,
+} from '../ipc/bindings';
+import { acceptConfigurationStatus } from '../ipc/configuration-status';
+import { queries } from '../ipc/query-bindings';
+import {
+  invokeMutation,
+  invokeQuery,
+  MutationUnconfirmedError,
+} from '../ipc/query-options';
+import { unwrapResult } from '../utils';
+
+export const CONFIGURATION_STATUS_QUERY_KEY = [
+  'getConfigurationStatusSummary',
+] as const;
+
+type ConfigurationStatusContextValue = {
+  status: ConfigurationStatusSummary | undefined;
+  isLoading: boolean;
+  isError: boolean;
+  error: unknown;
+  refetch: () => Promise<unknown>;
+  retryRuntime: () => Promise<void>;
+  retryEffect: (kind: EffectKind) => Promise<void>;
+  isRetrying: boolean;
+  retryError: unknown;
+  isLatestOperationUnconfirmed: boolean;
+};
+
+const CONFIGURATION_MUTATIONS = new Set<unknown>([
+  'patchAppConfig',
+  'patchSystemSettings',
+  'patchClashConfig',
+  'patchClashSystemConfig',
+  'patchRuntimeOverrides',
+  'patchRuntimeAccess',
+  'setProxyMode',
+  'changeClashCore',
+  'setHotkeys',
+  'setServiceMode',
+  'createProfile',
+  'updateProfile',
+  'patchProfileMetadata',
+  'patchRemoteProfileOptions',
+  'replaceProfileDefinition',
+  'activateProfile',
+  'setProfileValidFields',
+  'reorderProfilesByList',
+  'deleteProfile',
+  'saveProfileFile',
+]);
+
+const ConfigurationStatusContext =
+  createContext<ConfigurationStatusContextValue | null>(null);
+
+/**
+ * Shares configuration health polling and events for a mounted dashboard,
+ * from the safe summary: diagnostic text is only a flag here.
+ */
+export function ConfigurationStatusProvider({
+  enabled = true,
+  children,
+}: PropsWithChildren<{ enabled?: boolean }>) {
+  const queryClient = useQueryClient();
+
+  const statusOptions = queries.getConfigurationStatusSummary();
+  const query = useQuery({
+    queryKey: statusOptions.queryKey,
+    enabled,
+    queryFn: async () =>
+      acceptConfigurationStatus(
+        queryClient.getQueryData<ConfigurationStatusSummary>(
+          CONFIGURATION_STATUS_QUERY_KEY,
+        ),
+        await invokeQuery(statusOptions),
+      ),
+    structuralSharing: (previous, next) =>
+      acceptConfigurationStatus(
+        previous as ConfigurationStatusSummary | undefined,
+        next as ConfigurationStatusSummary,
+      ),
+    refetchInterval: enabled ? 10_000 : false,
+  });
+
+  useEffect(() => {
+    if (!enabled) return;
+
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    events.configurationStatusSummaryChanged
+      .listen((event) =>
+        queryClient.setQueryData<ConfigurationStatusSummary>(
+          CONFIGURATION_STATUS_QUERY_KEY,
+          (previous) => acceptConfigurationStatus(previous, event.payload),
+        ),
+      )
+      .then((stop) => {
+        if (disposed) stop();
+        else unlisten = stop;
+      })
+      .catch((error: unknown) => {
+        if (!disposed) {
+          console.error('failed to subscribe to configuration status:', error);
+        }
+      });
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, [enabled, queryClient]);
+
+  const retry = useMutation({
+    mutationFn: async (kind: EffectKind | undefined) =>
+      unwrapResult(
+        await invokeMutation(
+          {
+            mutationFn: () =>
+              kind
+                ? commands.retryConfigurationEffect(kind)
+                : commands.retryConfigurationRuntime(),
+          },
+          undefined,
+        ),
+      ),
+    onSuccess: () =>
+      queryClient.invalidateQueries({
+        queryKey: CONFIGURATION_STATUS_QUERY_KEY,
+      }),
+    onError: async (error) => {
+      if (error instanceof MutationUnconfirmedError) await query.refetch();
+    },
+  });
+  const configurationMutations = useMutationState({
+    filters: {
+      predicate: (mutation) =>
+        CONFIGURATION_MUTATIONS.has(mutation.options.mutationKey?.[0]),
+    },
+    select: (mutation) => mutation.state,
+  });
+  let latestMutation: (typeof configurationMutations)[number] | undefined;
+  for (const mutation of configurationMutations) {
+    if (!latestMutation || mutation.submittedAt > latestMutation.submittedAt) {
+      latestMutation = mutation;
+    }
+  }
+
+  const value: ConfigurationStatusContextValue = {
+    status: query.data,
+    isLoading: query.isLoading,
+    isError: query.isError,
+    error: query.error,
+    refetch: async () => {
+      const result = await query.refetch();
+      if (!result.isError) retry.reset();
+      return result;
+    },
+    retryRuntime: async () => {
+      await retry.mutateAsync(undefined);
+    },
+    retryEffect: async (kind) => {
+      await retry.mutateAsync(kind);
+    },
+    isRetrying: retry.isPending,
+    retryError: retry.error,
+    isLatestOperationUnconfirmed:
+      latestMutation?.error instanceof MutationUnconfirmedError,
+  };
+
+  return (
+    <ConfigurationStatusContext.Provider value={value}>
+      {children}
+    </ConfigurationStatusContext.Provider>
+  );
+}
+
+export function useConfigurationStatus() {
+  const value = useContext(ConfigurationStatusContext);
+  if (!value) {
+    throw new Error(
+      'useConfigurationStatus must be used within a ConfigurationStatusProvider',
+    );
+  }
+  return value;
+}

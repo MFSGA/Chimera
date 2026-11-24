@@ -14,6 +14,19 @@ export const commands = {
     typedError<ProfileDocument_Serialize, string>(
       __TAURI_INVOKE('get_profiles'),
     ),
+  /**  Detailed read for the trusted local desktop, not the broadcast event. */
+  getConfigurationStatus: () =>
+    __TAURI_INVOKE<ConfigurationStatus>('get_configuration_status'),
+  getConfigurationStatusSummary: () =>
+    __TAURI_INVOKE<ConfigurationStatusSummary>(
+      'get_configuration_status_summary',
+    ),
+  retryConfigurationRuntime: () =>
+    typedError<null, string>(__TAURI_INVOKE('retry_configuration_runtime')),
+  retryConfigurationEffect: (kind: EffectKind) =>
+    typedError<null, string>(
+      __TAURI_INVOKE('retry_configuration_effect', { kind }),
+    ),
   getProfileSyncStatus: (uid: string) =>
     typedError<ProfileSyncStatus, string>(
       __TAURI_INVOKE('get_profile_sync_status', { uid }),
@@ -760,6 +773,10 @@ export const events = {
     'clash-connections-event',
   ),
   clashWsEvent: makeEvent<ClashWsEvent>('clash-ws-event'),
+  configurationStatusSummaryChanged:
+    makeEvent<ConfigurationStatusSummaryChanged>(
+      'configuration-status-summary-changed',
+    ),
   coreLogsChangedEvent: makeEvent<CoreLogsChangedEvent>(
     'core-logs-changed-event',
   ),
@@ -1933,6 +1950,34 @@ export type ConfigRevisionInfo = {
   effective_hash: string;
 };
 
+export type ConfigurationStatus = {
+  event_seq: number;
+  maintenance: string | null;
+  source_versions: SourceVersions;
+  runtime: RuntimeConvergence;
+  effects: EffectConvergence[];
+  /**  The latest background-source receipt per profile. */
+  sources: SourceStatus[];
+  active: string | null;
+  recent_operations: OperationStatus[];
+};
+
+/**  The secret-free view of [`ConfigurationStatus`]. */
+export type ConfigurationStatusSummary = {
+  event_seq: number;
+  /**  A maintenance operation is running. Its description is diagnostic text. */
+  maintenance_active: boolean;
+  source_versions: SourceVersions;
+  runtime: RuntimeConvergenceSummary;
+  effects: EffectConvergenceSummary[];
+  /**  The latest background-source receipt per profile, without the profile's name. */
+  sources: SourceSummary[];
+  active: string | null;
+  recent_operations: OperationSummary[];
+};
+
+export type ConfigurationStatusSummaryChanged = ConfigurationStatusSummary;
+
 export type Connection = Connection_Serialize | Connection_Deserialize;
 
 export type ConnectionMetadata =
@@ -2583,6 +2628,80 @@ export type DownloaderState =
   'idle' | 'downloading' | { failed: string } | 'finished';
 
 export type EditorWindowType = 'profile' | 'css-editor';
+
+export type EffectConvergence = {
+  kind: EffectKind;
+  health: ConvergenceHealth;
+  desired_revision: number;
+  applied_revision: number;
+  attempts: number;
+  automatic_remaining: number;
+  /**  What kind of failure the effect is in, for the UI to localize. */
+  code: EffectFailureCode | null;
+  /**  The failure's diagnostic text, as the owner reported it. */
+  message: string | null;
+};
+
+export type EffectConvergenceSummary = {
+  kind: EffectKind;
+  health: ConvergenceHealth;
+  desired_revision: number;
+  applied_revision: number;
+  attempts: number;
+  automatic_remaining: number;
+  code: EffectFailureCode | null;
+  has_diagnostic: boolean;
+};
+
+/**
+ *  Why an effect is not in its desired state, in the terms the UI localizes.
+ *
+ *  One value per kind of failure, named after the effect that failed, or
+ *  after the capability a shell lacks when several effects share it. The
+ *  owner that classifies a failure is the one that picks the code; the
+ *  message beside it is only the diagnostic text.
+ */
+export type EffectFailureCode =
+  | 'other'
+  | 'presentation_unsupported'
+  | 'hotkey_invalid_bindings'
+  | 'hotkey_partial_registration'
+  | 'hotkey_shut_down'
+  | 'hotkey_stopped'
+  | 'logger_refresh_failed'
+  | 'core_log_storage_failed'
+  | 'transparent_proxy_failed'
+  | 'widget_unavailable'
+  | 'widget_apply_failed'
+  | 'tray_refresh_failed'
+  | 'effect_owner_silent'
+  | 'proxy_guard_waiting_dependency'
+  | 'auto_launch_failed'
+  | 'pac_disable_failed'
+  | 'pac_apply_failed'
+  | 'pac_unsupported'
+  | 'system_proxy_apply_failed'
+  | 'system_proxy_port_unresolved'
+  | 'system_proxy_restore_failed'
+  | 'system_proxy_shut_down'
+  | 'system_proxy_stopped';
+
+/**
+ *  Execution order of a plan. The ordering is load-bearing: the tray menu is
+ *  rendered with the process-wide locale, and the proxy guard re-applies the
+ *  system proxy value that the `SystemProxy` effect just installed.
+ */
+export type EffectKind =
+  | 'locale'
+  | 'logger'
+  | 'core_log_storage'
+  | 'auto_launch'
+  | 'system_proxy'
+  | 'proxy_guard'
+  | 'transparent_proxy'
+  | 'hotkeys'
+  | 'widget'
+  | 'tray';
 
 export type EgressAddress = {
   address: string;
@@ -3336,6 +3455,21 @@ export type OneOrMany = string | string[];
 export type OpenLogs = {
   request_id: string;
   file: string | null;
+};
+
+export type OperationStatus = {
+  operation_id: string;
+  domain: string;
+  outcome: string;
+  message: string | null;
+};
+
+/**  One settled mutation. `domain` and `outcome` name variants of closed enums. */
+export type OperationSummary = {
+  operation_id: string;
+  domain: string;
+  outcome: string;
+  has_diagnostic: boolean;
 };
 
 /**  The pipeline operator that produced a snapshot node. */
@@ -4149,6 +4283,19 @@ export type RuntimeCommitStatus =
   /**  Chimera's durable recovery-required state. */
   | 'recovery_required';
 
+export type RuntimeConvergence = {
+  health: ConvergenceHealth;
+  operation_id: string | null;
+  message: string | null;
+};
+
+export type RuntimeConvergenceSummary = {
+  health: ConvergenceHealth;
+  operation_id: string | null;
+  /**  The owner reported diagnostic text, available to protected callers. */
+  has_diagnostic: boolean;
+};
+
 export type RuntimeInfos = {
   service_data_dir: string;
   service_config_dir: string;
@@ -4305,6 +4452,19 @@ export type SourceOutcome =
    */
   | { kind: 'rejected'; code: string; message: string };
 
+export type SourceOutcomeSummary =
+  | { kind: 'committed'; operation_id: string | null }
+  | { kind: 'superseded' }
+  | { kind: 'failed' }
+  | { kind: 'rejected'; code: SourceRejection };
+
+/**  The refusal reason a source receipt names, from the closed set the source owner raises. */
+export type SourceRejection =
+  | 'subscription_rejected'
+  | 'external_source_rejected'
+  /**  A code this build does not classify; never read as success. */
+  | 'other';
+
 export type SourceStatus = {
   profile: ProfileId;
   name: string;
@@ -4313,6 +4473,22 @@ export type SourceStatus = {
   health: ConvergenceHealth;
   /**  Unix milliseconds. */
   at: number;
+};
+
+export type SourceSummary = {
+  profile: ProfileId;
+  origin: SourceOrigin;
+  outcome: SourceOutcomeSummary;
+  health: ConvergenceHealth;
+  /**  Unix milliseconds. */
+  at: number;
+};
+
+export type SourceVersions = {
+  application: number;
+  clash: number;
+  session: number;
+  profiles: number;
 };
 
 export type StateChanged =

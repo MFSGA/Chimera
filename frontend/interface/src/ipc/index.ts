@@ -73,3 +73,5 @@ export const getCustomAppDir = commands.getCustomAppDir;
 export const setCustomAppDir = commands.setCustomAppDir;
 
 export * from './use-file-logs';
+
+export * from './configuration-status';

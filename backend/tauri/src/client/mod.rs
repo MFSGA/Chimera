@@ -8,6 +8,7 @@ mod application;
 pub(crate) mod application_workflow;
 mod clash_api;
 mod clash_config;
+mod configuration_status;
 pub mod convergence;
 mod core_events;
 pub(crate) mod core_lifecycle;
@@ -506,6 +507,10 @@ impl ChimeraClient {
         anyhow::ensure!(
             tauri::async_runtime::block_on(async { client.start_core_status_observer() }),
             "client shutdown began before its CoreActor observer was registered"
+        );
+        anyhow::ensure!(
+            tauri::async_runtime::block_on(async { client.start_configuration_status_observer() }),
+            "client shutdown began before its configuration observer was registered"
         );
         Ok(client)
     }

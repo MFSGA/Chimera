@@ -42,3 +42,6 @@ pub mod profiles;
 pub mod effects;
 
 pub mod configuration;
+
+pub mod configuration_observation;
+pub mod configuration_status;

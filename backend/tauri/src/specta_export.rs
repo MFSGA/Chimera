@@ -24,6 +24,10 @@ macro_rules! build_builder {
                 crate::greet,
                 crate::ipc::get_sys_proxy,
                 crate::ipc::get_profiles,
+                crate::ipc::get_configuration_status,
+                crate::ipc::get_configuration_status_summary,
+                crate::ipc::retry_configuration_runtime,
+                crate::ipc::retry_configuration_effect,
                 crate::ipc::get_profile_sync_status,
                 crate::ipc::get_profile_sync_status_summary,
                 crate::ipc::get_profile_sync_runs,
@@ -182,6 +186,7 @@ macro_rules! build_builder {
             .events(collect_events![
                 crate::client::event_sink::StateChangedEvent,
                 crate::client::event_sink::CoreStatusChangedEvent,
+                crate::client::event_sink::ConfigurationStatusSummaryChanged,
                 crate::adapters::events::AppUpdateStateChanged,
                 crate::core::storage::StorageValueChangedEvent,
                 crate::core::storage::StorageResyncEvent,

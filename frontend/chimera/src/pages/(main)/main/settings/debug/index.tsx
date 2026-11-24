@@ -10,6 +10,7 @@ import {
 } from '../_modules/settings-card';
 import AdvanceToolsSwitch from './_modules/advance-tools-switch';
 import BlockTaskViewer from './_modules/block-task-viewer';
+import ConfigurationStatus from './_modules/configuration-status';
 import { useDebugContext } from './_modules/debug-provider';
 import KVStorage from './_modules/kv-storage';
 import PathUtilsCard from './_modules/path-utils-card';
@@ -67,6 +68,8 @@ function RouteComponent() {
 
       <div className="space-y-4 px-4 pb-4">
         <PathUtilsSettings />
+
+        <ConfigurationStatus />
 
         <AdvanceToolsSettings />
       </div>

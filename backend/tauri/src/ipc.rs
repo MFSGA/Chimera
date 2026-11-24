@@ -150,6 +150,38 @@ pub async fn get_profiles(
     Ok((*profiles).clone())
 }
 
+/// Detailed read for the trusted local desktop, not the broadcast event.
+#[tauri::command]
+#[specta::specta]
+pub fn get_configuration_status(
+    client: State<'_, ChimeraClient>,
+) -> chimera_core::client::configuration::ConfigurationStatus {
+    client.configuration_status()
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn get_configuration_status_summary(
+    client: State<'_, ChimeraClient>,
+) -> chimera_core::client::configuration_observation::ConfigurationStatusSummary {
+    (&client.configuration_status()).into()
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn retry_configuration_runtime(client: State<'_, ChimeraClient>) -> Result<()> {
+    Ok(client.retry_configuration_runtime().await?)
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn retry_configuration_effect(
+    client: State<'_, ChimeraClient>,
+    kind: chimera_core::client::configuration::EffectKind,
+) -> Result<()> {
+    Ok(client.retry_configuration_effect(kind)?)
+}
+
 #[tauri::command]
 #[specta::specta]
 pub async fn get_profile_sync_status(
