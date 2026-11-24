@@ -21,12 +21,13 @@ use crate::client::reconciler::{
     committed::{SourceDomain, SourceVersions},
     release::ReleaseObservation,
     status::ReconcilerStatus,
-    workflow::{
-        RuntimeAdmission, RuntimeReconcilerState, committed_target_advanced, runtime_trigger,
-        source_committed_during_round,
-    },
+    workflow::{RuntimeAdmission, RuntimeReconcilerState, runtime_trigger},
 };
 use chimera_core::client::reconciler::{
+    completion::{
+        CompletionFence, HandoffContinuation, RebuildAction, checked_clash_notice,
+        rebuild_after_completion, refresh_effect_ports,
+    },
     plan::RunIntent,
     source_dispatch::{SourceAction, SourceDispatch, SourceDispatchFacts},
 };
@@ -62,36 +63,6 @@ type OperationId = u64;
 pub(in crate::client) struct CompletedLifecycleOperation {
     pub(in crate::client) result: anyhow::Result<()>,
     pub(in crate::client) report: StartupReport,
-}
-
-/// An obsolete Checked apply can have changed the actual Core process while
-/// another Source committed. Do not publish its stale port binding as the
-/// current desired Effects state; the sole Actor must first reconcile latest.
-/// Service/Shutdown observations remain independent of runtime convergence.
-fn refresh_effect_ports(
-    reconciled: bool,
-    service_observed: bool,
-    shutdown: bool,
-    source_advanced: bool,
-) -> bool {
-    (service_observed || shutdown) || (reconciled && !source_advanced)
-}
-
-fn checked_clash_notice(
-    checked_clash: bool,
-    result: &anyhow::Result<()>,
-    verified_running: bool,
-) -> Option<Result<(), String>> {
-    checked_clash.then(|| {
-        result
-            .as_ref()
-            .map_err(|error| format!("{error:#}"))
-            .and_then(|_| {
-                verified_running.then_some(()).ok_or_else(|| {
-                    "Clash source committed, but active Core apply was not verified".into()
-                })
-            })
-    })
 }
 
 fn completed_from_startup_report(report: StartupReport) -> CompletedLifecycleOperation {
@@ -1628,39 +1599,24 @@ impl Actor for RuntimeReconcilerActor {
                 reconciled,
             } => {
                 if state.active.as_ref().map(|operation| operation.response.id) == Some(id) {
-                    // Source messages can be handled between the worker's
-                    // final authoritative read and this completion. Detect
-                    // that queued notification race *before* settling Effects
-                    // or claiming latest-source convergence.
-                    let superseded_in_mailbox = state.active.as_ref().is_some_and(|active| {
-                        source_committed_during_round(
-                            active.trigger,
-                            &active.observed_sources,
-                            &state.runtime.seen_sources,
-                        )
-                    });
-                    let result = if superseded_in_mailbox && result.is_ok() {
-                        Err(anyhow::Error::new(
-                            crate::client::reconciler::attempt::CommittedTargetAdvanced,
-                        )
-                        .context("new committed source notice arrived during the Core operation"))
-                    } else {
-                        result
-                    };
-                    // Mailbox source advancement wins even if the earlier
-                    // Core command already failed. Otherwise its refusal
-                    // could poison a newer committed source's next retry.
-                    let source_advanced =
-                        superseded_in_mailbox || committed_target_advanced(&result);
-                    // Consume the Core's genuine terminal once. The source
-                    // notification fence below still decides whether this
-                    // observed result can settle the current target.
+                    let active = state
+                        .active
+                        .as_ref()
+                        .expect("matched active lifecycle operation");
+                    let CompletionFence {
+                        result,
+                        source_advanced,
+                        final_uncertain,
+                    } = CompletionFence::observe(
+                        result,
+                        active.trigger,
+                        &active.observed_sources,
+                        &state.runtime.seen_sources,
+                        state.uncertain,
+                        workflow_panicked,
+                        lower_outcome_uncertain,
+                    );
                     let prepared_outcome = workflow.lifecycle().take_prepared_outcome();
-                    // The lower Core can become uncertain independently of
-                    // Result<()>; it must override any apparent Core success
-                    // in both Attempt and Conclusion terminal classification.
-                    let final_uncertain =
-                        state.uncertain || workflow_panicked || lower_outcome_uncertain;
                     // A Checked worker may have promoted applied_selection
                     // after its second authoritative read, while the Actor
                     // already accepted a newer source notice. Completed is
@@ -1719,12 +1675,7 @@ impl Actor for RuntimeReconcilerActor {
                     )
                     .await;
                     let verified_running = round.verified_running;
-                    if round.connection_effect_observed {
-                        state.runtime.connection_interruption_maintenance = round
-                            .connection_degradation
-                            .as_ref()
-                            .map(|degradation| degradation.message.clone());
-                    }
+                    state.runtime.observe_round_connection(&round);
                     // Legacy SetConfig UI messages describe the outcome of
                     // Core refresh, not source persistence. Checked Clash
                     // follows the same semantics once the Actor settles it.
@@ -1749,18 +1700,12 @@ impl Actor for RuntimeReconcilerActor {
                     state.workflow = Some(workflow);
                     if service_endpoint_recovery {
                         state.service_recovery_inflight = false;
-                        state.runtime.service_recovery_maintenance =
-                            result.as_ref().err().map(|error| {
-                                format!("Service endpoint recovery is pending: {error:#}")
-                            });
                     }
-                    if active.trigger == "ServiceReadiness" {
-                        state.runtime.service_handoff_maintenance = result
-                            .as_ref()
-                            .err()
-                            .map(|error| format!("Service owner handoff is pending: {error:#}"));
-                    }
-                    if service_endpoint_recovery || active.trigger == "ServiceReadiness" {
+                    if state.runtime.observe_host_completion(
+                        active.trigger,
+                        service_endpoint_recovery,
+                        &result,
+                    ) {
                         state.publish_maintenance();
                     }
                     state.startup_owner_unproven = startup_owner_unproven;
@@ -1830,46 +1775,11 @@ impl Actor for RuntimeReconcilerActor {
                     }
 
                     let failed = result.is_err();
-                    let needs_owner_handoff = result
-                        .as_ref()
-                        .err()
-                        .and_then(|error| {
-                            error.downcast_ref::<crate::client::reconciler::attempt::OwnershipTransitionPending>()
-                        })
-                        .is_some_and(|pending| pending.plan.is_some());
-                    if matches!(
+                    if state.runtime.observe_completion_maintenance(
                         active.trigger,
-                        "SourceCommitted" | "Retry" | "Start" | "CoreChanged"
-                    ) && needs_owner_handoff
-                    {
-                        // The S2 decision was made inside the latest-source
-                        // round. The single Actor queues its existing leased
-                        // FollowService command; retain a one-shot S3/S4
-                        // continuation even if no new source notification arrives.
-                        state.runtime.source_after_handoff = true;
-                    }
-
-                    if let Some(error) = result.as_ref().err().and_then(|error| {
-                        error.downcast_ref::<crate::client::reconciler::attempt::ServiceFallbackDeferred>()
-                    }) {
-                        state.runtime.service_handoff_maintenance = Some(error.to_string());
-                        state.publish_maintenance();
-                    } else if reconciled
-                        && result.is_ok()
-                        && state.runtime.service_handoff_maintenance
-                            .as_deref()
-                            .is_some_and(|reason| reason.starts_with("Service-to-Local fallback"))
-                    {
-                        state.runtime.service_handoff_maintenance = None;
-                        state.publish_maintenance();
-                    }
-                    if active.trigger == "ServiceRelease" {
-                        state.runtime.service_release_debt.finish(
-                            result
-                                .as_ref()
-                                .map(|_| ())
-                                .map_err(|error| format!("{error:#}")),
-                        );
+                        reconciled,
+                        &result,
+                    ) {
                         state.publish_maintenance();
                     }
                     round.settle(
@@ -1933,27 +1843,25 @@ impl Actor for RuntimeReconcilerActor {
 
                     #[cfg(feature = "e2e")]
                     tracing::warn!(target: "chimera::e2e_core_mailbox", stage = "completed_retry_settled", "CoreLifecycle completion stage");
-                    if (retry_reconcile_on_failure && failed || source_advanced)
-                        && !state.uncertain
-                        && !state.shutting_down
-                    {
-                        // A source superseded in flight is a *source*
-                        // reconciliation, not a user Retry of obsolete bytes.
-                        // Preserve the intent across an outstanding S2 lease
-                        // and use the existing one-owner ReconcileSource path.
-                        if source_advanced {
-                            state.runtime.source_dirty = true;
-                        }
+                    if state.runtime.retry_completed_source(
+                        retry_reconcile_on_failure,
+                        failed,
+                        source_advanced,
+                        state.uncertain,
+                        state.shutting_down,
+                    ) {
                         state.mark_runtime_dirty(&myself);
                     }
-                    if request_runtime_rebuild && !state.shutting_down {
-                        if state.startup_owner_unproven
-                            || state.startup_owner_unproven_shared.load(Ordering::Acquire)
-                        {
-                            if !state.uncertain {
-                                state.request_startup_recovery(&myself);
-                            }
-                        } else {
+                    match rebuild_after_completion(
+                        request_runtime_rebuild,
+                        state.shutting_down,
+                        state.startup_owner_unproven
+                            || state.startup_owner_unproven_shared.load(Ordering::Acquire),
+                        state.uncertain,
+                    ) {
+                        RebuildAction::None => {}
+                        RebuildAction::RecoverStartup => state.request_startup_recovery(&myself),
+                        RebuildAction::ScheduleRuntime => {
                             let deferred = state
                                 .workflow
                                 .as_ref()
@@ -1975,36 +1883,19 @@ impl Actor for RuntimeReconcilerActor {
                     }
                     state.follow_service().await;
                     state.rearm_deferred_dirty_after_owner(&myself);
-                    // A failed S2 owner move retains the committed-source
-                    // continuation. It may be repaired by a later startup
-                    // recovery or explicit Start, not only FollowService.
-                    // Consume it only after a successful verified runtime
-                    // round, with a re-established and certain owner; the
-                    // fresh S2/S3/S4 round must re-read durable sources.
-                    if state.runtime.source_after_handoff
-                        && reconciled
-                        && !failed
-                        && verified_running
-                        && !state.uncertain
-                        && !state.startup_owner_unproven
-                        && !state.startup_owner_unproven_shared.load(Ordering::Acquire)
-                        && state.runtime.run_intent == RunIntent::Running
-                        && !state.shutting_down
-                    {
-                        state.runtime.source_after_handoff = false;
-                        if active.trigger == "SourceCommitted" {
-                            // A new latest-source round has *already* passed
-                            // S2 and proved the current target. Do not enqueue
-                            // an identical third round or leave a stale lease
-                            // maintenance warning after external recovery.
-                            state.runtime.service_handoff_maintenance = None;
-                            state.publish_maintenance();
-                        } else {
-                            // A successful Start, FollowService or startup
-                            // recovery needs one new committed-source round.
-                            state.runtime.source_dirty = true;
-                            state.mark_runtime_dirty(&myself);
-                        }
+                    match state.runtime.complete_handoff(
+                        active.trigger,
+                        reconciled,
+                        failed,
+                        verified_running,
+                        state.uncertain,
+                        state.startup_owner_unproven
+                            || state.startup_owner_unproven_shared.load(Ordering::Acquire),
+                        state.shutting_down,
+                    ) {
+                        HandoffContinuation::None => {}
+                        HandoffContinuation::ClearMaintenance => state.publish_maintenance(),
+                        HandoffContinuation::MarkDirty => state.mark_runtime_dirty(&myself),
                     }
                     state
                         .schedule_service_release(active.trigger == "Retry")

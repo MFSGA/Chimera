@@ -1,0 +1,316 @@
+//! Shared Completed message decisions. The sole mailbox still owns its
+//! worker join, host notifications, timers and RPC replies.
+use super::{
+    attempt::{CommittedTargetAdvanced, OwnershipTransitionPending, ServiceFallbackDeferred},
+    committed::SourceVersions,
+    plan::RunIntent,
+    round::Round,
+    workflow::{RuntimeReconcilerState, committed_target_advanced, source_committed_during_round},
+};
+
+/// An obsolete Checked apply can have changed the actual Core process while
+/// another Source committed. Do not publish its stale port binding as the
+/// current desired Effects state; the sole Actor must first reconcile latest.
+/// Service/Shutdown observations remain independent of runtime convergence.
+pub fn refresh_effect_ports(
+    reconciled: bool,
+    service_observed: bool,
+    shutdown: bool,
+    source_advanced: bool,
+) -> bool {
+    (service_observed || shutdown) || (reconciled && !source_advanced)
+}
+
+pub fn checked_clash_notice(
+    checked_clash: bool,
+    result: &anyhow::Result<()>,
+    verified_running: bool,
+) -> Option<Result<(), String>> {
+    checked_clash.then(|| {
+        result
+            .as_ref()
+            .map_err(|error| format!("{error:#}"))
+            .and_then(|_| {
+                verified_running.then_some(()).ok_or_else(|| {
+                    "Clash source committed, but active Core apply was not verified".into()
+                })
+            })
+    })
+}
+
+/// One completion fence, sampled synchronously before observing the live
+/// Core. A source notice can supersede even an earlier refused operation.
+pub struct CompletionFence {
+    pub result: anyhow::Result<()>,
+    pub source_advanced: bool,
+    pub final_uncertain: bool,
+}
+
+impl CompletionFence {
+    pub fn observe(
+        result: anyhow::Result<()>,
+        trigger: &str,
+        started: &SourceVersions,
+        latest: &SourceVersions,
+        previously_uncertain: bool,
+        workflow_panicked: bool,
+        lower_outcome_uncertain: bool,
+    ) -> Self {
+        let superseded = source_committed_during_round(trigger, started, latest);
+        let result = if superseded && result.is_ok() {
+            Err(anyhow::Error::new(CommittedTargetAdvanced)
+                .context("new committed source notice arrived during the Core operation"))
+        } else {
+            result
+        };
+        let source_advanced = superseded || committed_target_advanced(&result);
+        Self {
+            result,
+            source_advanced,
+            final_uncertain: previously_uncertain || workflow_panicked || lower_outcome_uncertain,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RebuildAction {
+    None,
+    RecoverStartup,
+    ScheduleRuntime,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HandoffContinuation {
+    None,
+    ClearMaintenance,
+    MarkDirty,
+}
+
+impl RuntimeReconcilerState {
+    pub fn observe_round_connection(&mut self, round: &Round) {
+        if round.connection_effect_observed {
+            self.connection_interruption_maintenance = round
+                .connection_degradation
+                .as_ref()
+                .map(|degradation| degradation.message.clone());
+        }
+    }
+
+    pub fn observe_host_completion(
+        &mut self,
+        trigger: &str,
+        endpoint_recovery: bool,
+        result: &anyhow::Result<()>,
+    ) -> bool {
+        if endpoint_recovery {
+            self.service_recovery_maintenance = result
+                .as_ref()
+                .err()
+                .map(|error| format!("Service endpoint recovery is pending: {error:#}"));
+        }
+        if trigger == "ServiceReadiness" {
+            self.service_handoff_maintenance = result
+                .as_ref()
+                .err()
+                .map(|error| format!("Service owner handoff is pending: {error:#}"));
+        }
+        endpoint_recovery || trigger == "ServiceReadiness"
+    }
+
+    /// A concrete S2 step retains the durable source continuation even if
+    /// no additional source notice arrives. Release debt is independent.
+    pub fn observe_completion_maintenance(
+        &mut self,
+        trigger: &str,
+        reconciled: bool,
+        result: &anyhow::Result<()>,
+    ) -> bool {
+        let needs_owner_handoff = result
+            .as_ref()
+            .err()
+            .and_then(|error| error.downcast_ref::<OwnershipTransitionPending>())
+            .is_some_and(|pending| pending.plan.is_some());
+        if matches!(
+            trigger,
+            "SourceCommitted" | "Retry" | "Start" | "CoreChanged"
+        ) && needs_owner_handoff
+        {
+            self.source_after_handoff = true;
+        }
+
+        let mut changed = false;
+        if let Some(error) = result
+            .as_ref()
+            .err()
+            .and_then(|error| error.downcast_ref::<ServiceFallbackDeferred>())
+        {
+            self.service_handoff_maintenance = Some(error.to_string());
+            changed = true;
+        } else if reconciled
+            && result.is_ok()
+            && self
+                .service_handoff_maintenance
+                .as_deref()
+                .is_some_and(|reason| reason.starts_with("Service-to-Local fallback"))
+        {
+            self.service_handoff_maintenance = None;
+            changed = true;
+        }
+        if trigger == "ServiceRelease" {
+            self.service_release_debt.finish(
+                result
+                    .as_ref()
+                    .map(|_| ())
+                    .map_err(|error| format!("{error:#}")),
+            );
+            changed = true;
+        }
+        changed
+    }
+
+    pub fn retry_completed_source(
+        &mut self,
+        retry_on_failure: bool,
+        failed: bool,
+        source_advanced: bool,
+        uncertain: bool,
+        shutting_down: bool,
+    ) -> bool {
+        if (retry_on_failure && failed || source_advanced) && !uncertain && !shutting_down {
+            if source_advanced {
+                self.source_dirty = true;
+            }
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Consume retained source intent only after a verified current round
+    /// with a certain, re-established owner. A SourceCommitted round already
+    /// loaded the latest inputs, so it must not enqueue an identical round.
+    pub fn complete_handoff(
+        &mut self,
+        trigger: &str,
+        reconciled: bool,
+        failed: bool,
+        verified_running: bool,
+        uncertain: bool,
+        owner_unproven: bool,
+        shutting_down: bool,
+    ) -> HandoffContinuation {
+        if !self.source_after_handoff
+            || !reconciled
+            || failed
+            || !verified_running
+            || uncertain
+            || owner_unproven
+            || self.run_intent != RunIntent::Running
+            || shutting_down
+        {
+            return HandoffContinuation::None;
+        }
+        self.source_after_handoff = false;
+        if trigger == "SourceCommitted" {
+            self.service_handoff_maintenance = None;
+            HandoffContinuation::ClearMaintenance
+        } else {
+            self.source_dirty = true;
+            HandoffContinuation::MarkDirty
+        }
+    }
+}
+
+pub fn rebuild_after_completion(
+    requested: bool,
+    shutting_down: bool,
+    owner_unproven: bool,
+    uncertain: bool,
+) -> RebuildAction {
+    if !requested || shutting_down {
+        RebuildAction::None
+    } else if owner_unproven {
+        if uncertain {
+            RebuildAction::None
+        } else {
+            RebuildAction::RecoverStartup
+        }
+    } else {
+        RebuildAction::ScheduleRuntime
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::client::reconciler::committed::SourceDomain;
+
+    #[test]
+    fn newer_source_fences_success_and_refusal_without_erasing_uncertainty() {
+        let started = SourceVersions::default();
+        let mut latest = started.clone();
+        latest.observe(SourceDomain::Profiles, 1);
+        let fence = CompletionFence::observe(
+            Ok(()),
+            "SourceCommitted",
+            &started,
+            &latest,
+            false,
+            false,
+            true,
+        );
+        assert!(fence.source_advanced && fence.final_uncertain);
+        assert!(committed_target_advanced(&fence.result));
+        let fence = CompletionFence::observe(
+            Err(anyhow::anyhow!("old refusal")),
+            "SourceCommitted",
+            &started,
+            &latest,
+            false,
+            false,
+            false,
+        );
+        assert!(fence.source_advanced);
+        assert_eq!(fence.result.unwrap_err().to_string(), "old refusal");
+    }
+
+    #[test]
+    fn handoff_continuation_waits_for_verified_owner_and_consumes_once() {
+        let mut state = RuntimeReconcilerState::default();
+        state.source_after_handoff = true;
+        assert_eq!(
+            state.complete_handoff("Start", true, false, false, false, false, false),
+            HandoffContinuation::None
+        );
+        assert!(state.source_after_handoff);
+        assert_eq!(
+            state.complete_handoff("Start", true, false, true, false, true, false),
+            HandoffContinuation::None
+        );
+        assert_eq!(
+            state.complete_handoff("Start", true, false, true, false, false, false),
+            HandoffContinuation::MarkDirty
+        );
+        assert!(state.source_dirty && !state.source_after_handoff);
+        assert_eq!(
+            state.complete_handoff("Start", true, false, true, false, false, false),
+            HandoffContinuation::None
+        );
+    }
+
+    #[test]
+    fn latest_source_round_clears_handoff_without_duplicate_retry() {
+        let mut state = RuntimeReconcilerState::default();
+        state.source_after_handoff = true;
+        state.service_handoff_maintenance = Some("old handoff".into());
+        assert_eq!(
+            state.complete_handoff("SourceCommitted", true, false, true, false, false, false),
+            HandoffContinuation::ClearMaintenance
+        );
+        assert!(state.service_handoff_maintenance.is_none());
+        assert!(!state.source_dirty);
+        assert!(!state.retry_completed_source(true, true, true, true, false));
+        assert!(state.retry_completed_source(false, false, true, false, false));
+        assert!(state.source_dirty);
+    }
+}

@@ -815,3 +815,8 @@ cargo clippy --manifest-path backend/Cargo.toml --all-targets --all-features
 
 - 基线 48a7c54d813bac36c2ec8dc4359afcc2004f0c84，master 7c5a2599，ref 375af277。Checked admission/abort、SourceCommitted、CheckedSourceCommitted、显式 checked target dispatch 的生产状态决策迁入 chimera-core/client/reconciler/source_dispatch.rs。复用同一 RuntimeReconcilerState 与 bounded checked inbox；Tauri mailbox 仅同步采集事实、执行返回的调度动作、入队、RPC reply 和 watch publication。保留 source version 单调性、停止意图、owner handoff continuation、queue backpressure、单次 mode effect degradation；没有第二 actor 或额外 runtime state。本轮不宣称完整复制 ref Actor，Completed 归并、timer/command 调度仍在 Tauri。
 - L2。macOS workspace all-features/all-targets offline cargo check，共享 source_dispatch 3/3，Tauri reconciler 196/196，rustfmt、diff--check。初次 all-targets 检查发现测试通过父模块间接导入旧 helper，改为直接导入共享 helper 后通过。未执行全 workspace 测试、真实主机切换或 GUI E2E。
+
+### DIFF-REF-SHARED-COMPLETION：共享 Reconciler 完成状态决策
+
+- 基线 b16fa030444cd8ea2bae8552dd82a97d0b693f7c，master 7c5a2599，ref 375af277。将 Completed 的源版本 fence、Core outcome uncertainty、连接中断维护状态、Service handoff/release/recovery debt、最新目标重试和 handoff continuation 决策迁入 chimera-core/client/reconciler/completion.rs。复用现有 Round::observe/settle、RuntimeReconcilerState 和 attempt/status；Tauri 保留 task join、RPC、实际 timer、Service watch 与宿主通知。无第二 actor、无 IPC schema 修改。本轮为 ref-shaped 完成状态执行的归属迁移，不是完整逐字替换 ref Actor。
+- L2。macOS workspace all-features/all-targets offline cargo check，共享 completion 3/3，Tauri reconciler 196/196，rustfmt、diff--check。未执行全 workspace 测试、真实 Service/Local 切换或 GUI E2E。

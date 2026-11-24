@@ -42,3 +42,5 @@ pub mod committed_round;
 pub mod apply_executor;
 
 pub mod source_dispatch;
+
+pub mod completion;
