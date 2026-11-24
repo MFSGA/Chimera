@@ -240,9 +240,7 @@ impl PreparedCoreSettlement {
                             && report.applied.revision == receipt.applied_revision
                             && report.status.host == receipt.host
                             && report.status.generation == report.applied.generation
-                            && report.status.snapshot.as_ref().is_some_and(
-                                |snapshot| receipt.confirms(report.status.host, snapshot)
-                            )
+                            && receipt.confirms_projection(&report.status)
                             && self.outcome.as_ref().is_some_and(|outcome| report.output
                                 == chimera_ipc::api::core::v2::OperationOutputInfo::Reconciled(
                                     outcome.clone()

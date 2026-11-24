@@ -10,9 +10,13 @@ use camino::Utf8PathBuf;
 use chimera_config::profile::{
     FolderId, NewProfileRequest, ProfileDefinition, ProfileId, ProfileLayout, ProfileMetadata,
     ProfileMetadataPatch, Profiles, ProxyGroupLayout, RemoteProfileOptions,
-    RemoteProfileOptionsPatch,
+    RemoteProfileOptionsPatch, TransformKind,
 };
-use chimera_core::state::{PersistentStateManagerSetup, StateSnapshot};
+use chimera_contracts::profiles::error::SubscriptionFetchError;
+use chimera_core::{
+    profile_import::{self, ProfileUrlProbe},
+    state::{PersistentStateManagerSetup, StateSnapshot},
+};
 use ractor::{Actor, ActorRef, RpcReplyPort, rpc::CallResult};
 use tokio_util::{sync::CancellationToken, task::TaskTracker};
 
@@ -37,6 +41,8 @@ pub(super) struct ProfilesClientInner {
     pub(super) snapshot: StateSnapshot<Profiles>,
     pub(super) content_lock: ProfileContentLock,
     pub(super) jobs: crate::state::profiles::jobs::ProfileJobs,
+    // Shared with the actor; a probe downloads without touching its state.
+    fetcher: Arc<dyn SubscriptionFetcher>,
     #[cfg(test)]
     _test_owner: Option<TestJobsOwner>,
 }
@@ -189,7 +195,7 @@ impl ProfilesClient {
                 content_lock: content_lock.clone(),
                 manager,
                 fs,
-                fetcher,
+                fetcher: fetcher.clone(),
                 materialization,
                 jobs: jobs.clone(),
             },
@@ -205,6 +211,7 @@ impl ProfilesClient {
                 snapshot,
                 content_lock,
                 jobs,
+                fetcher,
                 #[cfg(test)]
                 _test_owner: test_owner,
             }),
@@ -427,8 +434,35 @@ impl ProfilesClient {
             .await
     }
 
+    /// Downloads a profile URL and suggests how to import it. Nothing is
+    /// written, so this does not go through the actor.
+    // The desktop IPC is introduced with the generated frontend contract.
+    #[allow(dead_code)]
+    pub async fn probe(
+        &self,
+        url: url::Url,
+        option: RemoteProfileOptions,
+    ) -> Result<ProfileUrlProbe, ProfilesError> {
+        let fetched = self
+            .inner
+            .fetcher
+            .fetch(&url, &option)
+            .await
+            .map_err(|error| match error.downcast::<SubscriptionFetchError>() {
+                Ok(source) => ProfilesError::FetchSubscription {
+                    url: url.clone(),
+                    source,
+                },
+                Err(error) => ProfilesError::ImportFailed {
+                    message: error.to_string(),
+                },
+            })?;
+        Ok(profile_import::probe_fetched(url, option, fetched))
+    }
+
     /// Fetch-before-commit remote import. No durable placeholder is written until
     /// download + validation succeed and the caller is still awaiting the result.
+    #[cfg(test)]
     pub async fn import(
         &self,
         url: url::Url,
@@ -440,6 +474,7 @@ impl ProfilesClient {
             .await
     }
 
+    #[cfg(test)]
     pub async fn import_into_folder(
         &self,
         url: url::Url,
@@ -448,9 +483,31 @@ impl ProfilesClient {
         update_interval_explicit: bool,
         folder: Option<FolderId>,
     ) -> Result<CommitReport, ProfilesError> {
+        self.import_with_transform(
+            url,
+            None,
+            metadata,
+            option,
+            update_interval_explicit,
+            folder,
+        )
+        .await
+    }
+
+    /// The ref import command carries the confirmed kind through the single source actor.
+    pub async fn import_with_transform(
+        &self,
+        url: url::Url,
+        transform: Option<TransformKind>,
+        metadata: ProfileMetadata,
+        option: RemoteProfileOptions,
+        update_interval_explicit: bool,
+        folder: Option<FolderId>,
+    ) -> Result<CommitReport, ProfilesError> {
         self.call(
             |reply| ProfilesActorMessage::ImportRemote {
                 url,
+                transform,
                 metadata,
                 option,
                 update_interval_explicit,
@@ -4440,6 +4497,289 @@ mod tests {
         assert_eq!(subscription.download, Some(3));
         assert!(materialized.updated_at.is_some());
         assert_eq!(materialized.file.as_str(), format!("{uid}.yaml"));
+    }
+
+    use chimera_core::profile_import::ProfileImportKind;
+
+    /// A client whose only port that may act is the fetcher, so a probe that
+    /// wrote anything would fail on an unexpected mock call.
+    async fn probe_client(dir: &TempDir, fetched: FetchedSubscription) -> ProfilesClient {
+        let mut fetcher = MockSubscriptionFetcher::new();
+        fetcher
+            .expect_fetch()
+            .times(1)
+            .returning(move |_, _| Ok(fetched.clone()));
+        let mut materialization = MockProfileMaterializationPort::new();
+        materialization
+            .expect_reconcile()
+            .returning(|_| Ok(MaterializationReconcileReport::default()));
+        ProfilesClient::new(
+            crate::state::mutation::MutationCoordinator::isolated(),
+            temp_profiles_path(dir),
+            Arc::new(MockProfileFsPort::new()),
+            Arc::new(fetcher),
+            Arc::new(materialization),
+        )
+        .await
+        .unwrap()
+    }
+
+    fn probe_fixture(content: &str) -> FetchedSubscription {
+        FetchedSubscription {
+            content: content.into(),
+            filename: None,
+            subscription: SubscriptionInfo::default(),
+            suggested_update_interval_minutes: None,
+            content_type: None,
+            file_name: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn probe_suggests_a_subscription_and_keeps_its_details_without_writing() {
+        let dir = tempdir().unwrap();
+        let subscription = SubscriptionInfo {
+            upload: Some(1),
+            download: Some(2),
+            total: Some(10),
+            expire: None,
+        };
+        let client = probe_client(
+            &dir,
+            FetchedSubscription {
+                filename: Some("Airport".into()),
+                subscription: subscription.clone(),
+                suggested_update_interval_minutes: Some(360),
+                ..probe_fixture("proxies: []\n")
+            },
+        )
+        .await;
+
+        let before = std::fs::read(temp_profiles_path(&dir)).ok();
+        let revision = client.snapshot().revision();
+        let probe = client
+            .probe(
+                url::Url::parse("https://example.com/sub?token=1").unwrap(),
+                RemoteProfileOptions::default(),
+            )
+            .await
+            .expect("probe");
+
+        assert_eq!(
+            probe.classification.suggested,
+            Some(ProfileImportKind::Config)
+        );
+        assert_eq!(
+            probe.accepted,
+            [
+                ProfileImportKind::Config,
+                ProfileImportKind::Overlay,
+                ProfileImportKind::JavaScript,
+                ProfileImportKind::Lua
+            ]
+        );
+        assert_eq!(probe.suggested_name, "Airport");
+        assert_eq!(probe.subscription, subscription);
+        assert_eq!(probe.suggested_update_interval_minutes, Some(360));
+        assert_eq!(probe.content, "proxies: []\n");
+        assert!(client.snapshot().items.is_empty());
+        assert_eq!(client.snapshot().revision(), revision);
+        assert_eq!(std::fs::read(temp_profiles_path(&dir)).ok(), before);
+    }
+
+    #[tokio::test]
+    async fn probe_accepts_only_the_kinds_whose_validation_passes() {
+        let dir = tempdir().unwrap();
+        let client = probe_client(
+            &dir,
+            probe_fixture("function main(config)\n  local n = 1\n  return config\nend\n"),
+        )
+        .await;
+
+        let probe = client
+            .probe(
+                url::Url::parse("https://example.com/scripts/rename").unwrap(),
+                RemoteProfileOptions::default(),
+            )
+            .await
+            .expect("probe");
+
+        assert_eq!(probe.classification.suggested, Some(ProfileImportKind::Lua));
+        assert_eq!(
+            probe.accepted,
+            [ProfileImportKind::JavaScript, ProfileImportKind::Lua]
+        );
+        // Without a server title the name is the one the import would derive.
+        assert_eq!(probe.suggested_name, "rename");
+    }
+
+    #[tokio::test]
+    async fn probe_reports_a_failed_download() {
+        let dir = tempdir().unwrap();
+        let mut fetcher = MockSubscriptionFetcher::new();
+        fetcher.expect_fetch().times(1).returning(|_, _| {
+            Err(SubscriptionFetchError::SubscriptionHttpStatus { status: 503 }.into())
+        });
+        let mut materialization = MockProfileMaterializationPort::new();
+        materialization
+            .expect_reconcile()
+            .returning(|_| Ok(MaterializationReconcileReport::default()));
+        let client = ProfilesClient::new(
+            crate::state::mutation::MutationCoordinator::isolated(),
+            temp_profiles_path(&dir),
+            Arc::new(MockProfileFsPort::new()),
+            Arc::new(fetcher),
+            Arc::new(materialization),
+        )
+        .await
+        .unwrap();
+
+        let before = std::fs::read(temp_profiles_path(&dir)).ok();
+        let revision = client.snapshot().revision();
+        let err = client
+            .probe(
+                url::Url::parse("https://example.com/sub").unwrap(),
+                RemoteProfileOptions::default(),
+            )
+            .await
+            .expect_err("fetch failure");
+        assert!(matches!(err, ProfilesError::FetchSubscription { .. }));
+        assert!(client.snapshot().items.is_empty());
+        assert_eq!(client.snapshot().revision(), revision);
+        assert_eq!(std::fs::read(temp_profiles_path(&dir)).ok(), before);
+    }
+
+    #[tokio::test]
+    async fn remote_transform_import_preserves_kind_and_canonical_extension() {
+        for (kind, content, ext) in [
+            (ProfileImportKind::Overlay, "prepend-rules: []\n", "yaml"),
+            (
+                ProfileImportKind::JavaScript,
+                "function main(config) { return config; }",
+                "js",
+            ),
+            (
+                ProfileImportKind::Lua,
+                "function main(config) return config end",
+                "lua",
+            ),
+        ] {
+            let dir = tempdir().unwrap();
+            let mut fetcher = MockSubscriptionFetcher::new();
+            fetcher
+                .expect_fetch()
+                .times(1)
+                .returning(move |_, _| Ok(probe_fixture(content)));
+            let client = ProfilesClient::new(
+                crate::state::mutation::MutationCoordinator::isolated(),
+                temp_profiles_path(&dir),
+                Arc::new(MockProfileFsPort::new()),
+                Arc::new(fetcher),
+                test_materialization_port(),
+            )
+            .await
+            .unwrap();
+            let before = client.snapshot().revision();
+            let report = client
+                .import_with_transform(
+                    url::Url::parse("https://example.com/transform").unwrap(),
+                    kind.transform(),
+                    import_metadata("Transform", true),
+                    RemoteProfileOptions::default(),
+                    false,
+                    None,
+                )
+                .await
+                .unwrap();
+            let uid = report.created.expect("imported transform uid");
+            let item = &report.snapshot.items[&uid];
+            assert!(uid.0.starts_with('t'));
+            assert!(matches!(
+                &item.definition,
+                ProfileDefinition::Transform { .. }
+            ));
+            assert!(report.snapshot.current.is_none());
+            assert_eq!(report.snapshot.revision(), before + 1);
+            assert!(!report.affects_current);
+            let source = item.definition.source().expect("remote source");
+            assert!(matches!(source, ProfileSource::Remote { .. }));
+            assert_eq!(source.materialized().file.as_str(), format!("{uid}.{ext}"));
+            let stored = std::fs::read_to_string(temp_profiles_path(&dir)).unwrap();
+            let reloaded: Profiles = serde_yaml_ng::from_str(&stored).unwrap();
+            assert!(matches!(
+                &reloaded.items[&uid].definition,
+                ProfileDefinition::Transform { .. }
+            ));
+        }
+    }
+
+    #[tokio::test]
+    async fn invalid_remote_overlay_does_not_commit_or_materialize() {
+        let dir = tempdir().unwrap();
+        let client = probe_client(&dir, probe_fixture("[")).await;
+        let original = std::fs::read(temp_profiles_path(&dir)).ok();
+        let revision = client.snapshot().revision();
+        let error = client
+            .import_with_transform(
+                url::Url::parse("https://example.com/broken").unwrap(),
+                Some(TransformKind::Overlay),
+                import_metadata("Broken", true),
+                RemoteProfileOptions::default(),
+                false,
+                None,
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            ProfilesError::ProfileContentRejected { .. }
+        ));
+        assert_eq!(client.snapshot().revision(), revision);
+        assert!(client.snapshot().items.is_empty());
+        assert_eq!(std::fs::read(temp_profiles_path(&dir)).ok(), original);
+    }
+
+    #[tokio::test]
+    async fn transform_cannot_join_config_folder_before_download() {
+        let dir = tempdir().unwrap();
+        let mut fetcher = MockSubscriptionFetcher::new();
+        fetcher.expect_fetch().times(0);
+        let client = ProfilesClient::new(
+            crate::state::mutation::MutationCoordinator::isolated(),
+            temp_profiles_path(&dir),
+            Arc::new(MockProfileFsPort::new()),
+            Arc::new(fetcher),
+            test_materialization_port(),
+        )
+        .await
+        .unwrap();
+        client
+            .set_layout(ProfileLayout {
+                folders: vec![test_folder("f1", "Work", &[])],
+                ungrouped: vec![],
+            })
+            .await
+            .unwrap();
+        let before = client.snapshot();
+        let original = std::fs::read(temp_profiles_path(&dir)).ok();
+        let error = client
+            .import_with_transform(
+                url::Url::parse("https://example.com/overlay").unwrap(),
+                Some(TransformKind::Overlay),
+                import_metadata("Overlay", true),
+                RemoteProfileOptions::default(),
+                false,
+                Some(FolderId("f1".into())),
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(error, ProfilesError::ValidationFailed(ref errors)
+            if errors.iter().any(|error| matches!(error,
+                chimera_config::profile::ProfileValidationError::FolderMemberNotConfig { .. }))));
+        assert_eq!(client.snapshot().revision(), before.revision());
+        assert_eq!(client.snapshot().folders, before.folders);
+        assert!(client.snapshot().items.is_empty());
+        assert_eq!(std::fs::read(temp_profiles_path(&dir)).ok(), original);
     }
 
     #[tokio::test]

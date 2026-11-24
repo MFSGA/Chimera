@@ -256,7 +256,8 @@ pub(in crate::client) use crate::client::reconciler::apply::CheckedConnectionEff
 
 /// Ref plan(Facts) has only one S4 admission: Step::Apply. A concrete
 /// Idle/Owner/Stop step must never silently become a legacy Core submission.
-/// LegacyRecovery is reserved for missing/incomplete observations.
+/// LegacyRecovery is reserved for compatibility sessions and triggers not
+/// yet migrated to ref's committed-round admission.
 enum CommittedRound {
     Apply,
     LegacyRecovery,
@@ -1065,11 +1066,13 @@ impl CoreLifecycleWorkflow {
             ),
             _ => false,
         };
-        // Only SourceCommitted/Retry may need the last proven selection to
-        // compute the prepared Local Core's one-shot connection policy. All
-        // other legacy commands invalidate it before their first Core action.
+        // Ref converge uses the last proven selection for both explicit
+        // starts and observed Core changes, not just source notifications.
         let prepared_selection_candidate =
-            matches!(&command, Command::ReconcileSource | Command::Reconcile);
+            matches!(&command, Command::ReconcileSource | Command::Reconcile)
+                || (self.profiles.is_some()
+                    && self.checked_gate.get().is_some()
+                    && matches!(&command, Command::StartCore | Command::RecoverCore));
         if !prepared_selection_candidate && !matches!(&command, Command::ApplyChecked { .. }) {
             self.progress.lock().invalidate_selection();
         }
@@ -1745,18 +1748,27 @@ impl CoreLifecycleWorkflow {
             )
             .into());
         }
-        if let Some(accepted) = accepted {
-            let current = self.core.active_runtime_receipt().await?;
-            if accepted.host != crate::client::reconciler::proof::host_for(before.run_type)
-                || !current
-                    .as_ref()
-                    .is_some_and(|current| Arc::ptr_eq(accepted, current))
-            {
-                return Err(OwnershipTransitionPending::waiting(
-                    "the accepted Core revision changed before the S3 stop",
-                )
-                .into());
-            }
+        let current = self.core.active_runtime_receipt().await.map_err(|_| {
+            OwnershipTransitionPending::waiting(
+                "the accepted Core receipt became unreadable before S3 Stop",
+            )
+        })?;
+        if accepted.is_some_and(|receipt| {
+            receipt.host != crate::client::reconciler::proof::host_for(before.run_type)
+        }) || !crate::client::reconciler::decision::same_active_receipt(
+            accepted,
+            current.as_ref(),
+        ) {
+            return Err(OwnershipTransitionPending::waiting(
+                "the accepted Core revision changed before the S3 stop",
+            )
+            .into());
+        }
+        if self.core.outcome_uncertain() {
+            return Err(OwnershipTransitionPending::waiting(
+                "the Core outcome became uncertain before S3 Stop",
+            )
+            .into());
         }
         let stop = self.core.stop().await;
         if self.core.outcome_uncertain() {
@@ -1800,7 +1812,8 @@ impl CoreLifecycleWorkflow {
     /// Consume ref's stable S2/S3/S4 decision. A concrete Step::Apply,
     /// optionally after a verified S3 Stop, is explicit admission; a settled
     /// Idle/Owner/Refused can never fall through to legacy Core submission.
-    /// No plan means only the existing compatibility recovery may proceed.
+    /// An unreadable observation is Waiting in a canonical session, not
+    /// permission for the compatibility recovery to submit Core.
     /// Ownership moves remain with the one startup handoff actor.
     async fn planned_committed_round(
         &self,
@@ -1819,8 +1832,20 @@ impl CoreLifecycleWorkflow {
                 .into(),
             )));
         }
-        if !matches!(trigger, Trigger::SourceCommitted | Trigger::Retry) {
+        let canonical_session = self.profiles.is_some() && self.checked_gate.get().is_some();
+        if !crate::client::reconciler::startup::uses_committed_convergence(
+            trigger,
+            canonical_session,
+        ) {
             return Ok(CommittedRound::LegacyRecovery);
+        }
+        if canonical_session && !self.startup_service_command_settled().await {
+            return Ok(CommittedRound::Settled(Err(
+                crate::client::reconciler::attempt::OwnershipTransitionPending::waiting(
+                    "a service command started earlier is still running",
+                )
+                .into(),
+            )));
         }
         // Ref converge must re-sample Facts after an S3 Stop. The old
         // decision was about a Running instance and cannot authorize S4.
@@ -1829,13 +1854,13 @@ impl CoreLifecycleWorkflow {
         for _ in 0..2 {
             let observed = match self.core.status().await {
                 Ok(observed) => observed,
-                Err(_) if !stopped_for_replacement => {
+                Err(_) if !canonical_session && !stopped_for_replacement => {
                     return Ok(CommittedRound::LegacyRecovery);
                 }
                 Err(_) => {
                     return Ok(CommittedRound::Settled(Err(
                         crate::client::reconciler::attempt::OwnershipTransitionPending::waiting(
-                            "the Core is unreadable after S3 Stop; replan before S4",
+                            "the Core is unreadable; obtain a stable observation before S4",
                         )
                         .into(),
                     )));
@@ -1843,13 +1868,13 @@ impl CoreLifecycleWorkflow {
             };
             let receipt = match self.core.active_runtime_receipt().await {
                 Ok(receipt) => receipt,
-                Err(_) if !stopped_for_replacement => {
+                Err(_) if !canonical_session && !stopped_for_replacement => {
                     return Ok(CommittedRound::LegacyRecovery);
                 }
                 Err(_) => {
                     return Ok(CommittedRound::Settled(Err(
                         crate::client::reconciler::attempt::OwnershipTransitionPending::waiting(
-                            "the Core receipt is unreadable after S3 Stop; replan before S4",
+                            "the Core receipt is unreadable; obtain a stable observation before S4",
                         )
                         .into(),
                     )));
@@ -1869,7 +1894,21 @@ impl CoreLifecycleWorkflow {
                 .into(),
             )));
             }
-            let verified = if receipt.is_some() && matches!(observed.state, CoreState::Running) {
+            // ref startup::converge derives CoreFact::Running.verified from
+            // a matching live receipt, not from its equality to the desired
+            // target. The receipt's own target is a separate Facts.applied.
+            // active_runtime_receipt performs the complete runtime proof;
+            // the status/receipt samples below fence its identity.
+            let verified = if canonical_session {
+                matches!(observed.state, CoreState::Running)
+                    && receipt.as_deref().is_some_and(|receipt| {
+                        crate::client::reconciler::proof::receipt_matches_owner(
+                            receipt,
+                            crate::client::reconciler::proof::host_for(observed.run_type),
+                        )
+                    })
+            } else if receipt.is_some() && matches!(observed.state, CoreState::Running) {
+                // Preserve the old semantics only for pre-canonical ports.
                 self.verified_applied_runtime(&observed).await
             } else {
                 false
@@ -1905,38 +1944,21 @@ impl CoreLifecycleWorkflow {
                 .into(),
             )));
             }
-            // An S3/S4 decision may reuse a receipt only when the original Core
-            // revision remains the one selected after the ownership probes.
-            if let Some(original) = receipt.as_ref()
-                && !self
-                    .core
-                    .active_runtime_receipt()
-                    .await
-                    .ok()
-                    .flatten()
-                    .is_some_and(|current| Arc::ptr_eq(original, &current))
-            {
-                return Ok(CommittedRound::Settled(Err(
-                    crate::client::reconciler::attempt::OwnershipTransitionPending::waiting(
-                        "the accepted Core revision changed while sampling Service ownership",
-                    )
-                    .into(),
-                )));
-            }
-            // If S3 stopped the old Core, another runtime must not have
-            // installed a receipt during the Service ownership probes.
-            // Before S3, an existing receipt is separately pointer-fenced.
-            if stopped_for_replacement {
-                match self.core.active_runtime_receipt().await {
-                    Ok(None) => {}
-                    _ => {
-                        return Ok(CommittedRound::Settled(Err(
-                            crate::client::reconciler::attempt::OwnershipTransitionPending::waiting(
-                                "a new or unreadable Core receipt appeared during the S3/S4 replan",
-                            )
-                            .into(),
-                        )));
-                    }
+            // The accepted receipt (or its absence) is part of the same
+            // S2/S3 Facts sample, including before the first S3 Stop.
+            match self.core.active_runtime_receipt().await {
+                Ok(current)
+                    if crate::client::reconciler::decision::same_active_receipt(
+                        receipt.as_ref(),
+                        current.as_ref(),
+                    ) => {}
+                _ => {
+                    return Ok(CommittedRound::Settled(Err(
+                        crate::client::reconciler::attempt::OwnershipTransitionPending::waiting(
+                            "the accepted Core receipt changed or became unreadable while sampling ownership",
+                        )
+                        .into(),
+                    )));
                 }
             }
             if host == ExecutionHost::Service
@@ -1964,10 +1986,10 @@ impl CoreLifecycleWorkflow {
                 CommittedStepAction, classify_committed_step,
             };
             let Some(step) = step else {
-                if stopped_for_replacement {
+                if canonical_session || stopped_for_replacement {
                     return Ok(CommittedRound::Settled(Err(
                         crate::client::reconciler::attempt::OwnershipTransitionPending::waiting(
-                            "the S3 Stop succeeded but the latest S4 Facts plan is still unproven",
+                            "the latest S2/S3/S4 Facts plan is still unproven",
                         )
                         .into(),
                     )));
@@ -2027,6 +2049,12 @@ impl CoreLifecycleWorkflow {
                         .into(),
                 ))),
                 CommittedStepAction::StopForReplacement => {
+                    // Compatibility ports cannot yet build the canonical
+                    // PreparedCandidate after stopping an unreceipted Core.
+                    // Keep their old recovery path until those ports migrate.
+                    if !canonical_session && receipt.is_none() && !stopped_for_replacement {
+                        return Ok(CommittedRound::LegacyRecovery);
+                    }
                     if stopped_for_replacement {
                         return Ok(CommittedRound::Settled(Err(
                         crate::client::reconciler::attempt::OwnershipTransitionPending::waiting(
@@ -2141,7 +2169,10 @@ impl CoreLifecycleWorkflow {
                 if receipt.host != expected_host {
                     return None;
                 }
-                (Some(receipt), Some(self.progress.lock().selection()?))
+                // Upstream selection.interruption accepts an unknown prior
+                // selection. It must not block a valid live apply or invent
+                // a Mode/Profile change when the old selection is unknown.
+                (Some(receipt), self.progress.lock().selection())
             }
             CoreState::Stopped(_) if current_receipt.is_none() => (None, None),
             _ => return None,
@@ -2291,7 +2322,9 @@ impl CoreLifecycleWorkflow {
             let handled_by_plan = matches!(&planned, CommittedRound::Settled(_));
             let applied = match planned {
                 CommittedRound::Settled(result) => {
-                    self.progress.lock().invalidate_selection();
+                    if result.is_err() {
+                        self.progress.lock().invalidate_selection();
+                    }
                     result
                 }
                 CommittedRound::Apply | CommittedRound::LegacyRecovery => {

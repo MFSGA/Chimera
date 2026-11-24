@@ -500,3 +500,37 @@ cargo clippy --manifest-path backend/Cargo.toml --all-targets --all-features
 - 将 decision::plan_committed_target 的 applied 绑定到 active RuntimeApplyReceipt.target，只有真实 receipt 身份与期望 committed target 一致才可以报告 Converged；不再用目标参数直接制造 applied。Workflow 对 Converged 也在最终出站前重新读取最新 committed target 并检查 lower Core outcome_uncertain，确保本轮源已被更新时不能错误结算。已有 SourceCommitted/Retry 强制语义保持不变。
 - 生产 ChimeraClient 初始化会安装独立源权威和唯一 CandidateCheck，因此可在完整 Profiles 场景执行严格 ref S4 admission；无 Profiles 的测试/兼容路径继续使用旧 Core port，当前尚未整体移除 legacy execution。新回归用例代码覆盖 explicit Apply 缺少候选不能 fallback、未完成规划可以 legacy、已返回错误不能二次提交，以及 verified Running receipt 绑定不同目标不等于 Converged。
 - 保留 CoreLifecycle 唯一 command mailbox、原有 RuntimeProduct writer、Core revision allocator、SourceActor 发布与最终 Actor Completed 栅栏。本轮仅执行 rustfmt、Prettier、源码差异静态审阅和 git diff --check；按用户约定不运行编译、测试、Clippy 或 E2E，实际构建与运行仍需验证。
+
+### DIFF-REF-S3-UNCONFIRMED-RUNNING：未确认 Running 的 Stop 与不可读 Facts 的 Waiting
+
+- ref 基线：4607a7379f0aa060daf55b369dc8103dda929d82。对照 `client/reconciler/startup.rs::converge` 和 `plan.rs::plan`：有 Running 观测但没有匹配 confirmed receipt 时，Facts 仍为 `Running { verified: false }`，先执行 S2，再执行 S3 Stop，重新采样后才允许 S4；不可读的 Core 不允许 Apply。
+- Chimera `reconciler/decision.rs::plan_committed_target` 采用相同 CoreFact 映射，移除将无 receipt 的 Running 降格为 Unreadable 并返回无计划的分支。`core_lifecycle/workflow.rs::planned_committed_round` 在完整 Profiles/CandidateCheck 会话的 SourceCommitted/Retry 路径遇到不可读状态、不可读 receipt 或未初始化 Facts 时直接返回 typed Waiting，不调用旧 builder。未安装 canonical gate 的兼容端口仍保留旧 recovery；其它 trigger 的迁移另行处理。
+- `same_active_receipt` 在 S2/S3/S4 采样与 Stop 前同时检查已接受 receipt 的身份和缺失状态；采样期间新 receipt 出现、消失、被替换或不可读均不得使用旧 Facts 停止或提交 Core。保留原有唯一 CoreLifecycle Actor、S2 Service ownership、S3 Stop 后重采样和 source fence；不更改持久化格式、IPC、前端或宿主网络配置。
+- 风险 L2；验收为纯规划同 ref、无 receipt 的 S2 优先级及 receipt presence/absence 竞态证明，新增/更新未执行的回归用例。回滚仅撤销本切片，不改配置或 ref pin。按用户约定不运行编译、测试、Clippy 或 E2E；本轮只做源码差异审阅与格式检查，运行正确性待验证。
+
+### DIFF-REF-PROFILE-IMPORT：整块复制 Profile 模型和 URL 导入识别
+
+- ref 基线：4607a7379f0aa060daf55b369dc8103dda929d82。本切片以 `ref/backend/nyanpasu-config/src/profile/` 完整目录与 `ref/backend/nyanpasu-core/src/profile_import.rs` 为直接复制来源；现有同内容文件不制造无意义 diff。复用上游 ProfileImportKind、ImportFacts、ImportSignal、ImportClassification、classify 及全部原始分类用例。
+- 将 `ref/backend/nyanpasu-core/src/client/profiles.rs::ProfileUrlProbe/probe` 和 `state/profiles/actor.rs::remote_import_definition` 迁入 `backend/chimera-core/src/profile_import.rs`，因为本地 ProfilesActor 尚位于 Tauri crate。探测直接消费已有 SubscriptionFetcher port，使用相同 remote definition 与 typed content validator；真实的 actor 导入及 refresh 路径也使用该 validator，原 URL 命名策略从桌面 facade 移入共享模块。没有第二套 source owner、下载实现或写入事务。
+- 必要适配：nyanpasu_config → chimera_config；Profile 模型测试仍使用 serde_yaml_ng，分类及 typed content validation 使用现有 serde_yaml 以保留 ProfileContentError 的错误类型；现有 strum 0.28.0 仅增加依赖边。保留 NewProfileRequest.folder 的 legacy Specta optional 字段；保留全部原有额外 Proxy Group 测试、folder/interval/validation 断言。新 probe 是 core 库只读 API，不向远程访问或 agent 暴露；当前桌面 IPC、生成 TS bindings、远程 transform 提交入口仍未接入，不宣称 UI 导入流程完整迁移。
+- L2：验收目标是共享模型/分类/构造与校验直接采用上游代码，同时保持现有 Config 导入事务、源文档与用户数据兼容。未执行编译、测试、Clippy 或 E2E；只做 rustfmt、静态差异审阅和 git diff --check。回滚仅撤销本 Profile 切片，保留此前 Runtime 工作，不改 ref pin 或持久化数据。
+
+### DIFF-REF-REMOTE-TRANSFORM-IMPORT：Profiles 导入探测及 Transform actor 路径
+
+- ref 基线仍为 4607a7379f0aa060daf55b369dc8103dda929d82。参考上游 `client/profiles.rs::probe/import`、`client/mod.rs::probe_profile_url/import_profile` 和 `state/profiles/actor.rs::ImportRemote/CommitImported/spawn_download`，让同一个源 actor 携带用户确认的 `Option<TransformKind>`，从请求校验、下载校验、pending 状态到最终持久化，复用上一切片的上游 definition builder。
+- 桌面 ProfilesClient 与 actor 共享同一 fetcher。Core 的 probe_fetched 提供唯一下载后分类、可接受类型、名称及订阅信息投影，兼容现有 anyhow 下载端口并保留可识别的 SubscriptionFetchError；探测不经过 actor、无文件写入和自动激活。Core 的 typed fetch probe 仍调用同一投影函数。
+- 将上游下载/校验/结算逻辑统一为 actor 的 download helper，import 与 refresh 共用；保留 Chimera 既有 import panic supervision、refresh job instrumentation、stale-download fence、持久化补偿与错误类型。Config 仍自动激活（若无当前配置），Transform 不自动激活，且不能进入 Config folder。既有 IPC 签名不变，仍默认 Config；新的 probe_profile_url / import_profile_with_transform 是后端入口，暂未新增 IPC 或 TS bindings。
+- L2；直接迁移上游三个 probe 回归用例（兼容现有测试构造器及 mock 错误），补充三种 Transform 规范扩展名、非法 Overlay 无持久化、Transform 禁止加入 Config folder 的用例。未执行测试或编译；格式化和静态 diff 检查。回滚此切片不修改 ref pin，且保留此前未提交的 Runtime/Profile 工作；若已创建 Transform，禁止通过删除用户文件进行回滚。
+
+### DIFF-REF-RUNTIME-RECOVERY：完整迁移已确认运行态证明
+
+- ref 基线仍为 4607a7379f0aa060daf55b369dc8103dda929d82。完整迁移 `ref/backend/nyanpasu-core/src/client/runtime_recovery.rs` 的 ObservedRuntime、matches_confirmed_apply、confirmed_apply_kind 及三组上游回归用例到 Tauri `client/runtime_recovery.rs`，不创建第二个运行时 owner。保留 Chimera 原回执的 config_text、core_spec、artifact、ports、run_intent 与旧事务恢复能力；将 ref receipt.binding.revision 对应到现有 applied_revision，增加 instance_id 和可选 controller_generation（独立于配置 revision generation）。
+- Canonical CoreActor projection 使用已观测到的真实 owner generation，连接代数变化时必须证明同一 process instance；host、epoch、revision generation、effective/source hash 与 Running 均必须匹配，保留 Chimera 已发布 applied_kind 不一致的拒绝条件。断线缓存和无状态不得算作证据。直接旧 endpoint 不虚构 router generation；仅无绑定的兼容 receipt 可走旧 revision-only 判断，生产 projection 不使用该退路。
+- 将 shared proof 接入 active_runtime_receipt、observe_runtime_baseline、PreparedCoreSettlement/ReconcileReport、runtime_inspection 和 application effect ports；restore 在 routed host 上使用真实 owner token 和 RoutedEndpoint admission，保留旧测试/直接端口的 None 边界。回执记录实际应用确认时的 instance_id 与提交绑定的 owner generation（无 token 的历史路径保持 None，不能冒充同一连接）。不新增 IPC、持久化字段或前端变更。
+- 风险 L2：验收目标是连接代数变化且 instance 不同/缺失时拒绝复用，断线缓存、已知 kind 冲突、旧 revision 或 source 不一致均拒绝；保留上游恢复判定测试，补充缓存及兼容端口用例。仅 rustfmt 与 git diff --check、静态审阅，未执行编译、测试、Clippy 或 E2E。未完成：整个 RuntimeReconciler actor/生命周期 workflow 的物理迁移，以及所有旧 reconcile 提交路径的统一 admission。回滚仅撤销此恢复证明切片，不改 ref pin 或先前 Profile 工作。
+
+### DIFF-REF-CONVERGE-TRIGGERS：Start/CoreChanged 共用 S2/S3/S4 决策
+
+- ref 基线 4607a7379f0aa060daf55b369dc8103dda929d82。对齐 `client/reconciler/startup.rs::converge` 的 `confirmed -> CoreFact::Running.verified / Facts.applied` 两个独立事实，以及 `client/reconciler/workflow.rs::execute` 的 Start/Retry 收敛入口、`plan.rs::Trigger::forced` 行为。生产 Profiles + CandidateCheck 会话的 Start/CoreChanged 进入同一个已有 S2/S3/S4 bounded round，不允许缺失 prepared candidate 后退回 inline Core submit；现有 owner lease 由唯一 CoreLifecycle actor 执行，S2 动作保留待交接续轮。
+- 真实 live receipt 已由上轮 runtime_recovery proof 验证；S3 仅检查 receipt 的 host/run intent 并在异步采样之后重验同一 Arc，旧目标仍是 verified Running，目标不一致由 planner 决定 Apply 而不是误触发 Stop。Completed 的 exact-current-target 验证不变。已确认的无操作收敛不清空 selection；未知 previous selection 使用 ref 的 Option 语义，不推断连接中断，也不阻塞合法 prepared Apply。selection 恢复要求同一 accepted Arc。
+- 仍保留无 CandidateCheck 的旧测试/兼容 session 路由和原来的 stale-target stop 语义；Startup/FollowService 的实际 handoff 与 ServiceOperation 尚未并入同一 convergence actor。L2，验收条件：Start 强制 Apply、CoreChanged 同目标不重复提交、有效旧回执更新不做额外 S3 Stop、无确认回执仍需 Stop、已有外部 Service 命令未结算时不提交。新增 trigger、owner proof 和 planner 回归用例；未执行编译、测试、Clippy 或 E2E。仅格式化、静态审阅及 git diff --check。回滚仅撤销该切片，保留前序 Runtime/Profile 更改和 ref pin。

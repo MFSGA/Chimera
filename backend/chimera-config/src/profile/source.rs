@@ -148,8 +148,8 @@ impl Default for RemoteProfileOptions {
 
 /// Minutes between scheduled syncs of a remote profile.
 ///
-/// Zero disables automatic sync, including startup catch-up. Manual sync
-/// remains available.
+/// Zero disables automatic sync: no scheduled sync and no startup catch-up.
+/// Manual sync remains available.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
 #[serde(transparent)]
 #[repr(transparent)]

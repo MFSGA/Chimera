@@ -323,6 +323,8 @@ pub(crate) fn test_runtime_receipt(
             policy: chimera_core_manager::LocalIpcPolicy::Disable,
             keep_http_controller: true,
         },
+        instance_id: None,
+        controller_generation: None,
         applied_revision: chimera_ipc::api::status::ConfigRevisionInfo {
             epoch: 1,
             generation: 1,

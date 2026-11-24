@@ -545,10 +545,7 @@ impl CoreFacade {
                     && let Ok(status) = router.refresh_status().await
                     && status.host == owner.0
                     && status.generation == owner.1
-                    && status
-                        .snapshot
-                        .as_ref()
-                        .is_some_and(|observed| receipt.confirms(status.host, observed))
+                    && receipt.confirms_projection(&status)
                 {
                     let effective_config = report_endpoint
                         .effective_config()
@@ -1171,6 +1168,34 @@ impl CoreFacade {
 
     pub(crate) async fn observe_runtime_baseline(&self) -> anyhow::Result<KnownRuntimeState> {
         if let Some(local_runtime) = self.local_runtime.as_ref() {
+            if let Some(router) = &self.core_router {
+                let status = router.refresh_status().await?;
+                anyhow::ensure!(
+                    matches!(
+                        status.connectivity,
+                        chimera_core::actor_v2::EndpointConnectivity::Connected
+                    ),
+                    "core host is disconnected; Profile baseline is unconfirmed"
+                );
+                return match status
+                    .snapshot
+                    .as_ref()
+                    .and_then(|snapshot| snapshot.state.as_ref())
+                {
+                    Some(chimera_ipc::api::status::CoreStateDetail::Stopped { .. }) => {
+                        Ok(KnownRuntimeState::Stopped)
+                    }
+                    Some(chimera_ipc::api::status::CoreStateDetail::Running { .. }) => {
+                        Ok(local_runtime
+                            .confirmed_runtime_receipt()
+                            .filter(|receipt| receipt.confirms_projection(&status))
+                            .map_or(KnownRuntimeState::NeverApplied, KnownRuntimeState::Applied))
+                    }
+                    _ => anyhow::bail!(
+                        "core host has no stable runtime state; Profile baseline is unconfirmed"
+                    ),
+                };
+            }
             let endpoint = self.endpoint_for_run_type(local_runtime.run_type())?;
             let status = endpoint.status().await?;
             return match status.state.as_ref() {
@@ -1218,7 +1243,10 @@ impl CoreFacade {
         let stop_uncertain = self.outcome_uncertain.clone();
         let result = self
             .run_local_mutation("runtime receipt restore", async move {
-                if let Some(router) = router {
+                let (endpoint, expected_owner): (
+                    Arc<dyn ControlEndpoint>,
+                    Option<(super::control_endpoint::ExecutionHost, u64)>,
+                ) = if let Some(router) = router {
                     let target: Arc<dyn ControlEndpoint> = match receipt.host {
                         super::control_endpoint::ExecutionHost::Local => {
                             Arc::new(local_runtime.local_endpoint())
@@ -1229,6 +1257,19 @@ impl CoreFacade {
                     };
                     router.change_host_from(target, false).await?;
                     local_runtime.select_execution_host(receipt.host)?;
+                    let observed = router.refresh_status().await?;
+                    anyhow::ensure!(
+                        observed.host == receipt.host
+                            && matches!(
+                                observed.connectivity,
+                                chimera_core::actor_v2::EndpointConnectivity::Connected
+                            ),
+                        "runtime restore host is not connected"
+                    );
+                    (
+                        Arc::new(RoutedEndpoint::new(router, observed.host)),
+                        Some((observed.host, observed.generation)),
+                    )
                 } else {
                     match (previous, destination) {
                         (RunType::Service, RunType::Normal) => {
@@ -1237,9 +1278,10 @@ impl CoreFacade {
                         (RunType::Normal, RunType::Service) => local_runtime.stop_core().await?,
                         _ => {}
                     }
-                }
+                    (endpoint, None)
+                };
                 local_runtime
-                    .restore_runtime_receipt(endpoint.as_ref(), receipt)
+                    .restore_runtime_receipt_with_owner(endpoint.as_ref(), receipt, expected_owner)
                     .await
             })
             .await;
@@ -1421,6 +1463,12 @@ impl CoreFacade {
         let Some(local_runtime) = self.local_runtime.as_ref() else {
             return Ok(None);
         };
+        if let Some(router) = &self.core_router {
+            let status = router.refresh_status().await?;
+            return Ok(local_runtime
+                .accepted_runtime_receipt()
+                .filter(|receipt| receipt.confirms_projection(&status)));
+        }
         let endpoint = self.endpoint_for_run_type(local_runtime.run_type())?;
         let status = endpoint.status().await?;
         if !matches!(

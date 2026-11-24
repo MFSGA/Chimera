@@ -317,17 +317,29 @@ fn transform_target_must_exist() {
 }
 
 #[test]
-fn remote_source_rejects_unsupported_scheme_but_allows_disabled_auto_sync() {
-    let profiles = profiles_with(vec![
-        remote_file_config("ftp", "ftp.yaml", "ftp://example.com/a.yaml", 120),
-        remote_file_config("zero", "zero.yaml", "https://example.com/b.yaml", 0),
-    ]);
+fn remote_source_rejects_unsupported_scheme() {
+    let profiles = profiles_with(vec![remote_file_config(
+        "ftp",
+        "ftp.yaml",
+        "ftp://example.com/a.yaml",
+        120,
+    )]);
     let errors = profiles.validate().unwrap_err();
     assert!(has_error(&errors, |e| matches!(
         e,
         ProfileValidationError::UnsupportedRemoteUrlScheme { .. }
     )));
-    assert_eq!(errors.len(), 1);
+}
+
+#[test]
+fn remote_source_accepts_zero_interval_as_auto_update_off() {
+    let profiles = profiles_with(vec![remote_file_config(
+        "manual",
+        "manual.yaml",
+        "https://example.com/a.yaml",
+        0,
+    )]);
+    profiles.validate().unwrap();
 }
 
 #[test]
@@ -369,4 +381,18 @@ fn profiles_document_with_traversal_managed_path_fails_to_deserialize() {
 
     // 直接类型面同理(serde 字符串标量 → ManagedProfilePath)。
     assert!(serde_yaml_ng::from_str::<ManagedProfilePath>("../escape.yaml").is_err());
+}
+
+#[test]
+fn remote_source_rejects_unsupported_scheme_but_allows_disabled_auto_sync() {
+    let profiles = profiles_with(vec![
+        remote_file_config("ftp", "ftp.yaml", "ftp://example.com/a.yaml", 120),
+        remote_file_config("zero", "zero.yaml", "https://example.com/b.yaml", 0),
+    ]);
+    let errors = profiles.validate().unwrap_err();
+    assert!(has_error(&errors, |e| matches!(
+        e,
+        ProfileValidationError::UnsupportedRemoteUrlScheme { .. }
+    )));
+    assert_eq!(errors.len(), 1);
 }

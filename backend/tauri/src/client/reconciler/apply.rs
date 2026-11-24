@@ -619,6 +619,7 @@ mod tests {
         receipt.revision = product.revision;
         receipt.config_digest = chimera_core_manager::payload_digest(product.product_bytes());
         receipt.applied_revision = revision();
+        receipt.controller_generation = Some(3);
         receipt.artifact = Some(product.clone());
         let receipt = Arc::new(receipt);
         let mut router_status = status();
@@ -796,7 +797,7 @@ mod tests {
             change: SelectionChange::Mode,
             replaced: Some(false),
             prior: Err(anyhow::Error::new(
-                crate::core::actor_v2::api::ApiError::Stale,
+                chimera_core::actor_v2::api::ApiError::Stale,
             )),
         };
 
@@ -851,7 +852,7 @@ mod tests {
             change: SelectionChange::Profile,
             replaced: Some(false),
             prior: Err(anyhow::Error::new(
-                crate::core::actor_v2::api::ApiError::Stale,
+                chimera_core::actor_v2::api::ApiError::Stale,
             )),
         };
         let failed = finish_connection_effect(in_place, &Ok(()), true, false)

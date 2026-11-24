@@ -48,6 +48,7 @@ fs-err.workspace = true
 serde_yaml_ng.workspace = true
 
 snafu = { workspace = true }
+strum = { version = "0.28", features = ["derive"] }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["full", "test-util"] }

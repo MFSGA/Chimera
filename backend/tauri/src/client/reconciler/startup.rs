@@ -9,7 +9,7 @@ use chimera_core::{
         CoreStatusProjection,
         facade::{ReconcileReport, StopReport},
     },
-    client::reconciler::plan::{Conclusion, ServiceEvidence},
+    client::reconciler::plan::{Conclusion, ServiceEvidence, Trigger},
 };
 use chimera_core_manager::OperationId;
 
@@ -80,9 +80,36 @@ pub(super) fn cause(reason: String) -> Arc<RuntimeError> {
     Arc::new(RuntimeError::new(reason))
 }
 
+/// Ref workflow::execute routes Start/Retry and notifications into converge.
+/// Compatibility fixtures still lack canonical candidate preparation and
+/// retain their historical trigger routing until the old port is removed.
+pub(crate) fn uses_committed_convergence(trigger: Trigger, canonical_session: bool) -> bool {
+    matches!(trigger, Trigger::SourceCommitted | Trigger::Retry)
+        || (canonical_session && matches!(trigger, Trigger::Start | Trigger::CoreChanged))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ref_start_and_core_change_join_the_canonical_convergence_round() {
+        for trigger in [Trigger::Start, Trigger::CoreChanged] {
+            assert!(uses_committed_convergence(trigger, true));
+            assert!(!uses_committed_convergence(trigger, false));
+        }
+        for trigger in [Trigger::SourceCommitted, Trigger::Retry] {
+            assert!(uses_committed_convergence(trigger, true));
+            assert!(uses_committed_convergence(trigger, false));
+        }
+        for trigger in [
+            Trigger::Stop,
+            Trigger::ServiceOperation,
+            Trigger::PrepareService,
+        ] {
+            assert!(!uses_committed_convergence(trigger, true));
+        }
+    }
 
     #[test]
     fn ref_startup_projection_distinguishes_all_reconciler_conclusions() {

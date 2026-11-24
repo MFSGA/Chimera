@@ -31,11 +31,14 @@ pub struct Profiles {
     #[serde(default = "default_valid")]
     pub valid: Vec<String>,
 
-    /// User-named Config folders. Empty on existing documents until enabled.
+    /// User-named groups of Config profiles. A profile is in at most one
+    /// folder; `items` order already follows the folders (see
+    /// [`Profiles::apply_layout`]).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub folders: Vec<ProfileFolder>,
 
-    /// Presentation-only proxy group layouts keyed by the owning Config profile.
+    /// How each Config profile's proxy groups are arranged in the Proxies
+    /// sidebar, by profile. Presentation only: it never reaches the runtime.
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
     pub proxy_group_layouts: IndexMap<ProfileId, ProxyGroupLayout>,
 
@@ -361,21 +364,6 @@ pub enum ProfileValidationError {
     #[error("remote URL scheme is not supported for {profile}: {scheme}")]
     UnsupportedRemoteUrlScheme { profile: ProfileId, scheme: String },
 
-    #[error("proxy group layout belongs to an unknown or non-Config profile: {profile}")]
-    ProxyGroupLayoutProfileNotConfig { profile: ProfileId },
-
-    #[error("proxy group folder id duplicated in profile {profile}: {id}")]
-    ProxyGroupFolderDuplicateId { profile: ProfileId, id: FolderId },
-
-    #[error("proxy group folder name empty in profile {profile}: {id}")]
-    ProxyGroupFolderNameEmpty { profile: ProfileId, id: FolderId },
-
-    #[error("proxy group name empty in profile {profile}")]
-    ProxyGroupNameEmpty { profile: ProfileId },
-
-    #[error("proxy group {name} repeated in layout of profile {profile}")]
-    ProxyGroupDuplicate { profile: ProfileId, name: String },
-
     #[error("folder id is used more than once: {id}")]
     FolderDuplicateId { id: FolderId },
 
@@ -405,6 +393,21 @@ pub enum ProfileValidationError {
 
     #[error("layout places a profile that is not an existing Config: {profile}")]
     LayoutUnknownProfile { profile: ProfileId },
+
+    #[error("proxy group layout belongs to a profile that is not an existing Config: {profile}")]
+    ProxyGroupLayoutProfileNotConfig { profile: ProfileId },
+
+    #[error("proxy group folder id is used more than once in the layout of {profile}: {id}")]
+    ProxyGroupFolderDuplicateId { profile: ProfileId, id: FolderId },
+
+    #[error("proxy group folder name is empty in the layout of {profile}: {id}")]
+    ProxyGroupFolderNameEmpty { profile: ProfileId, id: FolderId },
+
+    #[error("proxy group name is empty in the layout of {profile}")]
+    ProxyGroupNameEmpty { profile: ProfileId },
+
+    #[error("proxy group is placed more than once in the layout of {profile}: {name}")]
+    ProxyGroupDuplicate { profile: ProfileId, name: String },
 }
 
 fn validate_transforms(

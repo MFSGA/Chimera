@@ -152,18 +152,13 @@ pub(crate) async fn proven_selection_from_receipt(
         .await
         .ok()
         .flatten();
-    // Recheck Core revision, host, source identity and exact config digest.
+    // Recheck the exact accepted receipt, including its process/connection identity.
     let still_active = core
         .active_runtime_receipt()
         .await
         .ok()
         .flatten()
-        .is_some_and(|latest| {
-            latest.target == first.target
-                && latest.host == first.host
-                && latest.applied_revision == first.applied_revision
-                && latest.config_digest == first.config_digest
-        });
+        .is_some_and(|latest| std::sync::Arc::ptr_eq(&first, &latest));
     if still_active && selection == latest_selection {
         selection
     } else {

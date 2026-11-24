@@ -24,6 +24,7 @@ pub(crate) mod reconciler;
 pub mod runtime;
 pub(crate) mod runtime_build;
 pub(crate) mod runtime_inspection;
+pub(crate) mod runtime_recovery;
 mod service_status;
 mod session_state;
 mod system_dns;
@@ -38,6 +39,7 @@ use chimera_config::application::ReleaseChannel;
 use chimera_config::profile::{
     FolderId, NewProfileRequest, ProfileDefinition, ProfileId, ProfileLayout, ProfileMetadata,
     ProfileMetadataPatch, ProfileSource, Profiles, RemoteProfileOptions, RemoteProfileOptionsPatch,
+    TransformKind,
 };
 use chimera_contracts::{
     bundle_metadata::BundleMetadata, net::ChangelogHttp, system_dns::SystemDnsCache,
@@ -48,6 +50,7 @@ use chimera_core::{
         service_router::ServiceHostStatus,
     },
     client::app_update::{self, AppUpdateArgs, AppUpdateClient, AppUpdateSettings},
+    profile_import::url_derived_name,
 };
 use struct_patch::Patch as _;
 
@@ -167,20 +170,6 @@ async fn new_typed_config_clients(
         session_state,
         clash_config,
     })
-}
-
-fn url_derived_name(url: &url::Url) -> String {
-    url.path_segments()
-        .and_then(|mut segments| segments.rfind(|segment| !segment.is_empty()))
-        .map(|segment| {
-            segment
-                .trim_end_matches(".yaml")
-                .trim_end_matches(".yml")
-                .to_string()
-        })
-        .filter(|name| !name.is_empty())
-        .or_else(|| url.host_str().map(str::to_string))
-        .unwrap_or_else(|| "Remote Profile".into())
 }
 
 struct ChimeraClientInner {
@@ -901,6 +890,21 @@ impl ChimeraClient {
         Ok(outcome)
     }
 
+    /// Download and suggest an import kind without committing a source document.
+    // The desktop IPC is introduced with the generated frontend contract.
+    #[allow(dead_code)]
+    pub(crate) async fn probe_profile_url(
+        &self,
+        url: url::Url,
+        options: Option<RemoteProfileOptionsPatch>,
+    ) -> anyhow::Result<chimera_core::profile_import::ProfileUrlProbe> {
+        let mut option = RemoteProfileOptions::default();
+        if let Some(patch) = options {
+            option.apply(patch);
+        }
+        Ok(self.profiles_client()?.probe(url, option).await?)
+    }
+
     pub(crate) async fn import_profile(
         &self,
         url: url::Url,
@@ -917,6 +921,19 @@ impl ChimeraClient {
         patch: Option<RemoteProfileOptionsPatch>,
         folder: Option<chimera_config::profile::FolderId>,
     ) -> anyhow::Result<MutationOutcome<ProfileId>> {
+        self.import_profile_with_transform(url, name, patch, None, folder)
+            .await
+    }
+
+    /// Ref import semantics: only Config imports may auto-activate.
+    pub(crate) async fn import_profile_with_transform(
+        &self,
+        url: url::Url,
+        name: Option<String>,
+        patch: Option<RemoteProfileOptionsPatch>,
+        transform: Option<TransformKind>,
+        folder: Option<FolderId>,
+    ) -> anyhow::Result<MutationOutcome<ProfileId>> {
         let update_interval_explicit = patch
             .as_ref()
             .and_then(|patch| patch.update_interval_minutes)
@@ -931,8 +948,9 @@ impl ChimeraClient {
         }
         let report = self
             .profiles_client()?
-            .import_into_folder(
+            .import_with_transform(
                 url,
+                transform,
                 ProfileMetadata {
                     name,
                     desc: None,
@@ -953,6 +971,9 @@ impl ChimeraClient {
             self.collect_post_commit_degradations(&report).await,
         )
         .with_commit(report.receipt.clone());
+        if transform.is_some() {
+            return Ok(outcome);
+        }
         Ok(outcome.append_commit_result(self.try_auto_activate_if_none(created).await))
     }
 

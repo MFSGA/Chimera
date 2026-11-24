@@ -1290,6 +1290,7 @@ dependencies = [
  "snafu",
  "specta",
  "specta-typescript",
+ "strum",
  "tempfile",
  "thiserror 2.0.21",
  "time",

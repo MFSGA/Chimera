@@ -70,11 +70,11 @@ fn actor_effective_config_matches_receipt(
     {
         return false;
     }
-    let (Some(before_status), Some(after_status)) = (&before.snapshot, &after.snapshot) else {
+    let Some(before_status) = &before.snapshot else {
         return false;
     };
-    receipt.confirms(before.host, before_status)
-        && receipt.confirms(after.host, after_status)
+    receipt.confirms_projection(before)
+        && receipt.confirms_projection(after)
         && before_status.instance_id.as_deref() == Some(effective.instance_id.as_str())
         && effective.revision == receipt.applied_revision
 }
@@ -94,10 +94,7 @@ impl ChimeraClient {
         if !matches!(
             before.connectivity,
             chimera_core::actor_v2::router::EndpointConnectivity::Connected
-        ) || !before
-            .snapshot
-            .as_ref()
-            .is_some_and(|status| receipt.confirms(before.host, status))
+        ) || !receipt.confirms_projection(&before)
         {
             return Ok(None);
         }
@@ -266,7 +263,8 @@ mod tests {
         };
         use chimera_ipc::api::status::{CoreStateDetail, RevisionIdInfo};
 
-        let receipt = crate::client::ports::test_runtime_receipt(Default::default());
+        let mut receipt = crate::client::ports::test_runtime_receipt(Default::default());
+        receipt.controller_generation = Some(7);
         let projection = CoreStatusProjection {
             host: ExecutionHost::Local,
             generation: 7,

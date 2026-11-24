@@ -2111,7 +2111,10 @@ impl Actor for ApplicationWorkflowActor {
                             error.downcast_ref::<crate::client::reconciler::attempt::OwnershipTransitionPending>()
                         })
                         .is_some_and(|pending| pending.plan.is_some());
-                    if matches!(active.trigger, "SourceCommitted" | "Retry") && needs_owner_handoff
+                    if matches!(
+                        active.trigger,
+                        "SourceCommitted" | "Retry" | "Start" | "CoreChanged"
+                    ) && needs_owner_handoff
                     {
                         // The S2 decision was made inside the latest-source
                         // round. The single Actor queues its existing leased
@@ -2153,7 +2156,10 @@ impl Actor for ApplicationWorkflowActor {
                         source_advanced,
                         prepared_outcome.as_ref(),
                     );
-                    workflow
+                    state
+                        .workflow
+                        .as_ref()
+                        .expect("completed workflow was restored")
                         .lifecycle()
                         .settle_observed_attempt(&verdict, verified_running);
                     state.reconciler.send_modify(|status| {

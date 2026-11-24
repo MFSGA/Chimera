@@ -397,6 +397,8 @@ pub(crate) struct RuntimeApplyReceipt {
     pub run_intent: super::application_workflow::policy::CoreRunIntent,
     pub local_ipc: chimera_core_manager::LocalIpcSettings,
     pub applied_revision: chimera_ipc::api::status::ConfigRevisionInfo,
+    pub instance_id: Option<String>,
+    pub controller_generation: Option<u64>,
     /// The Profile-backed source identity this runtime was built from, when
     /// the caller captured the complete committed target.
     pub target: Option<String>,
@@ -410,20 +412,18 @@ impl RuntimeApplyReceipt {
         host: crate::core::actor_v2::control_endpoint::ExecutionHost,
         status: &crate::core::actor_v2::control_endpoint::CoreStatusSnapshot,
     ) -> bool {
-        matches!(
-            status.state,
-            Some(chimera_ipc::api::status::CoreStateDetail::Running { epoch, .. })
-                if epoch == self.applied_revision.epoch
-        ) && host == self.host
-            && status.source_hash.as_deref() == Some(self.applied_revision.source_hash.as_str())
-            && status.revision.as_ref().is_some_and(|revision| {
-                revision.epoch == self.applied_revision.epoch
-                    && revision.generation == self.applied_revision.generation
-                    && revision.effective_hash == self.applied_revision.effective_hash
-            })
-            && status
-                .applied_kind
-                .is_none_or(|kind| kind == self.core_spec.kind)
+        super::runtime_recovery::matches_endpoint_apply(self, host, status)
+    }
+
+    pub(crate) fn confirms_projection(
+        &self,
+        status: &chimera_core::actor_v2::CoreStatusProjection,
+    ) -> bool {
+        super::runtime_recovery::confirmed_apply_kind(
+            self,
+            &super::runtime_recovery::ObservedRuntime::from_status(status),
+        )
+        .is_some()
     }
 }
 

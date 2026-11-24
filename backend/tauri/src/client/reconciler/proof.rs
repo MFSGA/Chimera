@@ -17,14 +17,21 @@ pub(crate) fn host_for(run_type: RunType) -> ExecutionHost {
     }
 }
 
+/// S3 proves the live receipt independently of the desired source. A verified
+/// older target is safe to replace in place; it is not an unverified Core.
+pub(crate) fn receipt_matches_owner(
+    receipt: &RuntimeApplyReceipt,
+    observed_host: ExecutionHost,
+) -> bool {
+    receipt.run_intent == CoreRunIntent::Running && receipt.host == observed_host
+}
+
 pub(crate) fn receipt_matches_target(
     receipt: &RuntimeApplyReceipt,
     target: &str,
     observed_host: ExecutionHost,
 ) -> bool {
-    receipt.run_intent == CoreRunIntent::Running
-        && receipt.host == observed_host
-        && receipt.target.as_deref() == Some(target)
+    receipt_matches_owner(receipt, observed_host) && receipt.target.as_deref() == Some(target)
 }
 
 #[cfg(test)]
@@ -41,6 +48,7 @@ mod tests {
             "committed-a",
             ExecutionHost::Local
         ));
+        assert!(receipt_matches_owner(&receipt, ExecutionHost::Local));
         assert!(!receipt_matches_target(
             &receipt,
             "committed-b",

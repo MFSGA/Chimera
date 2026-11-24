@@ -76,6 +76,19 @@ pub(crate) fn same_core_status(left: &CoreStatusSnapshot, right: &CoreStatusSnap
         && left.run_type == right.run_type
 }
 
+/// The same accepted receipt (including its absence) must survive the
+/// observation round. A newly installed receipt is a different Core fact.
+pub(crate) fn same_active_receipt(
+    before: Option<&Arc<RuntimeApplyReceipt>>,
+    after: Option<&Arc<RuntimeApplyReceipt>>,
+) -> bool {
+    match (before, after) {
+        (Some(before), Some(after)) => Arc::ptr_eq(before, after),
+        (None, None) => true,
+        _ => false,
+    }
+}
+
 /// Ref stop_owner does not treat a successful Stop RPC as a settled
 /// terminal. S4 may start only after observing the same selected host in
 /// a real stopped state, not another Running Core or an uninitialized status.
@@ -177,9 +190,10 @@ pub(crate) fn plan_owner_boundary(
     .plan(CoreFact::Unreadable, "", None, None)
 }
 
-/// S2 then S3/S4 in one ref Facts round. Returns None when there is no stable
-/// current Core or an unverified Running Core would otherwise be misclassified
-/// as a new target: the existing recovery adapter must handle that case.
+/// S2 then S3/S4 in one ref Facts round. Returns None only when the
+/// compatibility status has not been initialized. As in ref, an observed
+/// Running Core without a confirmed receipt is Running { verified: false },
+/// not Unreadable: S2 must establish ownership before S3 can stop it.
 ///
 /// A Service owner action or Waiting on ownership evidence is returned as an
 /// explicit step and must NOT be treated as permission to submit Core.
@@ -199,17 +213,13 @@ pub(crate) fn plan_committed_target(
         return None;
     }
     let owner = host_for(observed.run_type);
-    let owner_plan = plan::plan_owner(desired, owner, &service);
     let core = match &observed.state {
         CoreState::Stopped(reason) => CoreFact::Stopped {
             failed: reason.is_some(),
         },
-        CoreState::Running if active_receipt.is_some() => CoreFact::Running {
-            verified: verified_applied,
+        CoreState::Running => CoreFact::Running {
+            verified: active_receipt.is_some() && verified_applied,
         },
-        // Unverified Running is never enough for an S3/S4 stop. We still
-        // execute S2 to detect a distinct owned Service Core or handoff.
-        CoreState::Running => CoreFact::Unreadable,
     };
     // A verified Running receipt establishes its *own* applied target,
     // never the desired source target merely because the Core is healthy.
@@ -220,22 +230,16 @@ pub(crate) fn plan_committed_target(
     } else {
         None
     };
-    let step = FactFrame {
-        trigger,
-        recovering,
-        desired,
-        owner,
-        service,
-    }
-    .plan(core, target, applied, attempt);
-    // S2 established ownership but S3 cannot safely infer the active Core
-    // target: leave it to Chimera's existing Core receipt recovery path.
-    if matches!(owner_plan, OwnerPlan::Owned) && matches!(core, CoreFact::Unreadable) && !recovering
-    {
-        None
-    } else {
-        Some(step)
-    }
+    Some(
+        FactFrame {
+            trigger,
+            recovering,
+            desired,
+            owner,
+            service,
+        }
+        .plan(core, target, applied, attempt),
+    )
 }
 
 #[cfg(test)]
@@ -504,6 +508,17 @@ mod tests {
     }
 
     #[test]
+    fn receipt_observation_fences_both_presence_and_absence() {
+        let accepted = Arc::new(receipt());
+        let replacement = Arc::new(receipt());
+        assert!(same_active_receipt(None, None));
+        assert!(same_active_receipt(Some(&accepted), Some(&accepted)));
+        assert!(!same_active_receipt(None, Some(&accepted)));
+        assert!(!same_active_receipt(Some(&accepted), None));
+        assert!(!same_active_receipt(Some(&accepted), Some(&replacement)));
+    }
+
+    #[test]
     fn source_notification_does_not_reapply_verified_committed_target() {
         let mut accepted = receipt();
         accepted.target = Some("same-target".into());
@@ -566,7 +581,83 @@ mod tests {
     }
 
     #[test]
-    fn wrong_accepted_target_demands_stop_before_new_apply() {
+    fn ref_start_and_core_changed_use_the_same_running_receipt_facts() {
+        use crate::client::reconciler::proof::receipt_matches_owner;
+        let mut accepted = receipt();
+        accepted.target = Some("previous-target".into());
+        let observed = running(crate::core::RunType::Normal);
+        let verified = receipt_matches_owner(&accepted, ExecutionHost::Local);
+        assert!(verified);
+        for trigger in [
+            Trigger::Start,
+            Trigger::CoreChanged,
+            Trigger::SourceCommitted,
+            Trigger::Retry,
+        ] {
+            assert!(matches!(
+                plan_committed_target(
+                    "new-target",
+                    ExecutionHost::Local,
+                    &observed,
+                    absent(),
+                    false,
+                    Some(&accepted),
+                    verified,
+                    None,
+                    trigger
+                ),
+                Some(Step::Apply)
+            ));
+        }
+        // An ordinary CoreChanged observation does not force a duplicate apply.
+        assert!(matches!(
+            plan_committed_target(
+                "previous-target",
+                ExecutionHost::Local,
+                &observed,
+                absent(),
+                false,
+                Some(&accepted),
+                verified,
+                None,
+                Trigger::CoreChanged
+            ),
+            Some(Step::Idle(Conclusion::Converged))
+        ));
+        // Explicit Start keeps the upstream forced-reconcile semantics.
+        assert!(matches!(
+            plan_committed_target(
+                "previous-target",
+                ExecutionHost::Local,
+                &observed,
+                absent(),
+                false,
+                Some(&accepted),
+                verified,
+                None,
+                Trigger::Start
+            ),
+            Some(Step::Apply)
+        ));
+        // Only an actually unverified running instance requires S3 retirement.
+        assert!(matches!(
+            plan_committed_target(
+                "new-target",
+                ExecutionHost::Local,
+                &observed,
+                absent(),
+                false,
+                None,
+                false,
+                None,
+                Trigger::CoreChanged
+            ),
+            Some(Step::Stop { intent: false })
+        ));
+    }
+
+    #[test]
+    fn unverified_accepted_receipt_demands_stop_before_new_apply() {
         let step = plan_committed_target(
             "new-target",
             ExecutionHost::Local,
@@ -635,7 +726,7 @@ mod tests {
     }
 
     #[test]
-    fn recovery_and_unverified_owner_cannot_authorize_apply_or_stop() {
+    fn recovery_blocks_apply_but_observed_unverified_running_requires_stop() {
         let current = running(crate::core::RunType::Normal);
         assert!(matches!(
             plan_committed_target(
@@ -651,7 +742,7 @@ mod tests {
             ),
             Some(Step::Idle(Conclusion::Waiting { .. }))
         ));
-        assert!(
+        assert!(matches!(
             plan_committed_target(
                 "next",
                 ExecutionHost::Local,
@@ -662,9 +753,23 @@ mod tests {
                 false,
                 None,
                 Trigger::SourceCommitted,
-            )
-            .is_none()
-        );
+            ),
+            Some(Step::Stop { intent: false })
+        ));
+        assert!(matches!(
+            plan_committed_target(
+                "next",
+                ExecutionHost::Local,
+                &current,
+                owned_service(),
+                false,
+                None,
+                false,
+                None,
+                Trigger::SourceCommitted,
+            ),
+            Some(Step::Owner(OwnerPlan::RetireServiceThenLocal))
+        ));
         let mut unproven = current;
         unproven.state_changed_at = 0;
         assert!(

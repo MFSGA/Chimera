@@ -3,6 +3,7 @@ pub mod clash;
 pub mod client;
 pub mod connections;
 pub mod format;
+pub mod profile_import;
 pub mod proxies;
 pub mod proxies_actor;
 pub mod redb_ext;

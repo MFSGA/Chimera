@@ -491,6 +491,8 @@ impl LocalRuntimeHost {
             run_intent: crate::client::application_workflow::policy::CoreRunIntent::Running,
             local_ipc: prepared.intent.local_ipc,
             applied_revision,
+            instance_id: applied_status.instance_id.clone(),
+            controller_generation: Some(expected_owner.1),
             target: prepared.target.clone(),
             ports: prepared.ports.clone(),
             artifact: Some(prepared.snapshot.clone()),
@@ -1004,6 +1006,8 @@ impl LocalRuntimeHost {
             run_intent: crate::client::application_workflow::policy::CoreRunIntent::Running,
             local_ipc,
             applied_revision,
+            instance_id: applied_status.instance_id.clone(),
+            controller_generation: expected_owner.map(|(_, generation)| generation),
             target,
             ports: candidate_ports,
             artifact: Some(snapshot.clone()),
@@ -1143,10 +1147,21 @@ impl LocalRuntimeHost {
         Ok(())
     }
 
+    #[cfg(test)]
     pub(crate) async fn restore_runtime_receipt(
         &self,
         endpoint: &dyn ControlEndpoint,
         receipt: Arc<RuntimeApplyReceipt>,
+    ) -> anyhow::Result<()> {
+        self.restore_runtime_receipt_with_owner(endpoint, receipt, None)
+            .await
+    }
+
+    pub(crate) async fn restore_runtime_receipt_with_owner(
+        &self,
+        endpoint: &dyn ControlEndpoint,
+        receipt: Arc<RuntimeApplyReceipt>,
+        expected_owner: Option<(ExecutionHost, u64)>,
     ) -> anyhow::Result<()> {
         anyhow::ensure!(
             !self.closed.load(Ordering::Acquire),
@@ -1166,6 +1181,10 @@ impl LocalRuntimeHost {
                 crate::client::application_workflow::policy::CoreRunIntent::Running
             ),
             "a stopped runtime receipt cannot be restored by applying a config"
+        );
+        anyhow::ensure!(
+            expected_owner.is_none_or(|(host, _)| host == endpoint.host()),
+            "the restore receipt belongs to a different routed host"
         );
         let artifact = receipt
             .artifact
@@ -1230,7 +1249,7 @@ impl LocalRuntimeHost {
         };
         let operation_id = OperationId::generate();
         let submission = CoreSubmission {
-            expected_owner: None,
+            expected_owner,
             envelope: CoreCommandEnvelope {
                 operation_id,
                 command: CoreCommand::Reconcile(Box::new(ReconcileRequest {
@@ -1297,6 +1316,8 @@ impl LocalRuntimeHost {
             run_intent: receipt.run_intent,
             local_ipc: receipt.local_ipc,
             applied_revision,
+            instance_id: applied_status.instance_id.clone(),
+            controller_generation: expected_owner.map(|(_, generation)| generation),
             target: receipt.target.clone(),
             ports: receipt.ports.clone(),
             artifact: Some(snapshot.clone()),
@@ -2051,6 +2072,8 @@ mod tests {
                 policy: LocalIpcPolicy::Disable,
                 keep_http_controller: true,
             },
+            instance_id: None,
+            controller_generation: None,
             applied_revision: chimera_ipc::api::status::ConfigRevisionInfo {
                 epoch: 1,
                 generation: 1,
@@ -2785,6 +2808,8 @@ mod tests {
                 policy: LocalIpcPolicy::Disable,
                 keep_http_controller: true,
             },
+            instance_id: None,
+            controller_generation: None,
             applied_revision: chimera_ipc::api::status::ConfigRevisionInfo {
                 epoch: 1,
                 generation: 1,

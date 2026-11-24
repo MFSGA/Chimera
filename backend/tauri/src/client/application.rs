@@ -975,14 +975,8 @@ fn actor_confirms_effect_ports(
         && matches!(after.connectivity, EndpointConnectivity::Connected)
         && before.host == after.host
         && before.generation == after.generation
-        && before
-            .snapshot
-            .as_ref()
-            .is_some_and(|snapshot| receipt.confirms(before.host, snapshot))
-        && after
-            .snapshot
-            .as_ref()
-            .is_some_and(|snapshot| receipt.confirms(after.host, snapshot))
+        && receipt.confirms_projection(before)
+        && receipt.confirms_projection(after)
 }
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -1667,7 +1661,8 @@ mod tests {
         };
         use chimera_ipc::api::status::{CoreStateDetail, RevisionIdInfo};
 
-        let receipt = crate::client::ports::test_runtime_receipt(Default::default());
+        let mut receipt = crate::client::ports::test_runtime_receipt(Default::default());
+        receipt.controller_generation = Some(8);
         let before = CoreStatusProjection {
             host: ExecutionHost::Local,
             generation: 8,

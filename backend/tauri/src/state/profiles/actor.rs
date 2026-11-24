@@ -4,12 +4,11 @@
 use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use chimera_config::profile::{
-    ConfigDefinition, ExternalMode, FileConfig, FolderId, LocalBinding, ManagedProfilePath,
-    MaterializedFile, NewProfileRequest, ProfileDefinition, ProfileDependencyIndex, ProfileFolder,
-    ProfileId, ProfileItem, ProfileLayout, ProfileMetadata, ProfileMetadataPatch,
-    ProfileRevisionError, ProfileSource, ProfileValidationError, Profiles, ProxyGroupFolder,
-    ProxyGroupLayout, RemoteProfileOptions, RemoteProfileOptionsPatch, RemoteSyncInterval,
-    ScriptRuntime, SubscriptionInfo, TransformDefinition,
+    ExternalMode, FolderId, LocalBinding, ManagedProfilePath, NewProfileRequest, ProfileDefinition,
+    ProfileDependencyIndex, ProfileFolder, ProfileId, ProfileItem, ProfileLayout, ProfileMetadata,
+    ProfileMetadataPatch, ProfileRevisionError, ProfileSource, ProfileValidationError, Profiles,
+    ProxyGroupFolder, ProxyGroupLayout, RemoteProfileOptions, RemoteProfileOptionsPatch,
+    RemoteSyncInterval, ScriptRuntime, SubscriptionInfo, TransformDefinition, TransformKind,
 };
 use chimera_contracts::profiles::{
     command_failure::{
@@ -21,7 +20,10 @@ use chimera_contracts::{
     mutation::CommitAborted,
     runtime_error::{RuntimeCheckUnavailable, RuntimeError},
 };
-use chimera_core::state::{PersistentStateManager, ReplaceIfVersionResult, Version};
+use chimera_core::{
+    profile_import::remote_import_definition,
+    state::{PersistentStateManager, ReplaceIfVersionResult, Version},
+};
 use chimera_core_manager::OperationId;
 use ractor::{Actor, ActorProcessingErr, ActorRef, RpcReplyPort};
 
@@ -317,6 +319,7 @@ struct PendingRefresh {
 pub(crate) struct ImportOperationToken(u64);
 
 struct PendingImport {
+    transform: Option<TransformKind>,
     reply: RpcReplyPort<Result<CommitReport, ProfilesError>>,
     metadata: ProfileMetadata,
     url: url::Url,
@@ -476,6 +479,7 @@ pub enum ProfilesActorMessage {
     /// until download + validation succeed and the caller is still live.
     ImportRemote {
         url: url::Url,
+        transform: Option<TransformKind>,
         metadata: ProfileMetadata,
         option: RemoteProfileOptions,
         update_interval_explicit: bool,
@@ -888,26 +892,6 @@ impl ProfilesActor {
         }
     }
 
-    fn remote_import_definition(
-        url: url::Url,
-        option: RemoteProfileOptions,
-        file: ManagedProfilePath,
-        subscription: SubscriptionInfo,
-        updated_at: Option<time::OffsetDateTime>,
-    ) -> ProfileDefinition {
-        ProfileDefinition::Config {
-            config: ConfigDefinition::File(FileConfig {
-                source: ProfileSource::Remote {
-                    materialized: MaterializedFile { file, updated_at },
-                    url,
-                    option,
-                    subscription,
-                },
-                transforms: vec![],
-            }),
-        }
-    }
-
     /// Validate the URL, options and destination folder before starting any
     /// remote download. The commit stage checks the folder again against the
     /// latest document, so concurrent deletion cannot persist an orphan.
@@ -915,11 +899,13 @@ impl ProfilesActor {
         before: &Profiles,
         metadata: &ProfileMetadata,
         url: url::Url,
+        transform: Option<TransformKind>,
         option: RemoteProfileOptions,
         folder: Option<&FolderId>,
     ) -> Result<(), ProfilesError> {
-        let definition = Self::remote_import_definition(
+        let definition = remote_import_definition(
             url,
+            transform,
             option,
             ManagedProfilePath::new("pending.yaml").expect("static managed path is valid"),
             SubscriptionInfo::default(),
@@ -1486,31 +1472,54 @@ impl ProfilesActor {
         }
     }
 
+    /// Ref's common download/validate/settle path. Import and refresh use
+    /// the same typed outcome; only the caller owns task supervision and commit.
+    async fn download(
+        fetcher: &dyn SubscriptionFetcher,
+        url: &url::Url,
+        option: &RemoteProfileOptions,
+        definition: &ProfileDefinition,
+    ) -> RefreshOutcome {
+        let fetch = async {
+            tracing::info!(target: "chimera::profile_sync", stage = "download", "Downloading profile");
+            let fetched = fetcher.fetch(url, option).await.map_err(|error| {
+                let message = format!("download failed: {error}");
+                let source = error
+                    .downcast::<SubscriptionFetchError>()
+                    .ok()
+                    .map(|source| RefreshFailureSource::Subscription {
+                        url: url.clone(),
+                        source,
+                    });
+                (message, source)
+            })?;
+            Self::validate_fetched_content_typed(definition, &fetched.content).map_err(
+                |source| {
+                    (
+                        Self::content_error_message(&source),
+                        Some(RefreshFailureSource::Content(source)),
+                    )
+                },
+            )?;
+            tracing::info!(target: "chimera::profile_sync", stage = "validated", "Profile content validated");
+            Ok::<_, (String, Option<RefreshFailureSource>)>(fetched)
+        };
+        match fetch.await {
+            Ok(fetched) => RefreshOutcome::Succeeded {
+                subscription: fetched.subscription,
+                suggested_update_interval_minutes: fetched.suggested_update_interval_minutes,
+                content: fetched.content,
+                filename: fetched.filename,
+            },
+            Err((message, source)) => RefreshOutcome::Failed { message, source },
+        }
+    }
+
     fn validate_fetched_content_typed(
         definition: &ProfileDefinition,
         content: &str,
     ) -> Result<(), ProfileContentError> {
-        let needs_yaml = match definition {
-            ProfileDefinition::Config { .. } => true,
-            ProfileDefinition::Transform { transform } => {
-                matches!(transform, TransformDefinition::Overlay(_))
-            }
-        };
-        if needs_yaml {
-            let mapping = serde_yaml::from_str::<serde_yaml::Mapping>(content)
-                .map_err(|source| ProfileContentError::NotYamlMapping { source })?;
-            if matches!(definition, ProfileDefinition::Config { .. })
-                && !mapping.contains_key("proxies")
-                && !mapping.contains_key("proxy-providers")
-            {
-                return Err(ProfileContentError::MissingProxies);
-            }
-            Ok(())
-        } else if content.trim().is_empty() {
-            Err(ProfileContentError::EmptyScript)
-        } else {
-            Ok(())
-        }
+        chimera_core::profile_import::validate_fetched_content(definition, content)
     }
 
     /// Legacy call sites still need the exact historical text for sync jobs
@@ -2162,52 +2171,10 @@ impl Actor for ProfilesActor {
                     // CommitRefreshed handler, after the stale-download fence,
                     // so an in-flight refresh can never clobber the file of a
                     // definition that was replaced meanwhile.
-                    let fetch = async {
-                        tracing::info!(target: "chimera::profile_sync", stage = "download", "Downloading profile");
-                        let fetched = fetcher.fetch(&url, &option).await.map_err(|error| {
-                            let message = format!("download failed: {error}");
-                            let source =
-                                error
-                                    .downcast::<SubscriptionFetchError>()
-                                    .ok()
-                                    .map(|source| RefreshFailureSource::Subscription {
-                                        url: url.clone(),
-                                        source,
-                                    });
-                            (message, source)
-                        })?;
-                        Self::validate_fetched_content_typed(&definition, &fetched.content)
-                            .map_err(|source| {
-                                (
-                                    Self::content_error_message(&source),
-                                    Some(RefreshFailureSource::Content(source)),
-                                )
-                            })?;
-                        tracing::info!(target: "chimera::profile_sync", stage = "validated", "Profile content validated");
-                        Ok::<_, (String, Option<RefreshFailureSource>)>((
-                            fetched.subscription,
-                            fetched.suggested_update_interval_minutes,
-                            fetched.content,
-                            fetched.filename,
-                        ))
-                    };
+                    let download = Self::download(fetcher.as_ref(), &url, &option, &definition);
                     let outcome = match task_context {
-                        Some(context) => context.0.instrument(fetch).await,
-                        None => fetch.await,
-                    };
-                    let outcome = match outcome {
-                        Ok((
-                            subscription,
-                            suggested_update_interval_minutes,
-                            content,
-                            filename,
-                        )) => RefreshOutcome::Succeeded {
-                            subscription,
-                            suggested_update_interval_minutes,
-                            content,
-                            filename,
-                        },
-                        Err((message, source)) => RefreshOutcome::Failed { message, source },
+                        Some(context) => context.0.instrument(download).await,
+                        None => download.await,
                     };
                     let _ = actor.cast(ProfilesActorMessage::CommitRefreshed {
                         uid: commit_uid,
@@ -2365,6 +2332,7 @@ impl Actor for ProfilesActor {
             }
             ProfilesActorMessage::ImportRemote {
                 url,
+                transform,
                 metadata,
                 option,
                 update_interval_explicit,
@@ -2376,6 +2344,7 @@ impl Actor for ProfilesActor {
                     &before,
                     &metadata,
                     url.clone(),
+                    transform,
                     option.clone(),
                     folder.as_ref(),
                 ) {
@@ -2388,6 +2357,7 @@ impl Actor for ProfilesActor {
                 state.pending_imports.insert(
                     token,
                     PendingImport {
+                        transform,
                         reply,
                         metadata,
                         url: url.clone(),
@@ -2399,10 +2369,10 @@ impl Actor for ProfilesActor {
 
                 let fetcher = Arc::clone(&state.fetcher);
                 let actor = myself.clone();
-                // Content validation uses a Config definition shape; import is
-                // always a remote Config File profile.
-                let definition_for_validation = Self::remote_import_definition(
+                // Validate the exact caller-selected Config or Transform kind.
+                let definition_for_validation = remote_import_definition(
                     url.clone(),
+                    transform,
                     option.clone(),
                     ManagedProfilePath::new("pending.yaml").expect("static managed path is valid"),
                     SubscriptionInfo::default(),
@@ -2414,49 +2384,12 @@ impl Actor for ProfilesActor {
                 // Actor shutdown / cast failure remains safe: pending state drops.
                 tokio::spawn(async move {
                     let fetch_result = tokio::spawn(async move {
-                        let fetched = fetcher.fetch(&url, &option).await.map_err(|error| {
-                            let message = format!("download failed: {error}");
-                            let source =
-                                error
-                                    .downcast::<SubscriptionFetchError>()
-                                    .ok()
-                                    .map(|source| RefreshFailureSource::Subscription {
-                                        url: url.clone(),
-                                        source,
-                                    });
-                            (message, source)
-                        })?;
-                        Self::validate_fetched_content_typed(
-                            &definition_for_validation,
-                            &fetched.content,
-                        )
-                        .map_err(|source| {
-                            (
-                                Self::content_error_message(&source),
-                                Some(RefreshFailureSource::Content(source)),
-                            )
-                        })?;
-                        Ok::<_, (String, Option<RefreshFailureSource>)>((
-                            fetched.subscription,
-                            fetched.suggested_update_interval_minutes,
-                            fetched.content,
-                            fetched.filename,
-                        ))
+                        Self::download(fetcher.as_ref(), &url, &option, &definition_for_validation)
+                            .await
                     })
                     .await;
                     let outcome = match fetch_result {
-                        Ok(Ok((
-                            subscription,
-                            suggested_update_interval_minutes,
-                            content,
-                            filename,
-                        ))) => RefreshOutcome::Succeeded {
-                            subscription,
-                            suggested_update_interval_minutes,
-                            content,
-                            filename,
-                        },
-                        Ok(Err((message, source))) => RefreshOutcome::Failed { message, source },
+                        Ok(outcome) => outcome,
                         // Do not downcast panic payloads; emit a stable diagnostic.
                         Err(join_error) => RefreshOutcome::Failed {
                             message: if join_error.is_panic() {
@@ -2507,21 +2440,19 @@ impl Actor for ProfilesActor {
                             metadata.name = name;
                         }
 
-                        let mut definition = Self::remote_import_definition(
+                        let mut definition = remote_import_definition(
                             pending.url,
+                            pending.transform,
                             option,
                             ManagedProfilePath::new("pending.yaml")
                                 .expect("static managed path is valid"),
                             subscription,
                             Some(time::OffsetDateTime::now_utc()),
                         );
-                        if let Err(message) = Self::validate_fetched_content(&definition, &content)
+                        if let Err(source) =
+                            Self::validate_fetched_content_typed(&definition, &content)
                         {
-                            Err(ProfilesError::ImportFailed {
-                                message: format!(
-                                    "downloaded content is not valid for import: {message}"
-                                ),
-                            })
+                            Err(ProfilesError::ProfileContentRejected { source })
                         } else {
                             let uid = Self::generate_uid(&definition, &before);
                             let ext = Self::canonical_extension(&definition);
@@ -2832,6 +2763,7 @@ impl Actor for ProfilesActor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chimera_config::profile::{ConfigDefinition, FileConfig, MaterializedFile};
 
     fn config_definition() -> ProfileDefinition {
         ProfileDefinition::Config {
