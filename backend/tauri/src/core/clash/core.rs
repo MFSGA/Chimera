@@ -5,7 +5,6 @@ use std::{
         Arc,
         atomic::{AtomicBool, AtomicI64, Ordering},
     },
-    time::Duration,
 };
 
 use anyhow::{Context, Result};
@@ -31,15 +30,13 @@ use crate::{
     client::{
         SessionPortResolver,
         runtime::{
-            CheckedPromotionError, RuntimeLifecycle, RuntimePaths, RuntimeRebuildGate,
-            RuntimeSnapshot, RuntimeSnapshotData, RuntimeTransactionSnapshot,
-            RuntimeTransformFailure, capture_runtime_transaction, check_and_promote_candidate,
-            restore_failed_apply,
+            RuntimeLifecycle, RuntimePaths, RuntimeRebuildGate, RuntimeSnapshot,
+            RuntimeTransactionSnapshot, RuntimeTransformFailure, restore_failed_apply,
         },
     },
     config::{chimera::ClashCore, clash::ClashInfo, core::Config},
     core::{clash::api, logger::Logger},
-    enhance::{PostProcessingOutput, TransformFailureError},
+    enhance::PostProcessingOutput,
     log_err,
     utils::dirs,
 };
@@ -624,110 +621,6 @@ impl CoreManager {
         CoreInstance::check_config_(&core_type, &config_path, &binary_path, &app_dir)
             .await
             .context("failed to check runtime candidate")
-    }
-
-    async fn promote_and_start_locked(
-        &self,
-        paths: &RuntimePaths,
-        target_core: ClashCore,
-        clash: &ClashConfig,
-        run_type: RunType,
-    ) -> std::result::Result<(), RuntimeRestartError> {
-        Config::clash().reload();
-        log::debug!(target: "app", "reloaded clash config from file");
-        Config::clash()
-            .latest()
-            .prepare_external_controller_port()
-            .map_err(RuntimeRestartError::Prepare)?;
-
-        let candidate_ports = self
-            .lifecycle
-            .port_resolver
-            .resolve_candidate(clash)
-            .map_err(|source| RuntimeRestartError::Prepare(source.into()))?;
-
-        let revision = self
-            .lifecycle
-            .runtime_lifecycle
-            .allocate_revision()
-            .map_err(RuntimeRestartError::Prepare)?;
-        let (config, exists_keys, transform_output, inspection) =
-            match Config::generate_runtime_output_with_ports(
-                clash,
-                target_core,
-                candidate_ports.bindings().clone(),
-            )
-            .await
-            {
-                Ok(output) => (
-                    output.config,
-                    output.exists_keys,
-                    output.postprocessing_output,
-                    output.inspection,
-                ),
-                Err(error) => {
-                    if let Some(transform) = error.downcast_ref::<TransformFailureError>() {
-                        self.lifecycle.runtime_lifecycle.publish_transform_failure(
-                            RuntimeTransformFailure {
-                                attempt_revision: revision,
-                                transform_uid: transform.transform_uid.clone(),
-                                scope_uid: transform.scope_uid.clone(),
-                                script_type: transform.script_type,
-                                message: transform.message(),
-                            },
-                        );
-                    }
-                    return Err(RuntimeRestartError::Prepare(error));
-                }
-            };
-        self.lifecycle.runtime_lifecycle.clear_transform_failure();
-        let bytes = Config::render_runtime_bytes(&config).map_err(RuntimeRestartError::Prepare)?;
-        let candidate = paths
-            .create_candidate(&bytes)
-            .await
-            .map_err(RuntimeRestartError::Prepare)?;
-
-        todo!()
-        // let checked = { todo!() };
-        /* if let Err(error) = candidate.cleanup().await {
-            log::warn!(target: "app", "failed to clean runtime candidate: {error:?}");
-        }
-        let promoted_bytes = checked.map_err(|error| match error {
-            CheckedPromotionError::Check(error) | CheckedPromotionError::Verify(error) => {
-                RuntimeRestartError::Check(error)
-            }
-            CheckedPromotionError::Promote(error) => RuntimeRestartError::Promote(error),
-        })?;
-        let snapshot = Arc::new(RuntimeSnapshot::from_data(
-            revision,
-            target_core,
-            promoted_bytes.into(),
-            RuntimeSnapshotData {
-                config,
-                exists_keys,
-                postprocessing_output: transform_output,
-                inspection: Arc::new(inspection),
-            },
-        ));
-        self.lifecycle
-            .runtime_lifecycle
-            .publish_promoted(snapshot.clone());
-
-        self.run_core_from_product_inner(paths.product(), target_core, run_type)
-            .await
-            .map_err(RuntimeRestartError::Start)?;
-        crate::core::actor_v2::api::ApiClient::new(snapshot.clash_info())
-            .map_err(RuntimeRestartError::Start)?
-            .wait_until_ready(Duration::from_secs(10))
-            .await
-            .map_err(RuntimeRestartError::Start)?;
-        self.lifecycle
-            .runtime_lifecycle
-            .publish_applied(snapshot)
-            .map_err(RuntimeRestartError::Promote)?;
-        Config::runtime().apply();
-
-        Ok(()) */
     }
 
     async fn restore_after_restart_failure(

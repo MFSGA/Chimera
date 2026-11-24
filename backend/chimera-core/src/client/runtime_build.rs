@@ -17,9 +17,7 @@ pub use chimera_profile_transform::{
 mod build_tests;
 
 use crate::client::{
-    artifact_snapshot::{
-        ArtifactSnapshotData, artifact_to_snapshot_data, runtime_snapshot_data_from_artifact,
-    },
+    artifact_snapshot::runtime_snapshot_data_from_artifact,
     reconciler::{inputs, ports::RuntimeBuildPort},
     runtime,
 };
@@ -73,49 +71,50 @@ impl RuntimeBuildService {
         }
     }
 
-    /// Build from a typed source before a runtime revision is assigned. The
-    /// source is frozen on the blocking worker before scripts are constructed;
-    /// this path has no product publication or runtime ownership.
+    /// Freeze typed source bytes before building the exact runtime snapshot.
+    /// This path has no product publication or runtime ownership.
     pub async fn build_from_source(
+        revision: runtime::RuntimeRevision,
         input: RuntimeBuildInput,
         source: Arc<dyn ProfileContentSource + Send + Sync>,
         staged_content: BTreeMap<String, String>,
         scripts: Arc<ScriptRunnerFactory>,
         strict_transforms: bool,
-    ) -> Result<ArtifactSnapshotData, RuntimeBuildError> {
-        let builtins = selected_builtins(&input);
+    ) -> Result<Arc<runtime::RuntimeSnapshot>, RuntimeBuildError> {
         let built = tokio::task::spawn_blocking(move || {
             let content = inputs::FrozenProfileContent::capture_content(
                 &input.profiles,
                 source.as_ref(),
                 staged_content,
             );
-            Self::build_candidate_data(input, &content, || scripts(), &builtins, strict_transforms)
+            Self::build_snapshot(revision, input, &content, || scripts(), strict_transforms)
         });
         chimera_owner_support::blocking::join(built.await)
     }
 
-    fn build_candidate_data(
+    fn build_snapshot(
+        revision: runtime::RuntimeRevision,
         input: RuntimeBuildInput,
         content: &dyn ProfileContentSource,
         make_scripts: impl FnOnce() -> Result<Box<dyn ScriptRunner>, PortError>,
-        builtins: &[BuiltinTransform],
         strict_transforms: bool,
-    ) -> Result<ArtifactSnapshotData, RuntimeBuildError> {
+    ) -> Result<Arc<runtime::RuntimeSnapshot>, RuntimeBuildError> {
+        let core = input.app.core;
+        let builtin_enabled = input.app.enable_builtin_enhanced;
         let scripts = make_scripts().map_err(RuntimeBuildError::StartScriptRunner)?;
+        let builtins = selected_builtins(&input);
         let artifact = build_artifact(
             &input,
             content,
             scripts.as_ref(),
-            builtins,
+            &builtins,
             strict_transforms,
         )?;
-        let names = builtins
-            .iter()
-            .map(|builtin| builtin.name.clone())
-            .collect::<Vec<_>>();
-        artifact_to_snapshot_data(artifact, &input.profiles, &names)
-            .map_err(RuntimeBuildError::ProjectArtifact)
+        let (bytes, data) =
+            runtime_snapshot_data_from_artifact(artifact, &input.profiles, core, builtin_enabled)?;
+        Ok(Arc::new(runtime::RuntimeSnapshot::from_data(
+            revision, core, bytes, data,
+        )))
     }
 }
 
@@ -154,28 +153,19 @@ impl RuntimeBuildPort for RuntimeBuildService {
                 profiles,
                 content,
             } = inputs;
-            let core = app.core;
-            let builtin_enabled = app.enable_builtin_enhanced;
-            let scripts = script_runner().map_err(RuntimeBuildError::StartScriptRunner)?;
             let input = RuntimeBuildInput {
-                profiles: profiles.clone(),
+                profiles,
                 clash,
                 app,
                 resolved_ports,
             };
-            let builtins = selected_builtins(&input);
-            let artifact = build_artifact(
-                &input,
+            Self::build_snapshot(
+                revision,
+                input,
                 &content,
-                scripts.as_ref(),
-                &builtins,
+                || script_runner(),
                 strict_transforms,
-            )?;
-            let (bytes, data) =
-                runtime_snapshot_data_from_artifact(artifact, &profiles, core, builtin_enabled)?;
-            Ok(Arc::new(runtime::RuntimeSnapshot::from_data(
-                revision, core, bytes, data,
-            )))
+            )
         });
         chimera_owner_support::blocking::join(built.await)
     }
@@ -280,7 +270,30 @@ mod tests {
         let (_, inputs) = preparation
             .capture_committed_inputs(app, ClashConfig::default())
             .await;
+        let direct_input = inputs.clone();
         let prepared = preparation.prepare_candidate_inputs(inputs).await.unwrap();
+        let direct = RuntimeBuildService::build_from_source(
+            prepared.snapshot.revision,
+            RuntimeBuildInput {
+                profiles: direct_input.profiles,
+                clash: direct_input.clash,
+                app: direct_input.app,
+                resolved_ports: prepared.ports.bindings().clone(),
+            },
+            Arc::new(EmptyContent),
+            BTreeMap::new(),
+            Arc::new(|| Ok(Box::new(EchoRunner))),
+            true,
+        )
+        .await
+        .unwrap();
+        assert_eq!(direct.product_bytes(), prepared.snapshot.product_bytes());
+        assert_eq!(direct.product_sha256, prepared.snapshot.product_sha256);
+        assert!(
+            direct
+                .product_bytes()
+                .starts_with(b"# Generated by Clash Chimera\n\n")
+        );
         assert_eq!(
             prepared.intent.config_text.as_bytes(),
             prepared.snapshot.product_bytes(),

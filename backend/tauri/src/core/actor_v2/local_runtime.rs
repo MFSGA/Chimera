@@ -35,9 +35,7 @@ use tokio_util::{sync::CancellationToken, task::TaskTracker};
 use crate::{
     client::{
         RuntimePaths,
-        runtime::{
-            RuntimeApplyReceipt, RuntimeSnapshot, RuntimeSnapshotData, RuntimeTransformFailure,
-        },
+        runtime::{RuntimeApplyReceipt, RuntimeSnapshot, RuntimeTransformFailure},
     },
     config::{chimera::ClashCore, clash::ClashInfo, core::Config},
     core::{
@@ -602,6 +600,38 @@ impl LocalRuntimeHost {
         .context("prepared Profile TCC Try returned no held candidate")
     }
 
+    async fn build_profile_snapshot(
+        &self,
+        revision: crate::client::runtime::RuntimeRevision,
+        clash: ClashConfig,
+        target_core: ClashCore,
+        profiles: Arc<Profiles>,
+        mut app: chimera_config::application::ChimeraAppConfig,
+        resolved_ports: chimera_config::runtime::executor::ResolvedPortBindings,
+        staged_content: std::collections::BTreeMap<String, String>,
+    ) -> anyhow::Result<Arc<RuntimeSnapshot>> {
+        use chimera_core::client::runtime_build::{RuntimeBuildInput, RuntimeBuildService};
+        app.core = target_core;
+        let source = Arc::new(crate::enhance::FsProfileContentSource::new(
+            crate::utils::dirs::app_profiles_dir()?,
+        ));
+        let input = RuntimeBuildInput {
+            profiles,
+            clash,
+            app,
+            resolved_ports,
+        };
+        Ok(RuntimeBuildService::build_from_source(
+            revision,
+            input,
+            source,
+            staged_content,
+            Arc::new(|| Ok(Box::new(crate::enhance::EnhanceScriptRunner::new()?))),
+            true,
+        )
+        .await?)
+    }
+
     pub(crate) async fn validate_profile_runtime(
         &self,
         clash: ClashConfig,
@@ -623,16 +653,17 @@ impl LocalRuntimeHost {
         let candidate_ports = self.ports.resolve_candidate(&clash)?;
         let revision = self.lifecycle.allocate_revision()?;
         let diagnostic_profiles = profiles.clone();
-        let output = match Config::generate_runtime_output_from_profiles(
-            &clash,
-            target_core,
-            app,
-            profiles,
-            candidate_ports.bindings().clone(),
-            staged_content,
-            true,
-        )
-        .await
+        let snapshot = match self
+            .build_profile_snapshot(
+                revision,
+                clash,
+                target_core,
+                profiles,
+                app,
+                candidate_ports.bindings().clone(),
+                staged_content,
+            )
+            .await
         {
             Ok(output) => output,
             Err(error) => {
@@ -642,7 +673,7 @@ impl LocalRuntimeHost {
         };
         self.lifecycle.clear_transform_failure();
 
-        let config_bytes = Config::render_runtime_bytes(&output.config)?;
+        let config_bytes = snapshot.product_bytes().to_vec();
         let digest = chimera_core_manager::payload_digest(&config_bytes);
         let core_spec = local_host::core_spec(&target_core)?;
         let candidate = self
@@ -776,63 +807,38 @@ impl LocalRuntimeHost {
                 prepared.snapshot,
             )
         } else {
-            // A canonical PreparedRuntime does not supply or require default
-            // Clash values; the legacy generator uses its actual source.
             let clash = clash.context("legacy Profile build requires its original Clash source")?;
+            let (profiles, app, staged_content) = profile_source
+                .context("a typed Profile snapshot is required to build runtime configuration")?;
             let candidate_ports = self.ports.resolve_candidate(&clash)?;
             let revision = self.lifecycle.allocate_revision()?;
-            let mut diagnostic_profiles = None;
-            let generated = match profile_source {
-                Some((profiles, app, staged_content)) => {
-                    diagnostic_profiles = Some(profiles.clone());
-                    Config::generate_runtime_output_from_profiles(
-                        &clash,
-                        target_core,
-                        app,
-                        profiles,
-                        candidate_ports.bindings().clone(),
-                        staged_content,
-                        true,
-                    )
-                    .await
-                }
-                None => {
-                    Config::generate_runtime_output_with_ports(
-                        &clash,
-                        target_core,
-                        candidate_ports.bindings().clone(),
-                    )
-                    .await
-                }
-            };
-            let (config, exists_keys, transform_output, inspection) = match generated {
-                Ok(output) => (
-                    output.config,
-                    output.exists_keys,
-                    output.postprocessing_output,
-                    output.inspection,
-                ),
+            let diagnostic_profiles = profiles.clone();
+            let snapshot = match self
+                .build_profile_snapshot(
+                    revision,
+                    clash,
+                    target_core,
+                    profiles,
+                    app,
+                    candidate_ports.bindings().clone(),
+                    staged_content,
+                )
+                .await
+            {
+                Ok(snapshot) => snapshot,
                 Err(error) => {
-                    if let Some(profiles) = diagnostic_profiles.as_ref() {
-                        publish_transform_failure(&self.lifecycle, &error, profiles, revision);
-                    } else if let Some(transform) =
-                        error.downcast_ref::<crate::enhance::TransformFailureError>()
-                    {
-                        self.lifecycle
-                            .publish_transform_failure(RuntimeTransformFailure {
-                                attempt_revision: revision,
-                                transform_uid: transform.transform_uid.clone(),
-                                scope_uid: transform.scope_uid.clone(),
-                                script_type: transform.script_type,
-                                message: transform.message(),
-                            });
-                    }
+                    publish_transform_failure(
+                        &self.lifecycle,
+                        &error,
+                        &diagnostic_profiles,
+                        revision,
+                    );
                     return Err(error);
                 }
             };
             self.lifecycle.clear_transform_failure();
 
-            let config_bytes = Config::render_runtime_bytes(&config)?;
+            let config_bytes = snapshot.product_bytes().to_vec();
             let core_spec = local_host::core_spec(&target_core)?;
             let local_ipc = LocalIpcSettings {
                 policy: chimera_core_manager::LocalIpcPolicy::Disable,
@@ -848,17 +854,6 @@ impl LocalRuntimeHost {
             );
             let digest = intent.digest.clone();
             let config_text = intent.config_text.clone();
-            let snapshot = Arc::new(RuntimeSnapshot::from_data(
-                revision,
-                target_core,
-                config_bytes.clone().into(),
-                RuntimeSnapshotData {
-                    config,
-                    exists_keys,
-                    postprocessing_output: transform_output,
-                    inspection: Arc::new(inspection),
-                },
-            ));
             (
                 candidate_ports,
                 revision,

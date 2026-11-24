@@ -1,4 +1,5 @@
 use super::*;
+use crate::client::artifact_snapshot::{ArtifactSnapshotData, artifact_to_snapshot_data};
 use chimera_config::profile::Profiles;
 use chimera_config::{
     application::{ChimeraAppConfig, ClashCore},
@@ -232,6 +233,7 @@ async fn injected_builder_uses_one_script_factory_on_a_blocking_worker() {
     let calls = Arc::new(AtomicUsize::new(0));
     let counted = Arc::clone(&calls);
     let data = RuntimeBuildService::build_from_source(
+        runtime::RuntimeRevision::from_raw(1),
         input(),
         Arc::new(EmptyContent),
         BTreeMap::new(),
@@ -320,13 +322,20 @@ where
 {
     chimera_owner_support::blocking::join(
         tokio::task::spawn_blocking(move || {
-            RuntimeBuildService::build_candidate_data(
-                input,
+            let scripts = make_scripts().map_err(RuntimeBuildError::StartScriptRunner)?;
+            let artifact = build_artifact(
+                &input,
                 &content,
-                make_scripts,
+                scripts.as_ref(),
                 &builtins,
                 strict_transforms,
-            )
+            )?;
+            let names = builtins
+                .iter()
+                .map(|builtin| builtin.name.clone())
+                .collect::<Vec<_>>();
+            artifact_to_snapshot_data(artifact, &input.profiles, &names)
+                .map_err(RuntimeBuildError::ProjectArtifact)
         })
         .await,
     )

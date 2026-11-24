@@ -2,98 +2,23 @@
 //!
 //! The builder is pure once its typed inputs and executor ports are prepared.
 
-use std::collections::BTreeMap;
-use std::sync::Arc;
-
-use anyhow::Result;
-use chimera_config::{
-    application::ChimeraAppConfig,
-    clash::config::{ClashConfig, tun_stack::SelectedTunStack},
-    profile::Profiles,
-    runtime::executor::{
-        BuiltinTransform, ProfileContentSource, ResolvedPortBindings, RuntimeArtifact,
-        ScriptRunner, TunFlavor,
-    },
-};
-
 pub use chimera_core::client::runtime_build::{RuntimeBuildError, RuntimeBuildInput};
-
-use crate::{
-    config::chimera::ClashCore as LegacyClashCore,
-    enhance::{
-        EnhanceScriptRunner, FsProfileContentSource,
-        artifact_bridge::artifact_to_legacy_output_with_inspection,
-    },
-    utils::dirs,
-};
-
-pub use chimera_profile_transform::{RuntimeBuilder, builtin_transforms_for, derive_tun_flavor};
-
-/// Build from the committed or transaction-candidate Profiles snapshot.
-///
-/// Staged bytes are supplied by the ProfilesActor for file-first mutations;
-/// they overlay disk only for this candidate build and never change the
-/// materialized file source used by later builds.
-pub(crate) async fn build_from_profiles_with_inspection(
-    clash: &ClashConfig,
-    core: LegacyClashCore,
-    profiles: Arc<Profiles>,
-    mut app: ChimeraAppConfig,
-    resolved_ports: ResolvedPortBindings,
-    staged_content: BTreeMap<String, String>,
-    strict_transforms: bool,
-) -> Result<(
-    serde_yaml::Mapping,
-    Vec<String>,
-    crate::enhance::PostProcessingOutput,
-    crate::client::runtime_inspection::RuntimeInspectionData,
-)> {
-    let core = map_core(core);
-    app.core = core;
-    let input = RuntimeBuildInput {
-        profiles,
-        clash: clash.clone(),
-        app,
-        resolved_ports,
-    };
-    let profiles_dir = dirs::app_profiles_dir()?;
-
-    let data = chimera_core::client::runtime_build::RuntimeBuildService::build_from_source(
-        input,
-        Arc::new(FsProfileContentSource::new(profiles_dir)),
-        staged_content,
-        Arc::new(|| Ok(Box::new(EnhanceScriptRunner::new()?))),
-        strict_transforms,
-    )
-    .await?;
-    Ok((
-        data.config,
-        data.exists_keys,
-        data.postprocessing_output,
-        data.inspection,
-    ))
-}
-
-fn map_core(core: LegacyClashCore) -> chimera_config::application::ClashCore {
-    match core {
-        LegacyClashCore::ClashPremium => chimera_config::application::ClashCore::ClashPremium,
-        LegacyClashCore::ClashRs => chimera_config::application::ClashCore::ClashRs,
-        LegacyClashCore::Mihomo => chimera_config::application::ClashCore::Mihomo,
-        LegacyClashCore::MihomoAlpha => chimera_config::application::ClashCore::MihomoAlpha,
-        LegacyClashCore::ClashRsAlpha => chimera_config::application::ClashCore::ClashRsAlpha,
-        LegacyClashCore::ChimeraClient => chimera_config::application::ClashCore::ChimeraClient,
-        LegacyClashCore::ChimeraClientAlpha => {
-            chimera_config::application::ClashCore::ChimeraClientAlpha
-        }
-    }
-}
+pub use chimera_profile_transform::{RuntimeBuilder, builtin_transforms_for};
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::enhance::artifact_bridge::artifact_to_legacy_output_with_inspection;
     use crate::enhance::{EnhanceScriptRunner, FsProfileContentSource};
+    use anyhow::Result;
     #[cfg(target_os = "linux")]
     use chimera_config::clash::config::TransparentProxyMode;
+    use chimera_config::{
+        application::ChimeraAppConfig,
+        clash::config::{ClashConfig, tun_stack::SelectedTunStack},
+        profile::Profiles,
+        runtime::executor::{ProfileContentSource, ResolvedPortBindings, ScriptRunner, TunFlavor},
+    };
     use chimera_config::{
         clash::config::overrides::ManageableField,
         profile::{
@@ -107,7 +32,9 @@ mod tests {
             value::ConfigValue,
         },
     };
+    use chimera_profile_transform::derive_tun_flavor;
     use serde_json::json;
+    use std::{collections::BTreeMap, sync::Arc};
 
     struct EmptyContent;
 
@@ -199,6 +126,7 @@ mod tests {
         };
         let staged = "proxies: []\nmode: global\nextra-key: staged\n".to_string();
         let data = chimera_core::client::runtime_build::RuntimeBuildService::build_from_source(
+            chimera_core::client::runtime::RuntimeRevision::from_raw(1),
             input,
             Arc::new(FsProfileContentSource::new(directory.path().to_path_buf())),
             BTreeMap::from([("active.yaml".into(), staged)]),
@@ -232,6 +160,7 @@ mod tests {
             disk,
         );
         let second = chimera_core::client::runtime_build::RuntimeBuildService::build_from_source(
+            chimera_core::client::runtime::RuntimeRevision::from_raw(2),
             after_input,
             source,
             BTreeMap::new(),

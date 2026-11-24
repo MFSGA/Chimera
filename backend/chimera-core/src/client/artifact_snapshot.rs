@@ -176,9 +176,8 @@ pub fn runtime_snapshot_data_from_artifact(
     };
     let data = artifact_to_snapshot_data(artifact, profiles, &builtin_names)
         .map_err(RuntimeBuildError::ProjectArtifact)?;
-    let bytes = serde_yaml::to_string(&data.config)
-        .map_err(RuntimeBuildError::SerializeFinalConfig)?
-        .into_bytes();
+    let bytes = super::runtime::render_runtime_bytes(&data.config)
+        .map_err(RuntimeBuildError::SerializeFinalConfig)?;
     Ok((
         bytes.into(),
         super::runtime::RuntimeSnapshotData {
