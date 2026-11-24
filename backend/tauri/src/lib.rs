@@ -182,7 +182,11 @@ pub fn run() -> std::process::ExitCode {
 
     #[allow(unused_mut)]
     let mut builder = tauri::Builder::default();
-    builder = builder.manage(utils::exit::ExitBoundary::default());
+    builder = builder
+        .manage(utils::exit::ExitBoundary::default())
+        // Deep links wait here until a frontend takes them; macOS can deliver
+        // one before setup runs.
+        .manage(crate::ipc::PendingDeepLink::default());
 
     #[cfg(feature = "e2e")]
     {
@@ -238,7 +242,20 @@ pub fn run() -> std::process::ExitCode {
     };
 
     builder = builder
+        .invoke_handler(invoke_handler)
+        .plugin(tauri_plugin_os::init())
+        .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_fs::init())
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_clipboard_manager::init())
+        .plugin(tauri_plugin_notification::init())
+        .plugin(updater.build())
+        .plugin(tauri_plugin_global_shortcut::Builder::default().build())
+        .plugin(tauri_plugin_opener::init())
         .on_page_load(|webview, payload| {
+            // A reloaded page keeps the same webview, so `Channel::send`
+            // cannot tell its old connection-detail subscriptions are gone.
             if payload.event() == tauri::webview::PageLoadEvent::Started {
                 if let Some(registry) = webview.app_handle().try_state::<
                     crate::core::clash::connection_details::ConnectionDetailSubscriptions,
@@ -247,17 +264,6 @@ pub fn run() -> std::process::ExitCode {
                 }
             }
         })
-        .invoke_handler(invoke_handler)
-        .plugin(tauri_plugin_opener::init())
-        .plugin(updater.build())
-        .plugin(tauri_plugin_shell::init())
-        .plugin(tauri_plugin_process::init())
-        .plugin(tauri_plugin_clipboard_manager::init())
-        .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_fs::init())
-        .plugin(tauri_plugin_notification::init())
-        .plugin(tauri_plugin_os::init())
-        .plugin(tauri_plugin_global_shortcut::Builder::default().build())
         .setup(move |app| {
             // Only the primary instance reaches this callback. Keep the legacy
             // implementation's PathBuf API as a narrow compatibility adapter:
@@ -332,7 +338,29 @@ pub fn run() -> std::process::ExitCode {
                     // All window/IPC state must exist before the first webview loads.
                     app.manage(crate::window::WindowManager::new(app.handle().clone()));
                     app.manage(crate::utils::resolve::AppStartupStatus::default());
-                    app.manage(crate::ipc::PendingDeepLink::default());
+
+                    #[cfg(target_os = "macos")]
+                    {
+                        use tauri::menu::{MenuBuilder, SubmenuBuilder};
+                        let menu = (|| -> tauri::Result<()> {
+                            let submenu = SubmenuBuilder::new(app, "Edit")
+                                .undo()
+                                .redo()
+                                .copy()
+                                .paste()
+                                .cut()
+                                .select_all()
+                                .close_window()
+                                .quit()
+                                .build()?;
+                            let menu = MenuBuilder::new(app).item(&submenu).build()?;
+                            app.set_menu(menu)?;
+                            Ok(())
+                        })();
+                        if let Err(error) = menu {
+                            tracing::warn!(%error, "Edit menu unavailable; continuing without it");
+                        }
+                    }
 
                     resolve::resolve_setup(app);
 
@@ -454,9 +482,16 @@ pub fn run() -> std::process::ExitCode {
         }
     };
 
-    app.run(|app_handle, e| match e {
-        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    app.run(move |app_handle, e| match e {
+        tauri::RunEvent::ExitRequested { api, code, .. } => {
+            if code.is_some() {
+                profilers.finish_heap();
+            }
+            utils::exit::on_exit_requested(app_handle, code, &api);
+        }
         tauri::RunEvent::Exit => {
+            profilers.finish();
+            #[cfg(not(any(target_os = "android", target_os = "ios")))]
             // The event loop can no longer complete scheduled UI work.
             // Release hotkey actors awaiting a main-thread result.
             if let Some(handoff) = app_handle
@@ -466,35 +501,37 @@ pub fn run() -> std::process::ExitCode {
                 handoff.mark_event_loop_lost();
             }
         }
-        // pay attention to this event order, otherwise the app will quit immediately after all windows are closed
-        tauri::RunEvent::ExitRequested { api, code, .. } => {
-            utils::exit::on_exit_requested(app_handle, code, &api);
-        }
-        tauri::RunEvent::WindowEvent { label, event, .. }
+        tauri::RunEvent::WindowEvent { label, event, .. } => {
             if label == crate::consts::LEGACY_WINDOW_LABEL
-                || label == crate::consts::MAIN_WINDOW_LABEL =>
-        {
-            match event {
-                tauri::WindowEvent::CloseRequested { .. } => {
-                    // WindowManager invokes the kind's on_dismissed hook and
-                    // queues geometry through SessionState. The Tauri event
-                    // thread must never wait on the actor's disk write.
-                    log::debug!(target: "app", "window close requested: {label}");
-                }
-                tauri::WindowEvent::Destroyed => {
-                    if let Some(registry) = app_handle.try_state::<
-                        crate::core::clash::connection_details::ConnectionDetailSubscriptions,
-                    >() {
-                        registry.cancel_for_webview(label.as_str());
+                || label == crate::consts::MAIN_WINDOW_LABEL
+            {
+                match &event {
+                    tauri::WindowEvent::CloseRequested { .. } => {
+                        // WindowManager queues geometry through SessionState.
+                        log::debug!(target: "app", "window close requested: {label}");
                     }
-                    resolve::mark_frontend_unmounted(label.as_str());
+                    tauri::WindowEvent::Destroyed => {
+                        log::debug!(target: "app", "window destroyed");
+                    }
+                    _ => {}
                 }
-                _ => {}
+            }
+            // Every webview's connection-detail subscriptions must end on
+            // destroy, not just "main"'s: `Channel::send` cannot detect it.
+            if matches!(event, tauri::WindowEvent::Destroyed) {
+                if let Some(registry) = app_handle.try_state::<
+                    crate::core::clash::connection_details::ConnectionDetailSubscriptions,
+                >() {
+                    registry.cancel_for_webview(&label);
+                }
+                resolve::mark_frontend_unmounted(&label);
             }
         }
-        e => {
-            // tracing::debug!("Tauri Event: {:?}", e);
+        #[cfg(target_os = "macos")]
+        tauri::RunEvent::Reopen { .. } => {
+            resolve::create_window(app_handle);
         }
+        _ => {}
     });
 
     std::process::ExitCode::SUCCESS

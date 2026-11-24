@@ -99,6 +99,7 @@ impl chimera_contracts::net::SelfProxyPortSource for LegacySelfProxyPort {
     }
 }
 
+#[tracing::instrument(skip_all)]
 pub fn setup(
     app: &mut tauri::App,
     paths: PathResolver,
@@ -107,6 +108,15 @@ pub fn setup(
     startup_owners: &mut StartupOwners,
     startup_failure_capture: &parking_lot::Mutex<Option<crate::startup_failure::Report>>,
 ) -> anyhow::Result<()> {
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    let main_thread_handoff = Arc::new(MainThreadHandoff::default());
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    app.manage(Arc::clone(&main_thread_handoff));
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    let main_thread: Arc<dyn MainThreadExecutor> = Arc::new(TauriMainThread::new(
+        app.handle().clone(),
+        main_thread_handoff,
+    ));
     let shutdown = startup_owners.shutdown.clone();
     let tasks = startup_owners.tasks.clone();
     let system_proxy_source: Arc<dyn chimera_contracts::net::SystemProxySource> =
@@ -266,15 +276,6 @@ pub fn setup(
         Some(startup_failure_capture),
     )?;
 
-    #[cfg(not(any(target_os = "android", target_os = "ios")))]
-    let main_thread_handoff = Arc::new(MainThreadHandoff::default());
-    #[cfg(not(any(target_os = "android", target_os = "ios")))]
-    app.manage(Arc::clone(&main_thread_handoff));
-    #[cfg(not(any(target_os = "android", target_os = "ios")))]
-    let main_thread: Arc<dyn MainThreadExecutor> = Arc::new(TauriMainThread::new(
-        app.handle().clone(),
-        main_thread_handoff,
-    ));
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     let (hotkey_tx, hotkey_rx) = tokio::sync::mpsc::unbounded_channel();
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
