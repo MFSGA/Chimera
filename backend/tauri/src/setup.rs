@@ -121,7 +121,7 @@ pub fn setup(
         ),
     );
 
-    let runtime_paths = RuntimePaths::from_resolver(&paths)?;
+    let runtime_paths = RuntimePaths::from_config_dir(paths.app_config_dir())?;
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     let migrated = crate::migration_child::run_subprocess(&paths, startup_failure_capture);
     // Mobile targets have no standalone desktop executable to spawn. Retain

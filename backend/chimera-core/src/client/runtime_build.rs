@@ -27,7 +27,7 @@ pub type CoreSpecResolver = crate::client::core_spec::CoreSpecResolver;
 pub struct RuntimeBuildService {
     content: Arc<dyn ProfileContentSource + Send + Sync>,
     core_specs: Arc<CoreSpecResolver>,
-    product: camino::Utf8PathBuf,
+    paths: runtime::RuntimePaths,
     scripts: Arc<ScriptRunnerFactory>,
 }
 
@@ -36,13 +36,13 @@ impl RuntimeBuildService {
     pub fn new(
         content: Arc<dyn ProfileContentSource + Send + Sync>,
         core_specs: Arc<CoreSpecResolver>,
-        product: camino::Utf8PathBuf,
+        paths: runtime::RuntimePaths,
         scripts: Arc<ScriptRunnerFactory>,
     ) -> Self {
         Self {
             content,
             core_specs,
-            product,
+            paths,
             scripts,
         }
     }
@@ -110,7 +110,7 @@ impl RuntimeBuildPort for RuntimeBuildService {
         snapshot: &runtime::RuntimeSnapshot,
     ) -> Result<(), PublishRuntimeError> {
         runtime::write_product(
-            self.product.as_std_path(),
+            self.paths.product().as_std_path(),
             snapshot.product_bytes().to_vec(),
         )
         .await
@@ -169,9 +169,8 @@ mod tests {
     #[tokio::test]
     async fn real_builder_and_ref_preparation_share_bytes_without_precommit_publication() {
         let temp = tempfile::tempdir().unwrap();
-        let output =
-            camino::Utf8PathBuf::from_path_buf(temp.path().join("runtime/clash-config.yaml"))
-                .unwrap();
+        let paths = runtime::RuntimePaths::from_config_root(temp.path().to_path_buf());
+        let output = paths.product().to_owned();
         let builder = Arc::new(RuntimeBuildService::new(
             Arc::new(EmptyContent),
             Arc::new(|core| {
@@ -179,7 +178,7 @@ mod tests {
                     Ok(std::path::PathBuf::from("/tmp/chimera-test-core"))
                 })
             }),
-            output.clone(),
+            paths,
             Arc::new(|| Ok(Box::new(EchoRunner))),
         ));
         let manager = PersistentStateManagerSetup::<Profiles>::builder()
@@ -234,8 +233,7 @@ mod tests {
                     Ok(std::path::PathBuf::from("/tmp/chimera-test-core"))
                 })
             }),
-            camino::Utf8PathBuf::from_path_buf(temp.path().join("runtime/clash-config.yaml"))
-                .unwrap(),
+            runtime::RuntimePaths::from_config_root(temp.path().to_path_buf()),
             Arc::new(|| Ok(Box::new(EchoRunner))),
         );
         assert!(

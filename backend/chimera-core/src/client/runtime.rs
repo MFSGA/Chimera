@@ -1,6 +1,9 @@
 //! Ref-shaped RuntimeSnapshotStore with Chimera's instance-bound receipt.
 //! The session allocator, derived artifact, accepted receipt, and recovery
 //! baseline remain one shared owner. The shared product publisher has no Tauri dependency.
+mod paths;
+pub use paths::*;
+
 use super::{
     clash_info::ClashInfo,
     runtime_inspection::{RuntimeInspection, RuntimeInspectionContent},

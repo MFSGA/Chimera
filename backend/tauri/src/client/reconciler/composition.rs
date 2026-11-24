@@ -214,10 +214,7 @@ fn candidate_gate_with_ports(
         paths,
     } = sources;
     let builder = Arc::new(RuntimeBuildService::new(
-        content,
-        core_specs,
-        paths.product().to_owned(),
-        scripts,
+        content, core_specs, paths, scripts,
     ));
     CandidateCheck::new(check::Args {
         application,
