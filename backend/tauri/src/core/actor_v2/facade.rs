@@ -641,39 +641,6 @@ impl CoreFacade {
         .await
     }
 
-    pub(crate) async fn validate_profile_runtime(
-        &self,
-        clash: ClashConfig,
-        target_core: ClashCore,
-        run_type: RunType,
-        profiles: Arc<chimera_config::profile::Profiles>,
-        app: chimera_config::application::ChimeraAppConfig,
-        staged_content: std::collections::BTreeMap<String, String>,
-    ) -> anyhow::Result<crate::client::application_workflow::mutation::CheckRecord> {
-        let local_runtime = self
-            .local_runtime
-            .as_ref()
-            .context("the compatibility core manager cannot validate a typed Profile runtime")?;
-        // Config validation is advisory and does not submit any Core command.
-        // It may target the *prospective* host before S2 commits a handoff,
-        // so it must not require the Core Actor to have selected that host.
-        let endpoint: Arc<dyn ControlEndpoint> = match run_type {
-            RunType::Normal => Arc::new(local_runtime.local_endpoint()),
-            RunType::Service => Arc::new(self.service_endpoint.clone()),
-            RunType::Elevated => anyhow::bail!("elevated core execution is not implemented"),
-        };
-        local_runtime
-            .validate_profile_runtime(
-                clash,
-                target_core,
-                endpoint.as_ref(),
-                profiles,
-                app,
-                staged_content,
-            )
-            .await
-    }
-
     /// Core-owned Profile Try using the canonical PreparedRuntime product.
     /// Unlike a committed-source Apply, this must preserve a held candidate
     /// across the source TCC decision, so Confirm/Cancel remain the only

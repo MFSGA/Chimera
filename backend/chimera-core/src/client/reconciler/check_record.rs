@@ -133,7 +133,10 @@ pub fn safe_to_retry_deferred_runtime(error: &anyhow::Error) -> bool {
 pub fn deferred_runtime_waiting_dependency(error: &anyhow::Error) -> bool {
     error.chain().any(|cause| {
         cause
-            .downcast_ref::<super::check_record::RuntimeCheckFailure>()
-            .is_some_and(|failure| matches!(failure.record(), CheckRecord::Unserviceable(_)))
+            .downcast_ref::<super::attempt::OwnershipTransitionPending>()
+            .is_some()
+            || cause
+                .downcast_ref::<super::check_record::RuntimeCheckFailure>()
+                .is_some_and(|failure| matches!(failure.record(), CheckRecord::Unserviceable(_)))
     })
 }

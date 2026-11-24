@@ -669,60 +669,6 @@ impl LocalRuntimeHost {
         .await?)
     }
 
-    pub(crate) async fn validate_profile_runtime(
-        &self,
-        clash: ClashConfig,
-        target_core: ClashCore,
-        endpoint: &dyn ControlEndpoint,
-        profiles: Arc<chimera_config::profile::Profiles>,
-        app: chimera_config::application::ChimeraAppConfig,
-        staged_content: std::collections::BTreeMap<String, String>,
-    ) -> anyhow::Result<crate::client::application_workflow::mutation::CheckRecord> {
-        if self.closed.load(Ordering::Acquire) {
-            bail!("the local core control plane is shutting down");
-        }
-        if self.outcome_uncertain() {
-            bail!(
-                "the local core runtime outcome is uncertain; restart Chimera before checking a Profile"
-            );
-        }
-
-        let local_ipc = chimera_core::client::reconciler::preparation::runtime_local_ipc(&clash);
-        let candidate_ports = self.ports.resolve_candidate(&clash)?;
-        let revision = self.lifecycle.allocate_revision()?;
-        let diagnostic_profiles = profiles.clone();
-        let snapshot = match self
-            .build_profile_snapshot(
-                revision,
-                clash,
-                target_core,
-                profiles,
-                app,
-                candidate_ports.bindings().clone(),
-                staged_content,
-            )
-            .await
-        {
-            Ok(output) => output,
-            Err(error) => {
-                publish_transform_failure(&self.lifecycle, &error, &diagnostic_profiles, revision);
-                return Err(error);
-            }
-        };
-        self.lifecycle.clear_transform_failure();
-
-        let prepared =
-            chimera_core::client::reconciler::preparation::prepared_runtime_from_snapshot(
-                snapshot,
-                candidate_ports,
-                None,
-                local_ipc,
-            )?;
-        let core_spec = local_host::core_spec(&target_core)?;
-        self.check_prepared_profile(&prepared, &core_spec, endpoint)
-            .await
-    }
-
     async fn check_prepared_profile(
         &self,
         prepared: &crate::client::core_lifecycle::ports::PreparedRuntime,

@@ -589,39 +589,98 @@ impl CoreLifecycleWorkflow {
         if inputs.checked_target_key()? != expected_digest {
             return Ok(());
         }
-        let (app, clash, profiles, profile_content) =
-            inputs.clone().into_parts().map_err(|error| {
-                anyhow::Error::new(
+        if self.canonical_convergence_session() {
+            use crate::client::reconciler::{
+                attempt::OwnershipTransitionPending, proof::host_for, startup::CommittedRound,
+            };
+            use chimera_core::client::reconciler::plan::Trigger;
+
+            // Deferred retries never revive an intentionally stopped owner.
+            // The mailbox has already admitted Running intent; re-observe the
+            // actual host here before planning a retry.
+            let status = self.core.status().await?;
+            if !matches!(status.state, chimera_ipc::api::status::CoreState::Running) {
+                return Err(OwnershipTransitionPending::waiting(
+                    "deferred Profile retry awaits a running Core",
+                )
+                .into());
+            }
+            let host = host_for(status.run_type);
+            match self
+                .planned_committed_round(expected_digest, host, Trigger::Retry)
+                .await?
+            {
+                CommittedRound::Settled(result) => result,
+                CommittedRound::Apply => {
+                    self.progress
+                        .lock()
+                        .allow(expected_digest, host, Trigger::Retry)?;
+                    self.progress.lock().stage(expected_digest.to_owned(), host);
+                    self.try_reconcile_deferred_prepared(
+                        expected_digest,
+                        &inputs.app,
+                        &inputs.clash,
+                        status.run_type,
+                    )
+                    .await
+                    .unwrap_or_else(|| {
+                        Err(OwnershipTransitionPending::waiting(
+                            "deferred Profile retry lost its selected owner or source proof",
+                        )
+                        .into())
+                    })
+                }
+                CommittedRound::LegacyRecovery => Err(OwnershipTransitionPending::waiting(
+                    "deferred Profile retry requires a canonical S4 plan",
+                )
+                .into()),
+            }?;
+            return Ok(());
+        }
+        #[cfg(not(test))]
+        return Err(
+            crate::client::reconciler::attempt::OwnershipTransitionPending::waiting(
+                "deferred Profile retry requires the installed CandidateCheck",
+            )
+            .into(),
+        );
+
+        #[cfg(test)]
+        {
+            let (app, clash, profiles, profile_content) =
+                inputs.clone().into_parts().map_err(|error| {
+                    anyhow::Error::new(
                     crate::client::application_workflow::mutation::RuntimeCheckFailure::
                         candidate_unavailable(error.to_string()),
                 )
-            })?;
-        let target_core = app.core;
-        let run_type = crate::core::RunType::classify(
-            app.enable_service_mode,
-            crate::core::service::ipc::get_ipc_state().is_connected(),
-        );
-        self.core
-            .validate_profile_runtime(
-                clash.clone(),
-                target_core,
-                run_type,
-                profiles.clone(),
-                app.clone(),
-                profile_content.clone(),
-            )
-            .await?;
-        self.core
-            .reconcile_profiles(
-                clash,
-                target_core,
-                run_type,
-                profiles,
-                app,
-                profile_content,
-                Some(expected_digest.to_owned()),
-            )
-            .await
+                })?;
+            let target_core = app.core;
+            let run_type = crate::core::RunType::classify(
+                app.enable_service_mode,
+                crate::core::service::ipc::get_ipc_state().is_connected(),
+            );
+            self.core
+                .validate_profile_runtime(
+                    clash.clone(),
+                    target_core,
+                    run_type,
+                    profiles.clone(),
+                    app.clone(),
+                    profile_content.clone(),
+                )
+                .await?;
+            self.core
+                .reconcile_profiles(
+                    clash,
+                    target_core,
+                    run_type,
+                    profiles,
+                    app,
+                    profile_content,
+                    Some(expected_digest.to_owned()),
+                )
+                .await
+        }
     }
 
     #[cfg(test)]

@@ -148,6 +148,29 @@ impl CoreLifecycleWorkflow {
         clash: &chimera_config::clash::config::ClashConfig,
         run_type: crate::core::RunType,
     ) -> Option<anyhow::Result<()>> {
+        self.reconcile_prepared_selected_with_policy(target, app, clash, run_type, false)
+            .await
+    }
+
+    pub(in crate::client) async fn try_reconcile_deferred_prepared(
+        &self,
+        target: &str,
+        app: &ChimeraAppConfig,
+        clash: &chimera_config::clash::config::ClashConfig,
+        run_type: crate::core::RunType,
+    ) -> Option<anyhow::Result<()>> {
+        self.reconcile_prepared_selected_with_policy(target, app, clash, run_type, true)
+            .await
+    }
+
+    async fn reconcile_prepared_selected_with_policy(
+        &self,
+        target: &str,
+        app: &ChimeraAppConfig,
+        clash: &chimera_config::clash::config::ClashConfig,
+        run_type: crate::core::RunType,
+        deferred: bool,
+    ) -> Option<anyhow::Result<()>> {
         if self.convergence_core().outcome_uncertain() {
             return None;
         }
@@ -210,14 +233,15 @@ impl CoreLifecycleWorkflow {
             Err(error) => return Some(Err(error)),
         };
         let result = async {
-            let (candidate, core_spec) = gate
-                .prepare_committed_candidate(
-                    app.clone(),
-                    clash.clone(),
-                    target,
-                    previous.as_ref(),
-                )
-                .await?;
+            let (candidate, core_spec) = if deferred {
+                gate.prepare_deferred_committed_candidate(
+                    app.clone(), clash.clone(), target, previous.as_ref(),
+                ).await?
+            } else {
+                gate.prepare_committed_candidate(
+                    app.clone(), clash.clone(), target, previous.as_ref(),
+                ).await?
+            };
             let current = authority
                 .verify_committed_prepared_target(target, previous.as_ref())
                 .await?

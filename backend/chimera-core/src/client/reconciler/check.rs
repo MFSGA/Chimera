@@ -229,15 +229,27 @@ impl CandidateCheck {
         &self,
         inputs: super::inputs::RuntimeInputs,
     ) -> anyhow::Result<super::check_record::CheckRecord> {
-        use super::check_record::{CheckRecord, RuntimeCheckFailure};
+        use super::check_record::RuntimeCheckFailure;
         let (prepared, core_spec) = self
             .prepare_profile_tcc_candidate(inputs)
             .await
             .map_err(|error| RuntimeCheckFailure::candidate_unavailable(error.to_string()))?;
+        self.validate_prepared_profile(&prepared, &core_spec).await
+    }
+
+    /// Validate an already built strict Profile product without enqueuing
+    /// another source operation. Deferred committed retries submit this exact
+    /// candidate after the S4 source and owner fences.
+    async fn validate_prepared_profile(
+        &self,
+        prepared: &PreparedRuntime,
+        core_spec: &chimera_core_manager::CoreSpec,
+    ) -> anyhow::Result<super::check_record::CheckRecord> {
+        use super::check_record::{CheckRecord, RuntimeCheckFailure};
         match self
             .validator
             .check(RuntimeCheckRequest {
-                core_spec,
+                core_spec: core_spec.clone(),
                 intent: &prepared.intent,
             })
             .await
@@ -308,6 +320,48 @@ impl CandidateCheck {
             expected_target,
         )
         .await
+    }
+
+    /// Deferred Profile retry is a committed round, not a new Profile TCC.
+    /// It owes a strict advisory check; retain the exact checked product
+    /// rather than discarding it and constructing another runtime revision.
+    pub async fn prepare_deferred_committed_candidate(
+        &self,
+        app: ChimeraAppConfig,
+        clash: ClashConfig,
+        expected_target: &str,
+        previous: Option<&super::committed::Selection>,
+    ) -> anyhow::Result<(
+        super::apply::PreparedCandidate,
+        chimera_core_manager::CoreSpec,
+    )> {
+        use super::{
+            attempt::CommittedTargetAdvanced, check_record::RuntimeCheckFailure,
+            committed::Selection,
+        };
+        let inputs = self
+            .preparation
+            .capture_committed_inputs(app, clash)
+            .await
+            .1;
+        if inputs.target_key().as_deref() != Some(expected_target) {
+            return Err(CommittedTargetAdvanced.into());
+        }
+        let selection = Selection::of(&inputs);
+        let interruption = selection.interruption(previous, &inputs.clash);
+        let (runtime, spec) = self
+            .prepare_profile_tcc_candidate(inputs)
+            .await
+            .map_err(|error| RuntimeCheckFailure::candidate_unavailable(error.to_string()))?;
+        self.validate_prepared_profile(&runtime, &spec).await?;
+        Ok((
+            super::apply::PreparedCandidate {
+                runtime,
+                selection,
+                interruption,
+            },
+            spec,
+        ))
     }
 
     /// Backward-compatible fixture API. Production consumes the full
@@ -900,6 +954,87 @@ mod tests {
             1,
             "stale source must be rejected before allocating/building another product"
         );
+        assert!(inbox.checked.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn deferred_retry_retains_one_strict_checked_candidate_and_never_enqueues() {
+        let app = ChimeraAppConfig::default();
+        let clash = ClashConfig::default();
+        let target = RuntimeInputs {
+            app: app.clone(),
+            clash: clash.clone(),
+            profiles: Arc::new(Profiles::default()),
+            content: FrozenProfileContent::default(),
+        }
+        .checked_target_key()
+        .unwrap();
+        let (gate, builder, validator, inbox) = gate(RuntimeCheckOutcome::Passed, false).await;
+        let (candidate, _) = gate
+            .prepare_deferred_committed_candidate(app.clone(), clash.clone(), &target, None)
+            .await
+            .unwrap();
+        assert_eq!(candidate.runtime.target.as_deref(), Some(target.as_str()));
+        assert_eq!(
+            builder.prepared.lock().unwrap().as_slice(),
+            &[(true, target.clone())]
+        );
+        assert_eq!(validator.checked.lock().unwrap().len(), 1);
+        assert_eq!(
+            candidate.runtime.intent.config_text.as_bytes(),
+            candidate.runtime.snapshot.product_bytes()
+        );
+        assert!(inbox.checked.lock().unwrap().is_empty());
+        assert!(inbox.committed.lock().unwrap().is_empty());
+        let stale = gate
+            .prepare_deferred_committed_candidate(app, clash, "stale", None)
+            .await;
+        assert!(
+            stale
+                .err()
+                .unwrap()
+                .downcast_ref::<super::super::attempt::CommittedTargetAdvanced>()
+                .is_some()
+        );
+        assert_eq!(builder.prepared.lock().unwrap().len(), 1);
+        assert_eq!(validator.checked.lock().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn deferred_retry_rejection_retains_typed_check_failure() {
+        let app = ChimeraAppConfig::default();
+        let clash = ClashConfig::default();
+        let target = RuntimeInputs {
+            app: app.clone(),
+            clash: clash.clone(),
+            profiles: Arc::new(Profiles::default()),
+            content: FrozenProfileContent::default(),
+        }
+        .checked_target_key()
+        .unwrap();
+        let (gate, builder, validator, inbox) = gate(
+            RuntimeCheckOutcome::Rejected {
+                kind: Some(CoreErrorKind::ConfigCheckFailed),
+                message: "rejected fixture".into(),
+            },
+            false,
+        )
+        .await;
+        let error = gate
+            .prepare_deferred_committed_candidate(app, clash, &target, None)
+            .await
+            .err()
+            .unwrap();
+        assert!(
+            error
+                .downcast_ref::<super::super::check_record::RuntimeCheckFailure>()
+                .is_some()
+        );
+        assert_eq!(
+            builder.prepared.lock().unwrap().as_slice(),
+            &[(true, target)]
+        );
+        assert_eq!(validator.checked.lock().unwrap().len(), 1);
         assert!(inbox.checked.lock().unwrap().is_empty());
     }
 
