@@ -313,10 +313,9 @@ pub(crate) async fn persist_window_state(
     Ok(())
 }
 
-pub(crate) async fn persist_active_window_state(
-    app_handle: &AppHandle,
-    client: &crate::client::ChimeraClient,
-) -> Result<()> {
+/// Queue the final visible window geometry before cancelling the application
+/// owners, following ref's WindowManager::save_window_geometries.
+pub(crate) fn save_window_geometries(app_handle: &AppHandle) -> Result<()> {
     let preferred = match Config::verge().latest().window_type.unwrap_or_default() {
         crate::config::chimera::WindowType::Main => crate::consts::MAIN_WINDOW_LABEL,
         crate::config::chimera::WindowType::Legacy => crate::consts::LEGACY_WINDOW_LABEL,
@@ -343,7 +342,10 @@ pub(crate) async fn persist_active_window_state(
         return Ok(());
     };
 
-    persist_window_state(app_handle, client, label).await
+    if let Some(window) = app_handle.get_webview_window(label) {
+        queue_window_state_save(&window)?;
+    }
+    Ok(())
 }
 
 /// Window URL parameters (from the pinned ref).

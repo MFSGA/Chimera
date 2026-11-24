@@ -13,7 +13,7 @@ use std::time::Duration;
 
 use chimera_contracts::system_proxy::OsProxyConfig;
 use ractor::{Actor, ActorRef, rpc::CallResult};
-use tokio_util::task::TaskTracker;
+use tokio_util::{sync::CancellationToken, task::TaskTracker};
 
 use self::{
     actor::{Message, SystemProxyActor, requested_kinds},
@@ -60,6 +60,7 @@ pub struct SystemProxyStatus {
 #[derive(Clone)]
 pub struct SystemProxyClient {
     actor: ActorRef<Message>,
+    shutdown: CancellationToken,
 }
 
 impl SystemProxyClient {
@@ -68,12 +69,12 @@ impl SystemProxyClient {
     pub async fn spawn(args: SystemProxyArgs, tasks: &TaskTracker) -> anyhow::Result<Self> {
         let shutdown = args.shutdown.clone();
         let (actor, _handle) = Actor::spawn(None, SystemProxyActor, args).await?;
-        let cell = actor.get_cell();
-        tasks.spawn(async move {
-            shutdown.cancelled().await;
-            let _ = cell.drain_and_wait(None).await;
-        });
-        Ok(Self { actor })
+        chimera_owner_support::shutdown::drain_on_shutdown(
+            tasks,
+            shutdown.clone(),
+            actor.get_cell(),
+        );
+        Ok(Self { actor, shutdown })
     }
 
     /// One plan's system-owned effects in a single round trip. `None` means the
@@ -94,6 +95,23 @@ impl SystemProxyClient {
             return Vec::new();
         }
 
+        let stopped = || {
+            kinds
+                .iter()
+                .copied()
+                .map(|kind| EffectStatus {
+                    kind,
+                    desired_revision: revision,
+                    applied_revision: EffectRevision::default(),
+                    health: SystemProxyError::Stopped.health(),
+                })
+                .collect()
+        };
+        // The restore owns the host after cancellation. Do not admit new
+        // effects, and distinguish a shutdown race from an unexpected actor loss.
+        if self.shutdown.is_cancelled() {
+            return stopped();
+        }
         let call = self
             .actor
             .call(
@@ -111,19 +129,18 @@ impl SystemProxyClient {
         match call {
             Ok(CallResult::Success(statuses)) => statuses,
             other => {
-                tracing::warn!(
-                    revision = revision.get(),
-                    "the system proxy actor stopped before answering: {other:?}"
-                );
-                kinds
-                    .into_iter()
-                    .map(|kind| EffectStatus {
-                        kind,
-                        desired_revision: revision,
-                        applied_revision: EffectRevision::default(),
-                        health: SystemProxyError::Stopped.health(),
-                    })
-                    .collect()
+                if self.shutdown.is_cancelled() {
+                    tracing::debug!(
+                        revision = revision.get(),
+                        "system proxy reconcile cancelled during shutdown"
+                    );
+                } else {
+                    tracing::warn!(
+                        revision = revision.get(),
+                        "the system proxy actor stopped before answering: {other:?}"
+                    );
+                }
+                stopped()
             }
         }
     }

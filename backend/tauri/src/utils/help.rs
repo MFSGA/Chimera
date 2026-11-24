@@ -176,12 +176,7 @@ pub async fn cleanup_processes_async(app_handle: &AppHandle) -> anyhow::Result<(
     else {
         return Ok(());
     };
-    if let Err(error) = client.streams().stop().await {
-        log::warn!(target: "app", "failed to stop Clash streams during cleanup: {error:?}");
-    }
-    if let Err(error) = crate::window::persist_active_window_state(app_handle, &client).await {
-        log::error!(target: "app", "failed to persist active window state during cleanup: {error:?}");
-    }
+    // Streams and effects are already drained by the shared root TaskTracker.
     // on_dismissed may have queued a save immediately before exit. An actor
     // read fences those messages; the legacy Verge mirror is written only
     // after all previously queued typed writes have been applied.

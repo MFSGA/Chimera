@@ -333,10 +333,14 @@ impl ChimeraClient {
                     .expect("test clash config should be readable"),
                 None,
             );
-            effects::actor::EffectsClient::spawn(effects::actor::EffectsArgs {
-                port: effects_port,
-                initial,
-            })
+            effects::actor::EffectsClient::spawn_tracked(
+                effects::actor::EffectsArgs {
+                    port: effects_port,
+                    initial,
+                },
+                shutdown.child_token(),
+                &tasks,
+            )
             .await
         })?;
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -708,20 +712,6 @@ impl ChimeraClient {
         };
         Self {
             inner: Arc::new(inner),
-        }
-    }
-}
-
-impl ChimeraClient {
-    #[cfg(not(any(target_os = "android", target_os = "ios")))]
-    pub(crate) async fn unregister_hotkeys(&self) {
-        for status in self.inner.effects.shutdown().await {
-            if let crate::client::effects::status::EffectHealth::Degraded {
-                code, message, ..
-            } = status.health
-            {
-                tracing::warn!(%code, %message, "failed to release application effects at shutdown");
-            }
         }
     }
 }

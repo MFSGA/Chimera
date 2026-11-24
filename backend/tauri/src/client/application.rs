@@ -538,7 +538,13 @@ impl ChimeraClient {
 
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     pub(crate) async fn publish_runtime_port_binding(&self) {
+        if self.inner.shutdown.is_cancelled() {
+            return;
+        }
         let ports = self.confirmed_effect_port_binding().await;
+        if self.inner.shutdown.is_cancelled() {
+            return;
+        }
         super::effects::ports::CommitNotifications::runtime_bound(
             &self.inner.effects,
             ports,
@@ -548,7 +554,13 @@ impl ChimeraClient {
 
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     pub(crate) async fn publish_full_effects(&self) {
+        if self.inner.shutdown.is_cancelled() {
+            return;
+        }
         let ports = self.confirmed_effect_port_binding().await;
+        if self.inner.shutdown.is_cancelled() {
+            return;
+        }
         super::effects::ports::CommitNotifications::publish_full(&self.inner.effects, ports);
     }
 

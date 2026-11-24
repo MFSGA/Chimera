@@ -3,6 +3,7 @@ use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
 use ractor::{Actor, ActorProcessingErr, ActorRef, RpcReplyPort, rpc::CallResult};
 use tokio::sync::watch;
+use tokio_util::{sync::CancellationToken, task::TaskTracker};
 
 use super::{
     plan::{
@@ -59,6 +60,7 @@ impl Entry {
 pub struct EffectsClient {
     actor: ActorRef<Message>,
     status: watch::Receiver<EffectsSnapshot>,
+    shutdown: CancellationToken,
 }
 
 pub struct EffectsArgs {
@@ -69,6 +71,7 @@ pub struct EffectsArgs {
 struct EffectsActor;
 struct Args {
     dependencies: EffectsArgs,
+    shutdown: CancellationToken,
     status: watch::Sender<EffectsSnapshot>,
 }
 struct State {
@@ -81,6 +84,7 @@ struct State {
     active: [Option<tokio::task::JoinHandle<()>>; 4],
     status: watch::Sender<EffectsSnapshot>,
     closed: bool,
+    shutdown: CancellationToken,
     retry_timer: Option<(
         tokio::time::Instant,
         tokio::task::JoinHandle<Result<(), ractor::MessagingErr<Message>>>,
@@ -150,7 +154,7 @@ fn group(kind: EffectKind) -> usize {
 
 impl State {
     fn arm_retry(&mut self, actor: &ActorRef<Message>) {
-        let due = if self.closed {
+        let due = if self.closed || self.shutdown.is_cancelled() {
             None
         } else {
             self.entries.values().filter_map(|entry| entry.next).min()
@@ -392,6 +396,9 @@ impl State {
 
     fn drive(&mut self, myself: &ActorRef<Message>) {
         for index in 0..4 {
+            if self.closed || self.shutdown.is_cancelled() {
+                break;
+            }
             if self.active[index].is_some() {
                 continue;
             }
@@ -468,6 +475,7 @@ impl Actor for EffectsActor {
             active: [None, None, None, None],
             status: args.status,
             closed: false,
+            shutdown: args.shutdown,
             retry_timer: None,
         })
     }
@@ -484,7 +492,7 @@ impl Actor for EffectsActor {
                 refresh,
                 full,
                 requested,
-            } if !state.closed => {
+            } if !state.closed && !state.shutdown.is_cancelled() => {
                 let runtime_notification = matches!(&slice, Slice::Ports(_));
                 let inputs = merge_slice(state.desired.clone(), slice);
                 let changed: Vec<_> = ApplicationEffectPlan::diff(&state.desired, &inputs)
@@ -504,7 +512,9 @@ impl Actor for EffectsActor {
                 state.drive(&myself);
             }
             Message::Publish { .. } => {}
-            Message::ReconcileHotkeys { inputs, reply } if !state.closed => {
+            Message::ReconcileHotkeys { inputs, reply }
+                if !state.closed && !state.shutdown.is_cancelled() =>
+            {
                 let revision = state.enqueue_hotkeys(*inputs);
                 state
                     .waiters
@@ -525,7 +535,9 @@ impl Actor for EffectsActor {
                     },
                 });
             }
-            Message::ReconcileEffect { kind, reply } if !state.closed => {
+            Message::ReconcileEffect { kind, reply }
+                if !state.closed && !state.shutdown.is_cancelled() =>
+            {
                 if !state.entries.contains_key(&kind) {
                     let _ = reply.send(EffectStatus {
                         kind,
@@ -576,7 +588,7 @@ impl Actor for EffectsActor {
                 revision,
                 kinds,
                 statuses,
-            } if !state.closed => {
+            } if !state.closed && !state.shutdown.is_cancelled() => {
                 // A completion message is sent before the spawned task
                 // returns. Reap the owned JoinHandle before admitting more
                 // work for this group; never silently detach a fatal panic.
@@ -661,6 +673,7 @@ impl Actor for EffectsActor {
             Message::Completed { .. } => {}
             Message::Tick(at)
                 if !state.closed
+                    && !state.shutdown.is_cancelled()
                     && state
                         .retry_timer
                         .as_ref()
@@ -680,7 +693,7 @@ impl Actor for EffectsActor {
                     state.drive(&myself);
                 }
             }
-            Message::RetryNow(kind) if !state.closed => {
+            Message::RetryNow(kind) if !state.closed && !state.shutdown.is_cancelled() => {
                 state.retry(kind, false);
                 state.drive(&myself);
             }
@@ -738,25 +751,57 @@ impl Actor for EffectsActor {
         _: ActorRef<Message>,
         state: &mut State,
     ) -> Result<(), ActorProcessingErr> {
+        let release_port = !state.closed;
         state.closed = true;
+        state.pending.clear();
         if let Some((_, timer)) = state.retry_timer.take() {
             timer.abort();
         }
         // Unexpected actor termination must not abandon in-flight OS effects.
         // Preserve upstream JoinHandle panic propagation after draining.
         state.drain_active().await;
+        // Chimera's host adapter owns shortcut registration. Keep its release
+        // inside the tracked effects owner rather than calling a stopped actor
+        // from the Tauri exit boundary.
+        if release_port {
+            for status in state.port.shutdown().await {
+                if let EffectHealth::Degraded { code, message, .. } = status.health {
+                    tracing::warn!(%code, %message, "failed to release application effects at shutdown");
+                }
+            }
+        }
         Ok(())
     }
 }
 
 impl EffectsClient {
     pub async fn spawn(args: EffectsArgs) -> anyhow::Result<Self> {
+        Self::spawn_inner(args, CancellationToken::new()).await
+    }
+
+    /// Register the effects owner with the same root lifecycle as ref.
+    pub async fn spawn_tracked(
+        args: EffectsArgs,
+        shutdown: CancellationToken,
+        tasks: &TaskTracker,
+    ) -> anyhow::Result<Self> {
+        let client = Self::spawn_inner(args, shutdown.clone()).await?;
+        chimera_owner_support::shutdown::drain_on_shutdown(
+            tasks,
+            shutdown,
+            client.actor.get_cell(),
+        );
+        Ok(client)
+    }
+
+    async fn spawn_inner(args: EffectsArgs, shutdown: CancellationToken) -> anyhow::Result<Self> {
         let (status, receiver) = watch::channel(EffectsSnapshot::default());
         let (actor, _) = Actor::spawn(
             None,
             EffectsActor,
             Args {
                 dependencies: args,
+                shutdown: shutdown.clone(),
                 status,
             },
         )
@@ -764,10 +809,15 @@ impl EffectsClient {
         Ok(Self {
             actor,
             status: receiver,
+            shutdown,
         })
     }
 
     pub fn retry_now(&self, kind: EffectKind) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            !self.shutdown.is_cancelled(),
+            "effects owner is shutting down"
+        );
         self.actor
             .cast(Message::RetryNow(kind))
             .map_err(|error| anyhow::anyhow!("{error}"))
@@ -831,6 +881,9 @@ impl EffectsClient {
         self.status.clone()
     }
     pub fn reconcile(&self, inputs: ApplicationEffectInputs) {
+        if self.shutdown.is_cancelled() {
+            return;
+        }
         if let Err(error) = self.actor.cast(Message::Publish {
             slice: Slice::Full(Box::new(inputs)),
             refresh: true,
@@ -990,6 +1043,50 @@ mod tests {
             .expect("shutdown task returned");
         assert!(reported.is_empty(), "effect port shutdown completed");
         assert!(completed.load(std::sync::atomic::Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn root_shutdown_drains_effects_and_refuses_new_work() {
+        let shutdown = CancellationToken::new();
+        let tasks = TaskTracker::new();
+        let (started, mut receiver) = mpsc::unbounded_channel();
+        let (release, gate) = tokio::sync::oneshot::channel();
+        let completed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let effects = EffectsClient::spawn_tracked(
+            EffectsArgs {
+                port: Arc::new(BlockingEffectsPort {
+                    started,
+                    release: tokio::sync::Mutex::new(Some(gate)),
+                    completed: completed.clone(),
+                }),
+                initial: inputs(),
+            },
+            shutdown.child_token(),
+            &tasks,
+        )
+        .await
+        .expect("tracked effects actor");
+
+        CommitNotifications::profiles_committed(&effects, Vec::new());
+        tokio::time::timeout(Duration::from_secs(5), receiver.recv())
+            .await
+            .expect("effect began")
+            .expect("effect owner is active");
+        shutdown.cancel();
+        tasks.close();
+        CommitNotifications::profiles_committed(&effects, Vec::new());
+        assert!(effects.retry_now(EffectKind::Tray).is_err());
+        assert!(!completed.load(std::sync::atomic::Ordering::SeqCst));
+        assert!(!tasks.is_empty(), "the in-flight group must remain tracked");
+        release.send(()).expect("worker was not cancelled");
+        tokio::time::timeout(Duration::from_secs(5), tasks.wait())
+            .await
+            .expect("tracked effects owner must drain");
+        assert!(completed.load(std::sync::atomic::Ordering::SeqCst));
+        assert!(
+            receiver.try_recv().is_err(),
+            "no new work may start after cancel"
+        );
     }
 
     struct RetryLocalePort;
@@ -1258,6 +1355,9 @@ impl CommitNotifications for EffectsClient {
 
 impl EffectsClient {
     fn publish(&self, slice: Slice, refresh: bool, full: bool, requested: Vec<EffectKind>) {
+        if self.shutdown.is_cancelled() {
+            return;
+        }
         if let Err(error) = self.actor.cast(Message::Publish {
             slice,
             refresh,

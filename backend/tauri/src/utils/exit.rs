@@ -146,13 +146,15 @@ fn start_shutdown(app_handle: &AppHandle) {
     let drain = drain_shutdown_owners(client, partial);
     let app_handle = app_handle.clone();
     tauri::async_runtime::spawn(async move {
+        tracing::debug!("waiting for application shutdown owners");
         if let Err(error) = drain.await {
             tracing::error!(%error, "application shutdown owner failed to stop the core");
         }
-        unregister_hotkeys(&app_handle).await;
+        tracing::debug!("application shutdown owners drained");
         if let Err(error) = crate::utils::help::cleanup_processes_async(&app_handle).await {
             tracing::error!(%error, "application cleanup failed during exit");
         }
+        tracing::debug!("application cleanup finished; releasing exit gate");
         let intent = app_handle.state::<ExitBoundary>().gate.lock().finish();
         #[cfg(windows)]
         crate::shutdown_hook::set_ready_for_shutdown();
@@ -168,7 +170,6 @@ fn start_shutdown(app_handle: &AppHandle) {
 pub async fn shutdown_before_exit(app_handle: &AppHandle) -> anyhow::Result<()> {
     let (client, partial) = prepare_shutdown(app_handle);
     drain_shutdown_owners(client, partial).await?;
-    unregister_hotkeys(app_handle).await;
     let result = crate::utils::help::cleanup_processes_async(app_handle).await;
     app_handle
         .state::<ExitBoundary>()
@@ -207,6 +208,11 @@ fn prepare_shutdown(
     let client = app_handle
         .try_state::<ChimeraClient>()
         .map(|state| state.inner().clone());
+    if client.is_some() {
+        if let Err(error) = crate::window::save_window_geometries(app_handle) {
+            tracing::warn!(%error, "failed to queue final window geometry before shutdown");
+        }
+    }
     let partial = app_handle
         .try_state::<crate::setup::StartupOwners>()
         .map(|state| state.inner().clone());
@@ -244,16 +250,6 @@ enum ShutdownOwner {
     Client(ChimeraClient),
     Partial(crate::setup::StartupOwners),
 }
-
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
-async fn unregister_hotkeys(app_handle: &AppHandle) {
-    if let Some(client) = app_handle.try_state::<crate::client::ChimeraClient>() {
-        client.unregister_hotkeys().await;
-    }
-}
-
-#[cfg(any(target_os = "android", target_os = "ios"))]
-async fn unregister_hotkeys(_app_handle: &AppHandle) {}
 
 fn spawn_relauncher(app_handle: &AppHandle) {
     let path = current_binary(&app_handle.env()).unwrap();
