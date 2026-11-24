@@ -1,3 +1,81 @@
+## [0.29.1] - 2026-11-24 16:31:12
+
+### ✅ Testing
+
+- **e2e:** Cover native Windows tray quit lifecycle by @MFSGA
+
+- **runtime:** Align committed-source fixtures with ref S4 admission by @MFSGA
+
+### ✨ Features
+
+- **core:** Align profile import and runtime recovery across lifecycle triggers by @MFSGA
+
+- **logs:** Align app and service file log viewers with ref by @MFSGA
+
+### 🐛 Bug Fixes
+
+- **ci:** Align daily manifest publication with ref by @MFSGA
+
+- **config:** Redact controller credentials before generic keys by @MFSGA
+
+- **editor:** Correct diff editor model lifecycle by @MFSGA
+
+- **editor:** Restore Monaco YAML worker compatibility by @MFSGA
+
+- **proxy:** Preserve shutdown error for cancelled reconciliation by @MFSGA
+
+- **runtime:** Share root shutdown cancellation token by @MFSGA
+
+- **runtime:** Enforce checked source and proven S2/S3 ownership by @MFSGA
+
+- **storage:** Align KV read recovery with ref by @MFSGA
+
+### 🔨 Refactor
+
+- **build:** Align scripts and supported platforms with ref by @MFSGA
+
+- **config:** Settle checked application and clash writes in shared owners by @MFSGA
+
+- **core:** Move application clash and profile source owners into shared core by @MFSGA
+
+- **core:** Share session ownership and adopt ref frontend reporting by @MFSGA
+
+- **core:** Migrate ref runtime owners and persistent observers by @MFSGA
+
+- **diagnose:** Adopt ref diagnostics and shared owner support by @MFSGA
+
+- **effects:** Share effect ownership and connect ref mutation coordinator by @MFSGA
+
+- **exit:** Align owner shutdown lifecycle with ref by @MFSGA
+
+- **runtime:** Consolidate startup convergence and lifecycle ownership in shared core by @MFSGA
+
+- **runtime:** Share startup retry state and retire legacy recovery replay by @MFSGA
+
+- **runtime:** Retire legacy profile admission and share round settlement by @MFSGA
+
+- **runtime:** Share candidate checking and reconciler admission state by @MFSGA
+
+- **runtime:** Share service recovery and conditional owner retirement by @MFSGA
+
+- **runtime:** Share ownership evidence and startup receipt proofs by @MFSGA
+
+- **runtime:** Share checked apply execution and connection effects by @MFSGA
+
+- **runtime:** Share reconciler preparation and settlement with core by @MFSGA
+
+- **runtime:** Converge S4 admission, application and attempt settlement by @MFSGA
+
+- **streams:** Adopt native observers, persistent logs and frontend contracts by @MFSGA
+
+### 🧹 Miscellaneous Tasks
+
+- **ref:** Pin upstream convergence and storage baseline by @MFSGA
+
+---
+
+**Full Changelog**: https://github.com/MFSGA/Chimera/compare/v0.29.0...v0.29.1
+
 ## [0.29.0] - 2026-11-23 08:15:23
 
 ### ✨ Features
