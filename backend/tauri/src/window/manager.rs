@@ -197,6 +197,11 @@ impl WindowManager {
             );
         }
 
+        #[cfg(all(debug_assertions, not(feature = "e2e")))]
+        {
+            window.open_devtools();
+        }
+
         kind.on_created(&window);
 
         // The frontend may have reported ready during construction.
