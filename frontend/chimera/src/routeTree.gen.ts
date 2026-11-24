@@ -489,6 +489,7 @@ const mainMainSettingsSystemServiceIndexRoute =
   } as any)
 
 export interface FileRoutesByFullPath {
+  '/': typeof legacyIndexRoute
   '/editor': typeof editorEditorRouteRouteWithChildren
   '/connections': typeof legacyConnectionsRoute
   '/dashboard': typeof legacyDashboardRoute
@@ -499,7 +500,6 @@ export interface FileRoutesByFullPath {
   '/rules': typeof legacyRulesRoute
   '/settings': typeof legacySettingsRoute
   '/subscription-onboarding': typeof legacySubscriptionOnboardingRoute
-  '/': typeof legacyIndexRoute
   '/main/assistant': typeof mainMainAssistantRouteRoute
   '/main/connections': typeof mainMainConnectionsRouteRouteWithChildren
   '/main/dashboard': typeof mainMainDashboardRouteRouteWithChildren
@@ -562,6 +562,7 @@ export interface FileRoutesByFullPath {
   '/main/settings/system/service/': typeof mainMainSettingsSystemServiceIndexRoute
 }
 export interface FileRoutesByTo {
+  '/': typeof legacyIndexRoute
   '/editor': typeof editorEditorRouteRouteWithChildren
   '/connections': typeof legacyConnectionsRoute
   '/dashboard': typeof legacyDashboardRoute
@@ -572,7 +573,6 @@ export interface FileRoutesByTo {
   '/rules': typeof legacyRulesRoute
   '/settings': typeof legacySettingsRoute
   '/subscription-onboarding': typeof legacySubscriptionOnboardingRoute
-  '/': typeof legacyIndexRoute
   '/main/assistant': typeof mainMainAssistantRouteRoute
   '/main': typeof mainMainIndexRoute
   '/main/profiles/global': typeof mainMainProfilesGlobalRouteRoute
@@ -703,6 +703,7 @@ export interface FileRoutesById {
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
+    | '/'
     | '/editor'
     | '/connections'
     | '/dashboard'
@@ -713,7 +714,6 @@ export interface FileRouteTypes {
     | '/rules'
     | '/settings'
     | '/subscription-onboarding'
-    | '/'
     | '/main/assistant'
     | '/main/connections'
     | '/main/dashboard'
@@ -776,6 +776,7 @@ export interface FileRouteTypes {
     | '/main/settings/system/service/'
   fileRoutesByTo: FileRoutesByTo
   to:
+    | '/'
     | '/editor'
     | '/connections'
     | '/dashboard'
@@ -786,7 +787,6 @@ export interface FileRouteTypes {
     | '/rules'
     | '/settings'
     | '/subscription-onboarding'
-    | '/'
     | '/main/assistant'
     | '/main'
     | '/main/profiles/global'
@@ -925,14 +925,14 @@ declare module '@tanstack/react-router' {
     '/(legacy)': {
       id: '/(legacy)'
       path: ''
-      fullPath: ''
+      fullPath: '/'
       preLoaderRoute: typeof legacyRouteRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/(main)': {
       id: '/(main)'
       path: ''
-      fullPath: ''
+      fullPath: '/'
       preLoaderRoute: typeof mainRouteRouteImport
       parentRoute: typeof rootRouteImport
     }

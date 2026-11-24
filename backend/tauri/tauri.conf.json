@@ -5,7 +5,7 @@
   "identifier": "com.chimera.app",
   "build": {
     "beforeDevCommand": "pnpm run web:dev",
-    "devUrl": "http://localhost:3000",
+    "devUrl": "http://localhost:3000/",
     "beforeBuildCommand": "pnpm run-p web:build generate:git-info && echo $(pwd)",
     "frontendDist": "./tmp/dist"
   },

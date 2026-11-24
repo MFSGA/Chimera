@@ -10,21 +10,17 @@
 
 ## dev
 
-`pnpm dev` -> `tauri dev` -> Vite
+`pnpm dev` -> `tauri:dev` -> `pnpm run web:dev` ->
+`pnpm --filter=chimera-ui dev`
 
-On Windows, `tauri.windows.conf.json` starts the existing Vite CLI directly
-from `frontend/chimera`. Tauri CLI 2.12.4 terminates the before-dev process
-tree with `Stop-Process` during normal exit, so nested pnpm lifecycle
-wrappers can emit misleading nonzero-exit diagnostics after a successful
-application exit. The Windows override avoids those wrappers without
-suppressing errors or changing the application shutdown contract.
-The dev scripts select the Rust application directory via `TAURI_APP_PATH`.
-Do not pass the base `tauri.conf.json` as `--config`: the CLI applies
-explicit merge configurations after platform configuration, so doing so
-would restore the original `beforeDevCommand` on Windows.
-Other platforms retain ref's `pnpm run web:dev` path. Recheck this narrow
-exception when upgrading Tauri CLI. The standalone `pnpm web:dev` command
-remains available.
+`pnpm dev:diff` uses the upstream `verge-dev` and `deadlock-detection`
+features. `pnpm dev:prod` uses the upstream production frontend development
+flow: build once, watch the production bundle, and serve it on port 3000
+through Vite preview. Tauri still runs in development mode.
+
+All three modes use the base Tauri configuration and the upstream command
+structure, with the Chimera frontend package name substituted. The Windows
+configuration only selects the NSIS bundle target.
 
 `clsx` is owned by `@chimera/ui`; the app does not prebundle a dependency
 that it cannot resolve directly.
