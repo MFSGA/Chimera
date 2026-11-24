@@ -53,7 +53,6 @@ pub mod session_state;
 
 pub mod application;
 pub mod clash_config;
-pub mod impact;
 
 pub mod mutation;
 pub mod profiles;

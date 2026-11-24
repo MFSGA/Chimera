@@ -18,7 +18,7 @@ use workflow::ApplicationWorkflow;
 pub(crate) use workflow::RecoveryContext;
 
 pub(crate) mod attempt;
-pub(crate) mod impact;
+pub(crate) use chimera_core::state::mutation::impact;
 pub(in crate::client) mod inputs;
 pub(crate) mod mutation;
 #[cfg(test)]

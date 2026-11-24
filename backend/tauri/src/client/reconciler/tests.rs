@@ -607,7 +607,7 @@ async fn explicit_reconcile_keeps_committed_profiles_active_after_deferred_retry
     let participant = mutations
         .participant(
             operation_id.clone(),
-            crate::client::application_workflow::impact::MutationHints::default(),
+            chimera_core::state::mutation::impact::MutationHints::default(),
             crate::client::application_workflow::policy::CommandClass::Save,
         )
         .expect("connected mutation coordinator should create a participant");

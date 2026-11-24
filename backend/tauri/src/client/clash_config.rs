@@ -379,7 +379,8 @@ impl ClashConfigClient {
         let plan = plan_clash_patch(&patch, &current, &next)?;
         validate_mixed_port_change(&plan, &current)?;
         validate_external_controller_change(owner, &plan, &current, &next).await?;
-        let reaches_runtime = crate::state::mutation::impact::reaches_runtime(&current, &next, &[]);
+        let reaches_runtime =
+            chimera_core::state::mutation::impact::reaches_runtime(&current, &next, &[]);
         // The ref source owner can commit the allowed raw runtime inputs
         // without a second Core mutator. The patch plan owns the exact
         // one-shot mode interruption decision, carried with its Checked
@@ -831,8 +832,8 @@ fn should_reconcile_clash_patch(
     // ref source-impact projection decides whether built runtime inputs moved.
     // Preserve the legacy explicit-request intent when an unchanged runtime
     // field is resubmitted to retry an outstanding desired configuration.
-    crate::state::mutation::impact::reaches_runtime(before, after, &[])
-        || crate::client::application_workflow::impact::RequestedRuntimeFields::of_clash(patch)
+    chimera_core::state::mutation::impact::reaches_runtime(before, after, &[])
+        || chimera_core::state::mutation::impact::RequestedRuntimeFields::of_clash(patch)
             .names_any()
         || (patch.dns.is_some() && after.managed_dns().is_some())
         || (patch.hosts.is_some() && after.managed_hosts().is_some())
@@ -987,7 +988,7 @@ mod tests {
         let before = ClashConfig::default();
         let next = apply_mapping_to_typed_clash(&before, &patch).unwrap();
         assert!(checked_raw_clash_patch_eligible(&patch, &app, false));
-        assert!(crate::state::mutation::impact::reaches_runtime(
+        assert!(chimera_core::state::mutation::impact::reaches_runtime(
             &before,
             &next,
             &[]
@@ -1045,7 +1046,7 @@ mod tests {
                 && same_plan.break_on_mode_change == current.break_connection.on_mode_change
         );
         assert!(checked_raw_clash_patch_eligible(&mode_request, &app, false));
-        assert!(!crate::state::mutation::impact::reaches_runtime(
+        assert!(!chimera_core::state::mutation::impact::reaches_runtime(
             &current,
             &same,
             &[]
@@ -1058,7 +1059,7 @@ mod tests {
         let changed_plan = plan_clash_patch(&mode_request, &current, &changed).unwrap();
         assert!(changed_plan.mode_changed && changed_plan.break_on_mode_change);
         assert!(checked_raw_clash_patch_eligible(&mode_request, &app, false));
-        assert!(crate::state::mutation::impact::reaches_runtime(
+        assert!(chimera_core::state::mutation::impact::reaches_runtime(
             &current,
             &changed,
             &[]
@@ -1763,8 +1764,8 @@ mod tests {
         mapping.insert("mode".into(), "global".into());
         let next = apply_mapping_to_typed_clash(&before.state, &mapping).unwrap();
         let reaches_runtime =
-            crate::client::application_workflow::impact::classify_clash(&before.state, &next)
-                != crate::client::application_workflow::impact::RuntimeImpact::None;
+            chimera_core::state::mutation::impact::classify_clash(&before.state, &next)
+                != chimera_core::state::mutation::impact::RuntimeImpact::None;
         assert!(reaches_runtime);
         let check_client = client.clone();
         let apply_client = client.clone();
@@ -1948,10 +1949,10 @@ mod tests {
             .commit_candidate_with(
                 before,
                 next,
-                crate::client::application_workflow::impact::classify_clash(
+                chimera_core::state::mutation::impact::classify_clash(
                     &client.get_typed(),
                     &apply_mapping_to_typed_clash(&client.get_typed(), &mapping).unwrap(),
-                ) != crate::client::application_workflow::impact::RuntimeImpact::None,
+                ) != chimera_core::state::mutation::impact::RuntimeImpact::None,
                 |_candidate| async {
                     panic!("unchanged override must not check Core");
                     #[allow(unreachable_code)]

@@ -11,8 +11,9 @@ use ractor::{Actor, ActorProcessingErr, ActorRef, RpcReplyPort};
 use struct_patch::Patch;
 
 use super::{
-    ConditionalReplaceResult, impact,
+    ConditionalReplaceResult,
     mirror::{PreparedTypedReplace, VergeLegacyBridge},
+    mutation::impact,
 };
 
 #[derive(Debug, Clone)]

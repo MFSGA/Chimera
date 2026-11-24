@@ -2,7 +2,6 @@
 
 mod change;
 pub(crate) use change::DomainChange;
-pub(crate) mod impact;
 mod ports;
 pub(crate) use ports::{RuntimeCandidate, RuntimeGate};
 mod profile_content;

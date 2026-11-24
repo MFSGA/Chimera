@@ -157,7 +157,7 @@ fn is_source_only_application_patch(command: &Command) -> bool {
             service_connected,
             ..
         }
-            if !crate::client::application_workflow::impact::application_patch_requires_reconcile(
+            if !chimera_core::state::mutation::impact::application_patch_requires_reconcile(
                 patch,
                 *service_connected,
             )
@@ -1147,7 +1147,7 @@ impl RuntimeReconcilerMailbox {
                 service_connected,
                 ..
             }
-                if crate::client::application_workflow::impact::application_patch_requires_reconcile(
+                if chimera_core::state::mutation::impact::application_patch_requires_reconcile(
                     patch,
                     *service_connected,
                 )

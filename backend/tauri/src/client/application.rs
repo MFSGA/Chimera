@@ -322,7 +322,7 @@ impl ChimeraClient {
 
         let service_connected = crate::core::service::ipc::get_ipc_state().is_connected();
         let requires_reconcile =
-            super::application_workflow::impact::application_patch_requires_reconcile(
+            chimera_core::state::mutation::impact::application_patch_requires_reconcile(
                 &patch,
                 service_connected,
             ) || patch.enable_service_mode.is_some();
@@ -334,7 +334,11 @@ impl ChimeraClient {
             );
         let native_source_only = self.inner.checked_gate.is_some()
             && !requires_reconcile
-            && !chimera_core::state::impact::reaches_runtime(&before.state, &candidate, &[]);
+            && !chimera_core::state::mutation::impact::reaches_runtime(
+                &before.state,
+                &candidate,
+                &[],
+            );
         let native = native_checked || native_source_only;
         let (mut degradations, notified_version, snapshot) = if native {
             let requested = super::effects::plan::requested_owners(&patch);

@@ -595,7 +595,7 @@ impl CoreLifecycleWorkflow {
                 patch,
                 service_connected,
                 ..
-            } => crate::client::application_workflow::impact::application_patch_requires_reconcile(
+            } => chimera_core::state::mutation::impact::application_patch_requires_reconcile(
                 patch,
                 *service_connected,
             ),

@@ -599,7 +599,7 @@ impl ApplicationWorkflow {
                         patch,
                         service_connected,
                         ..
-                    } if !crate::client::application_workflow::impact::
+                    } if !chimera_core::state::mutation::impact::
                         application_patch_requires_reconcile(patch, *service_connected)
                 );
                 let preserve_unresolved_attempt = (source_only_patch
@@ -622,16 +622,19 @@ impl ApplicationWorkflow {
                     | CoreCommand::ReconcileSource
                     | CoreCommand::RecoverCore
                     | CoreCommand::RetryDeferredProfiles { .. }
-                    | CoreCommand::ReconcileProfiles { .. }
-                    => true,
+                    | CoreCommand::ReconcileProfiles { .. } => true,
                     #[cfg(test)]
                     CoreCommand::SelectCore(_) => true,
                     CoreCommand::PatchApplicationConfig {
                         patch,
                         service_connected,
                         ..
-                    } => crate::client::application_workflow::impact::
-                        application_patch_requires_reconcile(patch, *service_connected),
+                    } => {
+                        chimera_core::state::mutation::impact::application_patch_requires_reconcile(
+                            patch,
+                            *service_connected,
+                        )
+                    }
                     _ => false,
                 };
                 #[cfg(test)]

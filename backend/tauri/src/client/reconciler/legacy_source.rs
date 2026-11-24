@@ -211,15 +211,13 @@ impl CoreLifecycleWorkflow {
     ) -> anyhow::Result<String> {
         let app = self.application.get_typed();
         let clash = self.clash.get()?;
-        let app_target = crate::client::application_workflow::impact::application_target(&app)
+        let app_target = chimera_core::state::mutation::impact::application_target(&app)
             .ok_or_else(|| anyhow::anyhow!("application runtime identity cannot be serialized"))?;
-        let clash_target = crate::client::application_workflow::impact::clash_target(&clash)
+        let clash_target = chimera_core::state::mutation::impact::clash_target(&clash)
             .ok_or_else(|| anyhow::anyhow!("clash runtime identity cannot be serialized"))?;
         let profile_target = match profiles {
-            Some(profiles) => crate::client::application_workflow::impact::profiles_target(
-                profiles,
-            )
-            .ok_or_else(|| anyhow::anyhow!("profiles runtime identity cannot be serialized"))?,
+            Some(profiles) => chimera_core::state::mutation::impact::profiles_target(profiles)
+                .ok_or_else(|| anyhow::anyhow!("profiles runtime identity cannot be serialized"))?,
             None => "no-profile-runtime".into(),
         };
         let projection = serde_json::to_vec(&(
@@ -265,7 +263,7 @@ impl CoreLifecycleWorkflow {
         service_connected: bool,
     ) -> anyhow::Result<ApplicationPatchResult> {
         let canonical = self.canonical_convergence_session();
-        if !crate::client::application_workflow::impact::application_patch_requires_reconcile(
+        if !chimera_core::state::mutation::impact::application_patch_requires_reconcile(
             &patch,
             service_connected,
         ) && !(canonical && patch.enable_service_mode.is_some())

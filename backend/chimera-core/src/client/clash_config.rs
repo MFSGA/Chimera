@@ -192,7 +192,7 @@ impl ClashConfigClient {
         );
         let prepared = self.prepare_replace(candidate).await?;
         let reaches_runtime =
-            crate::state::impact::reaches_runtime(&before.state, prepared.state(), &[]);
+            crate::state::mutation::impact::reaches_runtime(&before.state, prepared.state(), &[]);
         let receipt = if reaches_runtime || force_check {
             Some(
                 CheckedReceipt::check(
@@ -299,7 +299,8 @@ impl ClashConfigClient {
                     .checked_add(1)
                     .context("test Clash version overflow")?;
                 let (next, mirror) = prepared.into_parts();
-                let reaches_runtime = crate::state::impact::reaches_runtime(&source.0, &next, &[]);
+                let reaches_runtime =
+                    crate::state::mutation::impact::reaches_runtime(&source.0, &next, &[]);
                 source.0 = next.clone();
                 source.1 = next_version;
                 let version = source.1;

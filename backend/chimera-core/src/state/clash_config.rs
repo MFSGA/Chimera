@@ -11,8 +11,9 @@ use ractor::{Actor, ActorProcessingErr, ActorRef, RpcReplyPort};
 use struct_patch::Patch;
 
 use super::{
-    ConditionalReplaceResult, impact,
+    ConditionalReplaceResult,
     mirror::{ClashLegacyBridge, PreparedTypedReplace},
+    mutation::impact,
 };
 
 /// Snapshot of the saved Clash configuration domain, not live Clash runtime API state.

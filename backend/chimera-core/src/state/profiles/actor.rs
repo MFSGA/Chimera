@@ -27,10 +27,7 @@ use ractor::{Actor, ActorProcessingErr, ActorRef, RpcReplyPort};
 
 use super::sources::{SourceLedger, SourcesSnapshot};
 use crate::client::configuration::{SourceOrigin, SourceOutcome};
-use crate::state::{
-    impact,
-    mutation::{ProfileContentLock, ProfileMutationPort},
-};
+use crate::state::mutation::{ProfileContentLock, ProfileMutationPort, impact};
 use chimera_migration::modules::profiles::ProfilesFormat;
 use tokio::{sync::watch, task::JoinHandle};
 
@@ -662,7 +659,7 @@ impl ProfilesActor {
         !hints.requested
             && hints.touched.is_empty()
             && hints.staged_content.is_empty()
-            && !impact::profile_inputs_changed(before, next, &hints.touched)
+            && !impact::reaches_runtime(before, next, &hints.touched)
     }
 
     /// Classify only concrete failures returned by the conditional source
@@ -1334,8 +1331,8 @@ impl ProfilesActor {
             }
         }
         // Complete the full candidate check before preparing a file/journal.
-        let source_only = !hints.requested
-            && !impact::profile_inputs_changed(&before, &candidate, &hints.touched);
+        let source_only =
+            !hints.requested && !impact::reaches_runtime(&before, &candidate, &hints.touched);
         if !source_only {
             state
                 .mutations

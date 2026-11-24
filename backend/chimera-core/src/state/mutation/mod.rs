@@ -1,5 +1,6 @@
 //! Shared source candidate and committed-content ports.
 pub mod change;
+pub mod impact;
 pub mod ports;
 pub mod profile_content;
 pub use change::DomainChange;

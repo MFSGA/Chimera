@@ -261,7 +261,7 @@ impl ApplicationClient {
                 candidate.apply(patch);
                 crate::state::application::validate_network_automation_policy(&candidate)?;
                 let reaches_runtime =
-                    crate::state::impact::reaches_runtime(&before, &candidate, &[]);
+                    crate::state::mutation::impact::reaches_runtime(&before, &candidate, &[]);
                 source.0 = candidate.clone();
                 source.1 = next_version;
                 let snapshot = ApplicationSnapshot {
@@ -294,7 +294,7 @@ impl ApplicationClient {
         );
         let prepared = self.prepare_replace(candidate).await?;
         let reaches_runtime =
-            crate::state::impact::reaches_runtime(&before.state, prepared.state(), &[]);
+            crate::state::mutation::impact::reaches_runtime(&before.state, prepared.state(), &[]);
         let receipt = if reaches_runtime || force_check {
             Some(
                 CheckedReceipt::check(
@@ -408,7 +408,8 @@ impl ApplicationClient {
                     .context("test application version overflow")?;
                 let (next, mirror) = prepared.into_parts();
                 crate::state::application::validate_network_automation_policy(&next)?;
-                let reaches_runtime = crate::state::impact::reaches_runtime(&source.0, &next, &[]);
+                let reaches_runtime =
+                    crate::state::mutation::impact::reaches_runtime(&source.0, &next, &[]);
                 source.0 = next.clone();
                 source.1 = next_version;
                 let version = source.1;

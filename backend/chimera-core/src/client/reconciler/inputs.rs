@@ -1,5 +1,5 @@
 //! Fixed source inputs and content for one runtime target and build.
-use crate::state::impact;
+use crate::state::mutation::impact;
 use chimera_config::{
     application::ChimeraAppConfig, clash::config::ClashConfig, profile::Profiles,
 };
