@@ -1,4 +1,4 @@
-use tauri::{Emitter, Manager};
+use tauri::Manager;
 #[cfg(any(target_os = "macos", target_os = "linux", windows))]
 use tauri_plugin_deep_link::DeepLinkExt;
 
@@ -22,6 +22,8 @@ mod config;
 mod consts;
 /// 3
 mod core;
+#[cfg(any(target_os = "macos", target_os = "linux", windows))]
+mod desktop;
 /// 7
 mod enhance;
 /// 6
@@ -392,65 +394,22 @@ pub fn run() -> std::process::ExitCode {
                         let on_open_url_handle = app_handle.clone();
 
                         app.deep_link().on_open_url(move |event| {
-                            let Some(url) = event.urls().first().map(ToString::to_string) else {
-                                return;
-                            };
-
-                            let target_label = resolve::configured_window_label(&on_open_url_handle);
-                            resolve::create_window(&on_open_url_handle);
-
-                            let entry = on_open_url_handle
-                                .state::<crate::ipc::PendingDeepLink>()
-                                .store(url.clone());
-
-                            let delivery_handle = on_open_url_handle.clone();
-                            std::thread::spawn(move || {
-                                if !resolve::wait_for_frontend_ready(
-                                    target_label,
-                                    std::time::Duration::from_secs(15),
-                                ) {
-                                    log::warn!(target: "app", "frontend {target_label} did not become ready before delivering scheme request");
-                                    return;
-                                }
-
-                                if let Err(error) = delivery_handle.emit_to(
-                                    target_label,
-                                    "scheme-request-received",
-                                    entry,
-                                ) {
-                                    log::error!(target: "app", "failed to emit scheme request {url} to {target_label}: {error:?}");
-                                }
-                            });
+                            for url in event.urls().into_iter().filter_map(desktop::deep_link::accepted) {
+                                desktop::deep_link::deliver(&on_open_url_handle, &url);
+                            }
                         });
 
                         // The Client, window state and deep-link listener now exist.
                         // Deliver any activation coalesced during the primary startup.
                         #[cfg(not(feature = "e2e"))]
                         if secondary_activation.mark_ready() {
-                            resolve::create_window(app.handle());
+                            desktop::deep_link::show_main_window(app.handle());
                         }
 
-                        if let Some(url) = app
-                            .deep_link()
-                            .get_current()?
-                            .and_then(|urls| urls.first().map(ToString::to_string))
-                        {
-                            let target_label = resolve::configured_window_label(&app_handle);
-                            let entry = app
-                                .state::<crate::ipc::PendingDeepLink>()
-                                .store(url.clone());
-                            std::thread::spawn(move || {
-                                if resolve::wait_for_frontend_ready(
-                                    target_label,
-                                    std::time::Duration::from_secs(15),
-                                ) {
-                                    if let Err(error) = app_handle.emit_to(target_label, "scheme-request-received", entry) {
-                                        log::error!(target: "app", "failed to deliver startup scheme request: {error:?}");
-                                    }
-                                } else {
-                                    log::warn!(target: "app", "frontend {target_label} did not become ready before delivering startup scheme request");
-                                }
-                            });
+                        if let Some(urls) = app.deep_link().get_current()? {
+                            for url in urls.into_iter().filter_map(desktop::deep_link::accepted) {
+                                desktop::deep_link::deliver(&app_handle, &url);
+                            }
                         }
                     }
 
