@@ -116,6 +116,78 @@ test('newer events win over an older in-flight read and resync rereads used keys
   }
 });
 
+test('a replacement store reads keys whose first store never finished', async () => {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false, gcTime: Infinity } },
+  });
+  let reads = 0;
+  const api: KvStorageApi = {
+    getStorageItem: async () => {
+      reads += 1;
+      return { status: 'ok', data: { value: '"stored"', revision: 1 } };
+    },
+    setStorageItem: async () => ({ status: 'ok', data: 2 }),
+    listenStorageValueChanged: async () => () => undefined,
+    listenStorageResync: async () => () => undefined,
+  };
+  const abandoned = createKvStorageStore(queryClient, {
+    ...api,
+    listenStorageValueChanged: () => new Promise(() => {}),
+    listenStorageResync: () => new Promise(() => {}),
+  });
+  const disconnectAbandoned = abandoned.connect();
+  abandoned.ensureRead('config');
+  await tick();
+  assert.equal(abandoned.peek('config')?.read.status, 'reading');
+  assert.equal(reads, 0);
+  disconnectAbandoned();
+
+  const replacement = createKvStorageStore(queryClient, api);
+  const disconnectReplacement = replacement.connect();
+  try {
+    replacement.ensureRead('config');
+    replacement.ensureRead('config');
+    await tick();
+    assert.equal(reads, 1);
+    assert.equal(replacement.peek('config')?.read.status, 'done');
+    assert.equal(replacement.peek('config')?.value, '"stored"');
+  } finally {
+    disconnectReplacement();
+    queryClient.clear();
+  }
+});
+
+test('resync keeps a read key loaded until its answer arrives', async () => {
+  const reread =
+    deferred<Awaited<ReturnType<KvStorageApi['getStorageItem']>>>();
+  let reads = 0;
+  const harness = createHarness(
+    async () => {
+      reads += 1;
+      return reads === 1
+        ? { status: 'ok', data: { value: '"before"', revision: 1 } }
+        : reread.promise;
+    },
+    async () => ({ status: 'ok', data: 3 }),
+  );
+  try {
+    harness.store.ensureRead('config');
+    await harness.store.refresh('config');
+    assert.equal(harness.store.peek('config')?.read.status, 'done');
+    harness.emitResync();
+    await tick();
+    assert.equal(reads, 2);
+    assert.equal(harness.store.peek('config')?.read.status, 'done');
+    assert.equal(harness.store.peek('config')?.value, '"before"');
+    reread.resolve({ status: 'ok', data: { value: '"after"', revision: 2 } });
+    await harness.store.refresh('config');
+    assert.equal(harness.store.peek('config')?.read.status, 'done');
+    assert.equal(harness.store.peek('config')?.value, '"after"');
+  } finally {
+    harness.dispose();
+  }
+});
+
 test('listener registration retries before authoritative reads resume', async () => {
   let reads = 0;
   let registrationAttempts = 0;
