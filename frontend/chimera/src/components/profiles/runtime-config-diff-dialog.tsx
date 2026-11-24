@@ -76,6 +76,7 @@ export default function RuntimeConfigDiffDialog({
       title={m.profile_runtime_config_title()}
       open={open}
       onClose={onClose}
+      closeTestId="runtime-config-diff-close"
     >
       <div className="xs:w-[95vw] h-full w-[80vw] px-4">
         <div

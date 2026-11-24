@@ -12,6 +12,7 @@
     "test:critical": "wdio run ./wdio.conf.ts --suite critical && wdio run ./wdio.conf.ts --suite subscription-onboarding",
     "test:runtime": "wdio run ./wdio.conf.ts --suite runtime",
     "test:profiles": "wdio run ./wdio.conf.ts --suite profiles && wdio run ./wdio.conf.ts --suite subscription-onboarding",
+    "test:monaco-editor": "wdio run ./wdio.conf.ts --spec ./specs/monaco-editor.e2e.ts",
     "test:subscription-onboarding": "wdio run ./wdio.conf.ts --suite subscription-onboarding",
     "test:profile-auto-update": "wdio run ./wdio.conf.ts --suite profile-auto-update-main",
     "test:settings": "wdio run ./wdio.conf.ts --suite settings",

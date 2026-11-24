@@ -472,6 +472,7 @@ export const ProfileDialog = ({
       title={isEdit ? m.profile_update_option_edit() : m.profile_create_title()}
       open={open}
       onClose={() => onClose()}
+      closeTestId="profile-dialog-close"
       onOk={onSubmit}
       divider
       {...dialogProps}

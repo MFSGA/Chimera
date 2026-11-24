@@ -21,6 +21,7 @@ export const baseE2eSuites = {
     './specs/state-change-profiles-main.e2e.ts',
     './specs/deep-link-main.e2e.ts',
     './specs/profile-local-draft.e2e.ts',
+    './specs/monaco-editor.e2e.ts',
     './specs/profile-remote-validation.e2e.ts',
     './specs/profile-transform-chain-ui.e2e.ts',
     './specs/profiles-detail-main.e2e.ts',
