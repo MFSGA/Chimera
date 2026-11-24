@@ -1284,6 +1284,7 @@ dependencies = [
  "chimera-migration",
  "chimera-observers",
  "chimera-owner-support",
+ "chimera-panics",
  "chimera-persistence",
  "chimera-profile-transform",
  "chimera-state-engine",

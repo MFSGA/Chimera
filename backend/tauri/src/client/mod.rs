@@ -75,7 +75,6 @@ pub(crate) use self::{
 use crate::{
     service::profile_file::ProfileFileService,
     state::mirror::{ClashLegacyBridge, VergeLegacyBridge, WindowLegacyBridge},
-    state::mutation::MutationCoordinator,
     state::profiles::{CommitReport, ProfilesError, ReorderOp},
     utils::path::PathResolver,
 };
@@ -308,7 +307,13 @@ impl ChimeraClient {
                 &tasks,
             ))?;
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
-        effects_port.bind_streams(streams.clone())?;
+        let effects_port = Arc::new(
+            chimera_core::client::effects::executor::CoreRuntimeEffects::new(
+                effects_port,
+                streams.clone(),
+                core_v2.clone(),
+            ),
+        );
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
         let effects = tauri::async_runtime::block_on(async {
             let initial = effects::plan::ApplicationEffectInputs::project(
@@ -325,13 +330,15 @@ impl ChimeraClient {
             })
             .await
         })?;
+        let mutations = chimera_core::state::mutation::MutationCoordinator::pending();
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
-        let mutations = MutationCoordinator::pending_with_notifications(Arc::new((
+        let commit_notifications: Arc<dyn effects::ports::CommitNotifications> = Arc::new((
             effects.clone(),
             event_sink::UiCommitNotifications(ui_sink.clone()),
-        )));
+        ));
         #[cfg(any(target_os = "android", target_os = "ios"))]
-        let mutations = MutationCoordinator::pending();
+        let commit_notifications: Arc<dyn effects::ports::CommitNotifications> =
+            Arc::new(effects::ports::NoopCommitNotifications);
         let typed_profiles =
             tauri::async_runtime::block_on(profiles::ProfilesClient::new_with_jobs(
                 Arc::new(mutations.clone()),
@@ -378,9 +385,7 @@ impl ChimeraClient {
         tauri::async_runtime::block_on(
             core_lifecycle.install_candidate_gate(profile_gate.clone()),
         )?;
-        tauri::async_runtime::block_on(
-            mutations.connect_with_runtime_gate(core_lifecycle.clone(), profile_gate.clone()),
-        )?;
+        mutations.connect(commit_notifications, profile_gate.clone());
         let proxies =
             tauri::async_runtime::block_on(chimera_core::proxies_actor::ProxiesClient::spawn(
                 chimera_core::proxies_actor::CoreClient::new(Arc::new(core_v2.clone())),

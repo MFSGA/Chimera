@@ -68,6 +68,15 @@ impl CheckedCandidatePort for ReconcilerCheckedInbox {
             .await
     }
 
+    fn source_only_committed(
+        &self,
+        domain: chimera_contracts::mutation::ConfigDomain,
+        version: chimera_core::state::Version,
+    ) {
+        self.owner
+            .source_committed(Self::source_domain(domain), *version, false);
+    }
+
     fn source_committed(
         &self,
         domain: chimera_contracts::mutation::ConfigDomain,

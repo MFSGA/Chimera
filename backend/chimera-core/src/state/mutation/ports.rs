@@ -13,6 +13,12 @@ pub trait RuntimeGate: Send + Sync + 'static {
         &self,
         candidate: RuntimeCandidate,
     ) -> Result<(), std::sync::Arc<chimera_contracts::runtime_error::RuntimeError>>;
+    fn source_only_committed(
+        &self,
+        _domain: chimera_contracts::mutation::ConfigDomain,
+        _version: crate::state::Version,
+    ) {
+    }
     fn committed(
         &self,
         domain: chimera_contracts::mutation::ConfigDomain,

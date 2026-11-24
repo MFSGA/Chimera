@@ -36,6 +36,7 @@ pub(in crate::client) trait CheckedCandidatePort: Send + Sync + 'static {
         core_spec: chimera_core_manager::CoreSpec,
     ) -> Result<(), Arc<RuntimeError>>;
     fn source_committed(&self, domain: ConfigDomain, version: Version);
+    fn source_only_committed(&self, _domain: ConfigDomain, _version: Version) {}
     /// Failed source CAS after an ACK must not leave a permanent proposal.
     /// Until the ref operation token travels through every source actor,
     /// conservatively abort the entire matching domain only.
@@ -426,6 +427,10 @@ impl RuntimeGate for CandidateCheck {
             tracing::warn!(target: "chimera::e2e_profile", stage = "candidate_checked_admission_finished", succeeded = result.is_ok(), "Profile RuntimeGate stage");
         }
         result
+    }
+
+    fn source_only_committed(&self, domain: ConfigDomain, version: Version) {
+        self.workflow.source_only_committed(domain, version);
     }
 
     fn committed(&self, domain: ConfigDomain, version: Version) {

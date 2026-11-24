@@ -27,11 +27,12 @@ pub(crate) struct ApplicationEffectExecutor {
     hotkeys: HotkeyClient,
     accelerators: Arc<dyn AcceleratorValidator>,
     adapters: Arc<dyn ApplicationEffectAdapters>,
+    #[cfg(test)]
     core: Arc<dyn crate::client::core_lifecycle::CoreLifecyclePort>,
     /// Production side effects enter the ref CoreActor mailbox. The legacy
     /// port is retained for injected test adapters only.
+    #[cfg(test)]
     core_router: Option<chimera_core::actor_v2::CoreClient>,
-    streams: std::sync::OnceLock<chimera_core::clash::ws::StreamsClient>,
 }
 
 impl ApplicationEffectExecutor {
@@ -40,19 +41,21 @@ impl ApplicationEffectExecutor {
         hotkeys: HotkeyClient,
         accelerators: Arc<dyn AcceleratorValidator>,
         adapters: Arc<dyn ApplicationEffectAdapters>,
-        core: Arc<dyn crate::client::core_lifecycle::CoreLifecyclePort>,
+        #[cfg(test)] core: Arc<dyn crate::client::core_lifecycle::CoreLifecyclePort>,
     ) -> Self {
         Self {
             system_proxy,
             hotkeys,
             accelerators,
             adapters,
+            #[cfg(test)]
             core,
+            #[cfg(test)]
             core_router: None,
-            streams: std::sync::OnceLock::new(),
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn with_core_router(mut self, core: chimera_core::actor_v2::CoreClient) -> Self {
         self.core_router = Some(core);
         self
@@ -79,6 +82,7 @@ impl ApplicationEffectExecutor {
         )
     }
 
+    #[cfg(test)]
     async fn apply_transparent_proxy(
         &self,
         revision: EffectRevision,
@@ -232,12 +236,6 @@ impl ApplicationEffectExecutor {
 
 #[async_trait::async_trait]
 impl ApplicationEffectsPort for ApplicationEffectExecutor {
-    fn bind_streams(&self, streams: chimera_core::clash::ws::StreamsClient) -> anyhow::Result<()> {
-        self.streams
-            .set(streams)
-            .map_err(|_| anyhow::anyhow!("streams already bound"))
-    }
-
     async fn apply(
         &self,
         revision: EffectRevision,
@@ -254,32 +252,14 @@ impl ApplicationEffectsPort for ApplicationEffectExecutor {
                     self.adapters.set_locale(*language),
                 ),
                 ApplicationEffect::Logger(desired) => self.apply_logger(revision, desired),
-                ApplicationEffect::CoreLogStorage(desired) => {
-                    match self.streams.get().map(|streams| streams.core_logs()) {
-                        Some(logs) => match logs.configure(*desired).await {
-                            Ok(()) => healthy(EffectKind::CoreLogStorage, revision),
-                            Err(error) => degraded(
-                                EffectKind::CoreLogStorage,
-                                revision,
-                                "core_log_storage_failed",
-                                error.to_string(),
-                                true,
-                            ),
-                        },
-                        None => {
-                            #[cfg(test)]
-                            if self.streams.get().is_none() {
-                                statuses.push(healthy(EffectKind::CoreLogStorage, revision));
-                                continue;
-                            }
-                            degraded(
-                                EffectKind::CoreLogStorage,
-                                revision,
-                                "core_log_storage_unavailable",
-                                "Core log storage unavailable".into(),
-                                true,
-                            )
-                        }
+                ApplicationEffect::CoreLogStorage(_) => {
+                    #[cfg(test)]
+                    {
+                        healthy(EffectKind::CoreLogStorage, revision)
+                    }
+                    #[cfg(not(test))]
+                    {
+                        unreachable!("CoreRuntimeEffects owns storage")
                     }
                 }
                 ApplicationEffect::AutoLaunch(_)
@@ -309,7 +289,15 @@ impl ApplicationEffectsPort for ApplicationEffectExecutor {
                         })
                 }
                 ApplicationEffect::TransparentProxy(desired) => {
-                    self.apply_transparent_proxy(revision, desired).await
+                    #[cfg(test)]
+                    {
+                        self.apply_transparent_proxy(revision, desired).await
+                    }
+                    #[cfg(not(test))]
+                    {
+                        let _ = desired;
+                        unreachable!("CoreRuntimeEffects owns transparent capture")
+                    }
                 }
                 ApplicationEffect::Hotkeys(raw) => self.apply_hotkeys(revision, raw).await,
                 ApplicationEffect::Widget(config) => self.status_from_result(
@@ -332,34 +320,7 @@ impl ApplicationEffectsPort for ApplicationEffectExecutor {
     }
 }
 
-fn healthy(kind: EffectKind, revision: EffectRevision) -> EffectStatus {
-    EffectStatus {
-        kind,
-        desired_revision: revision,
-        applied_revision: revision,
-        health: EffectHealth::Healthy,
-    }
-}
-
-fn degraded(
-    kind: EffectKind,
-    revision: EffectRevision,
-    code: &'static str,
-    message: String,
-    retryable: bool,
-) -> EffectStatus {
-    EffectStatus {
-        kind,
-        desired_revision: revision,
-        applied_revision: EffectRevision::default(),
-        health: EffectHealth::Degraded {
-            code,
-            message,
-            retryable,
-        },
-    }
-}
-
+use super::status::{degraded, healthy};
 #[cfg(test)]
 mod tests {
     use std::sync::Mutex;
