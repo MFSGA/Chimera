@@ -530,23 +530,12 @@ impl LocalRuntimeHost {
 
     pub(crate) async fn reconcile(
         &self,
-        clash: ClashConfig,
-        target_core: ClashCore,
-        endpoint: &dyn ControlEndpoint,
-        expected_owner: Option<(ExecutionHost, u64)>,
+        _clash: ClashConfig,
+        _target_core: ClashCore,
+        _endpoint: &dyn ControlEndpoint,
+        _expected_owner: Option<(ExecutionHost, u64)>,
     ) -> anyhow::Result<()> {
-        self.reconcile_with_profile_source(
-            Some(clash),
-            target_core,
-            endpoint,
-            None,
-            None,
-            None,
-            None,
-            expected_owner,
-        )
-        .await
-        .map(|_| ())
+        bail!("a typed Profile snapshot is required to build runtime configuration")
     }
 
     pub(crate) async fn reconcile_with_profiles(
@@ -554,24 +543,75 @@ impl LocalRuntimeHost {
         clash: ClashConfig,
         target_core: ClashCore,
         endpoint: &dyn ControlEndpoint,
-        profiles: Arc<chimera_config::profile::Profiles>,
+        profiles: Arc<Profiles>,
         app: chimera_config::application::ChimeraAppConfig,
         staged_content: std::collections::BTreeMap<String, String>,
         target: Option<String>,
         expected_owner: Option<(ExecutionHost, u64)>,
     ) -> anyhow::Result<()> {
-        self.reconcile_with_profile_source(
-            Some(clash),
-            target_core,
-            endpoint,
-            Some((profiles, app, staged_content)),
-            target,
-            None,
-            None,
-            expected_owner,
-        )
-        .await
-        .map(|_| ())
+        use chimera_core::client::reconciler::preparation::{
+            prepared_runtime_from_snapshot, runtime_local_ipc,
+        };
+        anyhow::ensure!(
+            !self.closed.load(Ordering::Acquire),
+            "the local core control plane is shutting down"
+        );
+        anyhow::ensure!(
+            !self.outcome_uncertain(),
+            "the local core runtime outcome is uncertain; recover before applying"
+        );
+        let owner =
+            expected_owner.context("runtime reconcile requires the proven Core routing owner")?;
+        anyhow::ensure!(
+            owner.0 == endpoint.host(),
+            "runtime reconcile host does not match the routing owner"
+        );
+        anyhow::ensure!(
+            target.is_some(),
+            "runtime reconcile requires a source target"
+        );
+        let local_ipc = runtime_local_ipc(&clash);
+        let ports = self.ports.resolve_candidate(&clash)?;
+        let revision = self.lifecycle.allocate_revision()?;
+        let diagnostic_profiles = profiles.clone();
+        let snapshot = match self
+            .build_profile_snapshot(
+                revision,
+                clash,
+                target_core,
+                profiles,
+                app,
+                ports.bindings().clone(),
+                staged_content,
+            )
+            .await
+        {
+            Ok(snapshot) => snapshot,
+            Err(error) => {
+                publish_transform_failure(&self.lifecycle, &error, &diagnostic_profiles, revision);
+                return Err(error);
+            }
+        };
+        self.lifecycle.clear_transform_failure();
+        let prepared = prepared_runtime_from_snapshot(snapshot, ports, target, local_ipc)?;
+        let core_spec = local_host::core_spec(&target_core)?;
+        self.check_and_reconcile_prepared(&prepared, core_spec, endpoint, owner)
+            .await
+    }
+
+    async fn check_and_reconcile_prepared(
+        &self,
+        prepared: &crate::client::core_lifecycle::ports::PreparedRuntime,
+        core_spec: chimera_core_manager::CoreSpec,
+        endpoint: &dyn ControlEndpoint,
+        owner: (ExecutionHost, u64),
+    ) -> anyhow::Result<()> {
+        self.check_prepared_profile(prepared, &core_spec, endpoint)
+            .await?;
+        self.reconcile_prepared_settlement(prepared, core_spec, endpoint, owner)
+            .await?
+            .require_published()?;
+        Ok(())
     }
 
     pub(crate) async fn prepare_profile_runtime_prepared(
@@ -585,19 +625,16 @@ impl LocalRuntimeHost {
         crate::client::application_workflow::mutation::AppliedCandidate,
         crate::client::application_workflow::mutation::CheckRecord,
     )> {
-        let core = prepared.snapshot.target_core;
-        self.reconcile_with_profile_source(
-            None,
-            core,
+        let target = prepared.target.clone();
+        self.try_prepared_profile(
+            prepared,
+            core_spec,
             endpoint,
-            None,
-            prepared.target.clone(),
-            Some(operation_id),
-            Some((prepared, core_spec)),
+            target,
+            operation_id,
             expected_owner,
         )
-        .await?
-        .context("prepared Profile TCC Try returned no held candidate")
+        .await
     }
 
     async fn build_profile_snapshot(
@@ -650,6 +687,7 @@ impl LocalRuntimeHost {
             );
         }
 
+        let local_ipc = chimera_core::client::reconciler::preparation::runtime_local_ipc(&clash);
         let candidate_ports = self.ports.resolve_candidate(&clash)?;
         let revision = self.lifecycle.allocate_revision()?;
         let diagnostic_profiles = profiles.clone();
@@ -673,9 +711,27 @@ impl LocalRuntimeHost {
         };
         self.lifecycle.clear_transform_failure();
 
-        let config_bytes = snapshot.product_bytes().to_vec();
-        let digest = chimera_core_manager::payload_digest(&config_bytes);
+        let prepared =
+            chimera_core::client::reconciler::preparation::prepared_runtime_from_snapshot(
+                snapshot,
+                candidate_ports,
+                None,
+                local_ipc,
+            )?;
         let core_spec = local_host::core_spec(&target_core)?;
+        self.check_prepared_profile(&prepared, &core_spec, endpoint)
+            .await
+    }
+
+    async fn check_prepared_profile(
+        &self,
+        prepared: &crate::client::core_lifecycle::ports::PreparedRuntime,
+        core_spec: &chimera_core_manager::CoreSpec,
+        endpoint: &dyn ControlEndpoint,
+    ) -> anyhow::Result<crate::client::application_workflow::mutation::CheckRecord> {
+        let target_core = prepared.snapshot.target_core;
+        let config_bytes = prepared.snapshot.product_bytes().to_vec();
+        let digest = prepared.intent.digest.clone();
         let candidate = self
             .runtime_paths
             .create_candidate(&config_bytes)
@@ -721,29 +777,18 @@ impl LocalRuntimeHost {
             .map_err(anyhow::Error::new)
     }
 
-    async fn reconcile_with_profile_source(
+    async fn try_prepared_profile(
         &self,
-        clash: Option<ClashConfig>,
-        target_core: ClashCore,
+        prepared: crate::client::core_lifecycle::ports::PreparedRuntime,
+        core_spec: chimera_core_manager::CoreSpec,
         endpoint: &dyn ControlEndpoint,
-        profile_source: Option<(
-            Arc<chimera_config::profile::Profiles>,
-            chimera_config::application::ChimeraAppConfig,
-            std::collections::BTreeMap<String, String>,
-        )>,
         target: Option<String>,
-        profile_operation_id: Option<OperationId>,
-        prepared: Option<(
-            crate::client::core_lifecycle::ports::PreparedRuntime,
-            chimera_core_manager::CoreSpec,
-        )>,
+        profile_operation_id: OperationId,
         expected_owner: Option<(ExecutionHost, u64)>,
-    ) -> anyhow::Result<
-        Option<(
-            crate::client::application_workflow::mutation::AppliedCandidate,
-            crate::client::application_workflow::mutation::CheckRecord,
-        )>,
-    > {
+    ) -> anyhow::Result<(
+        crate::client::application_workflow::mutation::AppliedCandidate,
+        crate::client::application_workflow::mutation::CheckRecord,
+    )> {
         if self.closed.load(Ordering::Acquire) {
             bail!("the local core control plane is shutting down");
         }
@@ -752,119 +797,38 @@ impl LocalRuntimeHost {
                 "the local core runtime outcome is uncertain; restart Chimera before applying another runtime"
             );
         }
-        if let Some(operation_id) = profile_operation_id.as_ref() {
-            anyhow::ensure!(
-                !self
-                    .pending_profile_candidates
-                    .lock()
-                    .await
-                    .contains_key(operation_id),
-                "Profile operation already owns a pending runtime candidate"
-            );
-        }
-
-        // Use ref's canonical strict candidate directly for Profile TCC.
-        // No second runtime build, port reservation or revision allocation
-        // can change its exact advisory-checked and Core-submitted bytes.
-        let (
-            candidate_ports,
-            revision,
-            config_bytes,
-            core_spec,
-            local_ipc,
-            digest,
-            config_text,
-            snapshot,
-        ) = if let Some((prepared, core_spec)) = prepared {
-            anyhow::ensure!(
-                profile_operation_id.is_some(),
-                "a precommit Profile product requires a TCC operation owner"
-            );
-            anyhow::ensure!(
-                target.is_some() && target == prepared.target,
-                "the precommit Profile target does not match the prepared source"
-            );
-            anyhow::ensure!(
-                target_core == prepared.snapshot.target_core
-                    && prepared.intent.core_type == (&target_core).into(),
-                "prepared Profile candidate uses a different Core type"
-            );
-            anyhow::ensure!(
-                prepared.intent.config_text.as_bytes() == prepared.snapshot.product_bytes()
-                    && chimera_core_manager::payload_digest(prepared.snapshot.product_bytes())
-                        == prepared.intent.digest,
-                "Profile check bytes, snapshot and Core intent disagree"
-            );
-            self.lifecycle.clear_transform_failure();
-            (
-                prepared.ports,
-                prepared.snapshot.revision,
-                prepared.snapshot.product_bytes().to_vec(),
-                core_spec,
-                prepared.intent.local_ipc,
-                prepared.intent.digest.clone(),
-                prepared.intent.config_text.clone(),
-                prepared.snapshot,
-            )
-        } else {
-            let clash = clash.context("legacy Profile build requires its original Clash source")?;
-            let (profiles, app, staged_content) = profile_source
-                .context("a typed Profile snapshot is required to build runtime configuration")?;
-            let candidate_ports = self.ports.resolve_candidate(&clash)?;
-            let revision = self.lifecycle.allocate_revision()?;
-            let diagnostic_profiles = profiles.clone();
-            let snapshot = match self
-                .build_profile_snapshot(
-                    revision,
-                    clash,
-                    target_core,
-                    profiles,
-                    app,
-                    candidate_ports.bindings().clone(),
-                    staged_content,
-                )
+        anyhow::ensure!(
+            !self
+                .pending_profile_candidates
+                .lock()
                 .await
-            {
-                Ok(snapshot) => snapshot,
-                Err(error) => {
-                    publish_transform_failure(
-                        &self.lifecycle,
-                        &error,
-                        &diagnostic_profiles,
-                        revision,
-                    );
-                    return Err(error);
-                }
-            };
-            self.lifecycle.clear_transform_failure();
-
-            let config_bytes = snapshot.product_bytes().to_vec();
-            let core_spec = local_host::core_spec(&target_core)?;
-            let local_ipc = LocalIpcSettings {
-                policy: chimera_core_manager::LocalIpcPolicy::Disable,
-                keep_http_controller: true,
-            };
-            let config_text: Arc<str> = String::from_utf8(config_bytes.clone())?.into();
-            // Use the ref's pure core-owned intent builder for the actual
-            // reconcile. Its digest and bytes are one immutable candidate.
-            let intent = chimera_core::actor_v2::intent::RuntimeIntentBuilder::build(
-                (&target_core).into(),
-                config_text,
-                local_ipc,
-            );
-            let digest = intent.digest.clone();
-            let config_text = intent.config_text.clone();
-            (
-                candidate_ports,
-                revision,
-                config_bytes,
-                core_spec,
-                local_ipc,
-                digest,
-                config_text,
-                snapshot,
-            )
-        };
+                .contains_key(&profile_operation_id),
+            "Profile operation already owns a pending runtime candidate"
+        );
+        let target_core = prepared.snapshot.target_core;
+        anyhow::ensure!(
+            target.is_some() && target == prepared.target,
+            "the precommit Profile target does not match the prepared source"
+        );
+        anyhow::ensure!(
+            prepared.intent.core_type == (&target_core).into()
+                && core_spec.kind == chimera_core::client::core_spec::core_kind(target_core),
+            "prepared Profile candidate uses a different Core type"
+        );
+        anyhow::ensure!(
+            prepared.intent.config_text.as_bytes() == prepared.snapshot.product_bytes()
+                && chimera_core_manager::payload_digest(prepared.snapshot.product_bytes())
+                    == prepared.intent.digest,
+            "Profile check bytes, snapshot and Core intent disagree"
+        );
+        self.lifecycle.clear_transform_failure();
+        let candidate_ports = prepared.ports;
+        let revision = prepared.snapshot.revision;
+        let config_bytes = prepared.snapshot.product_bytes().to_vec();
+        let local_ipc = prepared.intent.local_ipc;
+        let digest = prepared.intent.digest.clone();
+        let config_text = prepared.intent.config_text.clone();
+        let snapshot = prepared.snapshot;
         let candidate = self
             .runtime_paths
             .create_candidate(&config_bytes)
@@ -1020,26 +984,21 @@ impl LocalRuntimeHost {
         // baseline receipt through the same confirmed path.
         self.lifecycle.publish_confirmed(receipt.clone());
 
-        if let Some(operation_id) = profile_operation_id {
-            let replaced = reconcile_replaced(&reconcile_outcome);
-            let mut pending = self.pending_profile_candidates.lock().await;
-            anyhow::ensure!(
-                !pending.contains_key(&operation_id),
-                "Profile operation already owns a pending runtime candidate"
-            );
-            pending.insert(operation_id, candidate);
-            return Ok(Some((
-                crate::client::application_workflow::mutation::AppliedCandidate {
-                    replaced,
-                    receipt,
-                    product: snapshot,
-                },
-                check_record,
-            )));
-        }
-        self.publish_profile_candidate(candidate, receipt, snapshot)
-            .await?;
-        Ok(None)
+        let replaced = reconcile_replaced(&reconcile_outcome);
+        let mut pending = self.pending_profile_candidates.lock().await;
+        anyhow::ensure!(
+            !pending.contains_key(&profile_operation_id),
+            "Profile operation already owns a pending runtime candidate"
+        );
+        pending.insert(profile_operation_id, candidate);
+        Ok((
+            crate::client::application_workflow::mutation::AppliedCandidate {
+                replaced,
+                receipt,
+                product: snapshot,
+            },
+            check_record,
+        ))
     }
 
     pub(crate) async fn confirm_profile_runtime(
@@ -1865,6 +1824,8 @@ mod tests {
                 Option<(ExecutionHost, u64)>,
             )>,
         >,
+        checked: StdMutex<Vec<(Vec<u8>, String)>>,
+        reject_check: bool,
         apply_submission: bool,
         /// Check replacement semantics independently from runtime receipt.
         patched: bool,
@@ -1881,7 +1842,19 @@ mod tests {
             ExecutionHost::Local
         }
 
-        async fn check_config(&self, _submission: CheckSubmission) -> CheckSupport {
+        async fn check_config(&self, submission: CheckSubmission) -> CheckSupport {
+            self.checked
+                .lock()
+                .unwrap()
+                .push((submission.config_bytes, submission.digest));
+            if self.reject_check {
+                return CheckSupport::Ran(Err(chimera_core_manager::CoreError {
+                    kind: Some(CoreErrorKind::ConfigCheckFailed),
+                    message: "fixture rejected candidate".into(),
+                    retryable: false,
+                    operation_id: None,
+                }));
+            }
             CheckSupport::Ran(Ok(()))
         }
 
@@ -2036,6 +2009,8 @@ mod tests {
                 applied_kind: Some(CoreKind::Mihomo),
             }),
             submitted: StdMutex::new(Vec::new()),
+            checked: StdMutex::new(Vec::new()),
+            reject_check: false,
             apply_submission,
             patched: false,
             rolled_back: false,
@@ -2335,14 +2310,12 @@ mod tests {
         let operation_id = OperationId::generate();
         prepared.target = Some("source-changed-after-prepare".into());
         let result = host
-            .reconcile_with_profile_source(
-                None,
-                prepared.snapshot.target_core,
+            .try_prepared_profile(
+                prepared,
+                spec,
                 &endpoint,
-                None,
                 Some("older-source".into()),
-                Some(operation_id),
-                Some((prepared, spec)),
+                operation_id,
                 None,
             )
             .await;
@@ -2412,6 +2385,74 @@ mod tests {
         assert_eq!(
             checked_session.revisions.allocate().unwrap().get(),
             revision_three.get() + 1
+        );
+        host.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn ordinary_checked_reconcile_uses_one_prepared_submission_and_exact_ipc_policy() {
+        use chimera_core::client::reconciler::preparation::{
+            prepared_runtime_from_snapshot, runtime_local_ipc,
+        };
+        let (_root, host, paths) = runtime_host_fixture().await;
+        let (original, spec) = prepared_runtime_fixture(Arc::from("mode: rule\n"));
+        let clash = ClashConfig {
+            clash_control_channel: chimera_config::clash::config::ClashControlChannel::PreferIpc,
+            clash_ipc_disable_http_controller: true,
+            ..Default::default()
+        };
+        let prepared = prepared_runtime_from_snapshot(
+            original.snapshot,
+            original.ports,
+            original.target,
+            runtime_local_ipc(&clash),
+        )
+        .unwrap();
+        let mut endpoint = recording_endpoint(true);
+        endpoint.reject_check = true;
+        let error = host
+            .check_and_reconcile_prepared(
+                &prepared,
+                spec.clone(),
+                &endpoint,
+                (ExecutionHost::Local, 3),
+            )
+            .await
+            .unwrap_err();
+        assert!(
+            error
+                .downcast_ref::<crate::client::application_workflow::mutation::RuntimeCheckFailure>(
+                )
+                .is_some()
+        );
+        assert!(endpoint.submitted.lock().unwrap().is_empty());
+        assert!(!paths.product().exists());
+
+        endpoint.reject_check = false;
+        host.check_and_reconcile_prepared(&prepared, spec, &endpoint, (ExecutionHost::Local, 3))
+            .await
+            .unwrap();
+        let checks = endpoint.checked.lock().unwrap();
+        assert_eq!(checks.len(), 2);
+        assert_eq!(checks[0], checks[1]);
+        assert_eq!(checks[1].0, prepared.snapshot.product_bytes());
+        assert_eq!(checks[1].1, prepared.intent.digest);
+        drop(checks);
+        let submits = endpoint.submitted.lock().unwrap();
+        assert_eq!(submits.len(), 1);
+        assert_eq!(submits[0].0, prepared.snapshot.product_bytes());
+        assert_eq!(
+            submits[0].1,
+            Some(LocalIpcSettings {
+                policy: LocalIpcPolicy::Prefer,
+                keep_http_controller: false
+            })
+        );
+        assert_eq!(submits[0].2, Some((ExecutionHost::Local, 3)));
+        drop(submits);
+        assert_eq!(
+            std::fs::read(paths.product()).unwrap(),
+            prepared.snapshot.product_bytes()
         );
         host.shutdown().await.unwrap();
     }

@@ -114,17 +114,7 @@ impl RuntimePreparation {
             .revisions
             .allocate()
             .context("allocate runtime revision")?;
-        let local_ipc = LocalIpcSettings {
-            policy: match inputs.clash.clash_control_channel {
-                chimera_config::clash::config::ClashControlChannel::PreferIpc => {
-                    LocalIpcPolicy::Prefer
-                }
-                chimera_config::clash::config::ClashControlChannel::HttpOnly => {
-                    LocalIpcPolicy::Disable
-                }
-            },
-            keep_http_controller: !inputs.clash.clash_ipc_disable_http_controller,
-        };
+        let local_ipc = runtime_local_ipc(&inputs.clash);
         // A candidate resolution, not an active one: nothing here touches the
         // confirmed binding, so a build that is never applied leaves the
         // running instance's ports alone (v2 §6.2).
@@ -132,7 +122,6 @@ impl RuntimePreparation {
             .ports
             .resolve_candidate(&inputs.clash)
             .context("resolve candidate listener ports")?;
-        let core_type: chimera_utils::core::CoreType = (&inputs.app.core).into();
         let target = inputs.target_key();
         let snapshot = self
             .builder
@@ -144,22 +133,41 @@ impl RuntimePreparation {
             )
             .await
             .context("build runtime candidate")?;
-        // Serialized once, here: the check and the reconcile both consume this
-        // value, so "same bytes" holds by construction rather than by
-        // convention.
-        // Chimera's RuntimeSnapshot currently stores the exact product bytes,
-        // rather than ref's separate `config_text` member. Reuse those bytes
-        // without serializing again, so checks and later submission agree.
-        let text = std::str::from_utf8(snapshot.product_bytes())
-            .context("the built runtime document is not UTF-8")?;
-        let intent = RuntimeIntentBuilder::build(core_type, Arc::<str>::from(text), local_ipc);
-        Ok(PreparedRuntime {
-            snapshot,
-            intent: Arc::new(intent),
-            ports,
-            target,
-        })
+        prepared_runtime_from_snapshot(snapshot, ports, target, local_ipc)
     }
+}
+
+/// Core command options derive from the same typed Clash input on every path.
+pub fn runtime_local_ipc(clash: &ClashConfig) -> LocalIpcSettings {
+    LocalIpcSettings {
+        policy: match clash.clash_control_channel {
+            chimera_config::clash::config::ClashControlChannel::PreferIpc => LocalIpcPolicy::Prefer,
+            chimera_config::clash::config::ClashControlChannel::HttpOnly => LocalIpcPolicy::Disable,
+        },
+        keep_http_controller: !clash.clash_ipc_disable_http_controller,
+    }
+}
+
+/// One exact-byte intent constructor for all prepared runtime admissions.
+pub fn prepared_runtime_from_snapshot(
+    snapshot: Arc<runtime::RuntimeSnapshot>,
+    ports: crate::client::ports::CandidatePortBindings,
+    target: Option<String>,
+    local_ipc: LocalIpcSettings,
+) -> Result<PreparedRuntime> {
+    let text = std::str::from_utf8(snapshot.product_bytes())
+        .context("the built runtime document is not UTF-8")?;
+    let intent = RuntimeIntentBuilder::build(
+        (&snapshot.target_core).into(),
+        Arc::<str>::from(text),
+        local_ipc,
+    );
+    Ok(PreparedRuntime {
+        snapshot,
+        intent: Arc::new(intent),
+        ports,
+        target,
+    })
 }
 
 #[async_trait::async_trait]
