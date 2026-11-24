@@ -12,7 +12,7 @@
     "forceConsistentCasingInFileNames": true,
     "module": "ESNext",
     "moduleResolution": "bundler",
-    "types": ["node"],
+    "types": ["node", "unplugin-icons/types/react", "vite-plugin-svgr/client"],
     "resolveJsonModule": true,
     "isolatedModules": true,
     "jsx": "preserve",
@@ -32,9 +32,4 @@
     // "ignoreDeprecations": "6.0",
   },
   "include": ["src", "./auto-imports.d.ts", "../utils/src", "../interface/src"],
-  "references": [
-    {
-      "path": "./tsconfig.node.json",
-    },
-  ],
 }

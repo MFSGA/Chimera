@@ -28,8 +28,7 @@ export default defineConfig(({ command, mode }) => {
     css: {
       preprocessorOptions: {
         scss: {
-          api: 'modern-compiler',
-          importer: [new NodePackageImporter()],
+          importers: [new NodePackageImporter()],
         },
       },
     },

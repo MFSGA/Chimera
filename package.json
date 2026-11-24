@@ -26,6 +26,7 @@
     "typecheck:utils": "tsc -p frontend/utils/tsconfig.json --noEmit",
     "typecheck:ui": "tsc -p frontend/ui/tsconfig.json --noEmit",
     "typecheck:chimera": "pnpm --filter=chimera-ui generate:i18n && tsc -p frontend/chimera/tsconfig.json --noEmit",
+    "typecheck:node": "tsc --noEmit --project ./frontend/chimera/tsconfig.node.json",
     "typecheck:e2e": "pnpm --filter @chimera/tauri-e2e typecheck",
     "verify:quality": "run-s lint typecheck test:changed-parts test:data-slots test:manifest:node test:manifest test:prepare:node test:nightly:node test:updater:nightly:node",
     "fmt": "run-s fmt:oxlint fmt:prettier fmt:backend",

@@ -9,6 +9,8 @@
     "dev:prod:build": "vite build --watch --emptyOutDir false",
     "dev:prod:serve": "vite preview --port 3000 --strictPort",
     "build": "vite build",
+    "serve": "vite preview",
+    "typecheck": "tsc --noEmit",
     "generate:i18n": "paraglide-js compile --project ./project.inlang --outdir ./src/paraglide --strategy custom-extension",
     "test:profile-sync-history": "tsx --test tests/profile-sync-history.test.ts",
     "test:profile-card-quota": "tsx --test tests/dashboard-daily-utils.test.ts",

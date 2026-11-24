@@ -22,8 +22,10 @@ All three modes use the base Tauri configuration and the upstream command
 structure, with the Chimera frontend package name substituted. The Windows
 configuration only selects the NSIS bundle target.
 
-`clsx` is owned by `@chimera/ui`; the app does not prebundle a dependency
-that it cannot resolve directly.
+The frontend uses the ref Vite/PostCSS plugins and prebundles `clsx` as a
+local development dependency. To preview an already built frontend, use
+`pnpm --filter=chimera-ui serve`. Node-side Vite configuration is checked
+separately with `pnpm typecheck:node`.
 
 ## build
 

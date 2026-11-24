@@ -1,12 +1,8 @@
 {
+  "extends": "../../tsconfig.node.json",
   "compilerOptions": {
-    "composite": true,
-    "skipLibCheck": true,
-    "module": "ESNext",
-    "moduleResolution": "bundler",
-    "allowSyntheticDefaultImports": true,
-    "forceConsistentCasingInFileNames": true,
-    "strict": true
+    "allowJs": true,
+    "types": ["node", "vite/client"]
   },
-  "include": ["frontend/chimera/vite.config.ts"]
+  "include": ["vite.config.*", "tailwind.config.ts"]
 }
