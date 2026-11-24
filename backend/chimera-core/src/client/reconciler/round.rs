@@ -5,7 +5,7 @@ use super::{
     proof::verified_applied_runtime,
     state::{RuntimeProgress, proven_selection_from_receipt},
 };
-use crate::client::core_lifecycle::ports::RuntimeObservationPort;
+use crate::client::core_lifecycle::ports::CoreLifecyclePort;
 
 /// One completed runtime round, observed only by the existing mailbox after
 /// the worker has joined. This object does not own or mutate a Core session.
@@ -20,7 +20,7 @@ pub struct Round {
 impl Round {
     #[allow(clippy::too_many_arguments)]
     pub async fn observe<F: std::future::Future<Output = anyhow::Result<String>>>(
-        core: &(impl RuntimeObservationPort + ?Sized),
+        core: &(impl CoreLifecyclePort + ?Sized),
         target_identity: impl Fn() -> F,
         progress: &parking_lot::Mutex<RuntimeProgress>,
         authority: Option<&dyn RuntimeSourceAuthority>,
@@ -37,7 +37,7 @@ impl Round {
         // reached Running or Stopped. Publish Converged/Inactive
         // only after sampling the runtime owner.
         let observed_core = if result.is_ok() && (reconciled || trigger == "Stop") {
-            core.observe_core_status().await.ok()
+            core.status().await.ok()
         } else {
             None
         };

@@ -1,7 +1,7 @@
 //! Conditional Core retirement and selected-host ownership operations.
-use crate::client::application_workflow::startup::{ServiceEvidence, StartupOwnerFailure};
 use crate::client::core_lifecycle::CoreLifecycleWorkflow;
 use crate::client::core_lifecycle::ports::CoreStatusSnapshot;
+use chimera_core::client::reconciler::service_evidence::ServiceEvidence;
 use std::sync::atomic::Ordering;
 
 impl CoreLifecycleWorkflow {
@@ -37,51 +37,64 @@ impl CoreLifecycleWorkflow {
         self.follow_service_recovery_host(host);
         Ok(())
     }
+}
 
-    pub(in crate::client) async fn confirm_local_owner_stopped(
-        &self,
-        current: &CoreStatusSnapshot,
-    ) -> Result<(), StartupOwnerFailure> {
-        chimera_core::client::core_lifecycle::ownership::confirm_local_owner_stopped(
-            self.core.as_ref(),
-            current,
-        )
-        .await
+#[async_trait::async_trait]
+impl chimera_core::client::reconciler::startup_executor::StartupHost for CoreLifecycleWorkflow {
+    type Core = dyn crate::client::core_lifecycle::ports::CoreLifecyclePort;
+    fn core(&self) -> &Self::Core {
+        self.core.as_ref()
     }
-    pub(in crate::client) async fn confirm_local_stopped_baseline(
-        &self,
-        stopped: &CoreStatusSnapshot,
-    ) -> Result<(), String> {
-        chimera_core::client::core_lifecycle::ownership::confirm_local_stopped_baseline(
-            self.core.as_ref(),
-            stopped,
-        )
-        .await
+    fn startup_application_config(&self) -> chimera_config::application::ChimeraAppConfig {
+        CoreLifecycleWorkflow::startup_application_config(self)
     }
-    pub(in crate::client) async fn recover_service_error_stop(
-        &self,
-        service: ServiceEvidence,
-        previous_generation: u64,
-    ) -> Result<(ServiceEvidence, u64), StartupOwnerFailure> {
-        chimera_core::client::core_lifecycle::ownership::recover_service_error_stop(
-            self.core.as_ref(),
-            || self.service_evidence(),
-            service,
-            previous_generation,
-        )
-        .await
+    fn startup_failed_generation(&self) -> u64 {
+        CoreLifecycleWorkflow::startup_failed_generation(self)
     }
-    pub(in crate::client) async fn retire_service_startup_owner(
+    fn set_startup_failed_generation(&self, generation: u64) {
+        CoreLifecycleWorkflow::set_startup_failed_generation(self, generation);
+    }
+    fn canonical_convergence_session(&self) -> bool {
+        CoreLifecycleWorkflow::canonical_convergence_session(self)
+    }
+    async fn startup_service_command_settled(&self) -> bool {
+        CoreLifecycleWorkflow::startup_service_command_settled(self).await
+    }
+    async fn service_evidence(&self) -> (ServiceEvidence, u64) {
+        CoreLifecycleWorkflow::service_evidence(self).await
+    }
+    async fn startup_select_execution_host(
         &self,
-        service: &ServiceEvidence,
-        require_ready_stopped: bool,
-    ) -> Result<ServiceEvidence, StartupOwnerFailure> {
-        chimera_core::client::core_lifecycle::ownership::retire_service_startup_owner(
-            self.core.as_ref(),
-            || self.service_evidence(),
-            service,
-            require_ready_stopped,
-        )
-        .await
+        host: chimera_core::actor_v2::endpoint::ExecutionHost,
+    ) -> anyhow::Result<()> {
+        CoreLifecycleWorkflow::startup_select_execution_host(self, host).await
+    }
+    async fn startup_target_identity(&self) -> anyhow::Result<String> {
+        CoreLifecycleWorkflow::startup_target_identity(self).await
+    }
+    async fn recover_committed_startup(
+        &self,
+        observed: &CoreStatusSnapshot,
+    ) -> Option<anyhow::Result<()>> {
+        CoreLifecycleWorkflow::recover_committed_startup(self, observed).await
+    }
+    async fn startup_reconcile_application(
+        &self,
+        app: chimera_config::application::ChimeraAppConfig,
+        service_connected: bool,
+    ) -> anyhow::Result<()> {
+        CoreLifecycleWorkflow::startup_reconcile_application(self, app, service_connected).await
+    }
+    async fn release_service_owner(&self) -> Result<ServiceEvidence, String> {
+        CoreLifecycleWorkflow::release_service_owner(self).await
+    }
+    async fn startup_reconcile_application_after_service_release(
+        &self,
+        app: chimera_config::application::ChimeraAppConfig,
+    ) -> anyhow::Result<()> {
+        CoreLifecycleWorkflow::startup_reconcile_application_after_service_release(self, app).await
+    }
+    fn service_recovery_blocks_handoff(&self) -> bool {
+        CoreLifecycleWorkflow::service_recovery_blocks_handoff(self)
     }
 }

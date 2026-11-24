@@ -569,12 +569,6 @@ impl CoreLifecycleWorkflow {
         self.application.get_typed()
     }
 
-    pub(in crate::client) async fn startup_core_status(
-        &self,
-    ) -> anyhow::Result<CoreStatusSnapshot> {
-        self.core.status().await
-    }
-
     pub(in crate::client) async fn execute(
         &self,
         command: Command,

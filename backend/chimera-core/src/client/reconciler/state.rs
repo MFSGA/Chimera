@@ -18,7 +18,7 @@ use super::{
     authority::RuntimeSourceAuthority,
     committed::Selection,
 };
-use crate::client::core_lifecycle::ports::RuntimeApplyPort;
+use crate::client::core_lifecycle::ports::CoreLifecyclePort;
 
 /// A worker-side declaration that an actual target/host attempt was admitted.
 /// Never classify its terminal until the one Actor Completed message observes
@@ -121,7 +121,7 @@ impl RuntimeProgress {
 /// selected Profile/Mode after a legacy reconcile. A failed probe clears
 /// selection; this function never starts or submits a Core.
 pub async fn proven_selection_from_receipt(
-    core: &(impl RuntimeApplyPort + ?Sized),
+    core: &(impl CoreLifecyclePort + ?Sized),
     authority: Option<&dyn RuntimeSourceAuthority>,
 ) -> Option<Selection> {
     let authority = authority?;

@@ -29,7 +29,7 @@ pub fn receipt_matches_target(
     receipt_matches_owner(receipt, observed_host) && receipt.target.as_deref() == Some(target)
 }
 
-use crate::client::core_lifecycle::{ports::RuntimeObservationPort, status::CoreStatusSnapshot};
+use crate::client::core_lifecycle::{ports::CoreLifecyclePort, status::CoreStatusSnapshot};
 use crate::client::reconciler::decision::same_core_status;
 use chimera_ipc::api::status::CoreState;
 use std::sync::Arc;
@@ -38,7 +38,7 @@ use std::sync::Arc;
 /// for the current committed inputs and selected host, then remain the
 /// same instance through a second authoritative observation.
 pub async fn verified_applied_runtime<F: std::future::Future<Output = anyhow::Result<String>>>(
-    core: &(impl RuntimeObservationPort + ?Sized),
+    core: &(impl CoreLifecyclePort + ?Sized),
     target_identity: impl Fn() -> F,
     observed: &CoreStatusSnapshot,
 ) -> bool {
@@ -67,7 +67,7 @@ pub async fn verified_applied_runtime<F: std::future::Future<Output = anyhow::Re
     ) {
         return false;
     }
-    let after = match core.observe_core_status().await {
+    let after = match core.status().await {
         Ok(after) => after,
         Err(_) => return false,
     };
@@ -85,7 +85,7 @@ pub async fn verified_applied_runtime<F: std::future::Future<Output = anyhow::Re
 }
 
 pub async fn recovery_receipt_matches<F: std::future::Future<Output = anyhow::Result<String>>>(
-    core: &(impl RuntimeObservationPort + ?Sized),
+    core: &(impl CoreLifecyclePort + ?Sized),
     target_identity: impl Fn() -> F,
     current: &CoreStatusSnapshot,
     desired: ExecutionHost,
@@ -116,7 +116,7 @@ pub async fn recovery_receipt_matches<F: std::future::Future<Output = anyhow::Re
         return Ok(false);
     }
 
-    let observed = core.observe_core_status().await.map_err(|error| {
+    let observed = core.status().await.map_err(|error| {
         format!("could not recheck the runtime after receipt verification: {error:#}")
     })?;
     if !same_core_status(current, &observed) {
@@ -184,13 +184,11 @@ mod tests {
 }
 
 /// Positive, stable stopped Service proof before releasing ownership.
-pub async fn startup_service_refusal_stopped(
-    core: &(impl RuntimeObservationPort + ?Sized),
-) -> bool {
+pub async fn startup_service_refusal_stopped(core: &(impl CoreLifecyclePort + ?Sized)) -> bool {
     if core.outcome_uncertain() {
         return false;
     }
-    let Ok(before) = core.observe_core_status().await else {
+    let Ok(before) = core.status().await else {
         return false;
     };
     if before.run_type != RunType::Service
@@ -202,7 +200,7 @@ pub async fn startup_service_refusal_stopped(
     if !matches!(core.active_runtime_receipt().await, Ok(None)) {
         return false;
     }
-    let Ok(after) = core.observe_core_status().await else {
+    let Ok(after) = core.status().await else {
         return false;
     };
     same_core_status(&before, &after) && matches!(core.active_runtime_receipt().await, Ok(None))

@@ -32,7 +32,7 @@ struct LifecycleProxyApiClientSource(Arc<dyn CoreLifecyclePort>);
 #[async_trait::async_trait]
 impl ProxyApiClientSource for LifecycleProxyApiClientSource {
     async fn api_client(&self) -> Result<chimera_core::actor_v2::api::ApiClient> {
-        Ok(self.0.clash_api_client().await?.core_client())
+        self.0.clash_api_client().await
     }
 }
 
@@ -81,7 +81,11 @@ impl ChimeraClient {
         }
         // Only test fixtures constructed from injected legacy ports take this
         // fallback. The production Client always receives ref CoreClient.
-        self.inner.core.clash_api_client().await
+        self.inner
+            .core
+            .clash_api_client()
+            .await
+            .map(ApiClient::from_core_client)
     }
 
     pub async fn clash_configs(&self) -> Result<ClashApiConfig> {

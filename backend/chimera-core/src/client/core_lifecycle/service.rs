@@ -1,6 +1,6 @@
 //! Shared lower Service endpoint recovery, following the ref retry budget.
-use super::{ports::RuntimeOwnershipPort, workflow::ServiceRecovery};
-pub async fn settle_service_recovery_action(core: &(impl RuntimeOwnershipPort + ?Sized)) -> bool {
+use super::{ports::CoreLifecyclePort, workflow::ServiceRecovery};
+pub async fn settle_service_recovery_action(core: &(impl CoreLifecyclePort + ?Sized)) -> bool {
     match core.settle_service_recovery_action().await {
         Some(Ok(())) | None => true,
         Some(Err(reason)) => {
@@ -11,7 +11,7 @@ pub async fn settle_service_recovery_action(core: &(impl RuntimeOwnershipPort + 
 }
 
 pub async fn report_service_endpoint_down(
-    core: &(impl RuntimeOwnershipPort + ?Sized),
+    core: &(impl CoreLifecyclePort + ?Sized),
     recovery: &parking_lot::Mutex<ServiceRecovery>,
     shutdown: &tokio_util::sync::CancellationToken,
 ) -> anyhow::Result<bool> {

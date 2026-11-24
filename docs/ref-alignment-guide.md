@@ -729,3 +729,26 @@ cargo clippy --manifest-path backend/Cargo.toml --all-targets --all-features
 - 基线 e7e3818cd0b712371d381eefea06e19b53255799，ref d95b44c05516a3e2e4eb24e2285a7eeaa70e1769。将实际 committed target、retry budget、LiveAttempt 与 startup observation/report 迁入 chimera-core/client/reconciler/reestablish.rs；统一 StartupOutcome 为现有 ref 共享类型（保留本地 Unsettled），ConfigDomain 使用 contracts。启动重试实际调度使用共享 update_reestablish_target；保留 committed identity 变化重置预算、dependency wait、下层 owner 不确定时禁止清除 attempt。报告仍使用本地 operation sequence/evidence，尚未完全统一为 ref report。
 - 正式构建的 recover_after_reconcile 只清除已结算的 native lifecycle/reestablish attempt，拒绝旧 Profile source-decision/rollback evidence；旧 TCC replay、confirm、restore 与 source decision 恢复逻辑仅在 cfg(test) 编译，保留原有回归测试。生产恢复不再重放旧 Profile 事务。完整上游 Actor、宿主 lifecycle 命令、旧配置镜像与尚存的旧 Profile runtime 端口仍待迁移。
 - L2。Rustfmt、workspace Clippy all-targets/all-features offline、diff--check；未运行常规测试、真实 Core/Service/GUI E2E。未主动改变 wire schema。回滚撤销本轮代码，不改用户配置。
+
+### DIFF-REF-SHARED-STARTUP-POLICY：共享启动策略
+
+- 基线 05fcd9bfaebfe228dfe05363b3983eca98bc9b58，ref d95b44c05516a3e2e4eb24e2285a7eeaa70e1769。在独立 ref-alignment/runtime-convergence 分支迁移，不直接修改 master。将生产启动失败分类、Service fallback refusal、S2 owner plan/followup、RuntimeEvidence 与 readiness owner signal 迁入共享 Core startup_policy.rs，直接复用已有 ref planner、receipt host proof 及 startup outcome。原启动决策和 retry fixtures 随代码迁移；旧 StartupRetryTarget 仅为 test-support。保留单一 lifecycle owner，不增加前端兼容 DTO。
+- L2。Rustfmt、workspace Clippy all-targets/all-features offline、diff--check；未运行常规测试及真实 Core/Service/GUI E2E。完整 startup executor、Actor 与 legacy config mirror 尚未逐字替换。回滚撤销本轮提交，不改用户配置。
+
+### DIFF-REF-SHARED-STARTUP-EXECUTOR：共享启动执行器
+
+- 分支 ref-alignment/runtime-convergence，基线 252068b684941c2fa50a79b3bd3d7df2f93fe79f，ref d95b44c05516a3e2e4eb24e2285a7eeaa70e1769。完整迁移已有 S2/S3 startup executor 与 readiness 双向复核至 chimera-core/client/reconciler/startup_executor.rs，单一生产 reconciler worker 通过 StartupHost 连接真实宿主操作。直接复用共享 ownership/proof 函数，移除旧桌面重复转发。保留原有 owner 证据、generation/target fence、Service fallback 正向拒绝条件、root shutdown 生命周期和报告语义。
+- 本轮迁移是 ref 执行边界对齐，不是逐字复制完整 ref Actor。宿主仍负责实际 Service lease、host selection、Core apply 与 startup retry attempt；StartupHost 是目前的临时宿主边界，后续完整 lifecycle composition 迁移时应收敛，不增加前端兼容协议。
+- L2。Rustfmt、workspace Clippy all-targets/all-features offline、diff--check 与正常签名提交钩子；未运行常规测试、真实 Core/Service 或 GUI E2E，未主动修改 IPC schema。仅推送迁移分支；回滚撤销本轮代码，不改用户配置。
+
+### DIFF-REF-SHARED-REESTABLISH-TRANSITIONS：共享启动尝试状态转换
+
+- 分支 ref-alignment/runtime-convergence，基线 fecfcbfda2e79e82ef26639dee4a95c3b0d34f10，ref d95b44c05516a3e2e4eb24e2285a7eeaa70e1769。将实际 begin/update/conclude attempt 与 committed source change retry re-arm 迁入已有 chimera-core/client/reconciler/reestablish.rs；沿用同一 live/deferred 状态，保持原有 retry identity、budget 与下层 owner 不确定性处理。宿主只提供当前源身份观察、下层状态和恢复信息发布，未增加第二 owner 或前端兼容协议。
+- 此为执行状态边界迁移，非完整 ref Actor 逐字替换。保留既有未结算尝试、旧测试事务以及原有 StartupOutcome 行为；完整 native actor 与宿主 lifecycle composition 仍待对齐。
+- L2。Rustfmt、workspace Clippy all-targets/all-features offline、diff--check 与签名提交钩子；未运行常规测试或真实 Core/Service/GUI E2E。未主动修改 IPC schema。仅推送迁移分支。
+
+### DIFF-REF-UNIFIED-LIFECYCLE-PORTS：统一实际 Core/Service 生命周期端口
+
+- 分支 ref-alignment/runtime-convergence，基线 4c25f4024f1800306c7ebd66f69c9701d9f483fa，ref d95b44c05516a3e2e4eb24e2285a7eeaa70e1769。整体迁移现有 CoreLifecyclePort、ServiceLifecyclePort、RunningConfigPort、PreparedCoreBinary、BinaryInstallProgress、RuntimeTransformDiagnostics 至 chimera-core/client/core_lifecycle/ports.rs。删除之前迁移中引入的 RuntimeApplyPort/RuntimeObservationPort/RuntimeOwnershipPort 三个过渡端口及其桌面转发实现；实际 S2/S3/S4、startup executor、round、release 与 proof 直接调用原唯一 lifecycle capability。Core API 直接使用 shared instance-bound client，仅 Tauri 边界保留现有 API wrapper。Service instance ownership 和 effective ClashInfo 由真实宿主/现有测试 fixture 显式提供，不在共享层读取桌面全局配置。保持原有 test adapter 行为、runtime receipt / source identity / Service generation fence 与 serialized owner。
+- 本轮移除跨 crate 依赖障碍，不声称完整 ref Actor 已逐字替换。原 RuntimeReconciler mailbox、CoreLifecycleWorkflow、旧 config transaction 与宿主 adapters 仍存在。保留现有 shared wire 字段及旧测试，无新增前端兼容 DTO。
+- L2。Rustfmt、workspace Clippy all-targets/all-features offline、diff--check 与正常签名提交钩子。未运行常规测试、真实 Core/Service 或 GUI E2E；未主动修改 IPC schema，未重新生成 bindings。仅推送迁移分支；回滚撤销本轮代码提交，不改用户配置。

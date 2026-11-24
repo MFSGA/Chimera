@@ -533,3 +533,156 @@ where
     };
     report
 }
+
+pub fn begin_reestablish_attempt(
+    live: &mut Option<LiveAttempt>,
+    deferred: &mut Option<DeferredTarget>,
+    cause: ReestablishCause,
+) {
+    if let Some(attempt) = live {
+        if let Some(target) = attempt.target_mut() {
+            target.origin = TargetOrigin::Reestablish(cause);
+            attempt.stage = if cause == ReestablishCause::Recovery {
+                AttemptStage::Recovering
+            } else {
+                AttemptStage::Preparing
+            };
+            attempt.unresolved = None;
+            return;
+        }
+        debug_assert!(false, "an unresolved attempt is never replaced");
+        return;
+    }
+
+    let mut target = deferred.take().unwrap_or_else(|| {
+        DeferredTarget::reestablish(OperationId::generate(), String::new(), cause)
+    });
+    target.origin = TargetOrigin::Reestablish(cause);
+    let operation_id = target.operation_id;
+    *live = Some(LiveAttempt::committed_target(operation_id, target));
+}
+
+/// Settle the live reestablishment using the latest committed identity. The
+/// caller publishes its recovery projection when the report remains unresolved.
+pub async fn update_reestablish_attempt<F, U>(
+    live: &mut Option<LiveAttempt>,
+    deferred: &mut Option<DeferredTarget>,
+    target_identity: impl FnOnce() -> F,
+    unresolved_identity: impl FnOnce() -> U,
+    lower_outcome_uncertain: impl FnOnce() -> bool,
+    report: StartupReport,
+    automatic: bool,
+    cause: ReestablishCause,
+) -> StartupReport
+where
+    F: std::future::Future<Output = anyhow::Result<String>>,
+    U: std::future::Future<Output = Option<String>>,
+{
+    let target = live
+        .as_ref()
+        .and_then(|attempt| match &attempt.origin {
+            AttemptOrigin::CommittedTarget(target) => Some(target.as_ref().clone()),
+            AttemptOrigin::SourceDecision { .. } | AttemptOrigin::Lifecycle => None,
+        })
+        .expect("startup reestablishment runs on its committed target");
+    let mut scheduled = Some(target);
+    let report = update_reestablish_target(
+        target_identity,
+        unresolved_identity,
+        report,
+        automatic,
+        cause,
+        &mut scheduled,
+    )
+    .await;
+    if let Some(target) = scheduled
+        && let Some(live_target) = live.as_mut().and_then(LiveAttempt::target_mut)
+    {
+        *live_target = target;
+    }
+
+    match &report.outcome {
+        StartupOutcome::Ready => {
+            *live = None;
+            *deferred = None;
+        }
+        StartupOutcome::RecoveryRequired { reason } | StartupOutcome::Unsettled { reason } => {
+            if let Some(attempt) = live {
+                attempt.unresolved = Some(reason.clone());
+            }
+            *deferred = None;
+        }
+        StartupOutcome::ReadyDegraded { .. } => {
+            conclude_attempt(live, deferred, None, lower_outcome_uncertain());
+        }
+    }
+    report
+}
+
+/// Re-arm a deferred reestablishment when a source commit changes the
+/// target. A previous exhausted budget remains exhausted for the same target.
+pub async fn reschedule_after_source_commit<F, U>(
+    deferred: &mut Option<DeferredTarget>,
+    target_identity: impl FnOnce() -> F,
+    unresolved_identity: impl FnOnce() -> U,
+) where
+    F: std::future::Future<Output = anyhow::Result<String>>,
+    U: std::future::Future<Output = Option<String>>,
+{
+    let Some(target) = deferred.as_ref().filter(|target| target.is_reestablish()) else {
+        return;
+    };
+    if target.health == ConvergenceHealth::RecoveryRequired {
+        return;
+    }
+    let cause = match target.origin {
+        TargetOrigin::Reestablish(cause) => cause,
+        TargetOrigin::Mutation => unreachable!("filtered reestablish target"),
+    };
+    let identity = match target_identity().await {
+        Ok(identity) => identity,
+        Err(_) => match unresolved_identity().await {
+            Some(identity) => identity,
+            None => return,
+        },
+    };
+    let target = deferred
+        .as_mut()
+        .filter(|target| target.is_reestablish())
+        .expect("reestablish target remains attached to the workflow");
+    if target.identity != identity {
+        *target = DeferredTarget::reestablish(OperationId::generate(), identity, cause);
+    } else if target.attempts_remaining == 0 {
+        return;
+    }
+    target.health = ConvergenceHealth::RetryScheduled;
+    target.next_attempt = Some(tokio::time::Instant::now());
+}
+
+/// Clear the sole live attempt only after the lower owner has settled.
+pub fn conclude_attempt(
+    live: &mut Option<LiveAttempt>,
+    deferred: &mut Option<DeferredTarget>,
+    unresolved: Option<String>,
+    lower_outcome_uncertain: bool,
+) -> bool {
+    match clearance_reason(unresolved, lower_outcome_uncertain) {
+        None => {
+            if let Some(target) = live.take().and_then(LiveAttempt::into_target) {
+                *deferred = Some(*target);
+            }
+            true
+        }
+        Some(reason) => {
+            if let Some(attempt) = live {
+                tracing::error!(
+                    operation_id = %attempt.operation_id,
+                    stage = ?attempt.stage,
+                    "an attempt left the execution domain isolated: {reason}"
+                );
+                attempt.unresolved = Some(reason);
+            }
+            false
+        }
+    }
+}

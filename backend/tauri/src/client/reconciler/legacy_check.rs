@@ -331,6 +331,12 @@ mod tests {
 
     #[async_trait::async_trait]
     impl CoreLifecyclePort for RecordingChecker {
+        fn effective_clash_info(&self) -> chimera_core::client::clash_info::ClashInfo {
+            crate::config::core::Config::clash()
+                .latest()
+                .get_client_info()
+        }
+
         async fn reconcile(&self, _: ClashConfig, _: ClashCore, _: RunType) -> Result<()> {
             panic!("candidate checking must not reconcile");
         }

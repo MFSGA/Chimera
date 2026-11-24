@@ -239,7 +239,7 @@ mod tests {
 /// Execute a release only while a verified Local instance and the stopped
 /// Service owner remain stable through the nonblocking transition lease.
 pub async fn maintain_service_release<R, S, L>(
-    core: &(impl crate::client::core_lifecycle::ports::RuntimeObservationPort + ?Sized),
+    core: &(impl crate::client::core_lifecycle::ports::CoreLifecyclePort + ?Sized),
     recovery: &parking_lot::Mutex<crate::client::core_lifecycle::workflow::ServiceRecovery>,
     observe_release: impl Fn() -> R,
     observe_service: impl Fn() -> S,
@@ -256,7 +256,7 @@ where
 {
     use super::decision::same_core_status;
     use chimera_ipc::api::status::CoreState;
-    let before = core.observe_core_status().await?;
+    let before = core.status().await?;
     anyhow::ensure!(
         observe_release().await == ReleaseObservation::Owed,
         "Service daemon release is not authorized by a verified Local owner"
@@ -269,7 +269,7 @@ where
     // Nonblocking lock acquisition preserves ServiceActor -> CoreLifecycle
     // ordering: a UI command can hold this lock while awaiting our mailbox.
     let mut lease = begin_transition().await?;
-    let local_after_lease = core.observe_core_status().await?;
+    let local_after_lease = core.status().await?;
     anyhow::ensure!(
         same_core_status(&before, &local_after_lease)
             && matches!(local_after_lease.state, CoreState::Running),
@@ -300,7 +300,7 @@ where
         matches!(after, ServiceEvidence::Absent { .. }),
         "Service stop was acknowledged but a fresh probe did not prove daemon shutdown: {after:?}"
     );
-    let current = core.observe_core_status().await?;
+    let current = core.status().await?;
     anyhow::ensure!(
         same_core_status(&before, &current) && matches!(current.state, CoreState::Running),
         "Local Core changed while retiring the Service daemon"

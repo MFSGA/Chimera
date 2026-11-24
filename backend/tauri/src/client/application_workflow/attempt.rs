@@ -58,25 +58,12 @@ impl ApplicationWorkflow {
 
     pub(crate) fn conclude_attempt(&mut self, unresolved: Option<String>) -> bool {
         let lower_outcome_uncertain = self.lower_outcome_uncertain();
-        match clearance_reason(unresolved, lower_outcome_uncertain) {
-            None => {
-                if let Some(target) = self.live.take().and_then(LiveAttempt::into_target) {
-                    self.deferred = Some(*target);
-                }
-                true
-            }
-            Some(reason) => {
-                if let Some(attempt) = &mut self.live {
-                    tracing::error!(
-                        operation_id = %attempt.operation_id,
-                        stage = ?attempt.stage,
-                        "an attempt left the execution domain isolated: {reason}"
-                    );
-                    attempt.unresolved = Some(reason);
-                }
-                false
-            }
-        }
+        chimera_core::client::reconciler::reestablish::conclude_attempt(
+            &mut self.live,
+            &mut self.deferred,
+            unresolved,
+            lower_outcome_uncertain,
+        )
     }
 }
 

@@ -1336,6 +1336,12 @@ mod tests {
 
     #[async_trait]
     impl CoreLifecyclePort for RecordingCore {
+        fn effective_clash_info(&self) -> chimera_core::client::clash_info::ClashInfo {
+            crate::config::core::Config::clash()
+                .latest()
+                .get_client_info()
+        }
+
         async fn reconcile(
             &self,
             _clash: chimera_config::clash::config::ClashConfig,
