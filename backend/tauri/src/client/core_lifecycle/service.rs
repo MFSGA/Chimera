@@ -4,7 +4,6 @@ use crate::client::core_lifecycle::CoreLifecycleWorkflow;
 use crate::client::core_lifecycle::ports::ServiceTransitionLease;
 use chimera_core::actor_v2::endpoint::ExecutionHost;
 use chimera_core::actor_v2::service_status::ServiceHostStatus;
-use chimera_ipc::api::status::CoreState;
 use std::sync::atomic::Ordering;
 
 impl CoreLifecycleWorkflow {
@@ -79,96 +78,6 @@ impl CoreLifecycleWorkflow {
             &self.shutdown,
         )
         .await
-    }
-
-    pub(in crate::client) async fn uninstall_service(
-        &self,
-        transition: &mut dyn ServiceTransitionLease,
-    ) -> anyhow::Result<()> {
-        self.service_recovery.lock().suppress();
-        transition.uninstall_daemon().await?;
-        transition.confirm_stopped().await?;
-        if !self.application.get_typed().enable_service_mode {
-            return Ok(());
-        }
-
-        let before = self.core.status().await?;
-        if !matches!(before.state, CoreState::Running)
-            || before.run_type == crate::core::RunType::Service
-        {
-            self.reconcile().await?;
-        }
-
-        let after = self.core.status().await?;
-        anyhow::ensure!(
-            matches!(after.state, CoreState::Running)
-                && after.run_type != crate::core::RunType::Service,
-            "core did not recover to the local host after Service uninstall"
-        );
-        Ok(())
-    }
-
-    pub(in crate::client) async fn start_service(
-        &self,
-        transition: &mut dyn ServiceTransitionLease,
-        restart: bool,
-        ready_timeout: std::time::Duration,
-    ) -> anyhow::Result<()> {
-        if restart {
-            transition.restart_daemon().await?;
-        } else {
-            transition.start_daemon().await?;
-        }
-        self.service_recovery.lock().rearm();
-        if !self.application.get_typed().enable_service_mode {
-            return Ok(());
-        }
-
-        transition.confirm_ready(ready_timeout).await?;
-        let before = self.core.status().await?;
-        if !matches!(before.state, CoreState::Running)
-            || before.run_type != crate::core::RunType::Service
-        {
-            self.reconcile().await?;
-        }
-
-        transition
-            .confirm_ready(std::time::Duration::from_secs(5))
-            .await?;
-        let after = self.core.status().await?;
-        anyhow::ensure!(
-            matches!(after.state, CoreState::Running)
-                && after.run_type == crate::core::RunType::Service,
-            "core did not reach the Chimera Service host"
-        );
-        Ok(())
-    }
-
-    pub(in crate::client) async fn stop_service(
-        &self,
-        transition: &mut dyn ServiceTransitionLease,
-    ) -> anyhow::Result<()> {
-        self.service_recovery.lock().suppress();
-        transition.stop_daemon().await?;
-        transition.confirm_stopped().await?;
-        if !self.application.get_typed().enable_service_mode {
-            return Ok(());
-        }
-
-        let before = self.core.status().await?;
-        if !matches!(before.state, CoreState::Running)
-            || before.run_type == crate::core::RunType::Service
-        {
-            self.reconcile().await?;
-        }
-
-        let after = self.core.status().await?;
-        anyhow::ensure!(
-            matches!(after.state, CoreState::Running)
-                && after.run_type != crate::core::RunType::Service,
-            "core did not recover to the local host after Service stop"
-        );
-        Ok(())
     }
 
     pub(in crate::client) async fn release_service_owner(&self) -> Result<ServiceEvidence, String> {

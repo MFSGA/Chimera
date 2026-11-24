@@ -29,7 +29,6 @@ use crate::client::reconciler::decision::service_prepared_owner_proven;
 use crate::client::reconciler::state::RuntimeProgress;
 #[cfg(test)]
 use crate::client::reconciler::state::proven_selection_from_receipt;
-use crate::config::chimera::ClashCore;
 use tokio_util::sync::CancellationToken;
 
 use super::{
@@ -37,103 +36,19 @@ use super::{
         application::ApplicationClient, clash_config::ClashConfigClient, runtime::RuntimePaths,
     },
     ports::{
-        BinaryInstaller, CoreLifecyclePort, CoreStatusSnapshot, PreparedCoreBinary,
-        ServiceLifecyclePort, ServiceTransitionLease,
+        BinaryInstaller, CoreLifecyclePort, CoreStatusSnapshot, ServiceLifecyclePort,
+        ServiceTransitionLease,
     },
 };
 
 pub(in crate::client) use crate::client::reconciler::legacy_source::ApplicationPatchResult;
 
-pub(in crate::client) enum Command {
-    #[cfg(test)]
-    ProfileMutation(Box<crate::client::application_workflow::mutation::MutationRequest>),
-    Shutdown,
-    /// Explicit user intent, distinct from automatic reconciliation.
-    StartCore,
-    StopCore,
-    PatchApplicationConfig {
-        patch: ChimeraAppConfigPatch,
-        service_connected: bool,
-        /// Reply after the source commit; runtime failures are degradations,
-        /// not evidence that the committed application.yaml rolled back.
-        degradations: tokio::sync::oneshot::Sender<ApplicationPatchResult>,
-        /// Captured by the old actor completion path until the ref single
-        /// Reconciler owns both source-version and applied-target status.
-        runtime_converged: Arc<AtomicBool>,
-    },
-    #[cfg(not(any(target_os = "android", target_os = "ios")))]
-    DisableStaleSystemProxy {
-        system_proxy: crate::client::system_proxy::SystemProxyClient,
-        expected_port: u16,
-        expected_core_state_changed_at: i64,
-        desired_before: bool,
-        original: chimera_contracts::system_proxy::OsProxyConfig,
-        notifications: Arc<dyn crate::client::effects::ports::CommitNotifications>,
-        persist_legacy_mirror: Arc<dyn Fn() -> anyhow::Result<()> + Send + Sync>,
-    },
-    /// Retired production entry. Legacy actor tests retain the old adapter.
-    #[cfg(test)]
-    SelectCore(ClashCore),
-    RecoverCore,
-    /// Re-evaluate the runtime owner after Service readiness changes.
-    FollowService {
-        operation_id: u64,
-        transition: Box<dyn ServiceTransitionLease>,
-    },
-    StartupReconcile {
-        operation_id: u64,
-        transition: Box<dyn ServiceTransitionLease>,
-    },
-    RecoverStartup {
-        operation_id: u64,
-        transition: Box<dyn ServiceTransitionLease>,
-    },
-    RetryStartup {
-        operation_id: u64,
-        identity: String,
-        transition: Box<dyn ServiceTransitionLease>,
-    },
-    CacheStartupUnsettled {
-        operation_id: u64,
-        reason: String,
-    },
-    Reconcile,
-    /// The exact upstream checked bytes, handed from the only lifecycle
-    /// mailbox into the existing CoreFacade mutation executor. No rebuild.
-    ApplyChecked {
-        prepared: super::ports::PreparedRuntime,
-        core_spec: chimera_core_manager::CoreSpec,
-        domain: super::super::reconciler::committed::SourceDomain,
-        version: u64,
-        authority: Arc<dyn crate::client::reconciler::authority::RuntimeSourceAuthority>,
-        interrupt_mode: bool,
-    },
-    /// One source notification requests a latest-committed-target round.
-    ReconcileSource,
-    /// Ref release-owed maintenance; no Core submit or startup handoff.
-    MaintainServiceRelease,
-    RetryDeferredProfiles {
-        digest: String,
-    },
-    ReconcileProfiles {
-        profiles: Arc<chimera_config::profile::Profiles>,
-        staged_content: std::collections::BTreeMap<String, String>,
-    },
-    ReplaceCoreBinary(PreparedCoreBinary),
-    InstallService(Box<dyn ServiceTransitionLease>),
-    UninstallService(Box<dyn ServiceTransitionLease>),
-    UpdateService(Box<dyn ServiceTransitionLease>),
-    StartService {
-        transition: Box<dyn ServiceTransitionLease>,
-        ready_timeout: std::time::Duration,
-    },
-    RestartService {
-        transition: Box<dyn ServiceTransitionLease>,
-        ready_timeout: std::time::Duration,
-    },
-    StopService(Box<dyn ServiceTransitionLease>),
-    ServiceEndpointDown(Box<dyn ServiceTransitionLease>),
-}
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+pub(in crate::client) type Command = chimera_core::client::core_lifecycle::command::Command<
+    crate::client::system_proxy::SystemProxyClient,
+>;
+#[cfg(any(target_os = "android", target_os = "ios"))]
+pub(in crate::client) type Command = chimera_core::client::core_lifecycle::command::Command<()>;
 
 // ref apply_prepared owns post-Core one-shot effects. The sole lifecycle
 // Actor still decides when its final source/version fence permits completion.
@@ -574,11 +489,6 @@ impl CoreLifecycleWorkflow {
         command: Command,
         #[cfg(test)] startup_retry_target: &mut Option<StartupRetryTarget>,
     ) -> anyhow::Result<()> {
-        // The sole worker owns one command at a time. Any effect left over
-        // from a failed or superseded operation must not leak into the next.
-        self.checked_connection_effect.lock().take();
-        self.prepared_outcome.lock().take();
-        self.progress.lock().clear_pending();
         #[cfg(test)]
         let refresh_startup_retry_identity =
             matches!(&command, Command::PatchApplicationConfig { .. });
@@ -601,188 +511,16 @@ impl CoreLifecycleWorkflow {
             ),
             _ => false,
         };
-        // Ref converge uses the last proven selection for both explicit
-        // starts and observed Core changes, not just source notifications.
-        let prepared_selection_candidate =
-            matches!(&command, Command::ReconcileSource | Command::Reconcile)
-                || (self.profiles.is_some()
-                    && self.checked_gate.get().is_some()
-                    && matches!(&command, Command::StartCore | Command::RecoverCore));
-        if !prepared_selection_candidate && !matches!(&command, Command::ApplyChecked { .. }) {
-            self.progress.lock().invalidate_selection();
-        }
-        let result = match command {
-            #[cfg(test)]
-            Command::ProfileMutation(_) => {
-                anyhow::bail!("Profile mutations must run through RuntimeReconcilerActor")
-            }
-            Command::RecoverCore => self.reconcile_with_trigger(Trigger::CoreChanged).await,
-            Command::Reconcile => self.reconcile_with_trigger(Trigger::Retry).await,
-            Command::ReconcileSource => self.reconcile_with_trigger(Trigger::SourceCommitted).await,
-            Command::ApplyChecked {
-                prepared,
-                core_spec,
-                domain,
-                version,
-                authority,
-                interrupt_mode,
-            } => {
-                self.apply_checked_runtime(
-                    prepared,
-                    core_spec,
-                    domain,
-                    version,
-                    authority,
-                    interrupt_mode,
-                )
-                .await
-            }
-            Command::StartCore => self.reconcile_with_trigger(Trigger::Start).await,
-            #[cfg(test)]
-            Command::StartupReconcile {
-                operation_id,
-                transition,
-            } => {
-                let report = self
-                    .startup_reconcile(operation_id, transition, startup_retry_target)
-                    .await;
-                match report.outcome.failure_reason() {
-                    Some(reason) => Err(anyhow::anyhow!(reason.to_owned())),
-                    None => Ok(()),
-                }
-            }
-            #[cfg(test)]
-            Command::RecoverStartup {
-                operation_id,
-                transition,
-            } => {
-                let report = self
-                    .recover_startup(operation_id, transition, startup_retry_target)
-                    .await;
-                match report.outcome.failure_reason() {
-                    Some(reason) => Err(anyhow::anyhow!(reason.to_owned())),
-                    None => Ok(()),
-                }
-            }
-            #[cfg(test)]
-            Command::RetryStartup {
-                operation_id,
-                identity,
-                transition,
-            } => {
-                let report = self
-                    .retry_startup(operation_id, identity, transition, startup_retry_target)
-                    .await;
-                match report.outcome.failure_reason() {
-                    Some(reason) => Err(anyhow::anyhow!(reason.to_owned())),
-                    None => Ok(()),
-                }
-            }
-            #[cfg(not(test))]
-            Command::StartupReconcile { .. }
-            | Command::RecoverStartup { .. }
-            | Command::RetryStartup { .. }
-            | Command::FollowService { .. } => {
-                anyhow::bail!("startup commands must be handled by ApplicationWorkflow")
-            }
-            #[cfg(test)]
-            Command::FollowService { .. } => {
-                anyhow::bail!("Service readiness follow-up must run through ApplicationWorkflow")
-            }
-            Command::CacheStartupUnsettled { .. } => {
-                anyhow::bail!("an unsettled startup report must be cached by ApplicationWorkflow")
-            }
-            Command::RetryDeferredProfiles { digest } => {
-                self.retry_deferred_profiles(&digest).await
-            }
-            Command::ReconcileProfiles {
-                profiles,
-                staged_content,
-            } => self.reconcile_profiles(profiles, staged_content).await,
-            Command::Shutdown => {
-                self.service_recovery.lock().suppress();
-                self.core.stop().await
-            }
-            Command::StopCore => self.core.stop().await,
-            Command::PatchApplicationConfig {
-                patch,
-                service_connected,
-                degradations,
-                runtime_converged,
-            } => self
-                .patch_application_config_with_result(patch, service_connected)
-                .await
-                .map(|result| {
-                    // Notified source apply is a separate queued Core operation. The
-                    // source-command completion cannot mark it Converged.
-                    runtime_converged.store(
-                        result.notified_version.is_none() && result.degradations.is_empty(),
-                        Ordering::Release,
-                    );
-                    let _ = degradations.send(result);
-                }),
-            #[cfg(not(any(target_os = "android", target_os = "ios")))]
-            Command::DisableStaleSystemProxy {
-                system_proxy,
-                expected_port,
-                expected_core_state_changed_at,
-                desired_before,
-                original,
-                notifications,
-                persist_legacy_mirror,
-            } => self
-                .disable_stale_system_proxy(
-                    system_proxy,
-                    expected_port,
-                    expected_core_state_changed_at,
-                    desired_before,
-                    original,
-                    notifications,
-                    persist_legacy_mirror,
-                )
-                .await
-                .map_err(anyhow::Error::new),
-            #[cfg(test)]
-            Command::SelectCore(core) => self.select_core(core).await,
-            Command::ReplaceCoreBinary(artifact) => self.replace_binary(artifact).await,
-            Command::InstallService(mut transition) => transition.install_daemon().await,
-            Command::UninstallService(mut transition) => {
-                self.uninstall_service(transition.as_mut()).await
-            }
-            Command::UpdateService(mut transition) => transition.update_daemon().await,
-            Command::StartService {
-                mut transition,
-                ready_timeout,
-            } => {
-                self.start_service(transition.as_mut(), false, ready_timeout)
-                    .await
-            }
-            Command::RestartService {
-                mut transition,
-                ready_timeout,
-            } => {
-                self.start_service(transition.as_mut(), true, ready_timeout)
-                    .await
-            }
-            Command::StopService(mut transition) => self.stop_service(transition.as_mut()).await,
-            Command::MaintainServiceRelease => self.maintain_service_release().await,
-            Command::ServiceEndpointDown(mut transition) => {
-                match self.report_service_endpoint_down(transition.as_mut()).await {
-                    Ok(recovered) => {
-                        if recovered {
-                            self.service_recovery_reconnected
-                                .store(true, Ordering::Release);
-                        }
-                        Ok(())
-                    }
-                    Err(error) => Err(error),
-                }
-            }
-        };
-        if prepared_selection_candidate && result.is_err() {
-            self.progress.lock().invalidate_selection();
-        }
-        self.refresh_service_recovery_host().await;
+        #[cfg(not(test))]
+        let mut startup_retry_target = None;
+        #[cfg(not(test))]
+        let startup_retry_target = &mut startup_retry_target;
+        let result = chimera_core::client::core_lifecycle::executor::execute(
+            self,
+            command,
+            startup_retry_target,
+        )
+        .await;
         #[cfg(test)]
         {
             if refresh_startup_target {
@@ -1287,5 +1025,184 @@ mod checked_connection_effect_tests {
             }
         ));
         assert_eq!(degradation.message, "newer Profiles source reached mailbox");
+    }
+}
+
+#[async_trait::async_trait]
+impl chimera_core::client::core_lifecycle::executor::LifecycleHost for CoreLifecycleWorkflow {
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    type SystemProxy = crate::client::system_proxy::SystemProxyClient;
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    type SystemProxy = ();
+    fn application_config(&self) -> ChimeraAppConfig {
+        self.application.get_typed()
+    }
+    fn core(&self) -> &dyn CoreLifecyclePort {
+        self.core.as_ref()
+    }
+    fn installer(&self) -> &dyn BinaryInstaller {
+        self.installer.as_ref()
+    }
+    fn service_recovery(&self) -> &parking_lot::Mutex<ServiceRecovery> {
+        &self.service_recovery
+    }
+    fn progress(&self) -> &parking_lot::Mutex<RuntimeProgress> {
+        &self.progress
+    }
+    fn clear_round_effects(&self) {
+        self.checked_connection_effect.lock().take();
+        self.prepared_outcome.lock().take();
+    }
+    fn canonical_convergence_session(&self) -> bool {
+        self.canonical_convergence_session()
+    }
+    async fn reconcile_with_trigger(&self, trigger: Trigger) -> anyhow::Result<()> {
+        self.reconcile_with_trigger(trigger).await
+    }
+    async fn apply_checked_runtime(
+        &self,
+        prepared: super::ports::PreparedRuntime,
+        core_spec: chimera_core_manager::CoreSpec,
+        domain: crate::client::reconciler::committed::SourceDomain,
+        version: u64,
+        authority: Arc<dyn crate::client::reconciler::authority::RuntimeSourceAuthority>,
+        interrupt_mode: bool,
+    ) -> anyhow::Result<()> {
+        self.apply_checked_runtime(
+            prepared,
+            core_spec,
+            domain,
+            version,
+            authority,
+            interrupt_mode,
+        )
+        .await
+    }
+    async fn retry_deferred_profiles(&self, digest: &str) -> anyhow::Result<()> {
+        self.retry_deferred_profiles(digest).await
+    }
+    async fn reconcile_profiles(
+        &self,
+        profiles: Arc<chimera_config::profile::Profiles>,
+        staged_content: std::collections::BTreeMap<String, String>,
+    ) -> anyhow::Result<()> {
+        self.reconcile_profiles(profiles, staged_content).await
+    }
+    async fn patch_application_config_with_result(
+        &self,
+        patch: ChimeraAppConfigPatch,
+        service_connected: bool,
+    ) -> anyhow::Result<ApplicationPatchResult> {
+        self.patch_application_config_with_result(patch, service_connected)
+            .await
+    }
+    async fn maintain_service_release(&self) -> anyhow::Result<()> {
+        self.maintain_service_release().await
+    }
+    async fn report_service_endpoint_down(
+        &self,
+        transition: &mut dyn ServiceTransitionLease,
+    ) -> anyhow::Result<bool> {
+        self.report_service_endpoint_down(transition).await
+    }
+    fn record_service_reconnected(&self) {
+        self.service_recovery_reconnected
+            .store(true, Ordering::Release);
+    }
+    async fn refresh_service_recovery_host(&self) {
+        self.refresh_service_recovery_host().await
+    }
+    async fn execute_extension(
+        &self,
+        command: Command,
+        #[allow(unused_variables)] startup_retry_target: &mut Option<
+            chimera_core::client::reconciler::startup_policy::StartupRetryTarget,
+        >,
+    ) -> anyhow::Result<()> {
+        match command {
+            #[cfg(test)]
+            Command::ProfileMutation(_) => {
+                anyhow::bail!("Profile mutations must run through RuntimeReconcilerActor")
+            }
+            #[cfg(test)]
+            Command::StartupReconcile {
+                operation_id,
+                transition,
+            } => {
+                let report = self
+                    .startup_reconcile(operation_id, transition, startup_retry_target)
+                    .await;
+                match report.outcome.failure_reason() {
+                    Some(reason) => Err(anyhow::anyhow!(reason.to_owned())),
+                    None => Ok(()),
+                }
+            }
+            #[cfg(test)]
+            Command::RecoverStartup {
+                operation_id,
+                transition,
+            } => {
+                let report = self
+                    .recover_startup(operation_id, transition, startup_retry_target)
+                    .await;
+                match report.outcome.failure_reason() {
+                    Some(reason) => Err(anyhow::anyhow!(reason.to_owned())),
+                    None => Ok(()),
+                }
+            }
+            #[cfg(test)]
+            Command::RetryStartup {
+                operation_id,
+                identity,
+                transition,
+            } => {
+                let report = self
+                    .retry_startup(operation_id, identity, transition, startup_retry_target)
+                    .await;
+                match report.outcome.failure_reason() {
+                    Some(reason) => Err(anyhow::anyhow!(reason.to_owned())),
+                    None => Ok(()),
+                }
+            }
+            #[cfg(not(test))]
+            Command::StartupReconcile { .. }
+            | Command::RecoverStartup { .. }
+            | Command::RetryStartup { .. }
+            | Command::FollowService { .. } => {
+                anyhow::bail!("startup commands must be handled by ApplicationWorkflow")
+            }
+            #[cfg(test)]
+            Command::FollowService { .. } => {
+                anyhow::bail!("Service readiness follow-up must run through ApplicationWorkflow")
+            }
+            Command::CacheStartupUnsettled { .. } => {
+                anyhow::bail!("an unsettled startup report must be cached by ApplicationWorkflow")
+            }
+            #[cfg(not(any(target_os = "android", target_os = "ios")))]
+            Command::DisableStaleSystemProxy {
+                system_proxy,
+                expected_port,
+                expected_core_state_changed_at,
+                desired_before,
+                original,
+                notifications,
+                persist_legacy_mirror,
+            } => self
+                .disable_stale_system_proxy(
+                    system_proxy,
+                    expected_port,
+                    expected_core_state_changed_at,
+                    desired_before,
+                    original,
+                    notifications,
+                    persist_legacy_mirror,
+                )
+                .await
+                .map_err(anyhow::Error::new),
+            #[cfg(test)]
+            Command::SelectCore(core) => self.select_core(core).await,
+
+            _ => anyhow::bail!("command must be handled by the application workflow"),
+        }
     }
 }

@@ -51,3 +51,91 @@ pub async fn report_service_endpoint_down(
     }
     Ok(true)
 }
+
+use super::{executor::LifecycleHost, ports::ServiceTransitionLease, status::RunType};
+use crate::client::reconciler::plan::Trigger;
+use chimera_ipc::api::status::CoreState;
+
+pub async fn uninstall_service(
+    host: &(impl LifecycleHost + ?Sized),
+    transition: &mut dyn ServiceTransitionLease,
+) -> anyhow::Result<()> {
+    host.service_recovery().lock().suppress();
+    transition.uninstall_daemon().await?;
+    transition.confirm_stopped().await?;
+    if !host.application_config().enable_service_mode {
+        return Ok(());
+    }
+
+    let before = host.core().status().await?;
+    if !matches!(before.state, CoreState::Running) || before.run_type == RunType::Service {
+        host.reconcile_with_trigger(Trigger::ServiceOperation)
+            .await?;
+    }
+
+    let after = host.core().status().await?;
+    anyhow::ensure!(
+        matches!(after.state, CoreState::Running) && after.run_type != RunType::Service,
+        "core did not recover to the local host after Service uninstall"
+    );
+    Ok(())
+}
+
+pub async fn start_service(
+    host: &(impl LifecycleHost + ?Sized),
+    transition: &mut dyn ServiceTransitionLease,
+    restart: bool,
+    ready_timeout: std::time::Duration,
+) -> anyhow::Result<()> {
+    if restart {
+        transition.restart_daemon().await?;
+    } else {
+        transition.start_daemon().await?;
+    }
+    host.service_recovery().lock().rearm();
+    if !host.application_config().enable_service_mode {
+        return Ok(());
+    }
+
+    transition.confirm_ready(ready_timeout).await?;
+    let before = host.core().status().await?;
+    if !matches!(before.state, CoreState::Running) || before.run_type != RunType::Service {
+        host.reconcile_with_trigger(Trigger::ServiceOperation)
+            .await?;
+    }
+
+    transition
+        .confirm_ready(std::time::Duration::from_secs(5))
+        .await?;
+    let after = host.core().status().await?;
+    anyhow::ensure!(
+        matches!(after.state, CoreState::Running) && after.run_type == RunType::Service,
+        "core did not reach the Chimera Service host"
+    );
+    Ok(())
+}
+
+pub async fn stop_service(
+    host: &(impl LifecycleHost + ?Sized),
+    transition: &mut dyn ServiceTransitionLease,
+) -> anyhow::Result<()> {
+    host.service_recovery().lock().suppress();
+    transition.stop_daemon().await?;
+    transition.confirm_stopped().await?;
+    if !host.application_config().enable_service_mode {
+        return Ok(());
+    }
+
+    let before = host.core().status().await?;
+    if !matches!(before.state, CoreState::Running) || before.run_type == RunType::Service {
+        host.reconcile_with_trigger(Trigger::ServiceOperation)
+            .await?;
+    }
+
+    let after = host.core().status().await?;
+    anyhow::ensure!(
+        matches!(after.state, CoreState::Running) && after.run_type != RunType::Service,
+        "core did not recover to the local host after Service stop"
+    );
+    Ok(())
+}

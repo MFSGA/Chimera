@@ -10,13 +10,7 @@ use chimera_core::actor_v2::endpoint::ExecutionHost;
 use std::sync::Arc;
 use struct_patch::Patch;
 
-/// The Source commit is final even when the runtime is still pending in the
-/// checked Core mailbox. Never report pending checked work as an inline apply.
-pub(in crate::client) struct ApplicationPatchResult {
-    pub(in crate::client) degradations: Vec<crate::client::runtime::Degradation>,
-    /// Durable CAS version already delivered to the sole Reconciler.
-    pub(in crate::client) notified_version: Option<u64>,
-}
+pub use chimera_core::client::core_lifecycle::command::ApplicationPatchResult;
 
 /// Use ref checked-source handoff only for an isolated local-host runtime
 /// enhancement patch. Core/Service ownership and other application settings

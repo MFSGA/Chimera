@@ -10,3 +10,7 @@ pub mod status;
 
 pub mod ownership;
 pub mod service;
+
+pub mod binary;
+pub mod command;
+pub mod executor;

@@ -3,7 +3,6 @@
 
 pub(crate) mod adapters;
 pub(in crate::client) mod apply;
-mod binary;
 mod ownership;
 pub(crate) mod ports;
 mod service;

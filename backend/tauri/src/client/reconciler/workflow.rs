@@ -7,58 +7,14 @@ use super::{
     proof::host_for,
     startup::{CommittedRound, uses_committed_convergence},
 };
-use crate::client::core_lifecycle::{Command, CoreLifecycleWorkflow};
+use crate::client::core_lifecycle::CoreLifecycleWorkflow;
 
+pub use chimera_core::client::core_lifecycle::command::{admission_command, runtime_trigger};
 pub use chimera_core::client::reconciler::workflow::{
     AdmissionCommand, CheckedSourceNoticeKind, ProfilesSourceAdvanced, RuntimeAdmission,
     RuntimeReconcilerState, checked_mode_effect_deferred, committed_target_advanced,
     deferred_mode_effect_degradation, desired_host, source_committed_during_round,
 };
-pub fn admission_command(command: &Command) -> AdmissionCommand {
-    match command {
-        Command::StopCore => AdmissionCommand::Stop,
-        Command::StartCore => AdmissionCommand::Start,
-        Command::ApplyChecked {
-            domain,
-            version,
-            prepared,
-            ..
-        } => AdmissionCommand::Checked {
-            domain: *domain,
-            version: *version,
-            has_target: prepared.target.is_some(),
-        },
-        Command::Reconcile
-        | Command::ReconcileSource
-        | Command::ReconcileProfiles { .. }
-        | Command::RetryDeferredProfiles { .. }
-        | Command::RecoverCore
-        | Command::RecoverStartup { .. }
-        | Command::RetryStartup { .. }
-        | Command::FollowService { .. } => AdmissionCommand::Automatic,
-        _ => AdmissionCommand::Other,
-    }
-}
-
-pub(in crate::client) fn runtime_trigger(command: &Command) -> &'static str {
-    match command {
-        Command::StartCore => "Start",
-        Command::StopCore => "Stop",
-        Command::Shutdown => "Shutdown",
-        Command::Reconcile => "Retry",
-        Command::ReconcileSource | Command::ApplyChecked { .. } => "SourceCommitted",
-        Command::MaintainServiceRelease => "ServiceRelease",
-        Command::StartupReconcile { .. } => "Startup",
-        Command::RetryStartup { .. } => "Retry",
-        Command::FollowService { .. } => "ServiceReadiness",
-        Command::ReplaceCoreBinary(_) => "BinaryReplaced",
-        #[cfg(test)]
-        Command::ProfileMutation(_) => "Mutation",
-        Command::RecoverCore => "CoreChanged",
-        Command::RetryDeferredProfiles { .. } => "Tick",
-        _ => "ServiceOperation",
-    }
-}
 
 impl CoreLifecycleWorkflow {
     /// Treat Service failure for one readiness generation as a Local
