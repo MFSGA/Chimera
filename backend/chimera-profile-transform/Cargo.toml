@@ -1,0 +1,23 @@
+[package]
+name = 'chimera-profile-transform'
+version = '0.1.0'
+repository.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[features]
+test-support = []
+
+[dependencies]
+chimera-config = { path = '../chimera-config', default-features = false, features = ['nesting'] }
+indexmap = { version = '2.2.3', features = ['serde'] }
+serde = { version = '1.0', features = ['derive', 'rc'] }
+serde_yaml = '0.9'
+specta = { version = '^2.0.0-rc.25', features = ['indexmap'] }
+thiserror.workspace = true
+anyhow = '1'
+tokio.workspace = true
+
+[dev-dependencies]
+serde_json = { version = '1', features = ['preserve_order'] }

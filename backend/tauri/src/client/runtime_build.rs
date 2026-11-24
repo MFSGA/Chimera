@@ -96,7 +96,7 @@ impl RuntimeBuildPort for RuntimeBuildService {
             } else {
                 Vec::new()
             };
-            let artifact = RuntimeBuilder::build(&input, &builtins, &content, scripts.as_ref())?;
+            let artifact = RuntimeBuilder::build(&input, &content, scripts.as_ref())?;
             if strict_transforms {
                 RuntimeBuilder::validate_transforms(&artifact)?;
             }

@@ -713,8 +713,12 @@ impl CoreFacade {
                 local_runtime.select_execution_host(endpoint.host())?;
                 let observed = router.refresh_status().await?;
                 anyhow::ensure!(
-                    observed.host == endpoint.host(),
-                    "prepared Profile Try selected a different Core host"
+                    observed.host == endpoint.host()
+                        && matches!(
+                            observed.connectivity,
+                            chimera_core::actor_v2::EndpointConnectivity::Connected
+                        ),
+                    "prepared Profile Try selected a different or disconnected Core host"
                 );
                 Some((observed.host, observed.generation))
             } else {
@@ -792,7 +796,7 @@ impl CoreFacade {
             let endpoint = self.endpoint_for_run_type(run_type)?;
             let result = self
                 .run_local_mutation("core reconcile", async move {
-                    if let Some(router) = core_router {
+                    let expected_owner = if let Some(router) = core_router {
                         let target: Arc<dyn ControlEndpoint> = match run_type {
                             RunType::Normal => Arc::new(local_runtime.local_endpoint()),
                             RunType::Service => Arc::new(service_endpoint.clone()),
@@ -807,6 +811,16 @@ impl CoreFacade {
                             .change_host_from(target, service_owner_released)
                             .await?;
                         local_runtime.select_execution_host(endpoint.host())?;
+                        let observed = router.refresh_status().await?;
+                        anyhow::ensure!(
+                            observed.host == endpoint.host()
+                                && matches!(
+                                    observed.connectivity,
+                                    chimera_core::actor_v2::EndpointConnectivity::Connected
+                                ),
+                            "the reconciled host is not the connected routing owner"
+                        );
+                        Some((observed.host, observed.generation))
                     } else {
                         match (previous_run_type, run_type) {
                             (RunType::Service, RunType::Normal) => {
@@ -823,7 +837,8 @@ impl CoreFacade {
                             }
                             _ => {}
                         }
-                    }
+                        None
+                    };
                     match profile_source {
                         Some((profiles, app, staged_content)) => {
                             local_runtime
@@ -835,12 +850,13 @@ impl CoreFacade {
                                     app,
                                     staged_content,
                                     target,
+                                    expected_owner,
                                 )
                                 .await
                         }
                         None => {
                             local_runtime
-                                .reconcile(clash, target_core, endpoint.as_ref())
+                                .reconcile(clash, target_core, endpoint.as_ref(), expected_owner)
                                 .await
                         }
                     }
@@ -944,15 +960,30 @@ impl CoreFacade {
         if let Some(local_runtime) = self.local_runtime.as_ref() {
             let local_runtime = local_runtime.clone();
             let endpoint = self.endpoint_for_run_type(local_runtime.run_type())?;
+            let router = self.core_router.clone();
             let result = self
                 .run_local_mutation("local core selection", async move {
+                    let expected_owner = if let Some(router) = router.as_ref() {
+                        let observed = router.refresh_status().await?;
+                        anyhow::ensure!(
+                            observed.host == endpoint.host()
+                                && matches!(
+                                    observed.connectivity,
+                                    chimera_core::actor_v2::EndpointConnectivity::Connected
+                                ),
+                            "the selected Core owner changed before core selection"
+                        );
+                        Some((observed.host, observed.generation))
+                    } else {
+                        None
+                    };
                     Config::verge().draft().clash_core = Some(clash_core);
                     let clash = crate::bridge::clash::clash_config_from_legacy(
                         &Config::verge().latest(),
                         &Config::clash().latest().0,
                     )?;
                     match local_runtime
-                        .reconcile(clash, clash_core, endpoint.as_ref())
+                        .reconcile(clash, clash_core, endpoint.as_ref(), expected_owner)
                         .await
                     {
                         Ok(()) => {
@@ -1829,6 +1860,39 @@ impl CoreFacade {
         .await?;
         self.refresh_ws_binding().await;
         Ok(())
+    }
+
+    /// Ref replace_binary runs a Recover command even when the status says
+    /// Stopped. The selected router endpoint owns admission and the terminal
+    /// ticket, so this never sends a second request to the other host.
+    pub(crate) async fn recover_before_binary_install(&self) -> anyhow::Result<()> {
+        let Some(router) = self.core_router.clone() else {
+            #[cfg(test)]
+            return Ok(());
+            #[cfg(not(test))]
+            anyhow::bail!("binary replacement requires the selected Core router");
+        };
+        let uncertain = self.outcome_uncertain.clone();
+        self.run_local_mutation(
+            "routed Core quarantine recovery before binary install",
+            async move {
+                let projection = router.refresh_status().await?;
+                let host = projection.host;
+                let endpoint = RoutedEndpoint::new(router.clone(), host);
+                recover_service_core(endpoint, uncertain.clone()).await?;
+                let after = router.refresh_status().await?;
+                anyhow::ensure!(
+                    after.host == host,
+                    "the Core owner changed during binary replacement recovery"
+                );
+                anyhow::ensure!(
+                    !uncertain.load(Ordering::Acquire),
+                    "Core quarantine recovery remains uncertain"
+                );
+                Ok(())
+            },
+        )
+        .await
     }
 
     pub(crate) async fn recover_service_quarantine(&self) -> anyhow::Result<()> {

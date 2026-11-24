@@ -1,41 +1,10 @@
 //! Startup storage error classification and compatibility entry points.
 //! The shared persistence crate owns retries, evidence preservation and IO safety.
 
-use crate::utils::{
-    recovery_io::{IoFailure, classify},
-    redb_ext::{RedbFailure, find_failure},
-};
 use std::{io, path::Path};
 
+pub(crate) use chimera_core::corrupt::error_io;
 pub(crate) use chimera_persistence::{Error, is_link, preserve, retry, retry_io, retry_with_delay};
-
-/// Finds IO hidden by libraries whose error implementation does not expose it.
-pub(crate) fn error_io(error: &(dyn std::error::Error + 'static)) -> Option<IoFailure> {
-    if let Some(error) = error.downcast_ref::<io::Error>() {
-        return Some(classify(error));
-    }
-    if let Some(error) = error.downcast_ref::<atomicwrites::Error<io::Error>>() {
-        let (atomicwrites::Error::Internal(source) | atomicwrites::Error::User(source)) = error;
-        return Some(classify(source));
-    }
-    match find_failure(error) {
-        Some(RedbFailure::AlreadyOpen) => return Some(IoFailure::Transient),
-        Some(RedbFailure::Io(failure)) => return Some(failure),
-        // A redb data or program failure is not an IO failure.
-        Some(_) => return None,
-        None => {}
-    }
-    if let Some(error) = error.downcast_ref::<chimera_core_manager::Error>() {
-        match error {
-            chimera_core_manager::Error::Io(source) => return Some(classify(source)),
-            chimera_core_manager::Error::RuntimeDirectoryOwned(_) => {
-                return Some(IoFailure::Transient);
-            }
-            _ => {}
-        }
-    }
-    error.source().and_then(error_io)
-}
 
 /// Check whether a configuration node exists without following symlinks.
 /// Unlike `Path::exists`, a dangling symlink is still present and must not

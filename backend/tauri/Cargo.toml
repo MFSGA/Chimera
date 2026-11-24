@@ -23,6 +23,8 @@ chrono = "0.4"
 rustc_version = "0.4"
 
 [dependencies]
+chimera-scripts = { path = "../chimera-scripts" }
+chimera-profile-transform = { path = "../chimera-profile-transform" }
 # chimera-core-manager = { path = "../chimera-core-manager" }
 tauri = { version = "2.11.2", features = ["tray-icon", "image-png", "image-ico"] }
 tauri-plugin-wdio-webdriver = { path = "vendor/tauri-plugin-wdio-webdriver", optional = true }
@@ -56,6 +58,7 @@ thiserror = { workspace = true }
 # 
 chimera-macro = { path = "../chimera-macro" }
 chimera-core = { path = "../chimera-core" }
+chimera-profile-io = { path = "../chimera-profile-io" }
 chimera-persistence = { path = "../chimera-persistence" }
 chimera-migration = { path = "../chimera-migration" }
 chimera-panics = { path = "../chimera-panics" }
@@ -99,14 +102,6 @@ percent-encoding = "2.3.1"
 # todo: use another crate.
 serde_yaml = { version = "0.9" }
 serde_yaml_ng = { version = "0.10", git = "https://github.com/libnyanpasu/serde-yaml-ng.git", rev = "363da138dc97f90ef0a356f971c2dc1d8fe04c9e", features = ["specta"] }
-mlua = { version = "0.12", features = ["lua54", "vendored", "serde"] }
-rquickjs = "0.13.0"
-oxc_parser = "0.152"
-oxc_allocator = "0.152"
-oxc_span = "0.152"
-oxc_ast = "0.152"
-oxc_syntax = "0.152"
-oxc_ast_visit = "0.152"
 sha2 = "0.10"
 
 ambassador = "0.5.0"                                                      # for trait delegation
@@ -125,7 +120,6 @@ auto-launch = { git = "https://github.com/libnyanpasu/auto-launch.git", version 
 
 fs-err = { version = "3.1.2", features = ["tokio"] }
 notify-debouncer-full = "0.7.0"
-memmap2 = "0.9"
 snafu = "0.9"
 
 convert_case = "0.12.0"
@@ -262,6 +256,8 @@ objc2-app-kit = { version = "0.3.1", features = [
 objc2-foundation = { version = "0.3.1", features = ["NSGeometry"] }
 
 [dev-dependencies]
+chimera-scripts = { path = "../chimera-scripts", features = ["test-support"] }
+chimera-core = { path = "../chimera-core", features = ["test-support"] }
 tauri = { version = "2.11.2", features = ["test"] }
 mockall = "0.15"
 pretty_assertions = "1.4.0"

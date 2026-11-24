@@ -278,8 +278,12 @@ impl ChimeraClient {
             geo_mode_refresh: geo_index,
             local_source: self.inner.local_source.clone(),
         };
-        let traffic = tauri::async_runtime::block_on(TrafficClient::spawn(args))
-            .context("failed to start traffic recording actor")?;
+        let traffic = tauri::async_runtime::block_on(crate::core::traffic::spawn(
+            args,
+            self.inner.shutdown.child_token(),
+            &self.inner.tasks,
+        ))
+        .context("failed to start traffic recording actor")?;
         *self.inner.traffic.write() = Some(traffic);
         Ok(())
     }

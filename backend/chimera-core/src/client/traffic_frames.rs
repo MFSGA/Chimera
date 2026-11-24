@@ -10,14 +10,7 @@ mod fixtures;
 pub mod geo;
 use crate::clash::ws::ClashConnectionsFrame;
 
-/// Per-address-family public source addresses admitted by the traffic owner.
-/// A local socket IP is only substituted when an explicitly probed address
-/// is available; no IP is inferred from the current proxy exit.
-#[derive(Clone, Copy, Debug, Default)]
-pub struct LocalSourceIps {
-    pub ipv4: Option<std::net::Ipv4Addr>,
-    pub ipv6: Option<std::net::Ipv6Addr>,
-}
+pub use chimera_observers::traffic::LocalSourceIps;
 
 const UNKNOWN: &str = "unknown";
 

@@ -59,8 +59,8 @@ cargo test --locked --manifest-path backend/Cargo.toml -p chimera --lib client::
 cargo test --locked --manifest-path backend/Cargo.toml -p chimera --lib features::agent::actions::tests::system_proxy_actions_require_a_known_runtime_port -- --exact
 cargo test --locked --manifest-path backend/Cargo.toml -p chimera --lib features::agent::actions::tests::new_action_verification_requires_desired_and_observed_state -- --exact
 cargo test --locked --manifest-path backend/Cargo.toml -p chimera --lib client::application_workflow::tcc::tests::committed_profile_mutation_settles_after_runtime_apply -- --exact
-cargo test --locked --manifest-path backend/Cargo.toml -p chimera --lib client::core_lifecycle::tests::lifecycle_reconcile_and_shutdown_publish_active_runtime_binding -- --exact
-cargo test --locked --manifest-path backend/Cargo.toml -p chimera --lib client::core_lifecycle::tests::stale_proxy_lifecycle -- --test-threads=1
+cargo test --locked --manifest-path backend/Cargo.toml -p chimera --lib client::reconciler::actor::tests::lifecycle_reconcile_and_shutdown_publish_active_runtime_binding -- --exact
+cargo test --locked --manifest-path backend/Cargo.toml -p chimera --lib client::reconciler::actor::tests::stale_proxy_lifecycle -- --test-threads=1
 cargo test --locked --manifest-path backend/Cargo.toml -p chimera --lib client::tests::system_proxy_mutation_guard_serializes_competing_transactions -- --exact
 cargo test --locked --manifest-path backend/Cargo.toml -p chimera --lib client::system_proxy::tests::stale_proxy_rollback_does_not_overwrite_a_concurrent_host_change -- --exact
 ```

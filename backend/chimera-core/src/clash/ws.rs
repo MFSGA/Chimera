@@ -12,7 +12,8 @@ use std::{
 };
 
 use anyhow::{Context, Result};
-use chimera_config::clash::config::overrides::LogLevel;
+use chimera_config::{application::CoreLogSettings, clash::config::overrides::LogLevel};
+use chimera_observers::logs::{CoreLogRecord, CoreLogSource, CoreLogStore, CoreLogsClient};
 use ractor::{Actor, ActorProcessingErr, ActorRef, RpcReplyPort, rpc::CallResult};
 use serde::{Deserialize, Serialize};
 use specta::Type;
@@ -316,6 +317,7 @@ enum Message {
 }
 
 struct Args {
+    core_logs: Option<CoreLogsClient>,
     source: Arc<dyn ClashApiClientSource>,
     log_level: LogLevel,
     shutdown: CancellationToken,
@@ -435,6 +437,13 @@ impl State {
         // The previous logs subscription is fully retired before its lease
         // and epoch are cleared. This also applies to a replaced Core host.
         self.api = None;
+        // Shutdown must flush rather than clear the prior session's shards.
+        if !self.args.shutdown.is_cancelled()
+            && let Some(logs) = &self.args.core_logs
+            && let Err(error) = logs.set_instance(None).await
+        {
+            tracing::debug!(%error, "Core log instance reset failed");
+        }
         self.history = ClashWsHistory::default();
         self.previous_download_total = 0;
         self.previous_upload_total = 0;
@@ -503,7 +512,7 @@ impl State {
         resume_stream_panic(fatal);
     }
 
-    fn update(&mut self, sample: Sample) {
+    async fn update(&mut self, sample: Sample) {
         match sample {
             Sample::Connections(sample) => {
                 let value = match connection_snapshot_value(sample) {
@@ -589,6 +598,28 @@ impl State {
                     payload: sample.payload,
                 };
                 if self.recording.logs {
+                    if let (Some(logs), Some(instance)) = (
+                        &self.args.core_logs,
+                        self.api.as_ref().and_then(ApiClient::instance_id),
+                    ) {
+                        let record = CoreLogRecord {
+                            source: CoreLogSource {
+                                capture: self.capture_id.clone(),
+                                instance_id: instance.to_owned(),
+                                core_kind: None,
+                            },
+                            received_at: chrono::Utc::now().timestamp_millis(),
+                            time: None,
+                            log_type: log.log_type.clone(),
+                            payload: log.payload.clone(),
+                        };
+                        // The ref observer batches writes and reports rejected
+                        // or discarded records. Storage failure must not stop
+                        // existing live stream delivery.
+                        if let Err(error) = logs.append(record).await {
+                            tracing::debug!(%error, "Core log persistence unavailable");
+                        }
+                    }
                     push_limited(&mut self.history.logs, log.clone(), MAX_LOGS_HISTORY);
                 }
                 self.emit(ClashWsEvent::LogAppended(log));
@@ -930,10 +961,18 @@ impl Actor for StreamsActor {
                 let _ = reply.send(state.recording.clone());
             }
             Message::Clear(kind, reply) => {
+                let result = if kind == ClashWsKind::Logs {
+                    match &state.args.core_logs {
+                        Some(logs) => logs.clear().await.map_err(anyhow::Error::from),
+                        None => Ok(()),
+                    }
+                } else {
+                    Ok(())
+                };
                 state.history.clear(kind);
                 state.emit(ClashWsEvent::HistoryCleared(kind));
                 state.publish_snapshot();
-                let _ = reply.send(Ok(()));
+                let _ = reply.send(result);
             }
             Message::Deliver(delivery, reply) => {
                 let mut result = DeliveryResult::Rejected;
@@ -943,6 +982,13 @@ impl Actor for StreamsActor {
                             if !api.is_revoked() {
                                 if !state.accepts(&api) {
                                     state.reset().await;
+                                }
+                                if let Some(logs) = &state.args.core_logs
+                                    && let Err(error) = logs
+                                        .set_instance(api.instance_id().map(str::to_owned))
+                                        .await
+                                {
+                                    tracing::debug!(%error, "Core log instance binding failed");
                                 }
                                 state.api = Some(api);
                                 state.restart_logs(&actor).await;
@@ -965,7 +1011,7 @@ impl Actor for StreamsActor {
                                 Sample::Memory(_) => ClashWsKind::Memory,
                             };
                             if state.accepts(&api) && epoch == state.stream_epochs[kind.index()] {
-                                state.update(sample);
+                                state.update(sample).await;
                                 result = DeliveryResult::Accepted;
                             }
                         }
@@ -1007,6 +1053,7 @@ impl Actor for StreamsActor {
 pub struct StreamsClient(Arc<Inner>);
 
 struct Inner {
+    core_logs: Option<CoreLogsClient>,
     actor: ActorRef<Message>,
     shutdown: CancellationToken,
     connections: broadcast::Sender<ClashConnectionsConnectorEvent>,
@@ -1029,7 +1076,36 @@ impl StreamsClient {
         shutdown: CancellationToken,
         tasks: &TaskTracker,
     ) -> std::result::Result<Self, Error> {
+        Self::spawn_with_logs(source, log_level, shutdown, tasks, None).await
+    }
+
+    /// The desktop injects one current-session store. Existing headless and
+    /// compatibility stream callers do not create a second log database.
+    pub async fn spawn_with_logs(
+        source: Arc<dyn ClashApiClientSource>,
+        log_level: LogLevel,
+        shutdown: CancellationToken,
+        tasks: &TaskTracker,
+        store: Option<Box<dyn CoreLogStore>>,
+    ) -> std::result::Result<Self, Error> {
         let actor_shutdown = shutdown.child_token();
+        let core_logs = match store {
+            Some(store) => match CoreLogsClient::spawn(
+                store,
+                CoreLogSettings::default(),
+                shutdown.child_token(),
+                tasks,
+            )
+            .await
+            {
+                Ok(logs) => Some(logs),
+                Err(error) => {
+                    tracing::warn!(%error, "optional Core log observer could not start");
+                    None
+                }
+            },
+            None => None,
+        };
         let connections = broadcast::channel(16).0;
         let events = broadcast::channel(64).0;
         let details = watch::channel(None).0;
@@ -1043,6 +1119,7 @@ impl StreamsClient {
             None,
             StreamsActor,
             Args {
+                core_logs: core_logs.clone(),
                 source,
                 log_level,
                 shutdown: actor_shutdown.clone(),
@@ -1064,6 +1141,7 @@ impl StreamsClient {
         });
 
         Ok(Self(Arc::new(Inner {
+            core_logs,
             actor,
             shutdown: actor_shutdown,
             connections,
@@ -1103,6 +1181,11 @@ impl StreamsClient {
 
     pub async fn set_log_level(&self, level: LogLevel) -> Result<()> {
         self.call(|reply| Message::SetLogLevel(level, reply)).await
+    }
+
+    /// Full ref query/export API backed by the one stream capture owner.
+    pub fn core_logs(&self) -> Option<&CoreLogsClient> {
+        self.0.core_logs.as_ref()
     }
 
     pub fn state(&self) -> ClashConnectionsConnectorState {

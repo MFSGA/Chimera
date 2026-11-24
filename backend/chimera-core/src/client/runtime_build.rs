@@ -1,237 +1,19 @@
-//! Ref-style pure runtime builder: no filesystem, script runtime or core owner.
-//! The Tauri shell supplies builtin scripts and executor ports; this module
-//! validates a typed candidate and executes its graph deterministically.
-
+//! Candidate orchestration over the shared profile-transform crate.
 use anyhow::Context;
 use chimera_config::{
-    application::{ChimeraAppConfig, ClashCore},
-    clash::{
-        config::{
-            ClashConfig, TransparentProxyMode, TransparentProxyValidationError, dns::render_hosts,
-            tun_stack::SelectedTunStack,
-        },
-        features::{FieldSupport, TunFeatures, UnsupportedConfigValue},
-    },
     profile::Profiles,
-    runtime::executor::{
-        BuiltinTransform, DnsParams, ExecutionTarget, GuardInputs, ProfileContentSource,
-        ResolvedPortBindings, RuntimeArtifact, RuntimePipelineError, RuntimePipelineInputs,
-        ScriptRunner, TransformFailure, TunFlavor, TunParams, TunStackWrite, execute,
-    },
-    runtime::snapshot::OperatorTag,
+    runtime::executor::{BuiltinTransform, ProfileContentSource, ScriptRunner},
 };
-use std::collections::BTreeMap;
-use std::sync::Arc;
+use std::{collections::BTreeMap, sync::Arc};
 
 use super::{
     artifact_snapshot::{ArtifactSnapshotData, artifact_to_snapshot_data},
     runtime_build_port::FrozenProfileContent,
 };
-
-#[derive(Debug, thiserror::Error)]
-pub enum RuntimeBuildError {
-    // Pinned ref runtime_builder typed failures, mapped to Chimera's crate ownership.
-    #[error("could not start the script runner: {0}")]
-    StartScriptRunner(#[source] chimera_config::runtime::executor::PortError),
-    #[error("runtime build task did not complete: {0}")]
-    BuildWorker(#[source] tokio::task::JoinError),
-    #[error("could not project the runtime artifact: {0}")]
-    ProjectArtifact(#[source] anyhow::Error),
-    #[error("could not serialize the final runtime document: {0}")]
-    SerializeFinalConfig(#[source] serde_yaml::Error),
-    #[error("profiles snapshot failed validation: {0:?}")]
-    Validation(Vec<chimera_config::profile::ProfileValidationError>),
-    #[error("transparent proxy settings are invalid: {0}")]
-    ValidateTransparentProxy(#[from] TransparentProxyValidationError),
-    #[error("transparent capture requires service mode")]
-    TransparentProxyRequiresServiceMode,
-    #[error("the selected core does not support {values:?}")]
-    UnsupportedConfigValues { values: Vec<UnsupportedConfigValue> },
-    #[error("DNS/Hosts takeover is not yet supported for the selected core: {0:?}")]
-    UnsupportedDnsCore(chimera_config::application::ClashCore),
-    #[error(transparent)]
-    Pipeline(#[from] RuntimePipelineError),
-    #[error("runtime candidate contains failed transforms: {failures:?}")]
-    TransformsFailed {
-        failures: Vec<TransformFailure>,
-        logs: Vec<RuntimeBuildLog>,
-    },
-}
-
-#[derive(Debug, Clone)]
-pub struct RuntimeBuildLog {
-    pub tag: OperatorTag,
-    pub entries: Vec<chimera_config::runtime::executor::StepLogEntry>,
-}
-
-pub struct RuntimeBuildInput {
-    pub profiles: Arc<Profiles>,
-    pub clash: ClashConfig,
-    pub app: ChimeraAppConfig,
-    pub resolved_ports: ResolvedPortBindings,
-}
-
-/// Only `ClashRs` (not Alpha) takes the ClashRs branch, a legacy quirk
-/// (enhance/tun.rs:47). The stack and its options follow the core's config
-/// features.
-pub fn derive_tun_flavor(
-    core: chimera_config::application::ClashCore,
-    selected: SelectedTunStack<'_>,
-) -> TunFlavor {
-    if core == ClashCore::ClashRs {
-        return TunFlavor::ClashRs;
-    }
-    if matches!(
-        core,
-        ClashCore::ChimeraClient | ClashCore::ChimeraClientAlpha
-    ) {
-        return TunFlavor::ChimeraClient;
-    }
-    let features = core.config_features().tun;
-    let stack = match features.stack {
-        FieldSupport::Ignored => TunStackWrite::Omitted,
-        support if support.supports(&selected.stack()) => TunStackWrite::Selected(selected.stack()),
-        FieldSupport::Values(_) => TunStackWrite::Downgraded {
-            selected: selected.stack(),
-            written: TunFeatures::FALLBACK_STACK,
-        },
-    };
-    // A downgraded stack drops the options of the stack that was selected.
-    let congestion_controller = match (stack, selected) {
-        (TunStackWrite::Selected(_), SelectedTunStack::Mips(mips)) => mips
-            .congestion_controller
-            .filter(|controller| features.congestion_controller.supports(controller)),
-        _ => None,
-    };
-    TunFlavor::Standard {
-        stack,
-        congestion_controller,
-    }
-}
-
-pub struct RuntimeBuilder;
-
-impl RuntimeBuilder {
-    /// Retain the rejected candidate's diagnostics without publishing its output.
-    pub fn validate_transforms(artifact: &RuntimeArtifact) -> Result<(), RuntimeBuildError> {
-        if artifact.transform_failures.is_empty() {
-            return Ok(());
-        }
-        let logs = artifact
-            .step_logs
-            .iter()
-            .map(|log| RuntimeBuildLog {
-                tag: artifact
-                    .graph
-                    .nodes
-                    .iter()
-                    .find(|node| node.tag.node_key() == log.key)
-                    .expect("executor logs must belong to a snapshot node")
-                    .tag
-                    .clone(),
-                entries: log.entries.clone(),
-            })
-            .collect();
-        Err(RuntimeBuildError::TransformsFailed {
-            failures: artifact.transform_failures.clone(),
-            logs,
-        })
-    }
-
-    /// Executes with the shell-provided builtin table. The table is chosen
-    /// before entering the pure executor, as in ref's injected script port.
-    pub fn build(
-        input: &RuntimeBuildInput,
-        builtin_transforms: &[BuiltinTransform],
-        content: &dyn ProfileContentSource,
-        scripts: &dyn ScriptRunner,
-    ) -> Result<RuntimeArtifact, RuntimeBuildError> {
-        input
-            .profiles
-            .validate()
-            .map_err(RuntimeBuildError::Validation)?;
-        if input.clash.transparent_proxy.mode != TransparentProxyMode::Disabled
-            && !input.app.enable_service_mode
-        {
-            return Err(RuntimeBuildError::TransparentProxyRequiresServiceMode);
-        }
-        input
-            .clash
-            .validate_transparent_proxy(input.app.core, cfg!(target_os = "linux"))?;
-
-        let features = input.app.core.dns_features();
-        if features.keys.is_ignored()
-            && (input.clash.managed_dns().is_some() || input.clash.managed_hosts().is_some())
-        {
-            return Err(RuntimeBuildError::UnsupportedDnsCore(input.app.core));
-        }
-
-        let mut dns_warnings = Vec::new();
-        let dns_table = input
-            .clash
-            .managed_dns()
-            .and_then(|dns| dns.render(&features))
-            .map(|rendered| {
-                dns_warnings.extend(rendered.warnings);
-                rendered.table
-            });
-        let hosts_table = input
-            .clash
-            .managed_hosts()
-            .and_then(|hosts| render_hosts(hosts, &features))
-            .map(|rendered| {
-                dns_warnings.extend(rendered.warnings);
-                rendered.table
-            });
-
-        let target = match &input.profiles.current {
-            Some(uid) => ExecutionTarget::Selected(uid.clone()),
-            None => ExecutionTarget::Bare,
-        };
-        let inputs = RuntimePipelineInputs {
-            profiles: &input.profiles,
-            target,
-            guard: GuardInputs {
-                overrides: &input.clash.overrides,
-                ports: input.resolved_ports.clone(),
-                routing_mark: (cfg!(target_os = "linux")
-                    && input.clash.transparent_proxy.mode != TransparentProxyMode::Disabled)
-                    .then_some(0x20000),
-            },
-            whitelist_enabled: input.clash.enable_clash_fields,
-            core_supports_mmdb: matches!(
-                input.app.core,
-                chimera_config::application::ClashCore::ChimeraClient
-                    | chimera_config::application::ClashCore::ChimeraClientAlpha
-            ),
-            tun: TunParams {
-                enable: input.clash.enable_tun_mode,
-                overrides: input.clash.tun,
-                flavor: derive_tun_flavor(input.app.core, input.clash.selected_tun_stack()),
-                windows_fake_ip_filter: cfg!(windows),
-            },
-            dns: DnsParams {
-                dns: dns_table,
-                hosts: hosts_table,
-                warnings: dns_warnings,
-            },
-            expand_include_all: input.clash.expand_include_all,
-            builtin_transforms,
-        };
-        let artifact = execute(&inputs, content, scripts).map_err(RuntimeBuildError::Pipeline)?;
-        // Ref validates the final document, including script-produced fields,
-        // even when the TUN switch is disabled.
-        let values = input
-            .app
-            .core
-            .config_features()
-            .unsupported_values(&artifact.final_config);
-        if !values.is_empty() {
-            return Err(RuntimeBuildError::UnsupportedConfigValues { values });
-        }
-        Ok(artifact)
-    }
-}
+pub use chimera_profile_transform::{
+    RuntimeBuildError, RuntimeBuildInput, RuntimeBuildLog, RuntimeBuilder, builtin_transforms_for,
+    derive_tun_flavor,
+};
 
 /// One ref-style candidate build with its execution ports supplied by the
 /// shell. A script runner is *constructed and dropped* on the blocking thread:
@@ -377,8 +159,12 @@ impl RuntimeBuildService {
         F: FnOnce() -> anyhow::Result<Box<dyn ScriptRunner>>,
     {
         let scripts = make_scripts()?;
-        let artifact =
-            RuntimeBuilder::build(&input, &builtin_transforms, &content, scripts.as_ref())?;
+        let artifact = RuntimeBuilder::build_with_builtins(
+            &input,
+            &builtin_transforms,
+            &content,
+            scripts.as_ref(),
+        )?;
         if strict_transforms {
             RuntimeBuilder::validate_transforms(&artifact)?;
         }
@@ -393,6 +179,11 @@ impl RuntimeBuildService {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chimera_config::{
+        application::{ChimeraAppConfig, ClashCore},
+        clash::config::ClashConfig,
+        runtime::executor::{ResolvedPortBindings, TransformFailure},
+    };
     use chimera_config::{
         profile::{ManagedProfilePath, ScriptRuntime},
         runtime::{
@@ -479,8 +270,13 @@ mod tests {
         candidate.clash.tun_mips.congestion_controller = Some(TunCongestionController::Bbr3);
         for (stack, expected) in [(TunStack::Mips, Some("bbr3")), (TunStack::Gvisor, None)] {
             candidate.clash.tun_stack = stack;
-            let artifact =
-                RuntimeBuilder::build(&candidate, &[], &EmptyContent, &PassthroughScripts).unwrap();
+            let artifact = RuntimeBuilder::build_with_builtins(
+                &candidate,
+                &[],
+                &EmptyContent,
+                &PassthroughScripts,
+            )
+            .unwrap();
             let config = artifact.final_config.to_json();
             assert_eq!(config["tun"]["stack"], serde_json::json!(stack.as_ref()));
             assert_eq!(
@@ -500,8 +296,13 @@ mod tests {
         candidate.clash.enable_tun_mode = true;
         candidate.clash.tun_stack = TunStack::Mips;
         candidate.clash.tun_mips.congestion_controller = Some(TunCongestionController::Bbr);
-        let artifact =
-            RuntimeBuilder::build(&candidate, &[], &EmptyContent, &PassthroughScripts).unwrap();
+        let artifact = RuntimeBuilder::build_with_builtins(
+            &candidate,
+            &[],
+            &EmptyContent,
+            &PassthroughScripts,
+        )
+        .unwrap();
         let config = artifact.final_config.to_json();
         assert_eq!(config["tun"]["stack"], "gvisor");
         assert!(config["tun"].get("congestion-controller").is_none());
@@ -517,8 +318,13 @@ mod tests {
         assert!(warnings[0].message.contains("gvisor"));
 
         candidate.clash.enable_tun_mode = false;
-        let disabled =
-            RuntimeBuilder::build(&candidate, &[], &EmptyContent, &PassthroughScripts).unwrap();
+        let disabled = RuntimeBuilder::build_with_builtins(
+            &candidate,
+            &[],
+            &EmptyContent,
+            &PassthroughScripts,
+        )
+        .unwrap();
         assert!(disabled.step_logs.iter().all(|log| {
             log.entries
                 .iter()
@@ -536,8 +342,13 @@ mod tests {
             runtime: ScriptRuntime::JavaScript,
             source: "replace".into(),
         }];
-        let error = RuntimeBuilder::build(&candidate, &builtins, &EmptyContent, &EmitInvalidStack)
-            .unwrap_err();
+        let error = RuntimeBuilder::build_with_builtins(
+            &candidate,
+            &builtins,
+            &EmptyContent,
+            &EmitInvalidStack,
+        )
+        .unwrap_err();
         let RuntimeBuildError::UnsupportedConfigValues { values } = error else {
             panic!("unsupported stack must reject the candidate, not publish it");
         };
@@ -555,10 +366,15 @@ mod tests {
         candidate.clash.enable_tun_mode = true;
         candidate.clash.tun_stack = TunStack::Mips;
         candidate.clash.tun_mips.congestion_controller = Some(TunCongestionController::Bbr3);
-        let config = RuntimeBuilder::build(&candidate, &[], &EmptyContent, &PassthroughScripts)
-            .unwrap()
-            .final_config
-            .to_json();
+        let config = RuntimeBuilder::build_with_builtins(
+            &candidate,
+            &[],
+            &EmptyContent,
+            &PassthroughScripts,
+        )
+        .unwrap()
+        .final_config
+        .to_json();
         assert!(config["tun"].get("stack").is_none());
         assert!(config["tun"].get("congestion-controller").is_none());
         assert_eq!(config["tun"]["route-all"], true);

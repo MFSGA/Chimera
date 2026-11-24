@@ -494,7 +494,8 @@ export const commands = {
     filters: TrafficFilter[],
     before: {
       closed_at: number;
-      id: string;
+      incarnation: number;
+      seq: number;
     } | null,
     limit: number,
   ) =>
@@ -1774,7 +1775,8 @@ export type ClosedConnection = {
 /**  Exclusive position for newest-first paging. */
 export type ClosedCursor = {
   closed_at: number;
-  id: string;
+  incarnation: number;
+  seq: number;
 };
 
 export type ClosedPage = {
@@ -3169,9 +3171,9 @@ export type PortStrategyPatch_Serialize = {
 
 /**  后处理输出 */
 export type PostProcessingOutput = {
-  /**  Per-source transform chain output, keyed by source profile UID and transform UID. */
+  /**  局部链的输出 */
   scopes: { [key in string]: { [key in string]: [LogSpan, string][] } };
-  /**  Global transform chain output, keyed by transform UID. */
+  /**  全局链的输出 */
   global: { [key in string]: [LogSpan, string][] };
 };
 
@@ -3675,7 +3677,10 @@ export type Proxy_Serialize = {
 
 export type Ranking = {
   dimension: Dimension;
-  /**  Distinct values of the dimension among the filtered rows. */
+  /**
+   *  Distinct values of the dimension among the rows the ranking counts: those matching every
+   *  filter except one on this dimension.
+   */
   distinct: number;
   /**  Heaviest first. */
   groups: UsageGroup[];
@@ -3718,8 +3723,8 @@ export type RemoteProfileOptionsPatch_Serialize = {
 /**
  *  Minutes between scheduled syncs of a remote profile.
  *
- *  Zero disables automatic sync, including startup catch-up. Manual sync
- *  remains available.
+ *  Zero disables automatic sync: no scheduled sync and no startup catch-up.
+ *  Manual sync remains available.
  */
 export type RemoteSyncInterval = number;
 

@@ -462,6 +462,10 @@ impl CoreLifecyclePort for LegacyCoreBridge {
         self.facade().stop().await
     }
 
+    async fn recover_before_binary_install(&self) -> anyhow::Result<()> {
+        self.facade().recover_before_binary_install().await
+    }
+
     async fn finish_shutdown(&self) -> anyhow::Result<()> {
         self.facade().finish_shutdown().await
     }

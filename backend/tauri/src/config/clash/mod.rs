@@ -1,8 +1,3 @@
-use std::{
-    net::{IpAddr, Ipv4Addr, SocketAddr},
-    str::FromStr,
-};
-
 use anyhow::Result;
 use serde_yaml::{Mapping, Value};
 use tracing::{instrument, warn};
@@ -62,39 +57,11 @@ impl IClashTemp {
     }
 
     pub fn guard_mixed_port(config: &Mapping) -> u16 {
-        let mut port = config
-            .get("mixed-port")
-            .and_then(|value| match value {
-                Value::String(val_str) => val_str.parse().ok(),
-                Value::Number(val_num) => val_num.as_u64().map(|u| u as u16),
-                _ => None,
-            })
-            .unwrap_or(7890);
-        if port == 0 {
-            port = 7890;
-        }
-        port
+        ClashInfo::guard_mixed_port(config)
     }
 
     pub fn guard_server_ctrl(config: &Mapping) -> String {
-        config
-            .get("external-controller")
-            .and_then(|value| match value.as_str() {
-                Some(val_str) => {
-                    let val_str = val_str.trim();
-
-                    let val = match val_str.starts_with(':') {
-                        true => format!("127.0.0.1{val_str}"),
-                        false => val_str.to_owned(),
-                    };
-
-                    SocketAddr::from_str(val.as_str())
-                        .ok()
-                        .map(|s| s.to_string())
-                }
-                None => None,
-            })
-            .unwrap_or("127.0.0.1:9090".into())
+        ClashInfo::guard_server_ctrl(config)
     }
 
     #[instrument]
@@ -119,31 +86,11 @@ impl IClashTemp {
     }
 
     pub fn get_client_info(&self) -> ClashInfo {
-        let config = &self.0;
-
-        ClashInfo {
-            port: Self::guard_mixed_port(config),
-            server: Self::guard_client_ctrl(config),
-            secret: config.get("secret").and_then(|value| match value {
-                Value::String(val_str) => Some(val_str.clone()),
-                Value::Bool(val_bool) => Some(val_bool.to_string()),
-                Value::Number(val_num) => Some(val_num.to_string()),
-                _ => None,
-            }),
-        }
+        ClashInfo::from_mapping(&self.0)
     }
 
     pub fn guard_client_ctrl(config: &Mapping) -> String {
-        let value = Self::guard_server_ctrl(config);
-        match SocketAddr::from_str(value.as_str()) {
-            Ok(mut socket) => {
-                if socket.ip().is_unspecified() {
-                    socket.set_ip(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)));
-                }
-                socket.to_string()
-            }
-            Err(_) => "127.0.0.1:9090".into(),
-        }
+        ClashInfo::guard_client_ctrl(config)
     }
 
     pub fn get_mixed_port(&self) -> u16 {

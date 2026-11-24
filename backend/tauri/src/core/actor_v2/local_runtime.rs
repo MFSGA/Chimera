@@ -149,7 +149,7 @@ pub(crate) struct LocalRuntimeHost {
     control: CoreControl,
     runtime_paths: RuntimePaths,
     ports: Arc<crate::client::SessionPortResolver>,
-    lifecycle: Arc<crate::client::runtime::RuntimeLifecycle>,
+    lifecycle: Arc<chimera_core::client::runtime::RuntimeSnapshotStore>,
     pending_profile_candidates:
         tokio::sync::Mutex<HashMap<OperationId, crate::client::runtime::CandidateFile>>,
     run_type: RwLock<RunType>,
@@ -209,7 +209,7 @@ impl LocalRuntimeHost {
                 previous = current;
             }
         });
-        let lifecycle = Arc::new(crate::client::runtime::RuntimeLifecycle::default());
+        let lifecycle = Arc::new(chimera_core::client::runtime::RuntimeSnapshotStore::default());
         Self {
             control,
             runtime_paths,
@@ -535,6 +535,7 @@ impl LocalRuntimeHost {
         clash: ClashConfig,
         target_core: ClashCore,
         endpoint: &dyn ControlEndpoint,
+        expected_owner: Option<(ExecutionHost, u64)>,
     ) -> anyhow::Result<()> {
         self.reconcile_with_profile_source(
             Some(clash),
@@ -544,7 +545,7 @@ impl LocalRuntimeHost {
             None,
             None,
             None,
-            None,
+            expected_owner,
         )
         .await
         .map(|_| ())
@@ -559,6 +560,7 @@ impl LocalRuntimeHost {
         app: chimera_config::application::ChimeraAppConfig,
         staged_content: std::collections::BTreeMap<String, String>,
         target: Option<String>,
+        expected_owner: Option<(ExecutionHost, u64)>,
     ) -> anyhow::Result<()> {
         self.reconcile_with_profile_source(
             Some(clash),
@@ -568,7 +570,7 @@ impl LocalRuntimeHost {
             target,
             None,
             None,
-            None,
+            expected_owner,
         )
         .await
         .map(|_| ())

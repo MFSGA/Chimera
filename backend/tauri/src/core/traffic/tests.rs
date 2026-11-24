@@ -8,8 +8,8 @@ use std::{
 
 use chimera_geodata::IpIndex;
 use chimera_traffic::{
-    ClosedCursor, Dimension, Metric, RedbTrafficStore, ReportRequest, TrafficFilter, TrafficQuery,
-    TrafficRange, TrafficScope,
+    ClosedCursor, Dimension, Metric, ReportRequest, TrafficFilter, TrafficQuery, TrafficRange,
+    TrafficScope,
 };
 use mockall::Sequence;
 use tokio_util::{sync::CancellationToken, task::TaskTracker};
@@ -169,21 +169,28 @@ impl Clock for SystemClock {
 #[tokio::test]
 async fn connection_frames_become_active_and_then_persist_as_closed() {
     let dir = tempfile::tempdir().unwrap();
-    let store = Arc::new(RedbTrafficStore::open(&dir.path().join("traffic.redb")).unwrap());
+    let store = Arc::new(chimera_core::traffic::TrafficFileStorage::new(
+        dir.path().join("traffic.tsdb"),
+        chimera_core::traffic::Profile::desktop().backend_cache,
+    ));
     let (frames, receiver) = tokio::sync::watch::channel(None);
     let (_, geo) = tokio::sync::watch::channel(None::<Arc<CountryIndexSnapshot>>);
     let started_at = chrono::Utc::now().to_rfc3339();
-    let traffic = TrafficClient::spawn(TrafficArgs {
-        store,
-        profiles: Arc::new(TestProfile),
-        retention: Arc::new(SevenDayRetention),
-        clock: Arc::new(SystemClock),
-        frames: receiver,
-        geo,
-        geo_mode_source: None,
-        geo_mode_refresh: None,
-        local_source: Arc::new(NoLocalSource),
-    })
+    let traffic = super::spawn(
+        TrafficArgs {
+            store,
+            profiles: Arc::new(TestProfile),
+            retention: Arc::new(SevenDayRetention),
+            clock: Arc::new(SystemClock),
+            frames: receiver,
+            geo,
+            geo_mode_source: None,
+            geo_mode_refresh: None,
+            local_source: Arc::new(NoLocalSource),
+        },
+        CancellationToken::new(),
+        &TaskTracker::new(),
+    )
     .await
     .unwrap();
 
@@ -338,19 +345,26 @@ async fn a_new_core_frame_is_recorded_only_after_its_country_mode_is_loaded() {
     .unwrap();
     let frame_modes = Arc::new(FrameModeSource(AtomicUsize::new(0)));
     let dir = tempfile::tempdir().unwrap();
-    let store = Arc::new(RedbTrafficStore::open(&dir.path().join("traffic.redb")).unwrap());
+    let store = Arc::new(chimera_core::traffic::TrafficFileStorage::new(
+        dir.path().join("traffic.tsdb"),
+        chimera_core::traffic::Profile::desktop().backend_cache,
+    ));
     let (frames, receiver) = tokio::sync::watch::channel(None);
-    let traffic = TrafficClient::spawn(TrafficArgs {
-        store,
-        profiles: Arc::new(TestProfile),
-        retention: Arc::new(SevenDayRetention),
-        clock: Arc::new(SystemClock),
-        frames: receiver,
-        geo: geo_index.subscribe(),
-        geo_mode_source: Some(frame_modes.clone()),
-        geo_mode_refresh: Some(geo_index.clone()),
-        local_source: Arc::new(NoLocalSource),
-    })
+    let traffic = super::spawn(
+        TrafficArgs {
+            store,
+            profiles: Arc::new(TestProfile),
+            retention: Arc::new(SevenDayRetention),
+            clock: Arc::new(SystemClock),
+            frames: receiver,
+            geo: geo_index.subscribe(),
+            geo_mode_source: Some(frame_modes.clone()),
+            geo_mode_refresh: Some(geo_index.clone()),
+            local_source: Arc::new(NoLocalSource),
+        },
+        CancellationToken::new(),
+        &TaskTracker::new(),
+    )
     .await
     .unwrap();
 
@@ -438,19 +452,26 @@ async fn failed_new_core_mode_read_never_uses_old_geo_index_and_recovers_on_retr
     .unwrap();
     let frame_modes = Arc::new(RetryingFrameModeSource(AtomicUsize::new(0)));
     let dir = tempfile::tempdir().unwrap();
-    let store = Arc::new(RedbTrafficStore::open(&dir.path().join("traffic.redb")).unwrap());
+    let store = Arc::new(chimera_core::traffic::TrafficFileStorage::new(
+        dir.path().join("traffic.tsdb"),
+        chimera_core::traffic::Profile::desktop().backend_cache,
+    ));
     let (frames, receiver) = tokio::sync::watch::channel(None);
-    let traffic = TrafficClient::spawn(TrafficArgs {
-        store,
-        profiles: Arc::new(TestProfile),
-        retention: Arc::new(SevenDayRetention),
-        clock: Arc::new(SystemClock),
-        frames: receiver,
-        geo: geo_index.subscribe(),
-        geo_mode_source: Some(frame_modes.clone()),
-        geo_mode_refresh: Some(geo_index.clone()),
-        local_source: Arc::new(NoLocalSource),
-    })
+    let traffic = super::spawn(
+        TrafficArgs {
+            store,
+            profiles: Arc::new(TestProfile),
+            retention: Arc::new(SevenDayRetention),
+            clock: Arc::new(SystemClock),
+            frames: receiver,
+            geo: geo_index.subscribe(),
+            geo_mode_source: Some(frame_modes.clone()),
+            geo_mode_refresh: Some(geo_index.clone()),
+            local_source: Arc::new(NoLocalSource),
+        },
+        CancellationToken::new(),
+        &TaskTracker::new(),
+    )
     .await
     .unwrap();
 

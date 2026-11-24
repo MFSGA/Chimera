@@ -193,7 +193,7 @@ mod tests {
         progress.stage("committed-profile".into(), ExecutionHost::Local);
         progress.settle_with_verdict(&verdict, false);
 
-        let mut status = super::super::legacy_status::ReconcilerStatus::default();
+        let mut status = super::super::status::ReconcilerStatus::default();
         status.begin(9);
         status.finish_with_verdict(
             9,
@@ -236,7 +236,7 @@ mod tests {
         progress.stage("committed-profile".into(), ExecutionHost::Service);
         progress.settle_with_verdict(&verdict, false);
 
-        let mut status = super::super::legacy_status::ReconcilerStatus::default();
+        let mut status = super::super::status::ReconcilerStatus::default();
         status.begin(10);
         status.finish_with_verdict(
             10,
@@ -275,7 +275,7 @@ mod tests {
         progress.stage("superseded-profile".into(), ExecutionHost::Local);
         progress.settle_with_verdict(&verdict, false);
 
-        let mut status = super::super::legacy_status::ReconcilerStatus::default();
+        let mut status = super::super::status::ReconcilerStatus::default();
         status.begin(11);
         status.finish_with_verdict(
             11,

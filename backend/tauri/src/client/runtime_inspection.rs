@@ -3,54 +3,13 @@
 
 use super::{ChimeraClient, runtime::RuntimeSnapshot};
 use chimera_ipc::api::{core::v2::CoreEffectiveConfig, status::ConfigRevisionInfo};
+#[cfg(test)]
 use std::sync::Arc;
 
-pub(crate) use chimera_core::client::runtime_inspection::{
-    EffectiveInspection, RuntimeInspectionData,
-};
+pub(crate) use chimera_core::client::runtime_inspection::RuntimeInspectionData;
 pub use chimera_core::client::runtime_inspection::{
     RuntimeInspection, RuntimeInspectionContent, RuntimeInspectionDiff, RuntimeInspectionNode,
 };
-
-impl RuntimeSnapshot {
-    /// Attach an authenticated effective document to a temporary inspection view.
-    fn with_effective_config(&self, effective: CoreEffectiveConfig) -> anyhow::Result<Self> {
-        let view = self.inspection.effective_config(effective)?;
-        let mut snapshot = self.clone();
-        snapshot.inspection_id = format!(
-            "{}:effective:{}:{}:{}",
-            self.inspection_id,
-            view.revision.epoch,
-            view.revision.generation,
-            view.revision.effective_hash,
-        );
-        snapshot.effective = Some(Arc::new(view));
-        Ok(snapshot)
-    }
-
-    fn inspection_summary(&self, bound_revision: Option<ConfigRevisionInfo>) -> RuntimeInspection {
-        self.inspection.inspection_summary(
-            &self.inspection_id,
-            &self.revision.get().to_string(),
-            &self.target_core.to_string(),
-            self.effective.as_deref(),
-            bound_revision,
-        )
-    }
-
-    fn inspection_content(
-        &self,
-        snapshot_id: &str,
-        node_id: u32,
-    ) -> anyhow::Result<RuntimeInspectionContent> {
-        self.inspection.inspection_content(
-            &self.inspection_id,
-            self.effective.as_deref(),
-            snapshot_id,
-            node_id,
-        )
-    }
-}
 
 /// Ref-first effective-config evidence: two actor-serialized reads must
 /// describe the same endpoint generation, running instance and applied

@@ -5,7 +5,7 @@ use async_trait::async_trait;
 use chimera_config::runtime::executor::{PortError, ScriptRunner};
 use chimera_contracts::publish::PublishRuntimeError;
 use chimera_core::client::core_spec::CoreSpecError;
-use chimera_core::client::runtime_build::RuntimeBuildError;
+use chimera_profile_transform::RuntimeBuildError;
 use std::sync::Arc;
 
 /// Builds a script runner on the blocking thread that will use and drop it.

@@ -60,11 +60,9 @@ pub(crate) use self::application::SystemProxyMutation;
 pub(crate) use self::core_lifecycle::LegacyCoreBridge;
 pub use self::runtime::{Degradation, DegradationPhase, MutationOutcome};
 use self::{
-    application::ApplicationClient,
-    clash_config::ClashConfigClient,
-    core_lifecycle::{CoreLifecycleClient, CoreLifecyclePort},
-    event_sink::UiEventSink,
-    session_state::SessionStateClient,
+    application::ApplicationClient, clash_config::ClashConfigClient,
+    core_lifecycle::CoreLifecyclePort, event_sink::UiEventSink,
+    reconciler::RuntimeReconcilerClient, session_state::SessionStateClient,
 };
 #[allow(unused_imports)]
 pub(crate) use self::{
@@ -109,7 +107,7 @@ pub(crate) struct ClientSetupArgs {
     pub(crate) profile_service: Arc<ProfileFileService>,
 
     pub(crate) system_dns: Arc<dyn SystemDnsCache>,
-    pub(crate) traffic_store: Option<Arc<dyn chimera_traffic::TrafficStore>>,
+    pub(crate) traffic_store: Option<Arc<chimera_core::traffic::TrafficFileStorage>>,
     pub(crate) jobs: chimera_jobs::JobsClient,
     pub(crate) shutdown: tokio_util::sync::CancellationToken,
     pub(crate) tasks: tokio_util::task::TaskTracker,
@@ -179,7 +177,7 @@ struct ChimeraClientInner {
     app_updater: Option<AppUpdateClient>,
     changelog_http: Option<Arc<dyn ChangelogHttp>>,
     bundle_metadata: Option<BundleMetadata>,
-    core_lifecycle: CoreLifecycleClient,
+    core_lifecycle: RuntimeReconcilerClient,
     core_api: Option<CoreClientV2>,
     service_actor: Option<ServiceClient>,
     /// Ref CoreFacade is the read-only host/API authority for the production
@@ -198,7 +196,7 @@ struct ChimeraClientInner {
     checked_gate: Option<Arc<reconciler::check::CandidateCheck>>,
     profile_service: Arc<ProfileFileService>,
     system_dns: Arc<dyn SystemDnsCache>,
-    traffic_store: parking_lot::Mutex<Option<Arc<dyn chimera_traffic::TrafficStore>>>,
+    traffic_store: parking_lot::Mutex<Option<Arc<chimera_core::traffic::TrafficFileStorage>>>,
     traffic: parking_lot::RwLock<Option<crate::core::traffic::TrafficClient>>,
     /// The same opt-in source-address cache serves the traffic recorder and
     /// the explicit public-egress probe, without spawning a second probe.
@@ -311,8 +309,8 @@ impl ChimeraClient {
         let profile_content_source = Arc::new(crate::enhance::FsProfileContentSource::new(
             paths.app_profiles_dir(),
         ));
-        let core_lifecycle =
-            tauri::async_runtime::block_on(CoreLifecycleClient::spawn_with_profiles_and_content(
+        let core_lifecycle = tauri::async_runtime::block_on(
+            RuntimeReconcilerClient::spawn_with_profiles_and_content(
                 core.clone(),
                 typed.application.clone(),
                 typed.clash_config.clone(),
@@ -326,7 +324,8 @@ impl ChimeraClient {
                 service,
                 shutdown.clone(),
                 &tasks,
-            ))?;
+            ),
+        )?;
         let profile_gate = Arc::new(reconciler::composition::prepare_production_gate(
             &typed.application,
             &typed.clash_config,
@@ -346,13 +345,39 @@ impl ChimeraClient {
             mutations.connect_with_runtime_gate(core_lifecycle.clone(), profile_gate.clone()),
         )?;
         let streams_shutdown = shutdown.child_token();
-        let streams =
-            tauri::async_runtime::block_on(chimera_core::clash::ws::StreamsClient::spawn(
+        // Keep Core log shards in a dedicated subdirectory, never in the
+        // app/service text-log rotation namespace. Optional storage failure
+        // must not prevent the desktop or core from starting.
+        let core_log_dir = paths.app_logs_dir().join("core");
+        let core_log_store = tauri::async_runtime::block_on(async {
+            tokio::task::spawn_blocking(move || {
+                chimera_core::logs::RedbCoreLogStore::open(core_log_dir)
+            })
+            .await
+        });
+        let core_log_store = match core_log_store {
+            Ok(Ok(store)) => Some(Box::new(store) as Box<dyn chimera_core::logs::CoreLogStore>),
+            Ok(Err(error)) => {
+                tracing::warn!(%error, "optional Core log storage unavailable");
+                Some(Box::new(chimera_core::logs::UnavailableCoreLogStore(
+                    error.to_string(),
+                ))
+                    as Box<dyn chimera_core::logs::CoreLogStore>)
+            }
+            Err(error) => {
+                tracing::warn!(%error, "optional Core log storage worker failed");
+                None
+            }
+        };
+        let streams = tauri::async_runtime::block_on(
+            chimera_core::clash::ws::StreamsClient::spawn_with_logs(
                 Arc::new(core_v2.clone()),
                 typed.clash_config.get()?.overrides.log_level(),
                 streams_shutdown.clone(),
                 &tasks,
-            ))?;
+                core_log_store,
+            ),
+        )?;
         let proxies =
             tauri::async_runtime::block_on(chimera_core::proxies_actor::ProxiesClient::spawn(
                 chimera_core::proxies_actor::CoreClient::new(Arc::new(core_v2.clone())),
@@ -476,7 +501,7 @@ impl ChimeraClient {
             Arc::new(NoSelfProxyPort),
         ));
         let runtime_paths = RuntimePaths::from_config_root(paths.app_config_dir().to_path_buf());
-        let core_lifecycle = CoreLifecycleClient::direct(
+        let core_lifecycle = RuntimeReconcilerClient::direct(
             core.clone(),
             typed.application.clone(),
             typed.clash_config.clone(),
@@ -554,7 +579,7 @@ impl ChimeraClient {
 
     fn with_parts_and_typed_config(
         typed: TypedConfigClients,
-        core_lifecycle: CoreLifecycleClient,
+        core_lifecycle: RuntimeReconcilerClient,
         core: Arc<dyn CoreLifecyclePort>,
         core_api: Option<CoreClientV2>,
         service_actor: Option<ServiceClient>,
@@ -1844,7 +1869,7 @@ mod tests {
         .unwrap();
         let inner = Arc::get_mut(&mut client.inner).expect("unique test client");
         inner.application = application.clone();
-        inner.core_lifecycle = CoreLifecycleClient::direct(
+        inner.core_lifecycle = RuntimeReconcilerClient::direct(
             inner.core.clone(),
             application,
             inner.clash_config.clone(),

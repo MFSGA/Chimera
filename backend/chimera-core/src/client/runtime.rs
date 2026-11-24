@@ -1,0 +1,600 @@
+//! Ref-shaped RuntimeSnapshotStore with Chimera's instance-bound receipt.
+//! The session allocator, derived artifact, accepted receipt, and recovery
+//! baseline remain one shared owner. No Tauri or filesystem dependency.
+use super::{
+    clash_info::ClashInfo,
+    runtime_inspection::{RuntimeInspection, RuntimeInspectionContent},
+};
+use anyhow::{Context, Result, bail};
+use chimera_config::application::ClashCore;
+use chimera_ipc::api::{core::v2::CoreEffectiveConfig, status::ConfigRevisionInfo};
+use chimera_profile_transform::PostProcessingOutput;
+use serde::{Deserialize, Serialize};
+use serde_yaml::Mapping;
+use sha2::{Digest, Sha256};
+use std::sync::{
+    Arc,
+    atomic::{AtomicU64, Ordering},
+};
+
+#[derive(Serialize, Deserialize, Default, Debug, Clone, Copy, PartialEq, Eq, specta::Type)]
+#[serde(rename_all = "snake_case")]
+pub enum ScriptType {
+    #[default]
+    #[serde(rename = "javascript")]
+    JavaScript,
+    Lua,
+}
+
+/// Whether the user wants a core running at all.
+///
+/// A stopped core is an intent, not a failure: an ordinary save must not start
+/// one behind the user's back just because it has something to apply.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CoreRunIntent {
+    Running,
+    StoppedByUser,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct RuntimeRevision(u64);
+
+impl RuntimeRevision {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn from_raw(value: u64) -> Self {
+        Self(value)
+    }
+
+    pub fn get(self) -> u64 {
+        self.0
+    }
+}
+
+#[derive(Debug, Default)]
+pub struct RuntimeRebuildGate(tokio::sync::Mutex<()>);
+
+impl RuntimeRebuildGate {
+    pub async fn lock(&self) -> tokio::sync::MutexGuard<'_, ()> {
+        self.0.lock().await
+    }
+
+    pub fn is_locked(&self) -> bool {
+        self.0.try_lock().is_err()
+    }
+}
+
+// Ref's shared session allocator: cloned preparation/build owners consume one
+// revision sequence, never independent counter copies. Chimera still returns
+// an explicit error on overflow until its RuntimeError port is migrated.
+#[derive(Debug, Clone, Default)]
+pub struct RuntimeRevisionAllocator(Arc<AtomicU64>);
+
+impl RuntimeRevisionAllocator {
+    /// Ref's constructor; Chimera retains a fallible allocation result until
+    /// the RuntimeRevisionAllocator representation migrates with its owner.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn allocate(&self) -> Result<RuntimeRevision> {
+        let previous = self
+            .0
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+                value.checked_add(1)
+            })
+            .map_err(|_| anyhow::anyhow!("runtime revision space exhausted"))?;
+        Ok(RuntimeRevision(previous + 1))
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct RuntimeSnapshotData {
+    pub config: Mapping,
+    pub exists_keys: Vec<String>,
+    pub postprocessing_output: PostProcessingOutput,
+    pub inspection: Arc<super::runtime_inspection::RuntimeInspectionData>,
+}
+
+#[derive(Debug, Clone)]
+pub struct RuntimeSnapshot {
+    pub inspection_id: String,
+    pub revision: RuntimeRevision,
+    pub target_core: ClashCore,
+    pub product_sha256: [u8; 32],
+    pub config: Mapping,
+    pub exists_keys: Vec<String>,
+    pub postprocessing_output: PostProcessingOutput,
+    product_bytes: Arc<[u8]>,
+    pub inspection: Arc<super::runtime_inspection::RuntimeInspectionData>,
+    /// Core-reported effective document is an ephemeral view, never stored in the build graph.
+    pub effective: Option<Arc<super::runtime_inspection::EffectiveInspection>>,
+}
+
+impl RuntimeSnapshot {
+    pub fn from_data(
+        revision: RuntimeRevision,
+        target_core: ClashCore,
+        product_bytes: Arc<[u8]>,
+        data: RuntimeSnapshotData,
+    ) -> Self {
+        let product_sha256 = Sha256::digest(&product_bytes).into();
+        Self {
+            inspection_id: nanoid::nanoid!(),
+            revision,
+            target_core,
+            product_sha256,
+            config: data.config,
+            exists_keys: data.exists_keys,
+            postprocessing_output: data.postprocessing_output,
+            product_bytes,
+            inspection: data.inspection,
+            effective: None,
+        }
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn new(
+        revision: RuntimeRevision,
+        target_core: ClashCore,
+        product_bytes: Vec<u8>,
+        config: Mapping,
+    ) -> Self {
+        Self::new_with_transform_output(
+            revision,
+            target_core,
+            product_bytes,
+            config,
+            PostProcessingOutput::default(),
+        )
+    }
+
+    pub fn new_with_transform_output(
+        revision: RuntimeRevision,
+        target_core: ClashCore,
+        product_bytes: Vec<u8>,
+        config: Mapping,
+        transform_output: PostProcessingOutput,
+    ) -> Self {
+        Self::new_with_transform_output_and_exists_keys(
+            revision,
+            target_core,
+            product_bytes,
+            config,
+            transform_output,
+            Vec::new(),
+        )
+    }
+
+    pub fn new_with_transform_output_and_exists_keys(
+        revision: RuntimeRevision,
+        target_core: ClashCore,
+        product_bytes: Vec<u8>,
+        config: Mapping,
+        transform_output: PostProcessingOutput,
+        exists_keys: Vec<String>,
+    ) -> Self {
+        Self::from_data(
+            revision,
+            target_core,
+            product_bytes.into(),
+            RuntimeSnapshotData {
+                config,
+                exists_keys,
+                postprocessing_output: transform_output,
+                inspection: Arc::new(super::runtime_inspection::RuntimeInspectionData::bare()),
+            },
+        )
+    }
+
+    pub fn new_with_transform_output_and_inspection(
+        revision: RuntimeRevision,
+        target_core: ClashCore,
+        product_bytes: Vec<u8>,
+        config: Mapping,
+        transform_output: PostProcessingOutput,
+        inspection: super::runtime_inspection::RuntimeInspectionData,
+    ) -> Self {
+        Self::new_with_transform_output_and_inspection_and_exists_keys(
+            revision,
+            target_core,
+            product_bytes,
+            config,
+            transform_output,
+            inspection,
+            Vec::new(),
+        )
+    }
+
+    pub fn new_with_transform_output_and_inspection_and_exists_keys(
+        revision: RuntimeRevision,
+        target_core: ClashCore,
+        product_bytes: Vec<u8>,
+        config: Mapping,
+        transform_output: PostProcessingOutput,
+        inspection: super::runtime_inspection::RuntimeInspectionData,
+        exists_keys: Vec<String>,
+    ) -> Self {
+        Self::from_data(
+            revision,
+            target_core,
+            product_bytes.into(),
+            RuntimeSnapshotData {
+                config,
+                exists_keys,
+                postprocessing_output: transform_output,
+                inspection: Arc::new(inspection),
+            },
+        )
+    }
+
+    pub fn product_bytes(&self) -> &[u8] {
+        &self.product_bytes
+    }
+
+    pub fn clash_info(&self) -> ClashInfo {
+        ClashInfo::from_mapping(&self.config)
+    }
+
+    pub fn identity_eq(&self, other: &Self) -> bool {
+        self.revision == other.revision
+            && self.target_core == other.target_core
+            && self.product_sha256 == other.product_sha256
+    }
+
+    pub fn with_revision(&self, revision: RuntimeRevision) -> Self {
+        Self::from_data(
+            revision,
+            self.target_core,
+            self.product_bytes.clone(),
+            RuntimeSnapshotData {
+                config: self.config.clone(),
+                exists_keys: self.exists_keys.clone(),
+                postprocessing_output: self.postprocessing_output.clone(),
+                inspection: self.inspection.clone(),
+            },
+        )
+    }
+}
+
+/// What the selected core host confirmed it applied. Keep the exact submitted
+/// bytes and host settings here: a Profile transaction may have to restore this
+/// runtime even when the previous Profile source now describes something else.
+/// `artifact` is Chimera's derived UI snapshot paired with the receipt; it is
+/// not evidence that the core accepted the document.
+#[derive(Debug, Clone)]
+pub struct RuntimeApplyReceipt {
+    pub revision: RuntimeRevision,
+    pub config_text: Arc<str>,
+    pub config_digest: String,
+    pub target_core: ClashCore,
+    pub core_spec: chimera_core_manager::CoreSpec,
+    pub host: crate::actor_v2::endpoint::ExecutionHost,
+    pub run_intent: CoreRunIntent,
+    pub local_ipc: chimera_core_manager::LocalIpcSettings,
+    pub applied_revision: chimera_ipc::api::status::ConfigRevisionInfo,
+    pub instance_id: Option<String>,
+    pub controller_generation: Option<u64>,
+    /// The Profile-backed source identity this runtime was built from, when
+    /// the caller captured the complete committed target.
+    pub target: Option<String>,
+    pub ports: super::ports::CandidatePortBindings,
+    pub artifact: Option<Arc<RuntimeSnapshot>>,
+}
+
+impl RuntimeApplyReceipt {
+    pub fn confirms(
+        &self,
+        host: crate::actor_v2::endpoint::ExecutionHost,
+        status: &crate::actor_v2::endpoint::CoreStatusSnapshot,
+    ) -> bool {
+        super::runtime_recovery::matches_endpoint_apply(self, host, status)
+    }
+
+    pub fn confirms_projection(&self, status: &crate::actor_v2::CoreStatusProjection) -> bool {
+        super::runtime_recovery::confirmed_apply_kind(
+            self,
+            &super::runtime_recovery::ObservedRuntime::from_status(status),
+        )
+        .is_some()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeTransformFailure {
+    pub attempt_revision: RuntimeRevision,
+    pub transform_uid: String,
+    pub scope_uid: Option<String>,
+    pub script_type: Option<ScriptType>,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct RuntimeLifecycleState {
+    pub promoted: Option<Arc<RuntimeSnapshot>>,
+    pub applied: Option<Arc<RuntimeSnapshot>>,
+    pub confirmed: Option<Arc<RuntimeApplyReceipt>>,
+    pub confirmed_available: bool,
+    pub last_transform_failure: Option<RuntimeTransformFailure>,
+}
+
+#[derive(Debug, Clone)]
+pub struct RuntimeSnapshotStore {
+    revisions: RuntimeRevisionAllocator,
+    state: tokio::sync::watch::Sender<RuntimeLifecycleState>,
+}
+
+impl Default for RuntimeSnapshotStore {
+    fn default() -> Self {
+        Self {
+            revisions: RuntimeRevisionAllocator::default(),
+            state: tokio::sync::watch::Sender::new(RuntimeLifecycleState::default()),
+        }
+    }
+}
+
+/// Compatibility alias for existing desktop session construction.
+pub type RuntimeLifecycle = RuntimeSnapshotStore;
+
+impl RuntimeSnapshotStore {
+    /// The checked candidate builder and the Core owner must allocate from
+    /// the same monotonic session counter. Never create another allocator
+    /// when wiring a new RuntimeReconciler producer into the running host.
+    pub fn revision_allocator(&self) -> RuntimeRevisionAllocator {
+        self.revisions.clone()
+    }
+
+    pub fn allocate_revision(&self) -> Result<RuntimeRevision> {
+        self.revisions.allocate()
+    }
+
+    pub fn snapshot(&self) -> RuntimeLifecycleState {
+        self.state.borrow().clone()
+    }
+
+    pub fn publish_promoted(&self, snapshot: Arc<RuntimeSnapshot>) {
+        self.state
+            .send_modify(|state| state.promoted = Some(snapshot));
+    }
+
+    pub fn publish_confirmed(&self, receipt: Arc<RuntimeApplyReceipt>) {
+        self.state.send_modify(|state| {
+            state.applied = None;
+            state.confirmed = Some(receipt);
+            state.confirmed_available = true;
+        });
+    }
+
+    pub fn confirmed_receipt(&self) -> Option<Arc<RuntimeApplyReceipt>> {
+        self.state.borrow().confirmed.clone()
+    }
+
+    pub fn accepted_confirmed_receipt(&self) -> Option<Arc<RuntimeApplyReceipt>> {
+        let state = self.state.borrow();
+        state
+            .confirmed_available
+            .then(|| state.confirmed.clone())
+            .flatten()
+    }
+
+    pub fn invalidate_confirmed(&self) {
+        self.state
+            .send_modify(|state| state.confirmed_available = false);
+    }
+
+    /// The ref pending-product boundary, retained by the *existing* runtime
+    /// lifecycle rather than duplicated in the higher CoreLifecycle actor.
+    /// A confirmed receipt carries its exact built artifact even if *file*
+    /// promotion failed before `publish_promoted`. That product may be repaired
+    /// only against the same accepted Core receipt; the host must promote the
+    /// exact bytes to disk before calling `republish_confirmed_product`.
+    /// A newer confirmation or an invalidated receipt makes the old product
+    /// ineligible; it must never be re-published as current.
+    pub fn pending_confirmed_product(
+        &self,
+    ) -> Option<(Arc<RuntimeApplyReceipt>, Arc<RuntimeSnapshot>)> {
+        let state = self.state.borrow();
+        let receipt = state.confirmed.as_ref()?.clone();
+        if !state.confirmed_available {
+            return None;
+        }
+        let matches_receipt = |product: &Arc<RuntimeSnapshot>| {
+            receipt.revision == product.revision
+                && receipt.config_digest
+                    == chimera_core_manager::payload_digest(product.product_bytes())
+                && receipt.target_core == product.target_core
+        };
+        let product = state
+            .promoted
+            .as_ref()
+            .filter(|product| matches_receipt(product))
+            .or_else(|| {
+                receipt
+                    .artifact
+                    .as_ref()
+                    .filter(|product| matches_receipt(product))
+            })?
+            .clone();
+        if state
+            .applied
+            .as_ref()
+            .is_some_and(|applied| applied.identity_eq(&product))
+        {
+            return None;
+        }
+        Some((receipt, product))
+    }
+
+    /// Retry only the derived Applied publication; never re-submit the Core
+    /// or revive a product invalidated by a later accepted revision.
+    pub fn republish_confirmed_product(
+        &self,
+        active: &Arc<RuntimeApplyReceipt>,
+    ) -> Result<Option<Arc<RuntimeSnapshot>>> {
+        // The receipt identity, promoted product and Applied publication must
+        // be checked and updated under ONE lock. An intervening confirmation
+        // must never turn a stale product into a newly published snapshot.
+        let mut published = None;
+        self.state.send_if_modified(|state| {
+            let Some(confirmed) = state.confirmed.as_ref() else {
+                return false;
+            };
+            let Some(product) = state.promoted.as_ref().cloned() else {
+                return false;
+            };
+            if !state.confirmed_available
+                || !Arc::ptr_eq(confirmed, active)
+                || state
+                    .applied
+                    .as_ref()
+                    .is_some_and(|applied| applied.identity_eq(&product))
+                || confirmed.revision != product.revision
+                || confirmed.config_digest
+                    != chimera_core_manager::payload_digest(product.product_bytes())
+                || confirmed.target_core != product.target_core
+            {
+                return false;
+            }
+            state.applied = Some(product.clone());
+            state.last_transform_failure = None;
+            published = Some(product);
+            true
+        });
+        Ok(published)
+    }
+
+    pub fn publish_applied(&self, snapshot: Arc<RuntimeSnapshot>) -> Result<()> {
+        let mut result = Ok(());
+        self.state.send_if_modified(|state| {
+            result = (|| -> Result<()> {
+                let promoted = state
+                    .promoted
+                    .as_deref()
+                    .context("cannot publish Applied before Promoted")?;
+                if !promoted.identity_eq(&snapshot) {
+                    bail!("Applied snapshot does not match the promoted runtime product");
+                }
+                if let Some(receipt) = state.confirmed.as_ref() {
+                    if !state.confirmed_available
+                        || receipt.revision != snapshot.revision
+                        || receipt.config_digest
+                            != chimera_core_manager::payload_digest(snapshot.product_bytes())
+                        || receipt.target_core != snapshot.target_core
+                    {
+                        bail!("Applied snapshot does not match the confirmed runtime receipt");
+                    }
+                }
+                state.applied = Some(snapshot);
+                state.last_transform_failure = None;
+                Ok(())
+            })();
+            result.is_ok()
+        });
+        result
+    }
+
+    pub fn publish_transform_failure(&self, failure: RuntimeTransformFailure) {
+        self.state
+            .send_modify(|state| state.last_transform_failure = Some(failure));
+    }
+
+    pub fn clear_transform_failure(&self) {
+        self.state
+            .send_modify(|state| state.last_transform_failure = None);
+    }
+
+    pub fn restore(&self, state: RuntimeLifecycleState) {
+        self.state.send_replace(state);
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct RuntimeTransactionSnapshot {
+    pub product: Option<Vec<u8>>,
+    pub lifecycle: RuntimeLifecycleState,
+}
+
+impl RuntimeSnapshot {
+    /// Attach an authenticated effective document to a temporary inspection view.
+    pub fn with_effective_config(&self, effective: CoreEffectiveConfig) -> anyhow::Result<Self> {
+        let view = self.inspection.effective_config(effective)?;
+        let mut snapshot = self.clone();
+        snapshot.inspection_id = format!(
+            "{}:effective:{}:{}:{}",
+            self.inspection_id,
+            view.revision.epoch,
+            view.revision.generation,
+            view.revision.effective_hash,
+        );
+        snapshot.effective = Some(Arc::new(view));
+        Ok(snapshot)
+    }
+
+    pub fn inspection_summary(
+        &self,
+        bound_revision: Option<ConfigRevisionInfo>,
+    ) -> RuntimeInspection {
+        self.inspection.inspection_summary(
+            &self.inspection_id,
+            &self.revision.get().to_string(),
+            &self.target_core.to_string(),
+            self.effective.as_deref(),
+            bound_revision,
+        )
+    }
+
+    pub fn inspection_content(
+        &self,
+        snapshot_id: &str,
+        node_id: u32,
+    ) -> anyhow::Result<RuntimeInspectionContent> {
+        self.inspection.inspection_content(
+            &self.inspection_id,
+            self.effective.as_deref(),
+            snapshot_id,
+            node_id,
+        )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::client::ports::test_runtime_receipt;
+
+    #[test]
+    fn cloned_store_shares_revision_sequence_and_confirmed_owner() {
+        let store = RuntimeSnapshotStore::default();
+        let clone = store.clone();
+        assert_eq!(store.allocate_revision().unwrap().get(), 1);
+        assert_eq!(clone.allocate_revision().unwrap().get(), 2);
+        let receipt = Arc::new(test_runtime_receipt(Default::default()));
+        store.publish_confirmed(receipt.clone());
+        assert!(Arc::ptr_eq(
+            &receipt,
+            &clone.accepted_confirmed_receipt().unwrap()
+        ));
+        clone.invalidate_confirmed();
+        assert!(store.accepted_confirmed_receipt().is_none());
+        assert!(Arc::ptr_eq(&receipt, &store.confirmed_receipt().unwrap()));
+    }
+
+    #[test]
+    fn invalidated_receipt_cannot_publish_applied_product() {
+        let store = RuntimeSnapshotStore::default();
+        let product = Arc::new(RuntimeSnapshot::new(
+            store.allocate_revision().unwrap(),
+            ClashCore::Mihomo,
+            b"mode: rule\n".to_vec(),
+            Mapping::new(),
+        ));
+        let mut receipt = test_runtime_receipt(Default::default());
+        receipt.revision = product.revision;
+        receipt.config_digest = chimera_core_manager::payload_digest(product.product_bytes());
+        receipt.artifact = Some(product.clone());
+        store.publish_confirmed(Arc::new(receipt));
+        store.publish_promoted(product.clone());
+        store.invalidate_confirmed();
+        assert!(store.publish_applied(product).is_err());
+        assert!(store.snapshot().applied.is_none());
+    }
+}

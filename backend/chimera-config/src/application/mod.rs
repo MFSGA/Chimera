@@ -4,6 +4,7 @@ use specta::Type;
 use struct_patch::Patch;
 
 mod clash_core;
+mod core_logs;
 mod i18n;
 mod logging;
 mod network_automation;
@@ -14,6 +15,7 @@ mod widget;
 mod window_close;
 
 pub use clash_core::*;
+pub use core_logs::*;
 pub use i18n::*;
 pub use logging::*;
 pub use network_automation::*;

@@ -1,13 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Serialize, Deserialize, Default, Debug, Clone, Copy, PartialEq, Eq, specta::Type)]
-#[serde(rename_all = "snake_case")]
-pub enum ScriptType {
-    #[default]
-    #[serde(rename = "javascript")]
-    JavaScript,
-    Lua,
-}
+pub use chimera_core::client::runtime::ScriptType;
 
 #[derive(Serialize, Deserialize, Default, Debug, Clone, Copy, PartialEq, Eq)]
 #[serde(tag = "kind", content = "variant", rename_all = "snake_case")]

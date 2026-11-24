@@ -137,6 +137,39 @@ pub(crate) fn stable_owner_facts(
         && before_service == after_service
 }
 
+/// S2-proven Service ownership must also describe the *same* selected Core
+/// lifecycle state before a prepared product is admitted. A synthetic
+/// timestamp-zero Stopped status or a ready but foreign daemon is not proof.
+pub(crate) fn service_prepared_owner_proven(
+    observed: &CoreStatusSnapshot,
+    service: &ObservedServiceEvidence,
+) -> bool {
+    if observed.run_type != crate::core::RunType::Service || observed.state_changed_at == 0 {
+        return false;
+    }
+    match (service, &observed.state) {
+        (
+            ObservedServiceEvidence::CoreStopped {
+                ready: true,
+                runtime_owned: true,
+                ..
+            },
+            CoreState::Stopped(_),
+        ) => true,
+        (
+            ObservedServiceEvidence::CoreRunning {
+                ready: true,
+                instance,
+                ..
+            },
+            CoreState::Running,
+        ) => instance
+            .as_ref()
+            .is_none_or(|expected| observed.instance_id.as_deref() == Some(expected.as_str())),
+        _ => false,
+    }
+}
+
 /// The reusable ref Facts frame. In S2 the Core fact stays Unreadable and
 /// ownership Unproven; in a committed round Core facts are sampled only after
 /// the selected endpoint has supplied a stable observation.
@@ -581,7 +614,7 @@ mod tests {
     }
 
     #[test]
-    fn ref_start_and_core_changed_use_the_same_running_receipt_facts() {
+    fn ref_startup_start_and_core_changed_use_the_same_running_receipt_facts() {
         use crate::client::reconciler::proof::receipt_matches_owner;
         let mut accepted = receipt();
         accepted.target = Some("previous-target".into());
@@ -589,6 +622,7 @@ mod tests {
         let verified = receipt_matches_owner(&accepted, ExecutionHost::Local);
         assert!(verified);
         for trigger in [
+            Trigger::Startup,
             Trigger::Start,
             Trigger::CoreChanged,
             Trigger::SourceCommitted,
@@ -609,21 +643,24 @@ mod tests {
                 Some(Step::Apply)
             ));
         }
-        // An ordinary CoreChanged observation does not force a duplicate apply.
-        assert!(matches!(
-            plan_committed_target(
-                "previous-target",
-                ExecutionHost::Local,
-                &observed,
-                absent(),
-                false,
-                Some(&accepted),
-                verified,
-                None,
-                Trigger::CoreChanged
-            ),
-            Some(Step::Idle(Conclusion::Converged))
-        ));
+        // Startup recovery and CoreChanged do not replay an already
+        // converged target. Explicit Start remains forced.
+        for trigger in [Trigger::Startup, Trigger::CoreChanged] {
+            assert!(matches!(
+                plan_committed_target(
+                    "previous-target",
+                    ExecutionHost::Local,
+                    &observed,
+                    absent(),
+                    false,
+                    Some(&accepted),
+                    verified,
+                    None,
+                    trigger,
+                ),
+                Some(Step::Idle(Conclusion::Converged))
+            ));
+        }
         // Explicit Start keeps the upstream forced-reconcile semantics.
         assert!(matches!(
             plan_committed_target(

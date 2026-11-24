@@ -1,0 +1,33 @@
+[package]
+name = "chimera-observers"
+version.workspace = true
+repository.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[features]
+test-support = []
+
+[dependencies]
+chimera-traffic = { path = "../chimera-traffic" }
+chimera-tsdb = { path = "../chimera-tsdb" }
+chimera-geodata = { path = "../chimera-geodata" }
+async-trait = "0.1"
+chimera-contracts = { path = "../chimera-contracts" }
+chimera-config = { path = "../chimera-config" }
+anyhow = "1"
+ractor = "0.16"
+serde.workspace = true
+serde_json = "1"
+specta = "^2.0.0-rc.25"
+snafu.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+chimera-tsdb = { path = "../chimera-tsdb", features = ["redb"] }
+mockall = "0.15"
+tempfile = "3"

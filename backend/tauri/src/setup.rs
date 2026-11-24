@@ -4,8 +4,8 @@ use std::sync::Arc;
 
 use anyhow::Context as _;
 use chimera_contracts::net::SelfProxyPortSource as _;
+use chimera_core::traffic::{Profile as TrafficProfile, TrafficFileStorage};
 use chimera_os::system_dns::OsSystemDnsCache;
-use chimera_traffic::{RedbTrafficStore, TrafficStore};
 use chimera_utils::process::{AtomicStopStrategy, StopStrategy};
 use tauri::Manager;
 
@@ -589,16 +589,19 @@ impl StartupOwners {
 }
 
 /// Traffic recording is optional; an unavailable store disables history without blocking launch.
-fn open_traffic_store(paths: &PathResolver) -> Option<Arc<dyn TrafficStore>> {
+fn open_traffic_store(paths: &PathResolver) -> Option<Arc<TrafficFileStorage>> {
     let dir = paths.app_data_dir().join("traffic");
-    let open = || -> anyhow::Result<RedbTrafficStore> {
+    let open = || -> anyhow::Result<TrafficFileStorage> {
         std::fs::create_dir_all(&dir)?;
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
             std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))?;
         }
-        Ok(RedbTrafficStore::open(&dir.join("traffic.redb"))?)
+        Ok(TrafficFileStorage::new(
+            dir.join("traffic.tsdb"),
+            TrafficProfile::desktop().backend_cache,
+        ))
     };
     match open() {
         Ok(store) => Some(Arc::new(store)),

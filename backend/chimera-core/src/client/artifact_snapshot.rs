@@ -10,34 +10,10 @@ use chimera_config::{
         snapshot::SnapshotNodeKey,
     },
 };
-use indexmap::IndexMap;
-use serde::{Deserialize, Serialize};
 
 use super::runtime_inspection::RuntimeInspectionData;
 
-// Legacy frontend wire keys are strings. Keep the previous ProfileUid alias
-// instead of changing the serialized map to the typed ProfileId newtype.
-type ProfileUid = String;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
-#[serde(rename_all = "lowercase")]
-pub enum LogSpan {
-    Log,
-    Info,
-    Warn,
-    Error,
-}
-
-pub type Logs = Vec<(LogSpan, String)>;
-
-#[derive(Default, Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
-/// 后处理输出
-pub struct PostProcessingOutput {
-    /// Per-source transform chain output, keyed by source profile UID and transform UID.
-    pub scopes: IndexMap<ProfileUid, IndexMap<ProfileUid, Logs>>,
-    /// Global transform chain output, keyed by transform UID.
-    pub global: IndexMap<ProfileUid, Logs>,
-}
+pub use chimera_profile_transform::{LogSpan, Logs, PostProcessingOutput};
 
 fn span(level: StepLogLevel) -> LogSpan {
     match level {

@@ -1,22 +1,8 @@
-//! The country index traffic regions are looked up in, built from the database
-//! the running core reads and kept in step with it.
-mod actor;
-mod adapters;
-mod client;
-#[cfg(test)]
-pub(crate) mod fixtures;
-mod ports;
-#[cfg(test)]
-mod tests;
-
-pub use actor::GeoIndexArgs;
-pub use adapters::FsCountryIndexSource;
-pub use client::GeoIndexClient;
-#[cfg(test)]
-pub use ports::MockCountryIndexSource;
-pub use ports::{
+//! Desktop compatibility exports. The country index owner and filesystem
+//! adapter live in chimera-core; no desktop-specific actor or watcher remains.
+pub use chimera_core::geo::{
     CoreGeodataBinding, CoreGeodataModeSource, CountryIndexSnapshot, CountryIndexSource,
-    GeodataMode,
+    FsCountryIndexSource, GeoIndexArgs, GeoIndexClient, GeodataMode,
 };
 #[cfg(test)]
-pub(crate) use ports::{IndexKey, Loaded};
+pub(crate) use chimera_core::geo::{IndexKey, Loaded, MockCountryIndexSource, fixtures};

@@ -475,6 +475,12 @@ pub(crate) trait CoreLifecyclePort: Send + Sync {
     }
     async fn discard_profile_runtime(&self, _operation_id: OperationId) {}
     async fn stop(&self) -> anyhow::Result<()>;
+    /// Ref binary replacement must settle quarantined Core epochs before
+    /// installing an executable. Legacy mock ports have no manager epochs.
+    async fn recover_before_binary_install(&self) -> anyhow::Result<()> {
+        Ok(())
+    }
+
     /// Drain the full Core Actor and its in-process executor at application
     /// exit. Unlike Stop Core, this is terminal for the current session.
     async fn finish_shutdown(&self) -> anyhow::Result<()> {

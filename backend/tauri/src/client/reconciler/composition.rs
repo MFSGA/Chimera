@@ -2,7 +2,7 @@
 //! Core-owned runtime session. Construction itself is read-only.
 //!
 //! Profiles production installs this gate through MutationCoordinator and
-//! sends checked commits to the single CoreLifecycle mailbox. Application and
+//! sends checked commits to the single RuntimeReconciler mailbox. Application and
 //! Clash mutations still use their separate legacy runtime paths.
 
 use std::sync::Arc;
@@ -28,16 +28,16 @@ use crate::{
 };
 
 /// Bridges ref's Checked/SourceCommitted notifications into the *existing*
-/// CoreLifecycle Actor. Checked admissions are acknowledged and committed
+/// RuntimeReconciler Actor. Checked admissions are acknowledged and committed
 /// notices use a dedicated mailbox message; they do not call the legacy
 /// SourceCommitted rebuild handler.
-pub(in crate::client) struct CoreLifecycleCheckedInbox {
-    owner: crate::client::core_lifecycle::CoreLifecycleClient,
+pub(in crate::client) struct ReconcilerCheckedInbox {
+    owner: crate::client::reconciler::RuntimeReconcilerClient,
 }
 
-impl CoreLifecycleCheckedInbox {
+impl ReconcilerCheckedInbox {
     pub(in crate::client) fn new(
-        owner: crate::client::core_lifecycle::CoreLifecycleClient,
+        owner: crate::client::reconciler::RuntimeReconcilerClient,
     ) -> Self {
         Self { owner }
     }
@@ -55,7 +55,7 @@ impl CoreLifecycleCheckedInbox {
 }
 
 #[async_trait::async_trait]
-impl CheckedCandidatePort for CoreLifecycleCheckedInbox {
+impl CheckedCandidatePort for ReconcilerCheckedInbox {
     async fn checked(
         &self,
         domain: chimera_contracts::mutation::ConfigDomain,
@@ -144,7 +144,7 @@ pub(in crate::client) fn prepare_production_gate(
     content: Arc<dyn ProfileContentSource + Send + Sync>,
     paths: RuntimePaths,
     core: &chimera_core::actor_v2::CoreClient,
-    owner: &crate::client::core_lifecycle::CoreLifecycleClient,
+    owner: &crate::client::reconciler::RuntimeReconcilerClient,
 ) -> anyhow::Result<CandidateCheck> {
     let session = owner.runtime_preparation_session().ok_or_else(|| {
         anyhow::anyhow!("ref CandidateCheck requires the active Core-owned runtime session")
@@ -160,7 +160,7 @@ pub(in crate::client) fn prepare_production_gate(
     Ok(production_candidate_gate(
         sources,
         core,
-        Arc::new(CoreLifecycleCheckedInbox::new(owner.clone())),
+        Arc::new(ReconcilerCheckedInbox::new(owner.clone())),
     ))
 }
 
