@@ -23,12 +23,11 @@ use crate::client::application_workflow::startup::{
 #[cfg(test)]
 use crate::client::application_workflow::workflow::ApplicationWorkflow;
 use crate::client::application_workflow::workflow::ProfileRuntime;
-use crate::client::reconciler::attempt::{
-    AttemptPolicy, CommittedTargetAdvanced, ServiceFallbackDeferred,
-};
+use crate::client::reconciler::attempt::{CommittedTargetAdvanced, ServiceFallbackDeferred};
 use crate::client::reconciler::decision::{
     confirmed_planned_stop, same_core_status, stable_owner_facts,
 };
+use crate::client::reconciler::state::{RuntimeProgress, proven_selection_from_receipt};
 use crate::client::reconciler::{
     committed::{Selection, SelectionChange},
     inputs::RuntimeInputs,
@@ -251,88 +250,17 @@ fn manager_core_kind(core: ClashCore) -> CoreKind {
     }
 }
 
-/// A one-shot post-Core connection effect waiting for the Actor's final
-/// source-mailbox fence and Running verification. This does not own Core and
-/// cannot be executed by the worker before Completed is accepted.
-pub(in crate::client) struct CheckedConnectionEffect {
-    change: SelectionChange,
-    replaced: Option<bool>,
-    prior: anyhow::Result<Option<crate::core::actor_v2::api::ApiClient>>,
-}
+// ref apply_prepared owns post-Core one-shot effects. The sole lifecycle
+// Actor still decides when its final source/version fence permits completion.
+pub(in crate::client) use crate::client::reconciler::apply::CheckedConnectionEffect;
 
-impl CheckedConnectionEffect {
-    fn degradation(
-        change: SelectionChange,
-        message: String,
-        cause: chimera_contracts::runtime::InterruptFailure,
-    ) -> chimera_contracts::runtime::Degradation {
-        use chimera_contracts::runtime::{Degradation, DegradationPhase, DegradationReason};
-        Degradation {
-            phase: DegradationPhase::SystemEffect,
-            reason: match change {
-                SelectionChange::Mode => DegradationReason::ModeInterruptionFailed { cause },
-                SelectionChange::Profile => DegradationReason::ProfileInterruptionFailed { cause },
-            },
-            message,
-            retryable: false,
-        }
-    }
-
-    fn from_error(
-        change: SelectionChange,
-        error: anyhow::Error,
-    ) -> chimera_contracts::runtime::Degradation {
-        use chimera_contracts::runtime::InterruptFailure;
-        use chimera_core::actor_v2::api::ApiError;
-        // Keep REF's typed API failure identity; avoid parsing error strings.
-        let cause = match error.downcast_ref::<ApiError>() {
-            Some(ApiError::Stale) => InterruptFailure::Stale,
-            Some(ApiError::Unavailable(_)) => InterruptFailure::Unavailable,
-            Some(ApiError::Timeout) => InterruptFailure::Timeout,
-            Some(ApiError::Protocol(_)) => InterruptFailure::Protocol,
-            None => InterruptFailure::Unavailable,
-        };
-        Self::degradation(change, format!("{error:#}"), cause)
-    }
-
-    /// An obsolete or unverified Core result must never close the old API;
-    /// preserve its non-retryable one-shot effect as typed degradation.
-    pub(in crate::client) fn deferred(
-        self,
-        reason: &str,
-    ) -> chimera_contracts::runtime::Degradation {
-        Self::degradation(
-            self.change,
-            reason.to_owned(),
-            chimera_contracts::runtime::InterruptFailure::Unavailable,
-        )
-    }
-
-    pub(in crate::client) async fn finish(self) -> Option<chimera_contracts::runtime::Degradation> {
-        match (self.replaced, self.prior) {
-            (Some(true), _) => None, // Replaced Core already retired connections.
-            (Some(false), Ok(None)) => None, // No previous running Core instance.
-            (Some(false), Ok(Some(api))) => {
-                let result = match self.change {
-                    SelectionChange::Mode => {
-                        crate::core::connection_interruption::ConnectionInterruptionService::on_mode_change(&api, true).await
-                    }
-                    SelectionChange::Profile => {
-                        crate::core::connection_interruption::ConnectionInterruptionService::on_profile_change(&api, true).await
-                    }
-                };
-                result
-                    .err()
-                    .map(|error| Self::from_error(self.change, error))
-            }
-            (Some(false), Err(error)) => Some(Self::from_error(self.change, error)),
-            (None, _) => Some(Self::degradation(
-                self.change,
-                "Core replacement outcome is unknown; connection interruption not attempted".into(),
-                chimera_contracts::runtime::InterruptFailure::Unavailable,
-            )),
-        }
-    }
+/// Ref plan(Facts) has only one S4 admission: Step::Apply. A concrete
+/// Idle/Owner/Stop step must never silently become a legacy Core submission.
+/// LegacyRecovery is reserved for missing/incomplete observations.
+enum CommittedRound {
+    Apply,
+    LegacyRecovery,
+    Settled(anyhow::Result<()>),
 }
 
 #[derive(Clone)]
@@ -345,10 +273,10 @@ pub(in crate::client) struct CoreLifecycleWorkflow {
     /// session and Profiles gate have been assembled. Shared by clones of
     /// the sole lifecycle workflow, not an independent runtime owner.
     checked_gate: Arc<std::sync::OnceLock<Arc<crate::client::reconciler::check::CandidateCheck>>>,
-    /// A baseline exists only after an exact Checked apply and two successful
-    /// authoritative source reads. Legacy rebuilds invalidate it because they
-    /// do not yet hand back a confirmed applied selection.
-    applied_selection: Arc<parking_lot::Mutex<Option<Selection>>>,
+    /// Ref's applied selection and last target/host attempt share a single
+    /// runtime-progress owner. Only the current Core worker may record them,
+    /// and the Actor retains final Conclusion/source-version authority.
+    progress: Arc<parking_lot::Mutex<RuntimeProgress>>,
     /// A checked source's post-apply Mode effect is held by the same
     /// workflow until its sole Actor has fenced the Completed message.
     checked_connection_effect: Arc<parking_lot::Mutex<Option<CheckedConnectionEffect>>>,
@@ -370,7 +298,6 @@ pub(in crate::client) struct CoreLifecycleWorkflow {
     service_failed_generation_shared: Arc<AtomicU64>,
     service_status: Option<watch::Receiver<ServiceHostStatus>>,
     service_recovery: Arc<parking_lot::Mutex<ServiceRecovery>>,
-    attempt_policy: Arc<parking_lot::Mutex<AttemptPolicy>>,
     service_recovery_reconnected: Arc<AtomicBool>,
     shutdown: CancellationToken,
 }
@@ -450,7 +377,7 @@ impl CoreLifecycleWorkflow {
             profiles,
             content_reader: None,
             checked_gate: Arc::new(std::sync::OnceLock::new()),
-            applied_selection: Arc::new(parking_lot::Mutex::new(None)),
+            progress: Arc::new(parking_lot::Mutex::new(RuntimeProgress::default())),
             checked_connection_effect: Arc::new(parking_lot::Mutex::new(None)),
             prepared_outcome: Arc::new(parking_lot::Mutex::new(None)),
             source_authority: None,
@@ -463,7 +390,6 @@ impl CoreLifecycleWorkflow {
             service_failed_generation_shared: Arc::new(AtomicU64::new(0)),
             service_status: None,
             service_recovery: Arc::new(parking_lot::Mutex::new(ServiceRecovery::default())),
-            attempt_policy: Arc::new(parking_lot::Mutex::new(AttemptPolicy::default())),
             service_recovery_reconnected: Arc::new(AtomicBool::new(false)),
             shutdown: CancellationToken::new(),
         }
@@ -508,7 +434,7 @@ impl CoreLifecycleWorkflow {
     }
 
     pub(in crate::client) fn invalidate_applied_selection(&self) {
-        self.applied_selection.lock().take();
+        self.progress.lock().invalidate_selection();
     }
 
     pub(in crate::client) fn take_checked_connection_effect(
@@ -524,74 +450,37 @@ impl CoreLifecycleWorkflow {
     ) -> Option<crate::client::reconciler::mutation::ApplyOutcome> {
         self.prepared_outcome.lock().take()
     }
+    /// Finalize the staged Runtime attempt only after this CoreLifecycle
+    /// mailbox has applied the latest-source and Running-receipt fences.
+    /// This is the same observed terminal used by ReconcilerStatus::finish.
+    pub(in crate::client) fn settle_observed_attempt(
+        &self,
+        verdict: &crate::client::reconciler::attempt::LegacyApplyVerdict,
+        verified_running: bool,
+    ) {
+        self.progress
+            .lock()
+            .settle_with_verdict(verdict, verified_running);
+    }
 
-    /// Ref's applied_selection follows an *observed Core result*, not a
-    /// successfully saved document. The legacy startup/reconcile actor only
-    /// reports Result<()>; its already-confirmed live receipt and the same
-    /// bounded source authority used by Checked Apply can prove the selection.
-    /// Unknown, stopped, Service-handoff, or advanced sources clear the value.
+    /// Recover selection from a *proven* live Core receipt and two bounded
+    /// committed source reads. RuntimeProgress, not the legacy workflow,
+    /// owns the selected Mode/Profile and last attempted target/host.
     pub(in crate::client) async fn recover_applied_selection_from_receipt(&self) {
-        let Some(authority) = self.source_authority.as_ref() else {
-            self.applied_selection.lock().take();
-            return;
-        };
-        let first = match self.core.active_runtime_receipt().await {
-            Ok(Some(receipt)) if receipt.target.is_some() => receipt,
-            Ok(_) => {
-                self.applied_selection.lock().take();
-                return;
-            }
-            Err(error) => {
-                tracing::debug!(%error, "cannot prove active Core for selection recovery");
-                self.applied_selection.lock().take();
-                return;
-            }
-        };
-        let target = first.target.as_deref().expect("checked above");
-        let selection = match authority.selection_for_applied_target(target).await {
-            Ok(selection) => selection,
-            Err(error) => {
-                tracing::debug!(%error, "cannot prove committed sources for selection recovery");
-                None
-            }
-        };
-        // Recheck the complete source target across the asynchronous Core
-        // observation. A source commit racing this read must not seed a
-        // selection that was never proven to match the running bytes.
-        let latest_selection = authority
-            .selection_for_applied_target(target)
-            .await
-            .ok()
-            .flatten();
-        // The source reads were asynchronous. Reject an intervening Core
-        // replacement or second apply even if its document target is equal.
-        let still_active = self
-            .core
-            .active_runtime_receipt()
-            .await
-            .ok()
-            .flatten()
-            .is_some_and(|latest| {
-                latest.target == first.target
-                    && latest.host == first.host
-                    && latest.applied_revision == first.applied_revision
-                    && latest.config_digest == first.config_digest
-            });
-        *self.applied_selection.lock() = if still_active && selection == latest_selection {
-            selection
-        } else {
-            None
-        };
+        let selection =
+            proven_selection_from_receipt(self.core.as_ref(), self.source_authority.as_deref())
+                .await;
+        self.progress.lock().set_selection(selection);
     }
 
     #[cfg(test)]
     pub(super) fn applied_selection_for_tests(&self) -> Option<Selection> {
-        self.applied_selection.lock().clone()
+        self.progress.lock().selection()
     }
 
     #[cfg(test)]
     pub(super) fn set_applied_selection_for_tests(&self, selection: Selection) {
-        *self.applied_selection.lock() = Some(selection);
+        self.progress.lock().set_selection(Some(selection));
     }
 
     pub(in crate::client) fn startup_owner_unproven_handle(&self) -> Arc<AtomicBool> {
@@ -1063,39 +952,14 @@ impl CoreLifecycleWorkflow {
         prepared: super::ports::PreparedRuntime,
         spec: chimera_core_manager::CoreSpec,
     ) -> anyhow::Result<super::ports::PreparedCoreSettlement> {
-        let verdict = self
-            .core
-            .reconcile_prepared_submission(prepared, spec)
-            .await?;
-        let mapped = crate::client::reconciler::apply::prepared_submission_outcome(&verdict);
-        // The producer retains only the Core registry's *observed* result.
-        // A missing report or rejected identity never invents Applied.
-        *self.prepared_outcome.lock() = mapped.clone();
-        match verdict {
-            super::ports::PreparedSubmission::Applied(applied) => {
-                if let Some(crate::client::reconciler::mutation::ApplyOutcome::Applied(candidate)) =
-                    mapped
-                {
-                    anyhow::ensure!(
-                        applied.replaced == Some(candidate.replaced)
-                            && applied
-                                .product
-                                .as_ref()
-                                .is_some_and(|product| Arc::ptr_eq(product, &candidate.product)),
-                        "upstream AppliedCandidate is not the exact confirmed Core settlement"
-                    );
-                }
-                Ok(applied)
-            }
-            super::ports::PreparedSubmission::RolledBack(report) => {
-                let reason = report
-                    .failed_apply
-                    .clone()
-                    .unwrap_or_else(|| "the host returned no rollback detail".into());
-                Err(super::ports::PreparedRolledBack { report, reason }.into())
-            }
-            super::ports::PreparedSubmission::Unknown(error) => Err(error.into()),
-        }
+        let (mapped, result) =
+            crate::client::reconciler::apply::submit_prepared(self.core.as_ref(), prepared, spec)
+                .await;
+        // Only the single existing CoreLifecycle worker mutates the runtime.
+        // Keep ref's observed terminal for the Actor's final source/receipt
+        // fence, including rollback and unknown-operation evidence.
+        *self.prepared_outcome.lock() = mapped;
+        result
     }
 
     /// The sole Core owner's checked runtime execution. Carry the pre-apply
@@ -1116,7 +980,7 @@ impl CoreLifecycleWorkflow {
             .as_deref()
             .ok_or_else(|| anyhow::anyhow!("checked runtime has no source target identity"))?
             .to_owned();
-        let previous = self.applied_selection.lock().clone();
+        let previous = self.progress.lock().selection();
         let result = async {
             let interruption = if interrupt_mode {
                 // Source-owned raw Clash patch has already proved that its
@@ -1149,7 +1013,7 @@ impl CoreLifecycleWorkflow {
         .await;
         match result {
             Ok((selection, interruption, source, replaced)) => {
-                *self.applied_selection.lock() = selection;
+                self.progress.lock().set_selection(selection);
                 // The worker cannot know about source notices that reached
                 // the Actor after its final read. Defer the one-shot mode
                 // effect to Completed; only that mailbox can settle it.
@@ -1163,7 +1027,7 @@ impl CoreLifecycleWorkflow {
                 Ok(())
             }
             Err(error) => {
-                self.applied_selection.lock().take();
+                self.progress.lock().invalidate_selection();
                 Err(error)
             }
         }
@@ -1178,6 +1042,7 @@ impl CoreLifecycleWorkflow {
         // from a failed or superseded operation must not leak into the next.
         self.checked_connection_effect.lock().take();
         self.prepared_outcome.lock().take();
+        self.progress.lock().clear_pending();
         #[cfg(test)]
         let refresh_startup_retry_identity =
             matches!(&command, Command::PatchApplicationConfig { .. });
@@ -1206,7 +1071,7 @@ impl CoreLifecycleWorkflow {
         let prepared_selection_candidate =
             matches!(&command, Command::ReconcileSource | Command::Reconcile);
         if !prepared_selection_candidate && !matches!(&command, Command::ApplyChecked { .. }) {
-            self.applied_selection.lock().take();
+            self.progress.lock().invalidate_selection();
         }
         let result = match command {
             Command::ProfileMutation(_) => {
@@ -1376,7 +1241,7 @@ impl CoreLifecycleWorkflow {
             }
         };
         if prepared_selection_candidate && result.is_err() {
-            self.applied_selection.lock().take();
+            self.progress.lock().invalidate_selection();
         }
         self.refresh_service_recovery_host().await;
         #[cfg(test)]
@@ -1811,16 +1676,16 @@ impl CoreLifecycleWorkflow {
             return Err(CommittedTargetAdvanced.into());
         }
 
+        // This fallback has proved the old Service Core is released. Its
+        // Local submission supersedes the staged Service attempt; Completed
+        // alone may record the observed Local terminal.
+        self.progress
+            .lock()
+            .stage(target.to_owned(), ExecutionHost::Local);
         let local = self
             .reconcile_application_after_service_release(self.application.get_typed())
             .await;
         self.refresh_service_recovery_host().await;
-        self.attempt_policy.lock().record(
-            target.to_owned(),
-            ExecutionHost::Local,
-            &local,
-            self.core.outcome_uncertain(),
-        );
         if !self
             .startup_target_identity()
             .await
@@ -1932,134 +1797,267 @@ impl CoreLifecycleWorkflow {
         Ok(())
     }
 
-    /// Execute only those decisions of ref's S3/S4 plan for which Chimera
-    /// has established the selected host and has a live runtime receipt.
-    /// Ownership moves continue through the single startup handoff actor.
-    /// Returning Some means this round has already been handled; None means
-    /// the existing Core submission path should execute.
+    /// Consume ref's stable S2/S3/S4 decision. A concrete Step::Apply,
+    /// optionally after a verified S3 Stop, is explicit admission; a settled
+    /// Idle/Owner/Refused can never fall through to legacy Core submission.
+    /// No plan means only the existing compatibility recovery may proceed.
+    /// Ownership moves remain with the one startup handoff actor.
     async fn planned_committed_round(
         &self,
         target: &str,
         host: ExecutionHost,
         trigger: Trigger,
-    ) -> anyhow::Result<Option<anyhow::Result<()>>> {
-        use chimera_core::client::reconciler::plan::{Conclusion, Step};
-
-        // Do not turn a possibly unknown in-flight Core operation into a
-        // second stop or submit. The actor's uncertain gate remains in charge.
-        if self.core.outcome_uncertain()
-            || !matches!(trigger, Trigger::SourceCommitted | Trigger::Retry)
-        {
-            return Ok(None);
+    ) -> anyhow::Result<CommittedRound> {
+        // The worker must never use a legacy adapter to sidestep a
+        // lower-Core uncertain operation. A different command's legacy
+        // trigger still keeps its existing compatibility recovery path.
+        if self.core.outcome_uncertain() {
+            return Ok(CommittedRound::Settled(Err(
+                crate::client::reconciler::attempt::OwnershipTransitionPending::waiting(
+                    "the Core submit outcome is unknown; recover its owner before another Apply",
+                )
+                .into(),
+            )));
         }
-        let observed = match self.core.status().await {
-            Ok(observed) => observed,
-            Err(_) => return Ok(None),
-        };
-        let receipt = self.core.active_runtime_receipt().await.ok().flatten();
-        let verified = if receipt.is_some() && matches!(observed.state, CoreState::Running) {
-            self.verified_applied_runtime(&observed).await
-        } else {
-            false
-        };
-        let previous = self.attempt_policy.lock().snapshot();
-        // Read the same ServiceActor-owned evidence as StartupWorkflow. Its
-        // epoch/readiness and the selected Core state form ONE ref Facts round
-        // instead of permitting S3 to bypass a pending S2 owner transition.
-        let (service, service_generation) = self.service_evidence().await;
-        // Both selected Core and Service ownership must form one coherent
-        // S2/S3 Facts frame. Async probes can cross a daemon restart even if
-        // they return two individually valid Ready snapshots.
-        let resampled_core = self.core.status().await.ok();
-        let (resampled_service, resampled_generation) = self.service_evidence().await;
-        let final_core = self.core.status().await.ok();
-        let coherent = resampled_core.as_ref().is_some_and(|current| {
-            stable_owner_facts(
-                &observed,
-                current,
-                &service,
-                service_generation,
-                &resampled_service,
-                resampled_generation,
-            )
-        }) && final_core
-            .as_ref()
-            .is_some_and(|current| same_core_status(&observed, current));
-        if !coherent {
-            return Ok(Some(Err(
+        if !matches!(trigger, Trigger::SourceCommitted | Trigger::Retry) {
+            return Ok(CommittedRound::LegacyRecovery);
+        }
+        // Ref converge must re-sample Facts after an S3 Stop. The old
+        // decision was about a Running instance and cannot authorize S4.
+        // At most one stop/replan is allowed in this CoreLifecycle command.
+        let mut stopped_for_replacement = false;
+        for _ in 0..2 {
+            let observed = match self.core.status().await {
+                Ok(observed) => observed,
+                Err(_) if !stopped_for_replacement => {
+                    return Ok(CommittedRound::LegacyRecovery);
+                }
+                Err(_) => {
+                    return Ok(CommittedRound::Settled(Err(
+                        crate::client::reconciler::attempt::OwnershipTransitionPending::waiting(
+                            "the Core is unreadable after S3 Stop; replan before S4",
+                        )
+                        .into(),
+                    )));
+                }
+            };
+            let receipt = match self.core.active_runtime_receipt().await {
+                Ok(receipt) => receipt,
+                Err(_) if !stopped_for_replacement => {
+                    return Ok(CommittedRound::LegacyRecovery);
+                }
+                Err(_) => {
+                    return Ok(CommittedRound::Settled(Err(
+                        crate::client::reconciler::attempt::OwnershipTransitionPending::waiting(
+                            "the Core receipt is unreadable after S3 Stop; replan before S4",
+                        )
+                        .into(),
+                    )));
+                }
+            };
+            if stopped_for_replacement
+                && !crate::client::reconciler::decision::s3_replanned_stopped_owner_ready(
+                    &observed,
+                    receipt.as_deref(),
+                    host,
+                )
+            {
+                return Ok(CommittedRound::Settled(Err(
+                crate::client::reconciler::attempt::OwnershipTransitionPending::waiting(
+                    "S3 Stop did not leave a stable selected Stopped Core with no active receipt",
+                )
+                .into(),
+            )));
+            }
+            let verified = if receipt.is_some() && matches!(observed.state, CoreState::Running) {
+                self.verified_applied_runtime(&observed).await
+            } else {
+                false
+            };
+            let previous = self.progress.lock().attempt();
+            // Read the same ServiceActor-owned evidence as StartupWorkflow. Its
+            // epoch/readiness and the selected Core state form ONE ref Facts round
+            // instead of permitting S3 to bypass a pending S2 owner transition.
+            let (service, service_generation) = self.service_evidence().await;
+            // Both selected Core and Service ownership must form one coherent
+            // S2/S3 Facts frame. Async probes can cross a daemon restart even if
+            // they return two individually valid Ready snapshots.
+            let resampled_core = self.core.status().await.ok();
+            let (resampled_service, resampled_generation) = self.service_evidence().await;
+            let final_core = self.core.status().await.ok();
+            let coherent = resampled_core.as_ref().is_some_and(|current| {
+                stable_owner_facts(
+                    &observed,
+                    current,
+                    &service,
+                    service_generation,
+                    &resampled_service,
+                    resampled_generation,
+                )
+            }) && final_core
+                .as_ref()
+                .is_some_and(|current| same_core_status(&observed, current));
+            if !coherent {
+                return Ok(CommittedRound::Settled(Err(
                 crate::client::reconciler::attempt::OwnershipTransitionPending::waiting(
                     "Core or Service ownership changed while sampling the committed Facts round",
                 )
                 .into(),
             )));
-        }
-        // An S3/S4 decision may reuse a receipt only when the original Core
-        // revision remains the one selected after the ownership probes.
-        if let Some(original) = receipt.as_ref()
-            && !self
-                .core
-                .active_runtime_receipt()
-                .await
-                .ok()
-                .flatten()
-                .is_some_and(|current| Arc::ptr_eq(original, &current))
-        {
-            return Ok(Some(Err(
-                crate::client::reconciler::attempt::OwnershipTransitionPending::waiting(
-                    "the accepted Core revision changed while sampling Service ownership",
-                )
-                .into(),
-            )));
-        }
-        if host == ExecutionHost::Service && matches!(service, ServiceEvidence::ForeignCore { .. })
-        {
-            return Ok(Some(Err(
-                crate::client::reconciler::attempt::OwnershipTransitionPending::waiting(
-                    "Service belongs to another instance; Local owner selection is required",
-                )
-                .into(),
-            )));
-        }
-        let step = crate::client::reconciler::decision::plan_committed_target(
-            target,
-            host,
-            &observed,
-            crate::client::application_workflow::startup::reconciler_service_evidence(&service),
-            self.service_recovery_blocks_handoff(),
-            receipt.as_deref(),
-            verified,
-            previous,
-            trigger,
-        );
-        match step {
-            Some(Step::Idle(Conclusion::Converged)) => Ok(Some(Ok(()))),
-            Some(Step::Owner(owner_plan)) => Ok(Some(Err(
-                crate::client::reconciler::attempt::OwnershipTransitionPending::owner(owner_plan)
+            }
+            // An S3/S4 decision may reuse a receipt only when the original Core
+            // revision remains the one selected after the ownership probes.
+            if let Some(original) = receipt.as_ref()
+                && !self
+                    .core
+                    .active_runtime_receipt()
+                    .await
+                    .ok()
+                    .flatten()
+                    .is_some_and(|current| Arc::ptr_eq(original, &current))
+            {
+                return Ok(CommittedRound::Settled(Err(
+                    crate::client::reconciler::attempt::OwnershipTransitionPending::waiting(
+                        "the accepted Core revision changed while sampling Service ownership",
+                    )
                     .into(),
-            ))),
-            Some(Step::Idle(Conclusion::Waiting { cause })) => Ok(Some(Err(
-                crate::client::reconciler::attempt::OwnershipTransitionPending::waiting(
-                    cause.to_string(),
-                )
-                .into(),
-            ))),
-            Some(Step::Stop { intent: false }) => {
-                // Ref S3: a stale or unverified Running Core must retire
-                // before S4 prepares the new runtime. Only proceed after
-                // a stable terminal stop and a fresh source-target fence.
-                self.stop_planned_unverified_core(target, &observed, receipt.as_ref())
-                    .await?;
-                Ok(None)
+                )));
             }
-            Some(Step::FallBackToLocal) => {
-                let refusal =
-                    anyhow::anyhow!("previously refused committed Service target: {target}");
-                Ok(Some(
-                    self.fallback_after_service_refusal(target, refusal).await,
-                ))
+            // If S3 stopped the old Core, another runtime must not have
+            // installed a receipt during the Service ownership probes.
+            // Before S3, an existing receipt is separately pointer-fenced.
+            if stopped_for_replacement {
+                match self.core.active_runtime_receipt().await {
+                    Ok(None) => {}
+                    _ => {
+                        return Ok(CommittedRound::Settled(Err(
+                            crate::client::reconciler::attempt::OwnershipTransitionPending::waiting(
+                                "a new or unreadable Core receipt appeared during the S3/S4 replan",
+                            )
+                            .into(),
+                        )));
+                    }
+                }
             }
-            _ => Ok(None),
+            if host == ExecutionHost::Service
+                && matches!(service, ServiceEvidence::ForeignCore { .. })
+            {
+                return Ok(CommittedRound::Settled(Err(
+                    crate::client::reconciler::attempt::OwnershipTransitionPending::waiting(
+                        "Service belongs to another instance; Local owner selection is required",
+                    )
+                    .into(),
+                )));
+            }
+            let step = crate::client::reconciler::decision::plan_committed_target(
+                target,
+                host,
+                &observed,
+                crate::client::application_workflow::startup::reconciler_service_evidence(&service),
+                self.service_recovery_blocks_handoff(),
+                receipt.as_deref(),
+                verified,
+                previous,
+                trigger,
+            );
+            use crate::client::reconciler::decision::{
+                CommittedStepAction, classify_committed_step,
+            };
+            let Some(step) = step else {
+                if stopped_for_replacement {
+                    return Ok(CommittedRound::Settled(Err(
+                        crate::client::reconciler::attempt::OwnershipTransitionPending::waiting(
+                            "the S3 Stop succeeded but the latest S4 Facts plan is still unproven",
+                        )
+                        .into(),
+                    )));
+                }
+                return Ok(CommittedRound::LegacyRecovery);
+            };
+            return match classify_committed_step(step) {
+                CommittedStepAction::Apply => {
+                    // Ref plans a snapshot of committed Facts. A newer source
+                    // could have arrived during the asynchronous Service probe:
+                    // the stable owner cannot submit that obsolete target.
+                    if self.startup_target_identity().await? != target {
+                        return Err(CommittedTargetAdvanced.into());
+                    }
+                    if self.core.outcome_uncertain() {
+                        return Ok(CommittedRound::Settled(Err(
+                        crate::client::reconciler::attempt::OwnershipTransitionPending::waiting(
+                            "the Core result became uncertain after S4 admission",
+                        )
+                        .into(),
+                    )));
+                    }
+                    Ok(CommittedRound::Apply)
+                }
+                CommittedStepAction::Converged => {
+                    // A verified receipt belongs to its actual source target.
+                    // Do not claim a stale captured target converged when
+                    // another source commit arrived during owner probing.
+                    if self.startup_target_identity().await? != target {
+                        return Err(CommittedTargetAdvanced.into());
+                    }
+                    if self.core.outcome_uncertain() {
+                        return Ok(CommittedRound::Settled(Err(
+                            crate::client::reconciler::attempt::OwnershipTransitionPending::waiting(
+                                "the Core outcome became uncertain after convergence planning",
+                            )
+                            .into(),
+                        )));
+                    }
+                    Ok(CommittedRound::Settled(Ok(())))
+                }
+                CommittedStepAction::Owner(plan) => Ok(CommittedRound::Settled(Err(
+                    crate::client::reconciler::attempt::OwnershipTransitionPending::owner(plan)
+                        .into(),
+                ))),
+                CommittedStepAction::Wait(cause) => Ok(CommittedRound::Settled(Err(
+                    crate::client::reconciler::attempt::OwnershipTransitionPending::waiting(
+                        cause.to_string(),
+                    )
+                    .into(),
+                ))),
+                CommittedStepAction::Refused(cause) => Ok(CommittedRound::Settled(Err(
+                    crate::client::reconciler::attempt::PlannedTargetRefused { cause }.into(),
+                ))),
+                CommittedStepAction::Blocked(reason) => Ok(CommittedRound::Settled(Err(
+                    crate::client::reconciler::attempt::OwnershipTransitionPending::waiting(reason)
+                        .into(),
+                ))),
+                CommittedStepAction::StopForReplacement => {
+                    if stopped_for_replacement {
+                        return Ok(CommittedRound::Settled(Err(
+                        crate::client::reconciler::attempt::OwnershipTransitionPending::waiting(
+                            "Core still requires S3 Stop after the first confirmed stop",
+                        )
+                        .into(),
+                    )));
+                    }
+                    // After a confirmed S3 terminal, ref converge loops through
+                    // the *new* Core/Service Facts rather than submitting using
+                    // the previous Running instance's stale plan.
+                    self.stop_planned_unverified_core(target, &observed, receipt.as_ref())
+                        .await?;
+                    stopped_for_replacement = true;
+                    continue;
+                }
+                CommittedStepAction::FallBackToLocal => {
+                    let refusal =
+                        anyhow::anyhow!("previously refused committed Service target: {target}");
+                    Ok(CommittedRound::Settled(
+                        self.fallback_after_service_refusal(target, refusal).await,
+                    ))
+                }
+            };
         }
+        Ok(CommittedRound::Settled(Err(
+            crate::client::reconciler::attempt::OwnershipTransitionPending::waiting(
+                "S3/S4 converge exhausted the bounded owner replan",
+            )
+            .into(),
+        )))
     }
 
     /// Ref's prepared submission for an S2-selected and S3-proven Core owner.
@@ -2143,7 +2141,7 @@ impl CoreLifecycleWorkflow {
                 if receipt.host != expected_host {
                     return None;
                 }
-                (Some(receipt), Some(self.applied_selection.lock().clone()?))
+                (Some(receipt), Some(self.progress.lock().selection()?))
             }
             CoreState::Stopped(_) if current_receipt.is_none() => (None, None),
             _ => return None,
@@ -2158,8 +2156,13 @@ impl CoreLifecycleWorkflow {
             Err(error) => return Some(Err(error)),
         };
         let result = async {
-            let (prepared, core_spec) = gate
-                .prepare_committed_target(app.clone(), clash.clone(), target)
+            let (candidate, core_spec) = gate
+                .prepare_committed_candidate(
+                    app.clone(),
+                    clash.clone(),
+                    target,
+                    previous.as_ref(),
+                )
                 .await?;
             let current = authority
                 .verify_committed_prepared_target(target, previous.as_ref())
@@ -2169,7 +2172,13 @@ impl CoreLifecycleWorkflow {
                         "committed source authority cannot prove the prepared Local target"
                     )
                 })?;
-            if current != expected {
+            // ref's prepared S4 candidate carries selection and interruption
+            // from the same frozen inputs as its product. The independent
+            // source authority must agree before that candidate can submit.
+            if current != expected
+                || candidate.selection != expected.0
+                || candidate.interruption != expected.1
+            {
                 return Err(anyhow::Error::new(CommittedTargetAdvanced).context(
                     "committed selection or interruption policy advanced during runtime build",
                 ));
@@ -2203,12 +2212,13 @@ impl CoreLifecycleWorkflow {
                     .into(),
                 );
             }
-            let old_api = if expected.1.is_some() {
+            let old_api = if candidate.interruption.is_some() {
                 Some(self.core.capture_interruption_source().await)
             } else {
                 None
             };
-            let applied = self.submit_prepared_verdict(prepared, core_spec)
+            let applied = self
+                .submit_prepared_verdict(candidate.runtime, core_spec)
                 .await?;
             applied.validate_identity(target)?;
             let latest = authority
@@ -2221,8 +2231,8 @@ impl CoreLifecycleWorkflow {
                 return Err(anyhow::Error::new(CommittedTargetAdvanced)
                     .context("committed selection or policy advanced after prepared Core apply"));
             }
-            *self.applied_selection.lock() = Some(expected.0);
-            if let Some(change) = expected.1 {
+            self.progress.lock().set_selection(Some(candidate.selection));
+            if let Some(change) = candidate.interruption {
                 *self.checked_connection_effect.lock() = Some(CheckedConnectionEffect {
                     change,
                     replaced: applied.replaced,
@@ -2233,27 +2243,21 @@ impl CoreLifecycleWorkflow {
         }
         .await;
         if result.is_err() {
-            self.applied_selection.lock().take();
+            self.progress.lock().invalidate_selection();
         }
         Some(result)
     }
 
     async fn reconcile_with_trigger(&self, trigger: Trigger) -> anyhow::Result<()> {
-        // Ref pending-product maintenance happens before rebuilding the target.
-        // A manual Retry may repair the *same* confirmed runtime publication
-        // without a second Core apply. Source notifications and ordinary
-        // readiness ticks never replay a stale pending snapshot.
-        if trigger == Trigger::Retry
-            && !self.core.outcome_uncertain()
-            && let Some(pending) = self.core.pending_runtime_product_target()
-            && self
-                .startup_target_identity()
-                .await
-                .is_ok_and(|current| current == pending)
-            && self
-                .core
-                .republish_pending_runtime_product(&pending)
-                .await?
+        // Ref maintain(Retry) lives with S4 apply outcome maintenance.
+        // Only repair the accepted receipt's derived file, and never replay
+        // old Core bytes or publish a product after its source has advanced.
+        if crate::client::reconciler::apply::retry_pending_product(
+            self.core.as_ref(),
+            trigger,
+            || self.startup_target_identity(),
+        )
+        .await?
         {
             return Ok(());
         }
@@ -2283,52 +2287,58 @@ impl CoreLifecycleWorkflow {
                 }
             };
             let planned = self.planned_committed_round(&target, host, trigger).await?;
-            let handled_by_plan = planned.is_some();
-            let applied = if let Some(result) = planned {
-                self.applied_selection.lock().take();
-                result
-            } else {
-                let admitted = self.attempt_policy.lock().allow(&target, host, trigger);
-                match admitted {
-                    Ok(()) => {
-                        let prepared = match run_type {
-                            crate::core::RunType::Normal => {
-                                self.try_reconcile_prepared_local(&target, &app, &clash, run_type)
+            let ref_apply = matches!(&planned, CommittedRound::Apply);
+            let handled_by_plan = matches!(&planned, CommittedRound::Settled(_));
+            let applied = match planned {
+                CommittedRound::Settled(result) => {
+                    self.progress.lock().invalidate_selection();
+                    result
+                }
+                CommittedRound::Apply | CommittedRound::LegacyRecovery => {
+                    let admitted = self.progress.lock().allow(&target, host, trigger);
+                    match admitted {
+                        Ok(()) => {
+                            // The actual Core attempt is staged, never recorded
+                            // as Applied/Refused before Completed's final fence.
+                            self.progress.lock().stage(target.clone(), host);
+                            let prepared = match run_type {
+                                crate::core::RunType::Normal => {
+                                    self.try_reconcile_prepared_local(
+                                        &target, &app, &clash, run_type,
+                                    )
                                     .await
+                                }
+                                crate::core::RunType::Service => {
+                                    self.try_reconcile_prepared_service(&target, &app, &clash)
+                                        .await
+                                }
+                                crate::core::RunType::Elevated => None,
+                            };
+                            use crate::client::reconciler::apply::{
+                                CommittedPreparedDispatch, route_committed_prepared,
+                            };
+                            match route_committed_prepared(ref_apply, prepared) {
+                                CommittedPreparedDispatch::Observed(result) => result,
+                                CommittedPreparedDispatch::LegacyRecovery => {
+                                    // Only a missing/unproven legacy S3/S4
+                                    // plan may use inline Core reconciliation.
+                                    self.progress.lock().invalidate_selection();
+                                    self.core
+                                        .reconcile_profiles(
+                                            clash,
+                                            app.core,
+                                            run_type,
+                                            current,
+                                            app,
+                                            content,
+                                            Some(target.clone()),
+                                        )
+                                        .await
+                                }
                             }
-                            crate::core::RunType::Service => {
-                                self.try_reconcile_prepared_service(&target, &app, &clash)
-                                    .await
-                            }
-                            crate::core::RunType::Elevated => None,
-                        };
-                        let applied = if let Some(prepared) = prepared {
-                            prepared
-                        } else {
-                            self.applied_selection.lock().take();
-                            self.core
-                                .reconcile_profiles(
-                                    clash,
-                                    app.core,
-                                    run_type,
-                                    current,
-                                    app,
-                                    content,
-                                    Some(target.clone()),
-                                )
-                                .await
-                        };
-                        let observed = self.prepared_outcome.lock().clone();
-                        self.attempt_policy.lock().record_prepared(
-                            target.clone(),
-                            host,
-                            &applied,
-                            self.core.outcome_uncertain(),
-                            observed.as_ref(),
-                        );
-                        applied
+                        }
+                        Err(previous_refusal) => Err(previous_refusal.into()),
                     }
-                    Err(previous_refusal) => Err(previous_refusal.into()),
                 }
             };
             let applied = if host == ExecutionHost::Service && !handled_by_plan {
@@ -2357,25 +2367,22 @@ impl CoreLifecycleWorkflow {
                 }
             };
             let planned = self.planned_committed_round(&target, host, trigger).await?;
-            let handled_by_plan = planned.is_some();
-            let result = if let Some(result) = planned {
-                self.applied_selection.lock().take();
-                result
-            } else {
-                let admitted = self.attempt_policy.lock().allow(&target, host, trigger);
-                match admitted {
-                    Ok(()) => {
-                        self.applied_selection.lock().take();
-                        let result = self.core.reconcile(clash, target_core, run_type).await;
-                        self.attempt_policy.lock().record(
-                            target.clone(),
-                            host,
-                            &result,
-                            self.core.outcome_uncertain(),
-                        );
-                        result
+            let handled_by_plan = matches!(&planned, CommittedRound::Settled(_));
+            let result = match planned {
+                CommittedRound::Settled(result) => {
+                    self.progress.lock().invalidate_selection();
+                    result
+                }
+                CommittedRound::Apply | CommittedRound::LegacyRecovery => {
+                    let admitted = self.progress.lock().allow(&target, host, trigger);
+                    match admitted {
+                        Ok(()) => {
+                            self.progress.lock().invalidate_selection();
+                            self.progress.lock().stage(target.clone(), host);
+                            self.core.reconcile(clash, target_core, run_type).await
+                        }
+                        Err(previous_refusal) => Err(previous_refusal.into()),
                     }
-                    Err(previous_refusal) => Err(previous_refusal.into()),
                 }
             };
             if host == ExecutionHost::Service && !handled_by_plan {

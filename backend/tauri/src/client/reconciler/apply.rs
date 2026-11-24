@@ -1,11 +1,14 @@
-//! The pinned-ref submission verdict boundary, adapted to Chimera's existing
-//! `CoreFacade::ReconcileResult`. This module does not send Core commands.
-//! Once the one Reconciler mailbox owns `CoreFacade`, it will consume these
-//! verdicts from the same `PreparedRuntime` validated before the source commit.
-use std::sync::Arc;
+//! Ref-aligned S4 candidate, Core submission, and post-apply maintenance.
+//! The only Core command is submitted by the existing CoreLifecycle worker
+//! through its sole CoreLifecyclePort; this module never creates a second
+//! owner, revision allocator, RuntimeProduct writer, or action mailbox.
+use std::{future::Future, sync::Arc};
 
 use chimera_contracts::runtime_error::{CoreFailure, RuntimeError};
-use chimera_core::actor_v2::facade::{ReconcileReport, ReconcileResult};
+use chimera_core::{
+    actor_v2::facade::{ReconcileReport, ReconcileResult},
+    client::reconciler::plan::Trigger,
+};
 use chimera_core_manager::{CoreError, CoreErrorKind};
 use chimera_ipc::api::core::v2::{OperationOutputInfo, ReconcileOutcomeKind};
 
@@ -31,10 +34,43 @@ fn core_failure(error: CoreError) -> CoreFailure {
 
 /// Pinned ref's `PreparedCandidate` preserves the selected profile/mode and
 /// interruption decision; it has not yet submitted anything to the Core.
-pub(super) struct PreparedCandidate {
+pub(in crate::client) struct PreparedCandidate {
     pub runtime: PreparedRuntime,
     pub selection: Selection,
     pub interruption: Option<SelectionChange>,
+}
+
+/// S4's production committed-input preparation: one frozen inputs snapshot
+/// determines both the exact PreparedRuntime bytes and its selection/effect
+/// policy. This is ref's prepare_candidate without consuming an uncommitted
+/// Checked proposal: those already enter the same Core owner via its inbox.
+/// The sole CoreLifecycle actor later submits this exact prepared product.
+pub(in crate::client) async fn prepare_committed_candidate(
+    preparation: &RuntimePreparation,
+    inputs: RuntimeInputs,
+    previous: Option<&Selection>,
+    expected_target: &str,
+) -> anyhow::Result<(PreparedCandidate, chimera_core_manager::CoreSpec)> {
+    anyhow::ensure!(
+        inputs.target_key().as_deref() == Some(expected_target),
+        "committed runtime inputs changed during prepared build capture"
+    );
+    let selection = Selection::of(&inputs);
+    let interruption = selection.interruption(previous, &inputs.clash);
+    let runtime = preparation.prepare_inputs(inputs).await?;
+    anyhow::ensure!(
+        runtime.target.as_deref() == Some(expected_target),
+        "prepared runtime was built for a different source target"
+    );
+    let spec = preparation.core_spec(&runtime.snapshot.target_core)?;
+    Ok((
+        PreparedCandidate {
+            runtime,
+            selection,
+            interruption,
+        },
+        spec,
+    ))
 }
 
 /// Pinned ref `RuntimeReconciler::prepare_candidate` body with its owner
@@ -89,6 +125,238 @@ pub(super) fn take_checked_for_target(
     } else {
         None
     }
+}
+
+/// Ref Step::Apply is permission to submit one exact PreparedCandidate, not
+/// permission to rebuild and submit different bytes through the old inline
+/// Core path. A missing prepared candidate on a proven ref S4 step is a
+/// dependency wait. Only a legacy/unproven planning route may use the old
+/// adapter while the remaining migration is unfinished.
+pub(crate) enum CommittedPreparedDispatch {
+    Observed(anyhow::Result<()>),
+    LegacyRecovery,
+}
+
+pub(crate) fn route_committed_prepared(
+    ref_apply: bool,
+    prepared: Option<anyhow::Result<()>>,
+) -> CommittedPreparedDispatch {
+    match prepared {
+        Some(result) => CommittedPreparedDispatch::Observed(result),
+        None if ref_apply => CommittedPreparedDispatch::Observed(Err(
+            crate::client::reconciler::attempt::OwnershipTransitionPending::waiting(
+                "ref S4 Apply cannot prove a prepared candidate from the current committed source and selected Core; legacy Core submit is forbidden",
+            )
+            .into(),
+        )),
+        None => CommittedPreparedDispatch::LegacyRecovery,
+    }
+}
+
+/// A one-shot post-Core connection effect waiting for the Actor's final
+/// source-mailbox fence and Running verification. This does not own Core and
+/// cannot be executed by the worker before Completed is accepted.
+pub(in crate::client) struct CheckedConnectionEffect {
+    pub(in crate::client) change: SelectionChange,
+    pub(in crate::client) replaced: Option<bool>,
+    pub(in crate::client) prior: anyhow::Result<Option<crate::core::actor_v2::api::ApiClient>>,
+}
+
+impl CheckedConnectionEffect {
+    fn degradation(
+        change: SelectionChange,
+        message: String,
+        cause: chimera_contracts::runtime::InterruptFailure,
+    ) -> chimera_contracts::runtime::Degradation {
+        use chimera_contracts::runtime::{Degradation, DegradationPhase, DegradationReason};
+        Degradation {
+            phase: DegradationPhase::SystemEffect,
+            reason: match change {
+                SelectionChange::Mode => DegradationReason::ModeInterruptionFailed { cause },
+                SelectionChange::Profile => DegradationReason::ProfileInterruptionFailed { cause },
+            },
+            message,
+            retryable: false,
+        }
+    }
+
+    pub(in crate::client) fn from_error(
+        change: SelectionChange,
+        error: anyhow::Error,
+    ) -> chimera_contracts::runtime::Degradation {
+        use chimera_contracts::runtime::InterruptFailure;
+        use chimera_core::actor_v2::api::ApiError;
+        // Keep REF's typed API failure identity; avoid parsing error strings.
+        let cause = match error.downcast_ref::<ApiError>() {
+            Some(ApiError::Stale) => InterruptFailure::Stale,
+            Some(ApiError::Unavailable(_)) => InterruptFailure::Unavailable,
+            Some(ApiError::Timeout) => InterruptFailure::Timeout,
+            Some(ApiError::Protocol(_)) => InterruptFailure::Protocol,
+            None => InterruptFailure::Unavailable,
+        };
+        Self::degradation(change, format!("{error:#}"), cause)
+    }
+
+    /// An obsolete or unverified Core result must never close the old API;
+    /// preserve its non-retryable one-shot effect as typed degradation.
+    pub(in crate::client) fn deferred(
+        self,
+        reason: &str,
+    ) -> chimera_contracts::runtime::Degradation {
+        Self::degradation(
+            self.change,
+            reason.to_owned(),
+            chimera_contracts::runtime::InterruptFailure::Unavailable,
+        )
+    }
+
+    pub(in crate::client) async fn finish(self) -> Option<chimera_contracts::runtime::Degradation> {
+        match (self.replaced, self.prior) {
+            (Some(true), _) => None, // Replaced Core already retired connections.
+            (Some(false), Ok(None)) => None, // No previous running Core instance.
+            (Some(false), Ok(Some(api))) => {
+                let result = match self.change {
+                    SelectionChange::Mode => {
+                        crate::core::connection_interruption::ConnectionInterruptionService::on_mode_change(&api, true).await
+                    }
+                    SelectionChange::Profile => {
+                        crate::core::connection_interruption::ConnectionInterruptionService::on_profile_change(&api, true).await
+                    }
+                };
+                result
+                    .err()
+                    .map(|error| Self::from_error(self.change, error))
+            }
+            (Some(false), Err(error)) => Some(Self::from_error(self.change, error)),
+            (None, _) => Some(Self::degradation(
+                self.change,
+                "Core replacement outcome is unknown; connection interruption not attempted".into(),
+                chimera_contracts::runtime::InterruptFailure::Unavailable,
+            )),
+        }
+    }
+}
+
+/// Ref apply_prepared finishes a one-shot Mode/Profile connection change
+/// only after the *single* CoreLifecycle mailbox has received its Core
+/// terminal and verified the final committed source and Running receipt.
+/// The source actor cannot finish this effect and stale apply results must
+/// remain typed degradations, not accidentally disconnect a newer Core.
+pub(in crate::client) async fn finish_connection_effect(
+    effect: CheckedConnectionEffect,
+    result: &anyhow::Result<()>,
+    verified_running: bool,
+    source_advanced: bool,
+) -> Option<chimera_contracts::runtime::Degradation> {
+    if checked_mode_effect_can_finish(result, verified_running, source_advanced) {
+        effect.finish().await
+    } else {
+        Some(effect.deferred(
+            "Connection interruption was not settled: checked Core target was superseded or active runtime is unverified",
+        ))
+    }
+}
+
+/// A committed source CAS does not authorize a runtime effect. The Actor
+/// must first establish a successful Core terminal, the applied Running
+/// instance, and that no later source reached the same mailbox.
+pub(in crate::client) fn checked_mode_effect_can_finish(
+    result: &anyhow::Result<()>,
+    verified_running: bool,
+    source_advanced: bool,
+) -> bool {
+    result.is_ok() && verified_running && !source_advanced
+}
+
+/// Ref's maintain(Retry) repairs the derived RuntimeProduct only when
+/// the original committed target is still active. The authoritative Core
+/// receipt remains owned and verified by the existing LocalRuntimeHost;
+/// this maintenance must never submit runtime bytes or allocate a revision.
+/// No automatic SourceCommitted/Tick replay of a stale pending product.
+pub(in crate::client) async fn retry_pending_product<Read, ReadFuture>(
+    core: &dyn crate::client::core_lifecycle::ports::CoreLifecyclePort,
+    trigger: Trigger,
+    read_current_target: Read,
+) -> anyhow::Result<bool>
+where
+    Read: FnOnce() -> ReadFuture,
+    ReadFuture: Future<Output = anyhow::Result<String>>,
+{
+    if trigger != Trigger::Retry || core.outcome_uncertain() {
+        return Ok(false);
+    }
+    let Some(pending) = core.pending_runtime_product_target() else {
+        return Ok(false);
+    };
+    if !read_current_target()
+        .await
+        .is_ok_and(|current| current == pending)
+    {
+        return Ok(false);
+    }
+    core.republish_pending_runtime_product(&pending).await
+}
+
+/// The sole CoreLifecycle worker delegates its actual prepared submission
+/// here, matching ref's RuntimeReconciler::submit_prepared boundary. This
+/// function neither spawns an actor nor owns a second runtime session: the
+/// caller supplies the existing CoreLifecyclePort and exact prepared bytes.
+/// Return the independently observed upstream terminal alongside the legacy
+/// Result so the mailbox can record the true Applied/Refused/Unknown outcome.
+pub(in crate::client) async fn submit_prepared(
+    core: &dyn crate::client::core_lifecycle::ports::CoreLifecyclePort,
+    prepared: PreparedRuntime,
+    spec: chimera_core_manager::CoreSpec,
+) -> (
+    Option<ApplyOutcome>,
+    anyhow::Result<crate::client::core_lifecycle::ports::PreparedCoreSettlement>,
+) {
+    match core.reconcile_prepared_submission(prepared, spec).await {
+        Ok(verdict) => settle_prepared_submission(verdict),
+        Err(error) => (None, Err(error)),
+    }
+}
+
+/// Project ref's prepared Core terminal once, preserving the exact accepted
+/// product and rolled-back/unknown evidence without fabricating an Applied
+/// candidate from an unverified legacy port.
+pub(in crate::client) fn settle_prepared_submission(
+    verdict: crate::client::core_lifecycle::ports::PreparedSubmission,
+) -> (
+    Option<ApplyOutcome>,
+    anyhow::Result<crate::client::core_lifecycle::ports::PreparedCoreSettlement>,
+) {
+    use crate::client::core_lifecycle::ports::{PreparedRolledBack, PreparedSubmission};
+    let mapped = prepared_submission_outcome(&verdict);
+    let result = match verdict {
+        PreparedSubmission::Applied(applied) => {
+            if let Some(ApplyOutcome::Applied(candidate)) = mapped.as_ref() {
+                if applied.replaced != Some(candidate.replaced)
+                    || !applied
+                        .product
+                        .as_ref()
+                        .is_some_and(|product| Arc::ptr_eq(product, &candidate.product))
+                {
+                    return (
+                        mapped,
+                        Err(anyhow::anyhow!(
+                            "upstream AppliedCandidate is not the exact confirmed Core settlement"
+                        )),
+                    );
+                }
+            }
+            Ok(applied)
+        }
+        PreparedSubmission::RolledBack(report) => {
+            let reason = report
+                .failed_apply
+                .clone()
+                .unwrap_or_else(|| "the host returned no rollback detail".into());
+            Err(PreparedRolledBack { report, reason }.into())
+        }
+        PreparedSubmission::Unknown(error) => Err(error.into()),
+    };
+    (mapped, result)
 }
 
 // Pinned ref/client/reconciler/apply.rs::not_submitted_outcome.
@@ -218,6 +486,47 @@ mod tests {
         status::ConfigRevisionInfo,
     };
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[test]
+    fn ref_apply_without_proven_prepared_candidate_never_uses_legacy_core() {
+        let CommittedPreparedDispatch::Observed(Err(error)) = route_committed_prepared(true, None)
+        else {
+            panic!("ref Step::Apply must not become an inline Core submit");
+        };
+        assert!(
+            error
+                .downcast_ref::<crate::client::reconciler::attempt::OwnershipTransitionPending>()
+                .is_some()
+        );
+        assert!(crate::client::reconciler::attempt::waiting_dependency(
+            &error
+        ));
+        assert!(
+            error
+                .to_string()
+                .contains("legacy Core submit is forbidden")
+        );
+    }
+
+    #[test]
+    fn only_unproven_legacy_planning_can_rebuild_and_submit_inline() {
+        assert!(matches!(
+            route_committed_prepared(false, None),
+            CommittedPreparedDispatch::LegacyRecovery
+        ));
+        assert!(matches!(
+            route_committed_prepared(true, Some(Ok(()))),
+            CommittedPreparedDispatch::Observed(Ok(()))
+        ));
+        let refused = route_committed_prepared(
+            false,
+            Some(Err(anyhow::anyhow!("candidate preparation refused"))),
+        );
+        assert!(matches!(
+            refused,
+            CommittedPreparedDispatch::Observed(Err(_))
+        ));
+    }
 
     fn product() -> Arc<RuntimeSnapshot> {
         Arc::new(RuntimeSnapshot::new(
@@ -414,6 +723,161 @@ mod tests {
             prepared_submission_outcome(&compat).is_none(),
             "the legacy Core bridge must not invent a ReconcileReport or AppliedCandidate"
         );
+    }
+
+    #[test]
+    fn production_s4_terminal_preserves_rollback_unknown_and_unobserved() {
+        use crate::client::core_lifecycle::ports::{
+            PreparedCoreSettlement, PreparedProductPublication, PreparedRolledBack,
+            PreparedSubmission,
+        };
+        let rollback = PreparedSubmission::RolledBack(ReconcileOutcomeInfo {
+            outcome: ReconcileOutcomeKind::RolledBack,
+            revision: revision(),
+            warning: None,
+            failed_apply: Some("rolled back to previous runtime".into()),
+        });
+        let (outcome, result) = settle_prepared_submission(rollback);
+        assert!(matches!(
+            outcome,
+            Some(ApplyOutcome::Refused {cause})
+                if matches!(cause.as_ref(), RuntimeError::CoreRolledBack {reason: Some(reason)}
+                    if reason == "rolled back to previous runtime")
+        ));
+        assert!(
+            result
+                .unwrap_err()
+                .downcast_ref::<PreparedRolledBack>()
+                .is_some()
+        );
+
+        let operation = OperationId::generate();
+        let (outcome, result) = settle_prepared_submission(PreparedSubmission::Unknown(
+            CoreError::new(CoreErrorKind::BackendUnavailable, "unknown operation", true)
+                .with_operation(operation.clone()),
+        ));
+        assert!(matches!(
+            outcome,
+            Some(ApplyOutcome::Unknown(cause))
+                if matches!(cause.as_ref(), RuntimeError::SubmissionUnobserved {failure}
+                    if failure.operation_id.as_deref() == Some(operation.to_string().as_str()))
+        ));
+        assert_eq!(
+            result
+                .unwrap_err()
+                .downcast_ref::<CoreError>()
+                .and_then(|error| error.operation_id.as_ref()),
+            Some(&operation),
+        );
+
+        let (outcome, result) =
+            settle_prepared_submission(PreparedSubmission::Applied(PreparedCoreSettlement {
+                report: None,
+                outcome: None,
+                replaced: None,
+                confirmed: None,
+                product: None,
+                publication: PreparedProductPublication::Unobserved,
+            }));
+        assert!(
+            outcome.is_none(),
+            "an unobserved compatibility terminal cannot claim Applied"
+        );
+        assert!(
+            result.is_ok(),
+            "the legacy port retains its original Result semantics"
+        );
+    }
+
+    #[tokio::test]
+    async fn completion_does_not_interrupt_without_final_running_and_source_proof() {
+        use chimera_contracts::runtime::{DegradationPhase, DegradationReason, InterruptFailure};
+        let effect = || CheckedConnectionEffect {
+            change: SelectionChange::Mode,
+            replaced: Some(false),
+            prior: Err(anyhow::Error::new(
+                crate::core::actor_v2::api::ApiError::Stale,
+            )),
+        };
+
+        let stale = finish_connection_effect(effect(), &Ok(()), true, true)
+            .await
+            .expect("superseded completion must remain typed effect debt");
+        assert!(matches!(
+            stale.reason,
+            DegradationReason::ModeInterruptionFailed {
+                cause: InterruptFailure::Unavailable
+            }
+        ));
+        assert_eq!(stale.phase, DegradationPhase::SystemEffect);
+        assert!(!stale.retryable);
+        assert!(stale.message.contains("superseded"));
+
+        let unverified = finish_connection_effect(effect(), &Ok(()), false, false)
+            .await
+            .expect("unverified Running receipt must defer interruption");
+        assert!(matches!(
+            unverified.reason,
+            DegradationReason::ModeInterruptionFailed {
+                cause: InterruptFailure::Unavailable
+            }
+        ));
+        let refused = finish_connection_effect(
+            effect(),
+            &Err(anyhow::anyhow!("Core refused candidate")),
+            true,
+            false,
+        )
+        .await
+        .expect("rejected Core terminal cannot finish interruption");
+        assert!(refused.message.contains("not settled"));
+    }
+
+    #[tokio::test]
+    async fn confirmed_s4_effect_uses_previous_instance_and_typed_errors() {
+        use chimera_contracts::runtime::{DegradationReason, InterruptFailure};
+        let already_replaced = CheckedConnectionEffect {
+            change: SelectionChange::Profile,
+            replaced: Some(true),
+            prior: Err(anyhow::anyhow!("old API already gone")),
+        };
+        assert!(
+            finish_connection_effect(already_replaced, &Ok(()), true, false)
+                .await
+                .is_none(),
+            "a replaced Core already retired the old connections"
+        );
+        let in_place = CheckedConnectionEffect {
+            change: SelectionChange::Profile,
+            replaced: Some(false),
+            prior: Err(anyhow::Error::new(
+                crate::core::actor_v2::api::ApiError::Stale,
+            )),
+        };
+        let failed = finish_connection_effect(in_place, &Ok(()), true, false)
+            .await
+            .expect("failed old-instance API must preserve ref's typed error");
+        assert!(matches!(
+            failed.reason,
+            DegradationReason::ProfileInterruptionFailed {
+                cause: InterruptFailure::Stale
+            }
+        ));
+
+        let replacement_unknown = CheckedConnectionEffect {
+            change: SelectionChange::Profile,
+            replaced: None,
+            prior: Ok(None),
+        };
+        let degraded = finish_connection_effect(replacement_unknown, &Ok(()), true, false)
+            .await
+            .expect("unknown replacement must never infer successful interruption");
+        assert!(matches!(
+            degraded.reason,
+            DegradationReason::ProfileInterruptionFailed {
+                cause: InterruptFailure::Unavailable
+            }
+        ));
     }
 
     #[test]

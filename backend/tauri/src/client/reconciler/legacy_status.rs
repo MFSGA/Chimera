@@ -8,11 +8,10 @@ use std::{collections::VecDeque, sync::Arc};
 
 use chimera_core::client::reconciler::plan::{Conclusion, RunIntent, RuntimeError};
 
-use super::{
-    attempt::{LegacyApplyVerdict, observed_apply_verdict},
-    legacy_mutation::RoundRecord,
-};
+use super::{attempt::LegacyApplyVerdict, legacy_mutation::RoundRecord};
 
+#[cfg(test)]
+use super::attempt::observed_apply_verdict;
 use super::committed::{SourceDomain, SourceVersions};
 use crate::client::runtime::Degradation;
 
@@ -26,6 +25,9 @@ pub(crate) struct ReconcilerStatus {
     pub conclusion: Conclusion,
     pub degradations: Vec<Degradation>,
     pub maintenance: Option<String>,
+    /// Ref pending_product's status projection, read from the one accepted
+    /// LocalRuntimeHost receipt at Actor completion (never a second writer).
+    pending_product_target: Option<String>,
     pub recent: VecDeque<RoundRecord>,
 }
 
@@ -40,6 +42,7 @@ impl Default for ReconcilerStatus {
             },
             degradations: Vec::new(),
             maintenance: None,
+            pending_product_target: None,
             recent: VecDeque::new(),
         }
     }
@@ -79,6 +82,25 @@ impl ReconcilerStatus {
             .push(Degradation::from_shared(degradation));
     }
 
+    pub(crate) fn product_publication_maintenance(&self) -> Option<String> {
+        self.pending_product_target
+            .as_ref()
+            .map(|target| format!("RuntimeProduct publication pending for target {target}"))
+    }
+
+    /// Reconcile status owns only the projection of publication debt. The
+    /// actual receipt and derived-file writer live in LocalRuntimeHost; the
+    /// Actor samples that owner once after the Core operation has settled.
+    pub(crate) fn observe_product_publication(&mut self, target: Option<&str>) {
+        if self.pending_product_target.as_deref() != target {
+            self.seq = self.seq.saturating_add(1);
+            self.pending_product_target = target.map(str::to_owned);
+        }
+        if let Some(target) = target {
+            self.record_product_publication_pending(target);
+        }
+    }
+
     /// Only the active Core owner's confirmed-but-unpublished product can
     /// produce this REF RuntimeBuild degradation. This records publication
     /// debt without inventing an upstream RuntimeError cause that the old
@@ -108,6 +130,7 @@ impl ReconcilerStatus {
 
     /// Always record the versions visible before this round started. New
     /// commits arriving while Core applies are left for a subsequent round.
+    #[cfg(test)]
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn finish(
         &mut self,
@@ -140,6 +163,7 @@ impl ReconcilerStatus {
     /// The one Actor's final source and Core-running evidence remains the
     /// convergence authority. An observed Prepared terminal supplies the
     /// upstream typed cause, not a shortcut to Converged.
+    #[cfg(test)]
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn finish_observed(
         &mut self,
@@ -155,10 +179,37 @@ impl ReconcilerStatus {
         source_advanced: bool,
         prepared: Option<&super::mutation::ApplyOutcome>,
     ) {
+        let verdict = observed_apply_verdict(result, outcome_uncertain, source_advanced, prepared);
+        self.finish_with_verdict(
+            operation_id,
+            trigger,
+            observed_sources,
+            intent,
+            reconciled,
+            verified_running,
+            verified_stopped,
+            &verdict,
+        );
+    }
+
+    /// Production Completed receives the *single* typed terminal computed
+    /// by the sole Actor, shared with RuntimeProgress::settle_with_verdict.
+    /// Source and Core proof still gate Converged independently of Applied.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn finish_with_verdict(
+        &mut self,
+        operation_id: u64,
+        trigger: &str,
+        observed_sources: &SourceVersions,
+        intent: RunIntent,
+        reconciled: bool,
+        verified_running: bool,
+        verified_stopped: bool,
+        verdict: &LegacyApplyVerdict,
+    ) {
         self.seq = self.seq.saturating_add(1);
         self.active = None;
         self.seen.merge(observed_sources);
-        let verdict = observed_apply_verdict(result, outcome_uncertain, source_advanced, prepared);
         self.conclusion = if trigger == "Shutdown" {
             Conclusion::Closed
         } else if trigger == "ServiceRelease" {
@@ -352,6 +403,33 @@ mod tests {
         status.set_maintenance(None);
         assert!(status.maintenance.is_none());
         assert_eq!(status.seq, initial + 2);
+    }
+
+    #[test]
+    fn pending_product_status_is_one_projection_not_a_runtime_reapply() {
+        let mut status = ReconcilerStatus::default();
+        status.conclusion = Conclusion::Converged;
+        status.observe_product_publication(Some("committed-profile"));
+        assert_eq!(
+            status.product_publication_maintenance().as_deref(),
+            Some("RuntimeProduct publication pending for target committed-profile"),
+        );
+        assert_eq!(status.degradations.len(), 1);
+        assert_eq!(
+            status.degradations[0].code,
+            "runtime_product_publish_failed"
+        );
+        assert!(matches!(status.conclusion, Conclusion::Converged));
+
+        let seq = status.seq;
+        status.observe_product_publication(Some("committed-profile"));
+        assert_eq!(
+            status.seq, seq,
+            "an unchanged debt must not republish status"
+        );
+        status.observe_product_publication(None);
+        assert!(status.product_publication_maintenance().is_none());
+        assert!(matches!(status.conclusion, Conclusion::Converged));
     }
 
     #[test]

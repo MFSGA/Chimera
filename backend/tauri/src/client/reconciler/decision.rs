@@ -4,17 +4,60 @@
 use chimera_core::{
     actor_v2::endpoint::ExecutionHost,
     client::reconciler::plan::{
-        self, Attempt, CoreFact, Facts, OwnerPlan, Ownership, RunIntent, ServiceEvidence, Step,
-        Trigger,
+        self, Attempt, Conclusion, CoreFact, Facts, OwnerPlan, Ownership, RunIntent, RuntimeError,
+        ServiceEvidence, Step, Trigger,
     },
 };
 use chimera_ipc::api::status::CoreState;
+use std::sync::Arc;
 
 use crate::client::{
     application_workflow::startup::ServiceEvidence as ObservedServiceEvidence,
     core_lifecycle::ports::CoreStatusSnapshot, reconciler::proof::host_for,
     runtime::RuntimeApplyReceipt,
 };
+
+/// A fully observed ref S2/S3/S4 step must not become a legacy Core submit
+/// merely because the old workflow does not implement the step. Only Apply
+/// explicitly authorizes S4, and StopForReplacement must first prove a
+/// terminal Stopped Core. Legacy recovery is reserved for a *missing* plan.
+#[derive(Debug)]
+pub(crate) enum CommittedStepAction {
+    Apply,
+    Converged,
+    Wait(Arc<RuntimeError>),
+    Refused(Arc<RuntimeError>),
+    Owner(OwnerPlan),
+    StopForReplacement,
+    FallBackToLocal,
+    Blocked(&'static str),
+}
+
+pub(crate) fn classify_committed_step(step: Step) -> CommittedStepAction {
+    match step {
+        Step::Apply => CommittedStepAction::Apply,
+        Step::Idle(Conclusion::Converged) => CommittedStepAction::Converged,
+        Step::Idle(Conclusion::Waiting { cause }) => CommittedStepAction::Wait(cause),
+        Step::Idle(Conclusion::NotInEffect { cause }) => CommittedStepAction::Refused(cause),
+        Step::Owner(plan) => CommittedStepAction::Owner(plan),
+        Step::Stop { intent: false } => CommittedStepAction::StopForReplacement,
+        Step::FallBackToLocal => CommittedStepAction::FallBackToLocal,
+        // The committed planner always requests Running. These cases
+        // indicate a stale/unsupported plan, not permission for S4.
+        Step::Stop { intent: true } => CommittedStepAction::Blocked(
+            "an explicit Stop decision cannot authorize a committed Runtime Apply",
+        ),
+        Step::Idle(Conclusion::Inactive) => CommittedStepAction::Blocked(
+            "an inactive Core plan cannot authorize a committed Runtime Apply",
+        ),
+        Step::Idle(Conclusion::Unknown { .. }) => CommittedStepAction::Blocked(
+            "an unknown Core plan requires recovery before Runtime Apply",
+        ),
+        Step::Idle(Conclusion::Closed) => CommittedStepAction::Blocked(
+            "a closed reconciler cannot authorize a committed Runtime Apply",
+        ),
+    }
+}
 
 /// The same Core instance must still own the selected endpoint after an
 /// asynchronous ServiceActor probe. Merely observing Running both times is
@@ -44,6 +87,22 @@ pub(crate) fn confirmed_planned_stop(
         && before.run_type == after.run_type
         && after.state_changed_at > 0
         && matches!(after.state, CoreState::Stopped(_))
+}
+
+/// After an S3 terminal, ref converge obtains fresh Core facts before
+/// authorizing S4. A stopped RPC reply is insufficient: the selected host
+/// must remain stopped, its status generation initialized, and the accepted
+/// Running receipt must have been retired. The following S2/plan probe is
+/// separate and must also pass; this is only the local S3 terminal boundary.
+pub(crate) fn s3_replanned_stopped_owner_ready(
+    observed: &CoreStatusSnapshot,
+    active_receipt: Option<&RuntimeApplyReceipt>,
+    desired_host: ExecutionHost,
+) -> bool {
+    matches!(observed.state, CoreState::Stopped(_))
+        && observed.state_changed_at > 0
+        && active_receipt.is_none()
+        && host_for(observed.run_type) == desired_host
 }
 
 /// One coherent ref Facts sample for S2 ownership and S3/S4 decisions.
@@ -152,8 +211,15 @@ pub(crate) fn plan_committed_target(
         // execute S2 to detect a distinct owned Service Core or handoff.
         CoreState::Running => CoreFact::Unreadable,
     };
-    let applied = (verified_applied && matches!(core, CoreFact::Running { verified: true }))
-        .then_some(target);
+    // A verified Running receipt establishes its *own* applied target,
+    // never the desired source target merely because the Core is healthy.
+    // Otherwise an older/newer active configuration can be reported as
+    // Converged for a different committed document without any S4 apply.
+    let applied = if verified_applied && matches!(core, CoreFact::Running { verified: true }) {
+        active_receipt.and_then(|receipt| receipt.target.as_deref())
+    } else {
+        None
+    };
     let step = FactFrame {
         trigger,
         recovering,
@@ -207,6 +273,107 @@ mod tests {
             instance: Some("owned".into()),
             revision: None,
         }
+    }
+
+    #[test]
+    fn explicit_ref_plan_actions_never_fall_through_to_core_apply() {
+        let cause = Arc::new(RuntimeError::new("committed target was refused"));
+        assert!(matches!(
+            classify_committed_step(Step::Apply),
+            CommittedStepAction::Apply
+        ));
+        assert!(matches!(
+            classify_committed_step(Step::Idle(Conclusion::Converged)),
+            CommittedStepAction::Converged
+        ));
+        assert!(matches!(
+            classify_committed_step(Step::Stop { intent: false }),
+            CommittedStepAction::StopForReplacement
+        ));
+        assert!(matches!(
+            classify_committed_step(Step::FallBackToLocal),
+            CommittedStepAction::FallBackToLocal
+        ));
+        assert!(matches!(
+            classify_committed_step(Step::Idle(Conclusion::NotInEffect {
+                cause: cause.clone(),
+            })),
+            CommittedStepAction::Refused(actual) if Arc::ptr_eq(&actual, &cause)
+        ));
+        assert!(matches!(
+            classify_committed_step(Step::Idle(Conclusion::Waiting {
+                cause: cause.clone(),
+            })),
+            CommittedStepAction::Wait(actual) if Arc::ptr_eq(&actual, &cause)
+        ));
+        assert!(matches!(
+            classify_committed_step(Step::Idle(Conclusion::Unknown {
+                cause: cause.clone(),
+            })),
+            CommittedStepAction::Blocked(_)
+        ));
+        assert!(matches!(
+            classify_committed_step(Step::Idle(Conclusion::Inactive)),
+            CommittedStepAction::Blocked(_)
+        ));
+        assert!(matches!(
+            classify_committed_step(Step::Idle(Conclusion::Closed)),
+            CommittedStepAction::Blocked(_)
+        ));
+        assert!(matches!(
+            classify_committed_step(Step::Stop { intent: true }),
+            CommittedStepAction::Blocked(_)
+        ));
+    }
+
+    #[test]
+    fn observed_refusal_is_a_non_submittable_committed_step() {
+        let refused = Arc::new(RuntimeError::new("original ref refusal"));
+        let current = CoreStatusSnapshot {
+            instance_id: Some("local-runtime".into()),
+            state: CoreState::Stopped(None),
+            state_changed_at: 18,
+            run_type: crate::core::RunType::Normal,
+        };
+        let planned = plan_committed_target(
+            "refused-target",
+            ExecutionHost::Local,
+            &current,
+            absent(),
+            false,
+            None,
+            false,
+            Some(Attempt {
+                target: "refused-target".into(),
+                host: ExecutionHost::Local,
+                outcome: AttemptOutcome::Refused(refused.clone()),
+            }),
+            Trigger::SourceCommitted,
+        )
+        .expect("stable stopped Local runtime must give a definite ref plan");
+        assert!(matches!(
+            classify_committed_step(planned),
+            CommittedStepAction::Refused(actual) if Arc::ptr_eq(&actual, &refused)
+        ));
+        let retry = plan_committed_target(
+            "refused-target",
+            ExecutionHost::Local,
+            &current,
+            absent(),
+            false,
+            None,
+            false,
+            Some(Attempt {
+                target: "refused-target".into(),
+                host: ExecutionHost::Local,
+                outcome: AttemptOutcome::Refused(refused),
+            }),
+            Trigger::Retry,
+        );
+        assert!(matches!(
+            retry.map(classify_committed_step),
+            Some(CommittedStepAction::Apply)
+        ));
     }
 
     #[test]
@@ -269,6 +436,47 @@ mod tests {
     }
 
     #[test]
+    fn stopped_core_after_s3_requires_retired_receipt_and_same_owner() {
+        let stopped = CoreStatusSnapshot {
+            instance_id: Some("same-instance".into()),
+            state: CoreState::Stopped(None),
+            state_changed_at: 2,
+            run_type: crate::core::RunType::Normal,
+        };
+        assert!(s3_replanned_stopped_owner_ready(
+            &stopped,
+            None,
+            ExecutionHost::Local,
+        ));
+        assert!(!s3_replanned_stopped_owner_ready(
+            &stopped,
+            Some(&receipt()),
+            ExecutionHost::Local,
+        ));
+        assert!(!s3_replanned_stopped_owner_ready(
+            &stopped,
+            None,
+            ExecutionHost::Service,
+        ));
+        assert!(!s3_replanned_stopped_owner_ready(
+            &CoreStatusSnapshot {
+                state: CoreState::Running,
+                ..stopped.clone()
+            },
+            None,
+            ExecutionHost::Local,
+        ));
+        assert!(!s3_replanned_stopped_owner_ready(
+            &CoreStatusSnapshot {
+                state_changed_at: 0,
+                ..stopped
+            },
+            None,
+            ExecutionHost::Local,
+        ));
+    }
+
+    #[test]
     fn ref_s3_requires_a_confirmed_terminal_before_s4_apply() {
         let before = running(crate::core::RunType::Normal);
         let stopped = CoreStatusSnapshot {
@@ -297,13 +505,15 @@ mod tests {
 
     #[test]
     fn source_notification_does_not_reapply_verified_committed_target() {
+        let mut accepted = receipt();
+        accepted.target = Some("same-target".into());
         let step = plan_committed_target(
             "same-target",
             ExecutionHost::Local,
             &running(crate::core::RunType::Normal),
             absent(),
             false,
-            Some(&receipt()),
+            Some(&accepted),
             true,
             None,
             Trigger::SourceCommitted,
@@ -315,12 +525,44 @@ mod tests {
             &running(crate::core::RunType::Normal),
             absent(),
             false,
-            Some(&receipt()),
+            Some(&accepted),
             true,
             None,
             Trigger::Retry,
         );
         assert!(matches!(retry, Some(Step::Apply)));
+    }
+
+    #[test]
+    fn verified_core_does_not_converge_a_different_committed_target() {
+        let mut accepted = receipt();
+        accepted.target = Some("old-target".into());
+        let current = running(crate::core::RunType::Normal);
+        let changed = plan_committed_target(
+            "new-target",
+            ExecutionHost::Local,
+            &current,
+            absent(),
+            false,
+            Some(&accepted),
+            true,
+            None,
+            Trigger::SourceCommitted,
+        );
+        assert!(matches!(changed, Some(Step::Apply)));
+        accepted.target = None;
+        let unbound = plan_committed_target(
+            "new-target",
+            ExecutionHost::Local,
+            &current,
+            absent(),
+            false,
+            Some(&accepted),
+            true,
+            None,
+            Trigger::SourceCommitted,
+        );
+        assert!(matches!(unbound, Some(Step::Apply)));
     }
 
     #[test]

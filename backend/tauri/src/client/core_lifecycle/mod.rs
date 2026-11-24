@@ -19,7 +19,10 @@ use std::{
     time::Duration,
 };
 
+#[cfg(test)]
+use super::reconciler::apply::checked_mode_effect_can_finish;
 use super::reconciler::{
+    apply::finish_connection_effect,
     committed::{SourceDomain, SourceVersions},
     legacy_status::ReconcilerStatus,
     release::{ReleaseObservation, ServiceReleaseDebt},
@@ -93,17 +96,6 @@ fn refresh_effect_ports(
     source_advanced: bool,
 ) -> bool {
     (service_observed || shutdown) || (reconciled && !source_advanced)
-}
-
-/// A checked Clash source CAS is not proof of runtime completion. Notify
-/// the legacy frontend only after the sole Actor settles Core and verifies
-/// the applied Running instance, never when the source merely saves.
-fn checked_mode_effect_can_finish(
-    result: &anyhow::Result<()>,
-    verified_running: bool,
-    source_advanced: bool,
-) -> bool {
-    result.is_ok() && verified_running && !source_advanced
 }
 
 /// On a source fallback, never discard an acknowledged Mode effect silently:
@@ -660,7 +652,6 @@ struct ApplicationWorkflowState {
     service_handoff_maintenance: Option<String>,
     service_release_debt: ServiceReleaseDebt,
     service_recovery_maintenance: Option<String>,
-    product_maintenance: Option<String>,
     connection_interruption_maintenance: Option<String>,
     service_recovery_timer: tokio::task::JoinHandle<()>,
     startup_recovery_pending: Arc<AtomicBool>,
@@ -884,11 +875,12 @@ impl ApplicationWorkflowState {
     /// maintenance debts; keep both even when a Core round converged.
     fn publish_maintenance(&self) {
         let service_release = self.service_release_debt.maintenance();
+        let product = self.reconciler.borrow().product_publication_maintenance();
         let details: Vec<_> = [
             self.service_handoff_maintenance.as_deref(),
             service_release.as_deref(),
             self.service_recovery_maintenance.as_deref(),
-            self.product_maintenance.as_deref(),
+            product.as_deref(),
             self.connection_interruption_maintenance.as_deref(),
         ]
         .into_iter()
@@ -1669,7 +1661,6 @@ impl Actor for ApplicationWorkflowActor {
             service_handoff_maintenance: None,
             service_release_debt: ServiceReleaseDebt::default(),
             service_recovery_maintenance: None,
-            product_maintenance: None,
             connection_interruption_maintenance: None,
             service_recovery_timer,
             startup_recovery_pending: args.startup_recovery_pending,
@@ -1878,11 +1869,20 @@ impl Actor for ApplicationWorkflowActor {
                     } else {
                         result
                     };
-                    let source_advanced = committed_target_advanced(&result);
+                    // Mailbox source advancement wins even if the earlier
+                    // Core command already failed. Otherwise its refusal
+                    // could poison a newer committed source's next retry.
+                    let source_advanced =
+                        superseded_in_mailbox || committed_target_advanced(&result);
                     // Consume the Core's genuine terminal once. The source
                     // notification fence below still decides whether this
                     // observed result can settle the current target.
                     let prepared_outcome = workflow.lifecycle().take_prepared_outcome();
+                    // The lower Core can become uncertain independently of
+                    // Result<()>; it must override any apparent Core success
+                    // in both Attempt and Conclusion terminal classification.
+                    let final_uncertain =
+                        state.uncertain || workflow_panicked || lower_outcome_uncertain;
                     // A Checked worker may have promoted applied_selection
                     // after its second authoritative read, while the Actor
                     // already accepted a newer source notice. Completed is
@@ -1963,7 +1963,11 @@ impl Actor for ApplicationWorkflowActor {
                     // still match. Checked Apply has already done its own
                     // exact-version selection check and must not be reset.
                     if reconciled && !active.checked_apply {
-                        if result.is_ok() && verified_running && !source_advanced {
+                        if result.is_ok()
+                            && verified_running
+                            && !source_advanced
+                            && !final_uncertain
+                        {
                             workflow
                                 .lifecycle()
                                 .recover_applied_selection_from_receipt()
@@ -1980,15 +1984,13 @@ impl Actor for ApplicationWorkflowActor {
                     // superseded checked product is never an effect success.
                     let mut round_connection_degradation = None;
                     if let Some(effect) = workflow.lifecycle().take_checked_connection_effect() {
-                        let issue = if checked_mode_effect_can_finish(
+                        let issue = finish_connection_effect(
+                            effect,
                             &result,
-                            verified_running,
+                            verified_running && !final_uncertain,
                             source_advanced,
-                        ) {
-                            effect.finish().await
-                        } else {
-                            Some(effect.deferred("Connection interruption was not settled: checked Core target was superseded or active runtime is unverified"))
-                        };
+                        )
+                        .await;
                         if let Some(ref degradation) = issue {
                             tracing::warn!(reason = ?degradation.reason, message = %degradation.message, "checked connection effect degraded");
                         }
@@ -2016,14 +2018,9 @@ impl Actor for ApplicationWorkflowActor {
                     // status projection only records outstanding publication
                     // debt and cannot mutate or duplicate the runtime product.
                     let pending_product = workflow.lifecycle().pending_runtime_product_target();
-                    state.product_maintenance = pending_product.as_ref().map(|target| {
-                        format!("RuntimeProduct publication pending for target {target}")
+                    state.reconciler.send_modify(|status| {
+                        status.observe_product_publication(pending_product.as_deref());
                     });
-                    if let Some(target) = pending_product.as_deref() {
-                        state.reconciler.send_modify(|status| {
-                            status.record_product_publication_pending(target);
-                        });
-                    }
                     state.publish_maintenance();
                     state.workflow = Some(workflow);
                     if service_endpoint_recovery {
@@ -2147,19 +2144,28 @@ impl Actor for ApplicationWorkflowActor {
                         );
                         state.publish_maintenance();
                     }
+                    // A single classification for the one Core operation.
+                    // Both ref Attempt and published Conclusion consume this
+                    // exact observed verdict after the mailbox source fence.
+                    let verdict = crate::client::reconciler::attempt::observed_apply_verdict(
+                        &result,
+                        final_uncertain,
+                        source_advanced,
+                        prepared_outcome.as_ref(),
+                    );
+                    workflow
+                        .lifecycle()
+                        .settle_observed_attempt(&verdict, verified_running);
                     state.reconciler.send_modify(|status| {
-                        status.finish_observed(
+                        status.finish_with_verdict(
                             active.response.id,
                             active.trigger,
                             &active.observed_sources,
                             state.run_intent,
-                            &result,
                             reconciled,
                             verified_running,
                             verified_stopped,
-                            state.uncertain,
-                            source_advanced,
-                            prepared_outcome.as_ref(),
+                            &verdict,
                         );
                         if let Some(degradation) = round_connection_degradation {
                             status.record_system_degradation(degradation);

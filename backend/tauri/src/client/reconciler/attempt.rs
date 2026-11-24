@@ -56,6 +56,15 @@ pub(crate) struct ServiceFallbackDeferred {
 #[error("committed runtime target changed while releasing Service; reconcile the latest source")]
 pub(crate) struct CommittedTargetAdvanced;
 
+/// A ref planner's NotInEffect is an observed terminal refusal, not an
+/// invitation to retry through the legacy compatibility path. Preserve its
+/// typed cause and original Arc across the Actor Completed classification.
+#[derive(Debug, thiserror::Error)]
+#[error("committed Runtime target is not in effect: {cause}")]
+pub(crate) struct PlannedTargetRefused {
+    pub cause: Arc<RuntimeError>,
+}
+
 /// A target refusal is not a request to roll back its durable source commit.
 #[derive(Debug, thiserror::Error)]
 #[error(
@@ -105,6 +114,7 @@ impl AttemptPolicy {
 
     /// A transiently unavailable host isn't a refused target. The upstream
     /// planner waits for a changed dependency or user retry in that case.
+    #[cfg(test)]
     pub(crate) fn record(
         &mut self,
         target: String,
@@ -115,6 +125,7 @@ impl AttemptPolicy {
         self.record_prepared(target, host, result, uncertain, None)
     }
 
+    #[cfg(test)]
     pub(crate) fn record_prepared(
         &mut self,
         target: String,
@@ -123,13 +134,27 @@ impl AttemptPolicy {
         uncertain: bool,
         prepared: Option<&super::mutation::ApplyOutcome>,
     ) {
-        let outcome = match observed_apply_verdict(result, uncertain, false, prepared) {
+        self.record_observed(
+            target,
+            host,
+            observed_apply_verdict(result, uncertain, false, prepared),
+        );
+    }
+
+    /// The sole Actor's Completed fence can supply the same observed verdict
+    /// used by ReconcilerStatus, *after* mailbox source notices and Core
+    /// running evidence are resolved. Waiting never poisons a source target.
+    pub(crate) fn record_observed(
+        &mut self,
+        target: String,
+        host: ExecutionHost,
+        verdict: LegacyApplyVerdict,
+    ) {
+        let outcome = match verdict {
             LegacyApplyVerdict::Applied => AttemptOutcome::Applied,
             LegacyApplyVerdict::Refused(cause) => AttemptOutcome::Refused(cause),
             LegacyApplyVerdict::Unknown(cause) => AttemptOutcome::Unknown(cause),
             LegacyApplyVerdict::Waiting(_) => {
-                // Ref Waiting does not poison the target with a refusal;
-                // the next dependency observation can retry this source.
                 self.last = None;
                 return;
             }
@@ -166,6 +191,8 @@ pub(crate) fn legacy_error_verdict(
         LegacyApplyVerdict::Unknown(Arc::new(runtime_apply_error(error, true)))
     } else if source_advanced || waiting_dependency(error) {
         LegacyApplyVerdict::Waiting(Arc::new(runtime_apply_error(error, false)))
+    } else if let Some(refused) = error.downcast_ref::<PlannedTargetRefused>() {
+        LegacyApplyVerdict::Refused(refused.cause.clone())
     } else if let Some(rolled_back) =
         error.downcast_ref::<crate::client::core_lifecycle::ports::PreparedRolledBack>()
     {
@@ -351,6 +378,26 @@ mod tests {
         ));
         assert!(matches!(
             observed_apply_verdict(&Ok(()), true, false, Some(&verdict)),
+            LegacyApplyVerdict::Unknown(_)
+        ));
+    }
+
+    #[test]
+    fn planned_not_in_effect_preserves_the_original_ref_cause() {
+        let cause = Arc::new(RuntimeError::new("ref observed failed target"));
+        let error = anyhow::Error::new(PlannedTargetRefused {
+            cause: cause.clone(),
+        });
+        assert!(matches!(
+            legacy_error_verdict(&error, false, false),
+            LegacyApplyVerdict::Refused(actual) if Arc::ptr_eq(&actual, &cause)
+        ));
+        assert!(matches!(
+            legacy_error_verdict(&error, false, true),
+            LegacyApplyVerdict::Waiting(_)
+        ));
+        assert!(matches!(
+            legacy_error_verdict(&error, true, false),
             LegacyApplyVerdict::Unknown(_)
         ));
     }

@@ -306,32 +306,47 @@ impl CandidateCheck {
         }
     }
 
-    /// Build the latest committed RuntimeInputs through the same canonical
-    /// session that checked sources use, but without writing a new source,
-    /// creating an inbox entry, or submitting a Core command. Only the sole
-    /// lifecycle worker may consume this product after a full target fence.
+    /// S4 uses ref's PreparedCandidate contract: the exact committed
+    /// inputs determine the product, selection and one-shot connection
+    /// interruption before any Core operation. Never enqueue a separate
+    /// Checked proposal or build with a second revision/port session here.
+    pub(in crate::client) async fn prepare_committed_candidate(
+        &self,
+        app: ChimeraAppConfig,
+        clash: ClashConfig,
+        expected_target: &str,
+        previous: Option<&super::committed::Selection>,
+    ) -> anyhow::Result<(
+        super::apply::PreparedCandidate,
+        chimera_core_manager::CoreSpec,
+    )> {
+        let inputs = self
+            .preparation
+            .capture_committed_inputs(app, clash)
+            .await
+            .1;
+        super::apply::prepare_committed_candidate(
+            &self.preparation,
+            inputs,
+            previous,
+            expected_target,
+        )
+        .await
+    }
+
+    /// Backward-compatible fixture API. Production consumes the full
+    /// PreparedCandidate, rather than losing its selection/effect policy.
+    #[cfg(test)]
     pub(in crate::client) async fn prepare_committed_target(
         &self,
         app: ChimeraAppConfig,
         clash: ClashConfig,
         expected_target: &str,
     ) -> anyhow::Result<(PreparedRuntime, chimera_core_manager::CoreSpec)> {
-        let inputs = self
-            .preparation
-            .capture_committed_inputs(app, clash)
-            .await
-            .1;
-        anyhow::ensure!(
-            inputs.target_key().as_deref() == Some(expected_target),
-            "committed runtime inputs changed during prepared build capture"
-        );
-        let prepared = self.preparation.prepare_inputs(inputs).await?;
-        anyhow::ensure!(
-            prepared.target.as_deref() == Some(expected_target),
-            "prepared runtime was built for a different source target"
-        );
-        let spec = self.preparation.core_spec(&prepared.snapshot.target_core)?;
-        Ok((prepared, spec))
+        let (candidate, spec) = self
+            .prepare_committed_candidate(app, clash, expected_target, None)
+            .await?;
+        Ok((candidate.runtime, spec))
     }
 
     /// Migration bridge for legacy postcommit Application/Clash workflows:
@@ -912,6 +927,59 @@ mod tests {
             "stale source must be rejected before allocating/building another product"
         );
         assert!(inbox.checked.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn committed_s4_candidate_carries_frozen_mode_selection_and_interruption() {
+        use crate::client::reconciler::{
+            committed::{Selection, SelectionChange},
+            inputs::{FrozenProfileContent, RuntimeInputs},
+        };
+        use chimera_config::clash::config::overrides::{ClashGuardOverridesPatch, Mode};
+        use struct_patch::Patch as _;
+
+        let (gate, builder, validator, inbox) = gate(RuntimeCheckOutcome::Passed, false).await;
+        let app = ChimeraAppConfig::default();
+        let prior_clash = ClashConfig::default();
+        let profiles = Arc::new(Profiles::default());
+        let previous = Selection::of(&RuntimeInputs {
+            app: app.clone(),
+            clash: prior_clash.clone(),
+            profiles: profiles.clone(),
+            content: FrozenProfileContent::default(),
+        });
+        let mut clash = prior_clash;
+        clash.overrides.apply(ClashGuardOverridesPatch {
+            mode: Some(Mode::Global),
+            ..Default::default()
+        });
+        clash.break_connection.on_mode_change = true;
+        let inputs = RuntimeInputs {
+            app: app.clone(),
+            clash: clash.clone(),
+            profiles,
+            content: FrozenProfileContent::default(),
+        };
+        let target = inputs.checked_target_key().unwrap();
+        let (candidate, spec) = gate
+            .prepare_committed_candidate(app, clash, &target, Some(&previous))
+            .await
+            .unwrap();
+        assert_eq!(candidate.runtime.target.as_deref(), Some(target.as_str()));
+        assert_eq!(candidate.selection, Selection::of(&inputs));
+        assert_eq!(candidate.interruption, Some(SelectionChange::Mode));
+        assert_eq!(
+            candidate.runtime.intent.config_text.as_bytes(),
+            candidate.runtime.snapshot.product_bytes()
+        );
+        assert_eq!(spec.kind, CoreKind::Mihomo);
+        assert_eq!(
+            builder.prepared.lock().unwrap().as_slice(),
+            &[(false, target)]
+        );
+        assert!(validator.checked.lock().unwrap().is_empty());
+        assert!(inbox.checked.lock().unwrap().is_empty());
+        assert!(inbox.committed.lock().unwrap().is_empty());
     }
 
     #[tokio::test]

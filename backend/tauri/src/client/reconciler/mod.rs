@@ -26,6 +26,7 @@ pub(crate) mod release;
 
 pub(crate) mod legacy_status;
 pub(crate) mod startup;
+pub(crate) mod state;
 pub(crate) mod status;
 
 // Pure upstream planner is already the single shared implementation in chimera-core.
