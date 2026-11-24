@@ -13,7 +13,7 @@ use crate::core::actor_v2::api::ProxySnapshot;
 use crate::core::clash::{CLASH_API_DEFAULT_BACKOFF_STRATEGY, api};
 
 pub use chimera_core::clash::proxies::{
-    NativeProxies, ProxyGroup, ProxyGroupCapabilities, ProxyGroupKind, ProxyProviderSummary,
+    Proxies, ProxyGroup, ProxyGroupCapabilities, ProxyGroupKind, ProxyProviderSummary,
 };
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default, Type)]
@@ -57,7 +57,7 @@ impl From<api::ProxyItem> for ProxyGroupItem {
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default, Type)]
 #[serde(rename_all = "camelCase")]
-pub struct Proxies {
+pub struct LegacyProxies {
     pub groups: Vec<ProxyGroupItem>,
     /// 2
     pub global: ProxyGroupItem,
@@ -95,13 +95,13 @@ fn proxy_item(record: &Proxy) -> api::ProxyItem {
 /// Fetch the native graph through the Tauri-owned instance-bound controller.
 /// Assembly and schema live in the independent core crate, not in this adapter.
 #[instrument(skip(api))]
-pub async fn fetch_native_proxies(api: &ApiClient) -> Result<NativeProxies> {
-    (|| NativeProxies::fetch(api))
+pub async fn fetch_native_proxies(api: &ApiClient) -> Result<Proxies> {
+    (|| Proxies::fetch(api))
         .retry(*CLASH_API_DEFAULT_BACKOFF_STRATEGY)
         .await
 }
 
-impl Proxies {
+impl LegacyProxies {
     #[instrument(skip(api))]
     pub async fn fetch(api: &ApiClient) -> Result<Self> {
         let native = fetch_native_proxies(api).await?;
@@ -115,18 +115,18 @@ impl Proxies {
         providers: &IndexMap<ProviderName, ProxyProvider>,
         group_list: Option<IndexMap<ProxyName, Proxy>>,
     ) -> Result<Self> {
-        let native = NativeProxies::from_responses(proxies, providers, group_list)?;
+        let native = Proxies::from_responses(proxies, providers, group_list)?;
         Ok(Self::from_native(native))
     }
 
-    pub(crate) fn from_native(native: NativeProxies) -> Self {
-        let NativeProxies {
+    pub(crate) fn from_native(native: Proxies) -> Self {
+        let Proxies {
             global,
             groups,
             nodes,
         } = native;
         let resolve = |name: &ProxyName| {
-            // NativeProxies inserts provider-only and unknown members into its
+            // Proxies inserts provider-only and unknown members into its
             // single node index, so every legacy member comes from one source.
             proxy_item(&nodes[name])
         };
@@ -165,13 +165,13 @@ mod tests {
         .expect("native Clash proxy fixture")
     }
 
-    fn assemble(snapshot: ProxySnapshot) -> Result<Proxies> {
+    fn assemble(snapshot: ProxySnapshot) -> Result<LegacyProxies> {
         let ProxySnapshot {
             proxies,
             providers,
             groups,
         } = snapshot;
-        Proxies::from_responses(proxies, &providers, groups)
+        LegacyProxies::from_responses(proxies, &providers, groups)
     }
 
     fn snapshot(items: Vec<Proxy>) -> ProxySnapshot {
@@ -326,10 +326,13 @@ mod tests {
             secret: None,
         })
         .unwrap();
-        let view = tokio::time::timeout(std::time::Duration::from_secs(5), Proxies::fetch(&api))
-            .await
-            .expect("legacy proxy view must finish")
-            .expect("legacy proxy view should assemble");
+        let view = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            LegacyProxies::fetch(&api),
+        )
+        .await
+        .expect("legacy proxy view must finish")
+        .expect("legacy proxy view should assemble");
         assert_eq!(view.global.all[0].name, "Group");
         assert_eq!(view.groups[0].name, "Group");
         assert_eq!(view.groups[0].all[0].name, "provider-node");
@@ -352,13 +355,13 @@ mod tests {
             .get_mut(&ProxyName::from("Group"))
             .unwrap()
             .icon = Some("https://user:secret@example.test/icon.svg".into());
-        let native = NativeProxies::from_responses(data.proxies, &data.providers, data.groups)
+        let native = Proxies::from_responses(data.proxies, &data.providers, data.groups)
             .expect("native graph should assemble");
         assert_eq!(
             native.group_icons()[&ProxyName::from("Group")],
             "https://user:secret@example.test/icon.svg"
         );
-        let legacy = Proxies::from_native(native);
+        let legacy = LegacyProxies::from_native(native);
         assert_eq!(legacy.groups[0].icon, None);
         let serialized = serde_json::to_string(&legacy).unwrap();
         assert!(!serialized.contains("secret"));
@@ -371,7 +374,7 @@ mod tests {
             native("GLOBAL", "Selector", Some(vec!["Group"])),
             native("Group", "Selector", Some(vec!["DIRECT"])),
         ]);
-        let view = NativeProxies::from_responses(data.proxies, &data.providers, data.groups)
+        let view = Proxies::from_responses(data.proxies, &data.providers, data.groups)
             .expect("native graph should assemble");
         let json = serde_json::to_value(&view).expect("native IPC view should serialize");
         assert_eq!(json["global"]["name"], "GLOBAL");
@@ -397,8 +400,7 @@ mod tests {
         .unwrap();
         data.providers
             .insert(ProviderName::from("subscription"), provider);
-        let native =
-            NativeProxies::from_responses(data.proxies, &data.providers, data.groups).unwrap();
+        let native = Proxies::from_responses(data.proxies, &data.providers, data.groups).unwrap();
 
         assert_eq!(native.groups.len(), 2);
         assert_eq!(native.nodes.len(), 7); // DIRECT, REJECT, GLOBAL, two groups, shared + missing
@@ -414,7 +416,7 @@ mod tests {
             native.groups[0].all[0], native.groups[1].all[0],
             "both groups must reference one canonical node"
         );
-        let legacy = Proxies::from_native(native);
+        let legacy = LegacyProxies::from_native(native);
         assert_eq!(legacy.groups[0].all[0].name, "shared");
         assert_eq!(legacy.groups[1].all[0].name, "shared");
         assert_eq!(legacy.groups[0].all[1].r#type, "Unknown");

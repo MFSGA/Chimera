@@ -992,7 +992,7 @@ pub async fn patch_clash_core_config(
 #[specta::specta]
 pub async fn get_proxies(
     client: State<'_, ChimeraClient>,
-) -> Result<crate::core::clash::proxies::Proxies> {
+) -> Result<crate::core::clash::proxies::LegacyProxies> {
     Ok(client.clash_proxies().await?)
 }
 
@@ -1003,7 +1003,7 @@ pub async fn get_proxies(
 #[specta::specta]
 pub async fn get_native_proxies(
     client: State<'_, ChimeraClient>,
-) -> Result<crate::core::clash::proxies::NativeProxies> {
+) -> Result<crate::core::clash::proxies::Proxies> {
     Ok(client.clash_native_proxies().await?)
 }
 

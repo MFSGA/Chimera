@@ -3,7 +3,7 @@ import { useCallback } from 'react';
 import { unwrapResult } from '../utils/index.js';
 import type {
   DelayHistory,
-  NativeProxies_Serialize,
+  Proxies_Serialize,
   Proxy_Serialize,
 } from './bindings.js';
 import { mutations, queries } from './query-bindings.js';
@@ -14,11 +14,11 @@ import { invokeMutation, invokeQuery } from './query-options.js';
  * than another copy, so every group sees the same updated history.
  */
 export const withNativeDelaySample = (
-  graph: NativeProxies_Serialize | undefined,
+  graph: Proxies_Serialize | undefined,
   name: string,
   delay: number,
   delayKey: string,
-): NativeProxies_Serialize | undefined => {
+): Proxies_Serialize | undefined => {
   const node = graph?.nodes[name];
   if (!graph || !node) return graph;
 

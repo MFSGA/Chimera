@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import type { NativeProxies_Serialize } from '../src/ipc/bindings.js';
+import type { Proxies_Serialize } from '../src/ipc/bindings.js';
 import {
   CLASH_PROXIES_QUERY_KEY,
   NATIVE_PROXIES_QUERY_KEY,
@@ -27,7 +27,7 @@ test('native proxy view excludes hidden groups without duplicating nodes', () =>
       { name: 'Visible B', hidden: false, all: ['Shared node'] },
     ],
     nodes: { 'Shared node': sharedNode },
-  } as unknown as NativeProxies_Serialize;
+  } as unknown as Proxies_Serialize;
 
   const selected = selectVisibleNativeProxies(graph);
 
@@ -51,7 +51,7 @@ test('native proxy view returns the original identity when nothing is hidden', (
     global: null,
     groups: [{ name: 'Visible', hidden: false, all: ['DIRECT'] }],
     nodes: { DIRECT: { name: 'DIRECT', type: 'Direct' } },
-  } as unknown as NativeProxies_Serialize;
+  } as unknown as Proxies_Serialize;
 
   assert.strictEqual(selectVisibleNativeProxies(graph), graph);
 });

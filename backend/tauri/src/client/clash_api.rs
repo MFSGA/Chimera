@@ -20,9 +20,9 @@ use crate::core::{
     },
 };
 use chimera_core::client::clash_api::{config_item, rule_provider_item};
-use chimera_core::proxies_actor::ProxyMutationOutcome;
 #[cfg(test)]
-use chimera_core::proxies_actor::{CoreClient as ProxyCoreClient, ProxyApiClientSource};
+use chimera_core::proxies::ProxyApiClientSource;
+use chimera_core::proxies::ProxyMutationOutcome;
 
 /// Only injected legacy test clients need a facade-based API source.
 #[cfg(test)]
@@ -37,8 +37,8 @@ impl ProxyApiClientSource for LifecycleProxyApiClientSource {
 }
 
 #[cfg(test)]
-pub(crate) fn proxy_core_client(core: Arc<dyn CoreLifecyclePort>) -> ProxyCoreClient {
-    ProxyCoreClient::new(Arc::new(LifecycleProxyApiClientSource(core)))
+pub(crate) fn proxy_core_client(core: Arc<dyn CoreLifecyclePort>) -> Arc<dyn ProxyApiClientSource> {
+    Arc::new(LifecycleProxyApiClientSource(core))
 }
 
 fn into_mutation_outcome(outcome: ProxyMutationOutcome) -> MutationOutcome<()> {
@@ -157,14 +157,14 @@ impl ChimeraClient {
 
     /// Read the single actor-owned proxy snapshot and project it to the
     /// existing Chimera legacy UI DTO at the IPC boundary.
-    pub async fn clash_proxies(&self) -> Result<crate::core::clash::proxies::Proxies> {
+    pub async fn clash_proxies(&self) -> Result<crate::core::clash::proxies::LegacyProxies> {
         let native = self.inner.proxies.get(false).await?;
-        Ok(crate::core::clash::proxies::Proxies::from_native(native))
+        Ok(crate::core::clash::proxies::LegacyProxies::from_native(
+            native,
+        ))
     }
 
-    pub async fn clash_native_proxies(
-        &self,
-    ) -> Result<chimera_core::clash::proxies::NativeProxies> {
+    pub async fn clash_native_proxies(&self) -> Result<chimera_core::clash::proxies::Proxies> {
         let default_url = self.get_app_config()?.default_latency_test;
         Ok(self
             .inner

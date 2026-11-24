@@ -1486,7 +1486,8 @@ async fn streams_and_proxies_share_ref_core_api_lease_and_revoke_after_handoff()
         .api_client()
         .await
         .expect("streams should obtain a lease from CoreActor");
-    let proxy = crate::proxies_actor::ProxyApiClientSource::api_client(&core)
+    let proxy = core
+        .api_client()
         .await
         .expect("proxy actor should obtain a lease from CoreActor");
     assert!(ws.same_instance(&proxy));

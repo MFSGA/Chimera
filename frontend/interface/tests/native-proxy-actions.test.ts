@@ -1,12 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import type {
-  NativeProxies_Serialize,
+  Proxies_Serialize,
   Proxy_Serialize,
 } from '../src/ipc/bindings.js';
 import { withNativeDelaySample } from '../src/ipc/use-native-proxy-actions.js';
 
-function graph(): NativeProxies_Serialize {
+function graph(): Proxies_Serialize {
   const sharedNode = {
     name: 'Shared',
     type: 'Vless',
@@ -32,7 +32,7 @@ function graph(): NativeProxies_Serialize {
       { name: 'B', all: ['Shared'], hidden: false },
     ],
     nodes: { Shared: sharedNode, DIRECT: otherNode },
-  } as unknown as NativeProxies_Serialize;
+  } as unknown as Proxies_Serialize;
 }
 
 test('native latency result updates one indexed node without copying shared group membership', () => {

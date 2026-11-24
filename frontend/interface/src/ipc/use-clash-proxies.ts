@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { unwrapResult } from '../utils';
 import {
   ProxyItemHistory,
-  type Proxies_Serialize,
+  type LegacyProxies_Serialize,
   type ProxyGroupItem_Serialize,
   type ProxyItem_Serialize,
 } from './bindings';
@@ -32,7 +32,7 @@ export interface ClashProxiesQueryGroupItem
   all: ClashProxiesQueryProxyItem[];
 }
 
-export interface ClashProxiesQuery extends Proxies_Serialize {
+export interface ClashProxiesQuery extends LegacyProxies_Serialize {
   global: ClashProxiesQueryGroupItem;
   groups: ClashProxiesQueryGroupItem[];
 }

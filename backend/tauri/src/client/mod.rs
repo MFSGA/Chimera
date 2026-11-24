@@ -194,7 +194,7 @@ struct ChimeraClientInner {
     file_logs: Option<chimera_core::client::logs::FileLogsClient>,
     streams: chimera_core::clash::ws::StreamsClient,
     streams_shutdown: tokio_util::sync::CancellationToken,
-    proxies: chimera_core::proxies_actor::ProxiesClient,
+    proxies: chimera_core::proxies::ProxiesClient,
     typed_profiles: Option<profiles::ProfilesClient>,
     /// The one candidate checker shared by the Profiles gate and legacy
     /// Clash read-only preflight during the staged ref source cutover.
@@ -397,12 +397,11 @@ impl ChimeraClient {
             core_lifecycle.install_candidate_gate(profile_gate.clone()),
         )?;
         mutations.connect(commit_notifications, profile_gate.clone());
-        let proxies =
-            tauri::async_runtime::block_on(chimera_core::proxies_actor::ProxiesClient::spawn(
-                chimera_core::proxies_actor::CoreClient::new(Arc::new(core_v2.clone())),
-                shutdown.clone(),
-                &tasks,
-            ))?;
+        let proxies = tauri::async_runtime::block_on(chimera_core::proxies::ProxiesClient::spawn(
+            core_v2.clone(),
+            shutdown.clone(),
+            &tasks,
+        ))?;
         let app_config = typed.application.get_typed();
         let channel = bundle_metadata
             .release_channel
@@ -543,7 +542,7 @@ impl ChimeraClient {
         );
         let proxy_shutdown = tokio_util::sync::CancellationToken::new();
         let proxy_tasks = tokio_util::task::TaskTracker::new();
-        let proxies = chimera_core::proxies_actor::ProxiesClient::spawn(
+        let proxies = chimera_core::proxies::ProxiesClient::spawn_with_source(
             clash_api::proxy_core_client(core.clone()),
             proxy_shutdown,
             &proxy_tasks,
@@ -633,7 +632,7 @@ impl ChimeraClient {
         file_logs: Option<chimera_core::client::logs::FileLogsClient>,
         streams: chimera_core::clash::ws::StreamsClient,
         streams_shutdown: tokio_util::sync::CancellationToken,
-        proxies: chimera_core::proxies_actor::ProxiesClient,
+        proxies: chimera_core::proxies::ProxiesClient,
         profile_service: Arc<ProfileFileService>,
         typed_profiles: Option<profiles::ProfilesClient>,
         checked_gate: Option<Arc<reconciler::check::CandidateCheck>>,

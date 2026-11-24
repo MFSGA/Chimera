@@ -307,16 +307,14 @@ export const commands = {
       __TAURI_INVOKE('patch_clash_core_config', { payload }),
     ),
   getProxies: () =>
-    typedError<Proxies_Serialize, string>(__TAURI_INVOKE('get_proxies')),
+    typedError<LegacyProxies_Serialize, string>(__TAURI_INVOKE('get_proxies')),
   /**
    *  Additive native proxy view for typed consumers. The legacy `get_proxies`
    *  wire shape remains available to existing UI/Agent consumers, but credential-
    *  bearing icon URLs are omitted and read through `get_proxy_group_icons`.
    */
   getNativeProxies: () =>
-    typedError<NativeProxies_Serialize, string>(
-      __TAURI_INVOKE('get_native_proxies'),
-    ),
+    typedError<Proxies_Serialize, string>(__TAURI_INVOKE('get_native_proxies')),
   getProxyGroupIcons: () =>
     typedError<{ [key in ProxyName]: string }, string>(
       __TAURI_INVOKE('get_proxy_group_icons'),
@@ -2996,6 +2994,24 @@ export type JsonValue =
   | (JsonValue | null)[]
   | { [key in string]: JsonValue | null };
 
+export type LegacyProxies = LegacyProxies_Serialize | LegacyProxies_Deserialize;
+
+export type LegacyProxies_Deserialize = {
+  groups: ProxyGroupItem_Deserialize[];
+  /**  2 */
+  global: ProxyGroupItem_Deserialize;
+  /**  3 */
+  direct: ProxyItem_Deserialize;
+};
+
+export type LegacyProxies_Serialize = {
+  groups: ProxyGroupItem_Serialize[];
+  /**  2 */
+  global: ProxyGroupItem_Serialize;
+  /**  3 */
+  direct: ProxyItem_Serialize;
+};
+
 export type Level =
   'trace' | 'debug' | 'info' | 'warn' | 'error' | 'fatal' | 'unknown';
 
@@ -3226,35 +3242,6 @@ export type MutationOutcome<T> =
       notifications_pending: boolean;
       degradations: Degradation[];
     };
-
-/**
- *  Internal normalized proxy graph. This follows ref's `Proxies` layout;
- *  the existing public `Proxies` remains a compatibility projection until
- *  main and legacy consumers can switch together.
- */
-export type NativeProxies = NativeProxies_Serialize | NativeProxies_Deserialize;
-
-/**
- *  Internal normalized proxy graph. This follows ref's `Proxies` layout;
- *  the existing public `Proxies` remains a compatibility projection until
- *  main and legacy consumers can switch together.
- */
-export type NativeProxies_Deserialize = {
-  global: ProxyGroup | null;
-  groups: ProxyGroup[];
-  nodes: { [key in ProxyName]: Proxy_Deserialize };
-};
-
-/**
- *  Internal normalized proxy graph. This follows ref's `Proxies` layout;
- *  the existing public `Proxies` remains a compatibility projection until
- *  main and legacy consumers can switch together.
- */
-export type NativeProxies_Serialize = {
-  global: ProxyGroup | null;
-  groups: ProxyGroup[];
-  nodes: { [key in ProxyName]: Proxy_Serialize };
-};
 
 /**
  *  The persisted policy. Disabled and empty by default, so an installation
@@ -3733,19 +3720,27 @@ export type Proxies = Proxies_Serialize | Proxies_Deserialize;
 export type ProxiesSelectorMode = 'hidden' | 'normal' | 'submenu';
 
 export type Proxies_Deserialize = {
-  groups: ProxyGroupItem_Deserialize[];
-  /**  2 */
-  global: ProxyGroupItem_Deserialize;
-  /**  3 */
-  direct: ProxyItem_Deserialize;
+  /**  The core's GLOBAL group; `None` when the core has none. */
+  global: ProxyGroup | null;
+  groups: ProxyGroup[];
+  /**
+   *  Every `/proxies` entry plus every provider-owned node referenced by a
+   *  group, keyed by name. A node that belongs to several groups still has
+   *  exactly one entry here; groups reference it by name in `all`.
+   */
+  nodes: { [key in ProxyName]: Proxy_Deserialize };
 };
 
 export type Proxies_Serialize = {
-  groups: ProxyGroupItem_Serialize[];
-  /**  2 */
-  global: ProxyGroupItem_Serialize;
-  /**  3 */
-  direct: ProxyItem_Serialize;
+  /**  The core's GLOBAL group; `None` when the core has none. */
+  global: ProxyGroup | null;
+  groups: ProxyGroup[];
+  /**
+   *  Every `/proxies` entry plus every provider-owned node referenced by a
+   *  group, keyed by name. A node that belongs to several groups still has
+   *  exactly one entry here; groups reference it by name in `all`.
+   */
+  nodes: { [key in ProxyName]: Proxy_Serialize };
 };
 
 /**  Common proxy fields with optional core-specific and group metadata. */
@@ -3763,30 +3758,38 @@ export type ProxyExtra = {
   history: DelayHistory[];
 };
 
-/**
- *  Normalized native group metadata, projected to the old UI shape at the
- *  boundary. This intentionally matches ref's group record fields.
- */
+/**  A group's meaning, derived from its record in `Proxies::nodes`. */
 export type ProxyGroup = {
   name: ProxyName;
   type: ProxyGroupKind;
+  /**  Member names; look each node up in `Proxies::nodes`. */
   all: ProxyName[];
   now: ProxyName | null;
+  /**  The member a user pinned; `None` while the core selects on its own. */
   fixed: ProxyName | null;
-  /**  Opaque history source key; raw test URLs never leave the native read view. */
+  /**
+   *  Which of a node's delay records this group's members are shown with: [`DEFAULT_TEST_URL_KEY`]
+   *  when the group tests with the app's default URL, else the group's own name. A test URL is
+   *  configuration that may hold a credential, so the key names the source and never the URL;
+   *  the backend resolves the URL itself.
+   */
   delayKey: string;
+  /**  The status codes a test must return, in the core's range syntax. */
   expectedStatus: string | null;
   hidden: boolean;
   /**
-   *  Icon presence only. The actual URL may include credentials and is
-   *  returned separately rather than being embedded in the native graph.
+   *  Whether the group has an icon. The icon is a profile-provided URL or path that may hold a
+   *  credential, so only `get_proxy_group_icons`, a sensitive query, returns it.
    */
   iconConfigured: boolean;
   capabilities: ProxyGroupCapabilities;
 };
 
+/**  What the running core lets a user do with a group. */
 export type ProxyGroupCapabilities = {
+  /**  `PUT /proxies/{group}` chooses a member. */
   select: boolean;
+  /**  `DELETE /proxies/{group}` returns a pinned group to automatic selection. */
   clearFixed: boolean;
 };
 
@@ -3842,10 +3845,7 @@ export type ProxyGroupItem_Serialize = {
   icon?: string | null;
 };
 
-/**
- *  Native group kinds and capabilities follow ref; legacy UI serialization
- *  remains a projection until the normalized nodes/groups IPC is migrated.
- */
+/**  A group's `type`, as the core reports it. */
 export type ProxyGroupKind =
   | 'Selector'
   | 'URLTest'
@@ -3853,6 +3853,7 @@ export type ProxyGroupKind =
   | 'LoadBalance'
   | 'Relay'
   | 'Smart'
+  /**  A type this build does not know, kept verbatim. */
   | string;
 
 /**
@@ -3900,17 +3901,11 @@ export type ProxyItem_Serialize = {
 
 export type ProxyName = string;
 
-/**
- *  Provider metadata retained after assembling the application proxy view.
- *  This lives beside `Proxies`, matching ref's `clash/proxies.rs` ownership.
- */
+/**  Provider metadata the application keeps after assembling its node view. */
 export type ProxyProviderSummary =
   ProxyProviderSummary_Serialize | ProxyProviderSummary_Deserialize;
 
-/**
- *  Provider metadata retained after assembling the application proxy view.
- *  This lives beside `Proxies`, matching ref's `clash/proxies.rs` ownership.
- */
+/**  Provider metadata the application keeps after assembling its node view. */
 export type ProxyProviderSummary_Deserialize = {
   name: ProviderName;
   type: ProviderType;
@@ -3920,10 +3915,7 @@ export type ProxyProviderSummary_Deserialize = {
   proxyCount: number;
 };
 
-/**
- *  Provider metadata retained after assembling the application proxy view.
- *  This lives beside `Proxies`, matching ref's `clash/proxies.rs` ownership.
- */
+/**  Provider metadata the application keeps after assembling its node view. */
 export type ProxyProviderSummary_Serialize = {
   name: ProviderName;
   type: ProviderType;

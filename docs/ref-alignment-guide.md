@@ -820,3 +820,9 @@ cargo clippy --manifest-path backend/Cargo.toml --all-targets --all-features
 
 - 基线 b16fa030444cd8ea2bae8552dd82a97d0b693f7c，master 7c5a2599，ref 375af277。将 Completed 的源版本 fence、Core outcome uncertainty、连接中断维护状态、Service handoff/release/recovery debt、最新目标重试和 handoff continuation 决策迁入 chimera-core/client/reconciler/completion.rs。复用现有 Round::observe/settle、RuntimeReconcilerState 和 attempt/status；Tauri 保留 task join、RPC、实际 timer、Service watch 与宿主通知。无第二 actor、无 IPC schema 修改。本轮为 ref-shaped 完成状态执行的归属迁移，不是完整逐字替换 ref Actor。
 - L2。macOS workspace all-features/all-targets offline cargo check，共享 completion 3/3，Tauri reconciler 196/196，rustfmt、diff--check。未执行全 workspace 测试、真实 Service/Local 切换或 GUI E2E。
+
+### DIFF-REF-PROXY-GRAPH-AND-ACTOR：完整复制代理图并归位唯一缓存 Actor
+
+- 基线 4795d99a94181745c184211b452de4a0430a1b09，master 7c5a2599，SSH 核对上游 main 仍为 375af2770f7928395c9db18998c17e3880d432ea；未变更 submodule。完整复制 ref/backend/nyanpasu-core/src/clash/proxies.rs 的 1294 行（含上游测试，逐行比较 1294/1294 匹配），仅追加现有 fetch 入口与 Chimera 回归测试。规范类型采用 ref 的 Proxies；Tauri legacy 投影明确为 LegacyProxies，生成 TS binding 并同步前端调用者，保持 IPC 命令名和 JSON shape 不变。
+- 实际 ProxiesActor/ProxiesClient 归位到 ref 的 chimera-core/src/proxies.rs，删除 proxies_actor.rs；生产 spawn 直接接收共享 CoreClient，不再套自定义 CoreClient/trait object，测试源通过 test-support 独立注入。既有延迟测试扩展移入 proxies/delay.rs；未被生产调用的旧 ProxySnapshotState 仅保留测试回归，不是第二套生产缓存。保留现有比 ref 更严格的 source-instance/shutdown fences、显式 invalidation、join/panic propagation 和既有 fingerprint 实现；并非逐字替换完整 Proxy Actor。
+- L2。macOS workspace all-features/all-targets offline cargo check；代理 core 77/77（含既有回归及完整 ref graph 测试），追加 ref CoreActor 真实端口集成测试 4/4；Tauri proxy 8/8；Specta regeneration/freshness 通过；interface TypeScript build、UI proxy 25/25、interface proxy 19/19。保留已有主/legacy UI 和 agent 命令 wire contract。非目标：更改代理协议、实际网络环境、发布版本、master 或 ref tag。未运行全 workspace、真实 GUI E2E/跨平台发布构建。回滚：在迁移分支 revert 此提交。

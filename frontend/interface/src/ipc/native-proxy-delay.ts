@@ -1,6 +1,6 @@
 import type {
   DelayHistory,
-  NativeProxies_Serialize,
+  Proxies_Serialize,
   Proxy_Serialize,
 } from './bindings.js';
 
@@ -8,13 +8,13 @@ import type {
 export const DEFAULT_DELAY_KEY = '';
 
 export type DelayKeySource = { delayKey: string };
-export type DelayKeyedProxies = NativeProxies_Serialize & {
+export type DelayKeyedProxies = Proxies_Serialize & {
   /** Complete source keys, including hidden groups filtered out of the UI. */
   delayKeys?: Readonly<Record<string, string>>;
 };
 
 export function collectDelayKeys(
-  proxies: NativeProxies_Serialize,
+  proxies: Proxies_Serialize,
 ): Record<string, string> {
   return Object.fromEntries(
     [...(proxies.global ? [proxies.global] : []), ...proxies.groups].map(
@@ -24,7 +24,7 @@ export function collectDelayKeys(
 }
 
 const delayKeysBySnapshot = new WeakMap<
-  NativeProxies_Serialize,
+  Proxies_Serialize,
   Readonly<Record<string, string>>
 >();
 
@@ -65,7 +65,7 @@ export type ProxyChain = {
 /** Follow the selected member until a non-group leaf, missing node or cycle. */
 export function resolveProxyChain(
   start: string,
-  proxies: NativeProxies_Serialize,
+  proxies: Proxies_Serialize,
 ): ProxyChain {
   const visited = new Set([start]);
   const path: string[] = [];

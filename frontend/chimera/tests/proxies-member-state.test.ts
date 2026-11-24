@@ -9,7 +9,7 @@ import {
   nodeDelayHistory,
   resolveProxyChain,
   selectVisibleNativeProxies,
-  type NativeProxies_Serialize,
+  type Proxies_Serialize,
   type Proxy_Serialize,
   type ProxyGroup,
 } from '@chimera/interface';
@@ -51,7 +51,7 @@ const snapshot = (
   groups: ProxyGroup[],
   nodes: Record<string, Proxy_Serialize>,
   global: ProxyGroup | null = null,
-): NativeProxies_Serialize => ({ groups, nodes, global });
+): Proxies_Serialize => ({ groups, nodes, global });
 
 const sample = (delay: number, time = '') => ({
   alive: delay > 0,

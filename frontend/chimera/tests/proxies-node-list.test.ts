@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import type { NativeProxies_Serialize, ProxyGroup } from '@chimera/interface';
+import type { Proxies_Serialize, ProxyGroup } from '@chimera/interface';
 import {
   DEFAULT_NODE_VIEW,
   memberDelay,
@@ -25,7 +25,7 @@ const proxies = {
     Untested: { name: 'Untested', type: 'vless', history: [] },
     node1: { name: 'node1', type: 'vless', history: [{ delay: 35 }] },
   },
-} as unknown as NativeProxies_Serialize;
+} as unknown as Proxies_Serialize;
 
 describe('ref proxy group view over the native graph', () => {
   it('retains source order and matches all case-insensitive search terms', () => {
@@ -110,7 +110,7 @@ describe('ref proxy group view over the native graph', () => {
           },
         },
       },
-    } as NativeProxies_Serialize;
+    } as Proxies_Serialize;
     assert.equal(memberDelay('node2', group, withSpecific), 99);
     assert.equal(memberDelay('Untested', group, proxies), undefined);
   });
@@ -128,7 +128,7 @@ describe('ref proxy group view over the native graph', () => {
           },
         },
       },
-    } as NativeProxies_Serialize;
+    } as Proxies_Serialize;
     assert.equal(
       memberDelay('node2', { ...group, delayKey: '' }, withSources),
       77,

@@ -1,6 +1,6 @@
 import {
   nativeMemberDelay,
-  type NativeProxies_Serialize,
+  type Proxies_Serialize,
   type Proxy_Serialize,
   type ProxyGroup,
 } from '@chimera/interface';
@@ -61,7 +61,7 @@ export function visibleMembers({
   delayOf,
 }: {
   group: ProxyGroup;
-  proxies: NativeProxies_Serialize;
+  proxies: Proxies_Serialize;
   query: string;
   view: NodeView;
   /** Reuse the page's single computed member-state snapshot, like ref. */

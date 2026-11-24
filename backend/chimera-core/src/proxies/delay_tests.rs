@@ -99,7 +99,7 @@ fn native_node_delay_spec_uses_live_group_url_provider_and_rejects_spoofed_membe
         let proxy: clash_api::Proxy = record(value);
         records.insert(proxy.name.clone(), proxy);
     }
-    let graph = NativeProxies::from_responses(records, &IndexMap::new(), None).unwrap();
+    let graph = Proxies::from_responses(records, &IndexMap::new(), None).unwrap();
     let (own, provider) =
         group_node_delay_spec(&graph, "Auto", "A", "https://app.test/default", DEADLINE).unwrap();
     assert_eq!(own.url.as_str(), "https://user:credential@group.test/check");

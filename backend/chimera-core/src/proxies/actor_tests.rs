@@ -189,18 +189,8 @@ async fn close_one(
     f.closed.lock().unwrap().push(id);
     close(HttpState(f)).await
 }
-async fn setup() -> (
-    ProxiesClient,
-    CoreClient,
-    Arc<TestApiSource>,
-    Arc<Fixture>,
-    tokio::task::JoinHandle<()>,
-) {
-    let fixture = Arc::new(Fixture {
-        subscription_expire: AtomicUsize::new(42),
-        ..Fixture::default()
-    });
-    let router = Router::new()
+fn fixture_router(fixture: Arc<Fixture>) -> Router {
+    Router::new()
         .route("/group", get(groups))
         .route("/proxies", get(proxies))
         .route("/providers/proxies", get(providers))
@@ -209,7 +199,21 @@ async fn setup() -> (
         .route("/providers/proxies/{name}/healthcheck", get(healthcheck))
         .route("/connections", get(connections).delete(close))
         .route("/connections/{id}", delete(close_one))
-        .with_state(fixture.clone());
+        .with_state(fixture)
+}
+
+async fn setup() -> (
+    ProxiesClient,
+    ApiSource,
+    Arc<TestApiSource>,
+    Arc<Fixture>,
+    tokio::task::JoinHandle<()>,
+) {
+    let fixture = Arc::new(Fixture {
+        subscription_expire: AtomicUsize::new(42),
+        ..Fixture::default()
+    });
+    let router = fixture_router(fixture.clone());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let server_address = listener.local_addr().unwrap();
     let server = tokio::spawn(async move {
@@ -221,10 +225,10 @@ async fn setup() -> (
         ),
         server: server_address,
     });
-    let core = CoreClient::from_source(source.clone());
+    let core = ApiSource::Fixture(source.clone());
     let shutdown = CancellationToken::new();
     let tasks = TaskTracker::new();
-    let client = ProxiesClient::spawn(core.clone(), shutdown, &tasks)
+    let client = ProxiesClient::spawn_source(core.clone(), shutdown, &tasks)
         .await
         .unwrap();
     (client, core, source, fixture, server)
@@ -1071,4 +1075,115 @@ fn proxy_interruption_causes_keep_the_upstream_classification() {
     ] {
         assert_eq!(interrupt_failure(&error), expected);
     }
+}
+
+// Ref integration fixtures use the actual CoreActor, including revocation.
+async fn setup_core_actor() -> (
+    ProxiesClient,
+    CoreClient,
+    Arc<crate::actor_v2::test_support::Endpoint>,
+    Arc<Fixture>,
+    tokio::task::JoinHandle<()>,
+) {
+    let fixture = Arc::new(Fixture {
+        subscription_expire: AtomicUsize::new(42),
+        ..Fixture::default()
+    });
+    let router = fixture_router(fixture.clone());
+    let (url, server) = crate::actor_v2::test_support::server(router).await;
+    let endpoint = crate::actor_v2::test_support::endpoint(url);
+    let core = CoreClient::spawn(endpoint.clone()).await.unwrap();
+    let client = ProxiesClient::spawn(core.clone(), CancellationToken::new(), &TaskTracker::new())
+        .await
+        .unwrap();
+    (client, core, endpoint, fixture, server)
+}
+
+#[tokio::test]
+async fn ref_core_actor_idle_cache_is_cleared_when_its_capability_is_revoked() {
+    let (client, core, endpoint, _, server) = setup_core_actor().await;
+    client.get(false).await.unwrap();
+    let mut changes = client.subscribe();
+    changes.borrow_and_update();
+    endpoint.binding.send_modify(|binding| {
+        binding.as_mut().unwrap().instance_id = "replacement".into();
+    });
+    core.api_client().await.unwrap();
+    assert!(client.snapshot().nodes.is_empty());
+    tokio::time::timeout(Duration::from_secs(3), changes.changed())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(client.snapshot().nodes.is_empty());
+    server.abort();
+}
+
+#[tokio::test]
+async fn ref_core_actor_replacement_during_read_never_publishes_the_old_response() {
+    let (client, core, endpoint, fixture, server) = setup_core_actor().await;
+    client.get(false).await.unwrap();
+    fixture.hold_read.store(true, Ordering::SeqCst);
+    let waiting = {
+        let client = client.clone();
+        tokio::spawn(async move { client.get(true).await })
+    };
+    fixture.entered.notified().await;
+    endpoint
+        .binding
+        .send_modify(|binding| binding.as_mut().unwrap().instance_id = "replacement".into());
+    core.api_client().await.unwrap();
+    assert!(waiting.await.unwrap().is_err());
+    assert!(client.snapshot().nodes.is_empty());
+    fixture.hold_read.store(false, Ordering::SeqCst);
+    fixture.release.notify_one();
+    client.get(false).await.unwrap();
+    assert!(!client.snapshot().nodes.is_empty());
+    server.abort();
+}
+
+#[tokio::test]
+async fn ref_core_actor_listed_groups_reach_the_published_snapshot() {
+    let (client, core, _, fixture, server) = setup_core_actor().await;
+    *fixture.group_list.lock().unwrap() = Some(serde_json::json!({"proxies":[
+        {"name":"listed", "type":"LoadBalance", "udp":true, "history":[], "all":[NODE]}
+    ]}));
+    let proxies = client.get(true).await.unwrap();
+    assert_eq!(proxies.groups.len(), 1);
+    assert_eq!(proxies.groups[0].name.as_str(), "listed");
+    assert_eq!(
+        proxies.nodes[&ProxyName::from(NODE)].provider.as_deref(),
+        Some(PROVIDER)
+    );
+    client.stop_for_test().await.unwrap();
+    core.shutdown().await.unwrap();
+    server.abort();
+}
+
+#[tokio::test]
+async fn ref_core_actor_select_closes_then_refreshes_without_replaying() {
+    let (client, _core, _, fixture, server) = setup_core_actor().await;
+    client.get(false).await.unwrap();
+    fixture.calls.lock().unwrap().clear();
+    client
+        .select(GROUP.into(), NODE.into(), ProxyChangeBreakMode::All)
+        .await
+        .unwrap();
+    assert_eq!(*fixture.calls.lock().unwrap(), ["select", "close", "read"]);
+    assert_eq!(
+        client.snapshot().groups[0]
+            .now
+            .as_ref()
+            .map(ProxyName::as_str),
+        Some(NODE)
+    );
+    fixture.calls.lock().unwrap().clear();
+    client
+        .select(GROUP.into(), NODE.into(), ProxyChangeBreakMode::Off)
+        .await
+        .unwrap();
+    assert_eq!(*fixture.calls.lock().unwrap(), ["select", "read"]);
+    fixture.calls.lock().unwrap().clear();
+    client.update_provider(PROVIDER.into()).await.unwrap();
+    assert_eq!(*fixture.calls.lock().unwrap(), ["update", "read"]);
+    server.abort();
 }

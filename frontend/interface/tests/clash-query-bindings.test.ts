@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { QueryClient } from '@tanstack/react-query';
-import { commands, type NativeProxies_Serialize } from '../src/ipc/bindings.js';
+import { commands, type Proxies_Serialize } from '../src/ipc/bindings.js';
 import {
   CLASH_CONFIG_QUERY_KEY,
   CLASH_PROXIES_PROVIDER_QUERY_KEY,
@@ -129,7 +129,7 @@ test('native proxy graph uses a distinct typed query cache and preserves shared 
       { name: 'B', all: ['shared'] },
     ],
     nodes: { shared: { name: 'shared', type: 'Direct' } },
-  } as unknown as NativeProxies_Serialize;
+  } as unknown as Proxies_Serialize;
   let calls = 0;
   commands.getNativeProxies = async () => {
     calls++;

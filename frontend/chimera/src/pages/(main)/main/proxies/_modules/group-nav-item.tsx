@@ -1,7 +1,7 @@
 import {
   useProxyGroupIcons,
   type FolderId,
-  type NativeProxies_Serialize,
+  type Proxies_Serialize,
   type ProxyGroup,
 } from '@chimera/interface';
 import { ContextMenuItem } from '@chimera/ui/context-menu';
@@ -62,7 +62,7 @@ function GroupDelay({
   proxies,
 }: {
   group: ProxyGroup;
-  proxies: NativeProxies_Serialize;
+  proxies: Proxies_Serialize;
 }) {
   const delay = group.now ? memberDelay(group.now, group, proxies) : undefined;
 
@@ -96,7 +96,7 @@ const GroupNavItem = memo(function GroupNavItem({
   section,
 }: {
   group: ProxyGroup;
-  proxies: NativeProxies_Serialize;
+  proxies: Proxies_Serialize;
   active: boolean;
   /** Where the group sits in its list, as the list shows it now. */
   index: number;
