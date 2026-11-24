@@ -46,6 +46,7 @@ export * from './use-config-features';
 export * from './use-clash-version';
 export * from './use-clash-info';
 export * from './use-clash-logs';
+export * from './use-core-logs';
 export * from './use-clash-memory';
 export * from './use-clash-traffic';
 export * from './use-traffic';

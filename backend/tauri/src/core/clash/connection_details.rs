@@ -12,7 +12,7 @@ use std::{
 use tauri::ipc::Channel;
 use tokio::{sync::watch, task::JoinHandle};
 
-use chimera_core::clash::connection_rates::ClashConnectionDetails;
+use chimera_core::clash::ws::ClashConnectionDetails;
 
 pub type SubscriptionId = u64;
 
@@ -78,16 +78,16 @@ impl ConnectionDetailSubscriptions {
 /// is dropped on unsubscription, webview close, or backend shutdown.
 pub async fn forward_details(
     mut receiver: watch::Receiver<Option<std::sync::Arc<ClashConnectionDetails>>>,
-    channel: Channel<ClashConnectionDetails>,
+    channel: Channel<std::sync::Arc<ClashConnectionDetails>>,
 ) {
     if let Some(frame) = receiver.borrow_and_update().clone()
-        && channel.send((*frame).clone()).is_err()
+        && channel.send(frame).is_err()
     {
         return;
     }
     while receiver.changed().await.is_ok() {
         if let Some(frame) = receiver.borrow_and_update().clone()
-            && channel.send((*frame).clone()).is_err()
+            && channel.send(frame).is_err()
         {
             return;
         }
@@ -103,7 +103,15 @@ mod tests {
         let (sender, receiver) =
             watch::channel(Some(std::sync::Arc::new(ClashConnectionDetails {
                 sequence: 1,
-                connections: vec![],
+                connections: chimera_core::clash::connection_rates::ConnectionDetails::new(
+                    std::sync::Arc::new(clash_api::ConnectionsSnapshot {
+                        download_total: 0,
+                        upload_total: 0,
+                        connections: None,
+                        memory: None,
+                    }),
+                    vec![],
+                ),
             })));
         let registry = ConnectionDetailSubscriptions::new();
         let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();

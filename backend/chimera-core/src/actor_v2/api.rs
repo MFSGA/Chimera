@@ -575,7 +575,7 @@ impl ApiClient {
                 Ok(forward_api_stream(
                     self.clone(),
                     stream,
-                    connection_snapshot_value,
+                    serialize_api_sample,
                 ))
             }
             ApiStreamKind::Logs => {
@@ -709,31 +709,6 @@ where
 
 pub fn serialize_api_sample<T: Serialize>(sample: T) -> Result<serde_json::Value> {
     serde_json::to_value(sample).context("failed to serialize API sample")
-}
-
-pub(crate) fn connection_snapshot_value(
-    snapshot: clash_api::ConnectionsSnapshot,
-) -> Result<serde_json::Value> {
-    let mut value =
-        serde_json::to_value(snapshot).context("failed to serialize connection sample")?;
-    if let Some(connections) = value
-        .get_mut("connections")
-        .and_then(serde_json::Value::as_array_mut)
-    {
-        for connection in connections {
-            let Some(object) = connection.as_object_mut() else {
-                continue;
-            };
-            let Some(extra) = object
-                .remove("_extra")
-                .and_then(|value| value.as_object().cloned())
-            else {
-                continue;
-            };
-            object.extend(extra);
-        }
-    }
-    Ok(value)
 }
 
 /// Actor-owned lifecycle lease for the cached controller capability. The

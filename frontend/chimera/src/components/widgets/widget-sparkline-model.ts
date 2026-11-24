@@ -27,7 +27,7 @@ export function trafficSamples(
 export function connectionCount(
   snapshot: ClashConnectionsSnapshot | undefined,
 ): number {
-  return snapshot?.connections?.length ?? 0;
+  return snapshot?.connectionCount ?? 0;
 }
 
 export function connectionSamples(

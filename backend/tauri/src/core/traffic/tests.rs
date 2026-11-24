@@ -22,7 +22,7 @@ use crate::core::geo::{
     CoreGeodataBinding, CoreGeodataModeSource, CountryIndexSnapshot, GeoIndexArgs, GeoIndexClient,
     GeodataMode, IndexKey, Loaded, MockCountryIndexSource,
 };
-use chimera_core::clash::ws::{ClashConnectionsFrame, ClashWsConnectionSnapshot};
+use chimera_core::clash::ws::ClashConnectionsFrame;
 
 struct WaitingCore;
 
@@ -101,32 +101,42 @@ fn country_index_for(country: &str) -> Arc<IpIndex> {
 fn frame(instance_id: &str, connection_id: &str) -> ClashConnectionsFrame {
     ClashConnectionsFrame {
         instance_id: instance_id.into(),
-        core_instance_id: instance_id.into(),
-        snapshot: ClashWsConnectionSnapshot {
+
+        snapshot: Arc::new(clash_api::ConnectionsSnapshot {
             download_total: 0,
             upload_total: 0,
-            download_speed: 0,
-            upload_speed: 0,
+
             memory: None,
-            connections: Some(vec![serde_json::json!({
-                "id": connection_id,
-                "metadata": {"network": "tcp", "host": "example.test"},
-                "upload": 0,
-                "download": 0,
-                "start": "2026-10-19T00:00:00Z",
-                "chains": ["Proxy"],
-                "rule": "MATCH",
-                "rulePayload": "Proxy"
-            })]),
-        },
+            connections: Some(vec![
+                serde_json::from_value(serde_json::json!({
+                    "id": connection_id,
+                    "metadata": {"network": "tcp", "host": "example.test"},
+                    "upload": 0,
+                    "download": 0,
+                    "start": "2026-10-19T00:00:00Z",
+                    "chains": ["Proxy"],
+                    "rule": "MATCH",
+                    "rulePayload": "Proxy"
+                }))
+                .unwrap(),
+            ]),
+        }),
     }
 }
 
 fn frame_with_geo(instance_id: &str, connection_id: &str) -> ClashConnectionsFrame {
     let mut frame = frame(instance_id, connection_id);
-    let metadata = &mut frame.snapshot.connections.as_mut().unwrap()[0]["metadata"];
-    metadata["sourceIP"] = serde_json::json!("8.8.8.8");
-    metadata["sourceGeoIP"] = serde_json::json!(["ca"]);
+    let metadata = Arc::make_mut(&mut frame.snapshot)
+        .connections
+        .as_mut()
+        .unwrap()[0]
+        .metadata
+        .as_mut()
+        .unwrap();
+    metadata.known.source_ip = Some("8.8.8.8".into());
+    metadata
+        .extra
+        .insert("sourceGeoIP".into(), serde_json::json!(["ca"]));
     frame
 }
 
@@ -196,34 +206,36 @@ async fn connection_frames_become_active_and_then_persist_as_closed() {
 
     frames.send_replace(Some(Arc::new(ClashConnectionsFrame {
         instance_id: "core-process-1".into(),
-        core_instance_id: "core-process-1".into(),
-        snapshot: ClashWsConnectionSnapshot {
+
+        snapshot: Arc::new(clash_api::ConnectionsSnapshot {
             upload_total: 120,
             download_total: 340,
-            upload_speed: 0,
-            download_speed: 0,
+
             memory: None,
-            connections: Some(vec![serde_json::json!({
-                "id": "00000000-0000-0000-0000-000000000001",
-                "metadata": {
-                    "network": "tcp",
-                    "host": "example.org",
-                    "sourceIP": "8.8.8.8",
-                    "sourceGeoIP": ["us"],
-                    "destinationIP": "1.1.1.1",
-                    "destinationGeoIP": ["au"],
-                    "process": "curl",
-                    "processPath": "/usr/bin/curl",
-                    "inboundName": "mixed"
-                },
-                "upload": 12,
-                "download": 34,
-                "start": started_at,
-                "chains": ["Proxy-A"],
-                "rule": "MATCH",
-                "rulePayload": "Proxy-A"
-            })]),
-        },
+            connections: Some(vec![
+                serde_json::from_value(serde_json::json!({
+                    "id": "00000000-0000-0000-0000-000000000001",
+                    "metadata": {
+                        "network": "tcp",
+                        "host": "example.org",
+                        "sourceIP": "8.8.8.8",
+                        "sourceGeoIP": ["us"],
+                        "destinationIP": "1.1.1.1",
+                        "destinationGeoIP": ["au"],
+                        "process": "curl",
+                        "processPath": "/usr/bin/curl",
+                        "inboundName": "mixed"
+                    },
+                    "upload": 12,
+                    "download": 34,
+                    "start": started_at,
+                    "chains": ["Proxy-A"],
+                    "rule": "MATCH",
+                    "rulePayload": "Proxy-A"
+                }))
+                .unwrap(),
+            ]),
+        }),
     })));
 
     let active_filter = vec![TrafficFilter {
@@ -258,15 +270,14 @@ async fn connection_frames_become_active_and_then_persist_as_closed() {
     );
     frames.send_replace(Some(Arc::new(ClashConnectionsFrame {
         instance_id: "core-process-1".into(),
-        core_instance_id: "core-process-1".into(),
-        snapshot: ClashWsConnectionSnapshot {
+
+        snapshot: Arc::new(clash_api::ConnectionsSnapshot {
             upload_total: 120,
             download_total: 340,
-            upload_speed: 0,
-            download_speed: 0,
+
             memory: None,
             connections: Some(Vec::new()),
-        },
+        }),
     })));
     tokio::time::timeout(Duration::from_secs(2), async {
         loop {

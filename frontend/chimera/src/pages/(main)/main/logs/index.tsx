@@ -1,17 +1,31 @@
-import { useClashLogs, type ClashLog } from '@chimera/interface';
+import {
+  useCoreLogs,
+  type CoreLogCursor,
+  type CoreLogRecord,
+  type CoreLogRow,
+} from '@chimera/interface';
 import { Button } from '@chimera/ui/button';
 import { ContextMenuItem } from '@chimera/ui/context-menu';
 import { EmptyState } from '@chimera/ui/empty-state';
 import {
   ScrollArea,
   useScrollArea,
+  useScrollAreaViewport,
   useScrollAreaViewportElement,
 } from '@chimera/ui/scroll-area';
 import { createFileRoute } from '@tanstack/react-router';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import DeleteForeverOutlineRounded from '~icons/material-symbols/delete-forever-outline-rounded';
 import { useReducedMotion } from 'motion/react';
-import { useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  memo,
+  useCallback,
+  useDeferredValue,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import {
   RegisterContextMenu,
   RegisterContextMenuContent,
@@ -20,7 +34,6 @@ import {
 import { useLockFn } from '@/hooks/use-lock-fn';
 import * as m from '@/paraglide/messages';
 import { useDataPageBottomInset } from '../_modules/data-page';
-import { matchesLogLevel } from './_modules/consts';
 import {
   LogClearButton,
   LogFollowButton,
@@ -38,24 +51,54 @@ export const Route = createFileRoute('/(main)/main/logs/')({
   component: RouteComponent,
 });
 
-type CoreLogs = ReturnType<typeof useClashLogs>;
+type CoreLogs = ReturnType<typeof useCoreLogs>;
+
+const coreLogRowKey = (row: CoreLogRow) =>
+  `${row.id.generation}:${row.id.sequence}`;
 
 const neverAdjust = () => false;
 
-// CoreLogCursor is not exposed by the legacy WS API. Preserve object identity
-// across append/capped-history updates until the cursor RPC is migrated.
-const logIds = new WeakMap<ClashLog, number>();
-let nextLogId = 0;
-const logRowKey = (log: ClashLog) => {
-  let id = logIds.get(log);
-  if (id === undefined) {
-    id = ++nextLogId;
-    logIds.set(log, id);
-  }
-  return String(id);
-};
+const CoreRecord = memo(function CoreRecord({
+  row,
+  detail,
+  expanded,
+  onInspect,
+  search,
+}: {
+  row: CoreLogRow;
+  detail: (cursor: CoreLogCursor) => Promise<CoreLogRecord>;
+  expanded: boolean;
+  onInspect: (key: string) => void;
+  search: string;
+}) {
+  const loadRaw = useCallback(() => detail(row.id), [detail, row.id]);
+  const inspect = useCallback(
+    () => onInspect(`${row.id.generation}:${row.id.sequence}`),
+    [onInspect, row.id],
+  );
+  const timeTitle = useMemo(
+    () => new Date(row.record.received_at).toLocaleString(),
+    [row.record.received_at],
+  );
 
-const Viewer = ({
+  return (
+    <LogRecord
+      time={row.record.time || ''}
+      timeTitle={timeTitle}
+      level={row.record.type}
+      message={row.record.payload}
+      raw={row.record}
+      loadRaw={loadRaw}
+      expanded={expanded}
+      incomplete={row.truncated}
+      incompleteTitle={m.logs_core_preview_truncated()}
+      search={search}
+      onInspect={inspect}
+    />
+  );
+});
+
+function Viewer({
   logs,
   search,
   following,
@@ -64,184 +107,270 @@ const Viewer = ({
   logs: CoreLogs;
   search: string;
   following: boolean;
-  setFollowing: (following: boolean) => void;
-}) => {
-  const { level } = IndexRoute.useSearch();
-
-  const filteredLogs = useMemo(() => {
-    if (!logs.data) {
-      return [];
-    }
-
-    const keyword = search.trim().toLowerCase();
-    return logs.data.filter((log) => {
-      if (!matchesLogLevel(log.type, level)) return false;
-      if (!keyword) return true;
-      return [log.time, log.type, log.payload].some((part) =>
-        part?.toLowerCase().includes(keyword),
-      );
-    });
-  }, [logs.data, level, search]);
-
-  // Defer high-frequency log rows so text input and navigation remain responsive.
-  // Keep the rows and their virtual indexes on the same deferred snapshot.
-  const rows = useDeferredValue(filteredLogs);
+  setFollowing: (value: boolean) => void;
+}) {
+  const { loadOlder } = logs;
+  const rows = useDeferredValue(logs.data);
   const deferredSearch = useDeferredValue(search);
-
-  const { scrollDirection, isBottom } = useScrollArea();
-  const reducedMotion = useReducedMotion();
   const bottomInset = useDataPageBottomInset();
-  const followBehavior = useRef<ScrollBehavior>('auto');
-  const isEntering = useEnteringRows(rows, logRowKey);
+  const reducedMotion = useReducedMotion();
+  const followScrollBehavior = useRef<ScrollBehavior>('auto');
+  const [inspected, setInspected] = useState<string | null>(null);
+  const inspect = useCallback(
+    (key: string) => {
+      setFollowing(false);
+      setInspected((current) => (current === key ? null : key));
+    },
+    [setFollowing],
+  );
+  const { isBottom, scrollDirection, isTop } = useScrollArea();
+  const { viewportRef } = useScrollAreaViewport();
   const viewportElement = useScrollAreaViewportElement();
-
+  const anchor = useRef<{
+    id: CoreLogCursor;
+    delta: number;
+    firstId: CoreLogCursor | undefined;
+  } | null>(null);
   const rowVirtualizer = useVirtualizer({
     count: rows.length,
-    getItemKey: (index) => logRowKey(rows[index]),
     getScrollElement: () => viewportElement,
-    estimateSize: () => 88,
-    overscan: 5,
+    getItemKey: (index) => coreLogRowKey(rows[index]),
+    estimateSize: () => 110,
     paddingEnd: bottomInset,
     scrollPaddingEnd: bottomInset,
+    overscan: 5,
     useFlushSync: false,
     useAnimationFrameWithResizeObserver: true,
   });
-
-  // Variable-height records must not pull a live-following viewport upward.
+  // Following, the list scrolls to the newest row once its rows are measured.
+  // Keeping the scroll position for each row measured above it would write
+  // it between their measurements, so every row would lay out the page.
   rowVirtualizer.shouldAdjustScrollPositionOnItemSizeChange = following
     ? neverAdjust
     : undefined;
-
   const totalSize = rowVirtualizer.getTotalSize();
-  const virtualItems = rowVirtualizer.getVirtualItems();
+  const showRows = useDeferredValue(true, false);
+  const isEntering = useEnteringRows(rows, coreLogRowKey);
 
-  // Re-measure variable-height rows when the virtualizer's viewport attaches.
   useEffect(() => {
     rowVirtualizer.measure();
   }, [rowVirtualizer]);
-
-  // An intentional upward scroll pauses following, as in the reference viewer.
   useEffect(() => {
     if (scrollDirection === 'up' && !isBottom) setFollowing(false);
   }, [scrollDirection, isBottom, setFollowing]);
-
   useEffect(() => {
-    if (!following || !rows.length) return;
     const frame = requestAnimationFrame(() => {
-      rowVirtualizer.scrollToIndex(rows.length - 1, {
-        align: 'end',
-        behavior: reducedMotion ? 'auto' : followBehavior.current,
-      });
-      followBehavior.current = 'smooth';
+      // Start instantly; resuming follow mode animates, including size corrections.
+      if (!following) followScrollBehavior.current = 'smooth';
+      if (following) anchor.current = null;
+      if (anchor.current) {
+        if (rows !== logs.data) return;
+        if (rows[0]?.id === anchor.current.firstId && logs.more) return;
+        const index = rows.findIndex(
+          (row) =>
+            row.id.generation === anchor.current?.id.generation &&
+            row.id.sequence === anchor.current?.id.sequence,
+        );
+        if (index >= 0) {
+          const offset = rowVirtualizer.getOffsetForIndex(index, 'start');
+          if (offset) {
+            rowVirtualizer.scrollToOffset(offset[0] + anchor.current.delta);
+          }
+        }
+        anchor.current = null;
+      } else if (following && rows.length) {
+        rowVirtualizer.scrollToIndex(rows.length - 1, {
+          align: 'end',
+          behavior: reducedMotion ? 'auto' : followScrollBehavior.current,
+        });
+      }
     });
     return () => cancelAnimationFrame(frame);
-  }, [following, rows.length, rowVirtualizer, reducedMotion, totalSize]);
+  }, [
+    rows,
+    logs.data,
+    logs.more,
+    following,
+    rowVirtualizer,
+    totalSize,
+    reducedMotion,
+  ]);
+  useEffect(() => {
+    if (
+      logs.isLoading ||
+      logs.loadingOlder ||
+      logs.error ||
+      logs.status?.error ||
+      !logs.more ||
+      rows !== logs.data
+    ) {
+      return;
+    }
+    const viewport = viewportRef.current;
+    const fitsViewport =
+      viewport && viewport.scrollHeight <= viewport.clientHeight;
+    if (
+      rows.length &&
+      !fitsViewport &&
+      (following || !isTop || (viewport?.scrollTop ?? 0) > 0)
+    ) {
+      return;
+    }
 
-  if (filteredLogs.length === 0 && !logs.isLoading && !logs.error) {
-    return (
-      <EmptyState
-        className="absolute inset-0"
-        data-slot="logs-no-logs"
-        message={
-          <span data-slot="logs-no-logs-message">{m.logs_empty_message()}</span>
-        }
-      />
-    );
-  }
+    // Continue short or empty filtered pages even without a scrollbar.
+    const timer = setTimeout(() => {
+      const first = rowVirtualizer
+        .getVirtualItems()
+        .find((item) => item.end > (viewportRef.current?.scrollTop ?? 0));
+      const row = first && rows[first.index];
+      if (row && first) {
+        anchor.current = {
+          id: row.id,
+          delta: (viewportRef.current?.scrollTop ?? 0) - first.start,
+          firstId: rows[0]?.id,
+        };
+      }
+      setFollowing(false);
+      loadOlder();
+    }, 100);
+    return () => clearTimeout(timer);
+  }, [
+    logs.isLoading,
+    logs.loadingOlder,
+    logs.error,
+    logs.status?.error,
+    logs.more,
+    logs.data,
+    loadOlder,
+    rows,
+    following,
+    isTop,
+    rowVirtualizer,
+    viewportRef,
+    setFollowing,
+  ]);
 
   return (
-    <div
-      className="relative"
-      data-slot="logs-virtual-list"
-      style={{ height: `${totalSize}px` }}
-    >
-      {virtualItems.map((virtualItem) => {
-        const log = rows[virtualItem.index];
-
-        if (!log) {
-          return null;
-        }
-
-        return (
-          <LogVirtualItem
-            key={virtualItem.key}
-            ref={rowVirtualizer.measureElement}
-            data-index={virtualItem.index}
-            entering={isEntering(log)}
-            style={{ transform: `translateY(${virtualItem.start}px)` }}
-          >
-            <LogRecord
-              time={log.time || ''}
-              level={log.type}
-              message={log.payload}
-              raw={log}
-              search={deferredSearch}
-              onInspect={() => setFollowing(false)}
-            />
-          </LogVirtualItem>
-        );
-      })}
+    <div data-slot="core-logs-viewer">
+      {/* The deferred rows lag behind the loaded ones. */}
+      {!logs.data.length && !logs.isLoading && (
+        <EmptyState
+          className="py-16"
+          data-slot="logs-no-logs"
+          message={
+            logs.more ? m.logs_search_incomplete() : m.logs_empty_message()
+          }
+        />
+      )}
+      <div
+        className="relative"
+        data-slot="logs-virtual-list"
+        style={{ height: totalSize }}
+      >
+        {showRows &&
+          rowVirtualizer.getVirtualItems().map((item) => {
+            const row = rows[item.index];
+            if (!row) return null;
+            const key = String(item.key);
+            return (
+              <LogVirtualItem
+                key={item.key}
+                ref={rowVirtualizer.measureElement}
+                data-index={item.index}
+                entering={isEntering(row)}
+                style={{ transform: `translateY(${item.start}px)` }}
+              >
+                <CoreRecord
+                  row={row}
+                  detail={logs.detail}
+                  expanded={inspected === key}
+                  search={deferredSearch}
+                  onInspect={inspect}
+                />
+              </LogVirtualItem>
+            );
+          })}
+      </div>
     </div>
   );
-};
+}
 
 function RouteComponent() {
-  const [search, setSearch] = useState('');
-  const [following, setFollowing] = useState(true);
-  const logs = useClashLogs();
   const { level } = IndexRoute.useSearch();
-  const slowLoading = useSlowLoading(logs.isLoading);
+  const [following, setFollowing] = useState(true);
+  const [search, setSearch] = useState('');
+  const [debounced, setDebounced] = useState(search);
+  useEffect(() => {
+    const timer = setTimeout(() => setDebounced(search), 250);
+    return () => clearTimeout(timer);
+  }, [search]);
+  useEffect(() => setFollowing(true), [level, debounced]);
 
-  useEffect(() => setFollowing(true), [level]);
-
-  const handleClearLogs = useLockFn(async () => {
+  const logs = useCoreLogs(level ?? null, debounced, following);
+  const clear = useLockFn(async () => {
     await logs.clean.mutateAsync();
   });
+  const canClear = Boolean(logs.status?.head);
+  const error = logs.error || logs.status?.error;
+  const slowLoading = useSlowLoading(logs.isLoading);
 
   return (
     <LogsLayout
       search={
         <LogSearch
           value={search}
-          onChange={(value) => {
-            setSearch(value);
-            setFollowing(true);
-          }}
+          onChange={setSearch}
           placeholder={m.logs_search_placeholder()}
         />
       }
       actions={
         <LogClearButton
-          disabled={logs.isLoading || !logs.data.length}
-          onClick={() => void handleClearLogs()}
-          label={m.logs_action_clear_log()}
+          disabled={!canClear}
+          onClick={clear}
+          label={m.logs_core_clear_history()}
         />
       }
     >
       <div className={logPanelVariants()} data-slot="core-logs">
-        {!following && !!logs.data.length && (
-          <LogFollowButton onClick={() => setFollowing(true)} />
-        )}
-        {(slowLoading || Boolean(logs.error)) && (
+        {(slowLoading ||
+          logs.loadingOlder ||
+          error ||
+          Boolean(logs.status?.discarded)) && (
           <div
             className="text-on-surface-variant flex flex-wrap items-center gap-2 px-4 py-2 text-xs"
             role="status"
-            data-slot="logs-status"
           >
             {slowLoading && <span>{m.logs_loading()}</span>}
-            {Boolean(logs.error) && (
+            {logs.loadingOlder && <span>{m.logs_load_older()}…</span>}
+            {error && (
               <>
-                <span className="text-error" role="alert">
+                <span
+                  className="text-error"
+                  title={
+                    typeof error === 'string'
+                      ? error
+                      : error.kind === 'unavailable'
+                        ? error.message
+                        : error.kind
+                  }
+                >
                   {m.logs_source_unavailable()}
                 </span>
                 <Button
                   data-slot="logs-retry"
                   variant="flat"
-                  onClick={() => void logs.retry()}
+                  onClick={() => logs.retry()}
                 >
                   {m.logs_retry()}
                 </Button>
               </>
+            )}
+            {Boolean(logs.status?.discarded) && (
+              <span>
+                {m.logs_core_discarded({
+                  count: String(logs.status?.discarded),
+                })}
+              </span>
             )}
           </div>
         )}
@@ -249,6 +378,7 @@ function RouteComponent() {
           <RegisterContextMenuTrigger asChild>
             <ScrollArea className="min-h-0 flex-1" data-slot="logs-scroll-area">
               <Viewer
+                key={`${level}:${debounced}`}
                 logs={logs}
                 search={search}
                 following={following}
@@ -257,15 +387,13 @@ function RouteComponent() {
             </ScrollArea>
           </RegisterContextMenuTrigger>
           <RegisterContextMenuContent>
-            <ContextMenuItem
-              disabled={logs.isLoading || !logs.data.length}
-              onClick={handleClearLogs}
-            >
-              <DeleteForeverOutlineRounded aria-hidden className="size-4" />
-              <span>{m.logs_action_clear_log()}</span>
+            <ContextMenuItem disabled={!canClear} onClick={clear}>
+              <DeleteForeverOutlineRounded className="size-4" />
+              <span>{m.logs_core_clear_history()}</span>
             </ContextMenuItem>
           </RegisterContextMenuContent>
         </RegisterContextMenu>
+        {!following && <LogFollowButton onClick={() => setFollowing(true)} />}
       </div>
     </LogsLayout>
   );

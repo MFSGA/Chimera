@@ -78,9 +78,11 @@ pub fn degradation_of(status: &EffectStatus) -> Option<Degradation> {
 
 const fn phase_of(kind: EffectKind) -> DegradationPhase {
     match kind {
-        EffectKind::Locale | EffectKind::Logger | EffectKind::Widget | EffectKind::Tray => {
-            DegradationPhase::UiEffect
-        }
+        EffectKind::Locale
+        | EffectKind::Logger
+        | EffectKind::CoreLogStorage
+        | EffectKind::Widget
+        | EffectKind::Tray => DegradationPhase::UiEffect,
         EffectKind::AutoLaunch
         | EffectKind::SystemProxy
         | EffectKind::ProxyGuard

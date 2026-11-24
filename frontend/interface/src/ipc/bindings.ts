@@ -527,6 +527,28 @@ export const commands = {
     typedError<null, string>(
       __TAURI_INVOKE('clear_clash_ws_history', { kind }),
     ),
+  queryCoreLogs: (query: CoreLogQuery) =>
+    typedError<CoreLogPage, CoreLogError>(
+      __TAURI_INVOKE('query_core_logs', { query }),
+    ),
+  queryCoreLogsSummary: (query: CoreLogSummaryQuery) =>
+    typedError<CoreLogPageSummary, CoreLogError>(
+      __TAURI_INVOKE('query_core_logs_summary', { query }),
+    ),
+  getCoreLog: (cursor: CoreLogCursor) =>
+    typedError<CoreLogRecord, CoreLogError>(
+      __TAURI_INVOKE('get_core_log', { cursor }),
+    ),
+  getCoreLogStatus: () =>
+    typedError<CoreLogStatus, CoreLogError>(
+      __TAURI_INVOKE('get_core_log_status'),
+    ),
+  getCoreLogStatusSummary: () =>
+    typedError<CoreLogStatusSummary, CoreLogError>(
+      __TAURI_INVOKE('get_core_log_status_summary'),
+    ),
+  clearCoreLogs: () =>
+    typedError<null, CoreLogError>(__TAURI_INVOKE('clear_core_logs')),
   subscribeClashConnectionDetails: (
     onFrame: Channel<ClashConnectionDetails_Deserialize>,
   ) =>
@@ -719,6 +741,9 @@ export const events = {
     'clash-connections-event',
   ),
   clashWsEvent: makeEvent<ClashWsEvent>('clash-ws-event'),
+  coreLogsChangedEvent: makeEvent<CoreLogsChangedEvent>(
+    'core-logs-changed-event',
+  ),
   coreStatusChangedEvent: makeEvent<CoreStatusChangedEvent>(
     'core-status-changed-event',
   ),
@@ -1180,6 +1205,7 @@ export type ChimeraAppConfigPatch_Deserialize = {
   enable_builtin_enhanced?: boolean | null;
   proxy_layout_column?: number | null;
   max_log_files?: number | null;
+  core_logs?: CoreLogSettings | null;
   enable_auto_check_update?: boolean | null;
   enable_auto_download_update?: boolean | null;
   release_channel?: ReleaseChannel | null;
@@ -1224,6 +1250,7 @@ export type ChimeraAppConfigPatch_Serialize = {
   enable_builtin_enhanced?: boolean | null;
   proxy_layout_column?: number | null;
   max_log_files?: number | null;
+  core_logs?: CoreLogSettings | null;
   enable_auto_check_update?: boolean | null;
   enable_auto_download_update?: boolean | null;
   release_channel?: ReleaseChannel | null;
@@ -1283,6 +1310,7 @@ export type ChimeraAppConfig_Deserialize = {
   /**  proxy page layout column count */
   proxy_layout_column?: number;
   max_log_files?: number;
+  core_logs?: CoreLogSettings;
   enable_auto_check_update?: boolean;
   enable_auto_download_update?: boolean;
   /**  None in older configurations means the channel of the installed build. */
@@ -1353,6 +1381,7 @@ export type ChimeraAppConfig_Serialize = {
   /**  proxy page layout column count */
   proxy_layout_column: number;
   max_log_files: number;
+  core_logs: CoreLogSettings;
   enable_auto_check_update: boolean;
   enable_auto_download_update: boolean;
   /**  None in older configurations means the channel of the installed build. */
@@ -1561,42 +1590,62 @@ export type ClashConfig_Serialize = {
   hosts: { [key in string]: OneOrMany };
 };
 
-/**  One core connection plus its derived rates, as in ref's detail contract. */
+/**
+ *  One connection plus its derived rates, for IPC consumers that need the
+ *  per-connection detail (only built when `with_details` is set).
+ */
 export type ClashConnection =
   ClashConnection_Serialize | ClashConnection_Deserialize;
 
 /**
- *  Latest full connection details, produced only while a UI subscriber exists.
- *  A single latest frame (not an unbounded event queue) follows ref's watch semantics.
+ *  Latest per-connection detail frame, pushed only while at least one
+ *  subscriber exists (see `StreamsClient::subscribe_connection_details`);
+ *  only the newest frame is kept, never a history.
  */
 export type ClashConnectionDetails =
   ClashConnectionDetails_Serialize | ClashConnectionDetails_Deserialize;
 
 /**
- *  Latest full connection details, produced only while a UI subscriber exists.
- *  A single latest frame (not an unbounded event queue) follows ref's watch semantics.
+ *  Latest per-connection detail frame, pushed only while at least one
+ *  subscriber exists (see `StreamsClient::subscribe_connection_details`);
+ *  only the newest frame is kept, never a history.
  */
 export type ClashConnectionDetails_Deserialize = {
+  /**
+   *  Equal to the sequence of the `ConnectionsUpdated` event emitted for
+   *  the same sample, so a subscriber can align the two.
+   */
   sequence: number;
   connections: ClashConnection_Deserialize[];
 };
 
 /**
- *  Latest full connection details, produced only while a UI subscriber exists.
- *  A single latest frame (not an unbounded event queue) follows ref's watch semantics.
+ *  Latest per-connection detail frame, pushed only while at least one
+ *  subscriber exists (see `StreamsClient::subscribe_connection_details`);
+ *  only the newest frame is kept, never a history.
  */
 export type ClashConnectionDetails_Serialize = {
+  /**
+   *  Equal to the sequence of the `ConnectionsUpdated` event emitted for
+   *  the same sample, so a subscriber can align the two.
+   */
   sequence: number;
   connections: ClashConnection_Serialize[];
 };
 
-/**  One core connection plus its derived rates, as in ref's detail contract. */
+/**
+ *  One connection plus its derived rates, for IPC consumers that need the
+ *  per-connection detail (only built when `with_details` is set).
+ */
 export type ClashConnection_Deserialize = {
   downloadSpeed: number;
   uploadSpeed: number;
 } & Connection_Deserialize;
 
-/**  One core connection plus its derived rates, as in ref's detail contract. */
+/**
+ *  One connection plus its derived rates, for IPC consumers that need the
+ *  per-connection detail (only built when `with_details` is set).
+ */
 export type ClashConnection_Serialize = {
   downloadSpeed: number;
   uploadSpeed: number;
@@ -1616,6 +1665,21 @@ export type ClashConnectionsInfo = {
   uploadTotal: number;
   downloadSpeed: number;
   uploadSpeed: number;
+};
+
+/**  Pushed on every connection sample; size is independent of connection count. */
+export type ClashConnectionsSummary = {
+  downloadTotal: number;
+  uploadTotal: number;
+  downloadSpeed: number;
+  uploadSpeed: number;
+  memory: number | null;
+  connectionCount: number;
+  /**
+   *  Keyed by chain member name (group or node); summed over every
+   *  connection whose `chains` contains that name.
+   */
+  memberRates: { [key in string]: TrafficRate };
 };
 
 export type ClashControlChannel = 'prefer_ipc' | 'http_only';
@@ -1711,35 +1775,18 @@ export type ClashVersion = {
   meta: boolean | null;
 };
 
-export type ClashWsConnectionSnapshot = {
-  downloadTotal: number;
-  uploadTotal: number;
-  downloadSpeed: number;
-  uploadSpeed: number;
-  memory: number | null;
-  connections: any | null;
-};
-
-export type ClashWsEvent =
-  | { kind: 'state_changed'; data: ClashConnectionsConnectorState }
-  | { kind: 'connections_updated'; data: ClashWsConnectionSnapshot }
-  | { kind: 'log_appended'; data: ClashWsLog }
-  | { kind: 'traffic_updated'; data: ClashWsTraffic }
-  | { kind: 'memory_updated'; data: ClashWsMemory }
-  | { kind: 'recording_changed'; data: ClashWsRecording }
-  | { kind: 'history_cleared'; data: ClashWsKind };
+export type ClashWsEvent = ClashWsPacket;
 
 export type ClashWsKind = 'connections' | 'logs' | 'traffic' | 'memory';
-
-export type ClashWsLog = {
-  type: string;
-  time: string | null;
-  payload: string;
-};
 
 export type ClashWsMemory = {
   inuse: number;
   oslimit: number;
+};
+
+export type ClashWsPacket = {
+  sequence: number;
+  update: ClashWsUpdate;
 };
 
 export type ClashWsRecording = {
@@ -1750,10 +1797,10 @@ export type ClashWsRecording = {
 };
 
 export type ClashWsSnapshot = {
+  sequence: number;
   state: ClashConnectionsConnectorState;
   recording: ClashWsRecording;
-  connections: ClashWsConnectionSnapshot[];
-  logs: ClashWsLog[];
+  connections: ClashConnectionsSummary[];
   traffic: ClashWsTraffic[];
   memory: ClashWsMemory[];
 };
@@ -1762,6 +1809,15 @@ export type ClashWsTraffic = {
   up: number;
   down: number;
 };
+
+export type ClashWsUpdate =
+  | { kind: 'reset'; data: ClashWsSnapshot }
+  | { kind: 'state_changed'; data: ClashConnectionsConnectorState }
+  | { kind: 'connections_updated'; data: ClashConnectionsSummary }
+  | { kind: 'traffic_updated'; data: ClashWsTraffic }
+  | { kind: 'memory_updated'; data: ClashWsMemory }
+  | { kind: 'recording_changed'; data: ClashWsRecording }
+  | { kind: 'history_cleared'; data: ClashWsKind };
 
 export type ClosedConnection = {
   id: string;
@@ -2123,6 +2179,123 @@ export type CoreLifecycleStatus = {
   shutting_down: boolean;
   completed: CoreLifecycleOperationResult[];
 };
+
+export type CoreLogCompression = 'none' | 'preset' | 'trained';
+
+export type CoreLogCursor = {
+  generation: string;
+  sequence: number;
+};
+
+export type CoreLogDirection = 'latest' | 'before' | 'after';
+
+export type CoreLogError =
+  | { kind: 'invalid_request' }
+  | { kind: 'cursor_expired' }
+  | { kind: 'record_gone' }
+  | { kind: 'too_large' }
+  | { kind: 'unavailable'; message: string };
+
+export type CoreLogLevel =
+  'trace' | 'debug' | 'info' | 'warn' | 'error' | 'silent' | 'unknown';
+
+export type CoreLogPage = {
+  rows: CoreLogRow[];
+  /**
+   *  Last consumed candidate, including nonmatches. A row excluded by the response
+   *  budget is not consumed and must appear in the next request.
+   */
+  cursor: CoreLogCursor | null;
+  more: boolean;
+  status: CoreLogStatus;
+};
+
+/**  Public core-log page summary without raw payloads, source labels, or storage error text. */
+export type CoreLogPageSummary = {
+  rows: CoreLogRowSummary[];
+  cursor: CoreLogCursor | null;
+  more: boolean;
+  status: CoreLogStatusSummary;
+};
+
+export type CoreLogQuery = {
+  direction: CoreLogDirection;
+  cursor: CoreLogCursor | null;
+  level: string | null;
+  keyword: string;
+  limit: number;
+};
+
+export type CoreLogRecord = {
+  source: CoreLogSource;
+  received_at: number;
+  time: string | null;
+  type: string;
+  payload: string;
+};
+
+export type CoreLogRow = {
+  id: CoreLogCursor;
+  record: CoreLogRecord;
+  truncated: boolean;
+};
+
+/**  Public core-log entry summary without payload text, raw time string, or source strings. */
+export type CoreLogRowSummary = {
+  id: CoreLogCursor;
+  received_at: number;
+  level: CoreLogLevel;
+  has_payload: boolean;
+  truncated: boolean;
+};
+
+/**
+ *  Current-session Core log rotation and compression, applied as soon as it is
+ *  committed.
+ */
+export type CoreLogSettings = {
+  shard_size_mib?: number;
+  max_size_mib?: number;
+  compression?: CoreLogCompression;
+};
+
+export type CoreLogSource = {
+  capture: string;
+  instance_id: string;
+  core_kind: string | null;
+};
+
+export type CoreLogStatus = {
+  generation: string;
+  version: number;
+  first: CoreLogCursor | null;
+  head: CoreLogCursor | null;
+  bytes: number;
+  error: string | null;
+  discarded: number;
+};
+
+/**  Public core-log status without raw storage error messages. */
+export type CoreLogStatusSummary = {
+  generation: string;
+  version: number;
+  first: CoreLogCursor | null;
+  head: CoreLogCursor | null;
+  bytes: number;
+  has_error: boolean;
+  discarded: number;
+};
+
+/**  Public core-log page query without arbitrary keyword filtering over payload text. */
+export type CoreLogSummaryQuery = {
+  direction: CoreLogDirection;
+  cursor: CoreLogCursor | null;
+  level: CoreLogLevel | null;
+  limit: number;
+};
+
+/**  Only status metadata is broadcast; preview bodies are page-local RPC reads. */
+export type CoreLogsChangedEvent = CoreLogStatus;
 
 export type CoreState = 'Running' | { Stopped: string | null };
 
@@ -4186,6 +4359,11 @@ export type TrafficRange =
   | 'last7_days'
   | 'last30_days'
   | 'all';
+
+export type TrafficRate = {
+  download: number;
+  upload: number;
+};
 
 export type TrafficReport = {
   total: Usage;

@@ -1,6 +1,7 @@
 import { createFileRoute } from '@tanstack/react-router';
 import { PageTitle } from '@/components/page-title';
 import * as m from '@/paraglide/messages';
+import CoreLogStorageConfig from '../_modules/core-log-storage-config';
 import LogFileConfig from '../_modules/log-file-config';
 import AppLogLevelSelector from '../_modules/log-level-selector';
 import TrafficRetentionSelector from '../_modules/traffic-retention-selector';
@@ -32,6 +33,7 @@ const CoreLogSettings = () => (
     <SettingsLabel>{m.settings_logs_core_label()}</SettingsLabel>
     <SettingsGroup>
       <CoreLogLevelSelector />
+      <CoreLogStorageConfig />
     </SettingsGroup>
   </div>
 );

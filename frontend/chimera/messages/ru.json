@@ -1587,5 +1587,16 @@
   "dashboard_layout_loading": "Загрузка макета панели…",
   "dashboard_layout_load_failed": "Не удалось загрузить макет панели",
   "dashboard_layout_saving": "Сохранение макета панели…",
-  "dashboard_layout_save_failed": "Не удалось сохранить макет панели"
+  "dashboard_layout_save_failed": "Не удалось сохранить макет панели",
+  "logs_core_clear_history": "Очистить сохранённую историю логов ядра",
+  "logs_core_discarded": "Не удалось записать {count} записей лога ядра.",
+  "logs_core_preview_truncated": "В списке показан сокращённый текст. Откройте JSON или скопируйте запись для чтения полного текста.",
+  "logs_load_older": "Загрузить ранние записи",
+  "logs_search_incomplete": "На этой странице совпадений нет. Загрузите ранние записи для продолжения поиска.",
+  "settings_clash_settings_core_log_shard_size_label": "Размер ротации журнала ядра",
+  "settings_clash_settings_core_log_max_size_label": "Лимит хранения журнала ядра",
+  "settings_clash_settings_core_log_compression_label": "Сжатие журнала ядра",
+  "settings_clash_settings_core_log_compression_none": "Выкл.",
+  "settings_clash_settings_core_log_compression_preset": "Встроенный словарь",
+  "settings_clash_settings_core_log_compression_trained": "Обученный на журналах"
 }

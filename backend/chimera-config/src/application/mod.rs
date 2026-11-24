@@ -172,6 +172,9 @@ pub struct ChimeraAppConfig {
     pub proxy_layout_column: i32,
     #[patch(attribute(specta(optional)))]
     pub max_log_files: usize,
+    #[serde(default)]
+    #[patch(attribute(specta(optional)))]
+    pub core_logs: CoreLogSettings,
     #[patch(attribute(specta(optional)))]
     pub enable_auto_check_update: bool,
     #[serde(default)]
@@ -269,6 +272,7 @@ impl Default for ChimeraAppConfig {
             enable_builtin_enhanced: true,
             proxy_layout_column: 0,
             max_log_files: 7,
+            core_logs: CoreLogSettings::default(),
             enable_auto_check_update: true,
             enable_auto_download_update: false,
             release_channel: None,

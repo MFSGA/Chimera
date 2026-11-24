@@ -630,3 +630,21 @@ cargo clippy --manifest-path backend/Cargo.toml --all-targets --all-features
 
 - TSDB 使用上游 Redb 5.0.0 的完整接口（含 fault backend、文件锁与 compaction）；旧 v3 导入器及其余现有数据库仍使用 Redb 4.4，不整体升级存储依赖。修复 Zstd 压缩界限 API、v3 range 类型参数、Geo hex 依赖、CoreFacade change_core owner generation 与日志目录 PathBuf 接线。
 - 已通过整个 workspace 的 Clippy（all-targets/all-features）；使用项目 Specta 生成器重新生成 TypeScript bindings，包含 ClosedCursor 的 incarnation/seq。未运行常规测试套件或真实用户数据库导入。此前各迁移记录中的未编译和待生成状态以本次提交验证为准。
+
+### DIFF-REF-OBSERVER-GEO-LOG-QUERY：共享 Geo 与 Core 日志分页
+
+- 基线 d95b44c05516a3e2e4eb24e2285a7eeaa70e1769。Geo actor/client/ports/fixtures/tests 完整移入 chimera-observers/src/geo，保留 instance_id fence、同步 SetMode、watch fallback、mode retry；Core 只持有 FsCountryIndexSource 及兼容 exports，Snafu selector 改为同型显式构造，不产生第二个 observer。
+- 复制 ref Core 日志分页、详情、状态、summary 与 status event 的调用边界，desktop command 使用已有唯一 CoreLogsClient；公开状态/错误固定化，不泄露后端路径与错误消息。Clear 经现有 StreamsActor，同时清空持久化与 legacy snapshot。仅状态元数据广播，完整 payload 按页或详情读取。主 UI 使用从 ref 复制的 bounded merge（500 行/2 MiB）、cursor sync、older/tail、expired recovery、clear epoch、focus resync、detail、scroll anchor 与虚拟列表，适配现有直接 Tauri RPC，legacy useClashLogs/WS 接口仍保留。补齐 ref i18n（俄语使用英文 fallback）。未迁移 file logs/Meow 专属页面、CoreLogSettings 配置持久化及 ref RPC capability framework。
+- L2。验收：共享 Geo 单 owner；主日志页面实际从持久化读取而非 WS 内存列表；生成 bindings、原有 UI 兼容入口保留。Rustfmt、全 workspace Clippy all-targets/all-features、Specta 生成、interface/chimera TypeScript 检查与 git diff --check 通过。未执行常规测试套件或真实日志数据库验证；保留旧 WS 事件及历史内存投影，后续可将 StreamsActor 与日志状态/设置效果进一步对齐。回滚仅撤销本轮 commit。
+
+### DIFF-REF-STREAM-RATES-LOG-SETTINGS：上游速率算法与日志存储效果
+
+- 基线 d95b44c05516a3e2e4eb24e2285a7eeaa70e1769。复制 ref clash/connection_rates.rs 完整派生算法（含 counter scratch、member rates、借用序列化和测试）；实际 StreamsActor 直接使用 typed snapshot、真实采样间隔和复用计数器，首次样本速率为零，断开时重置。保留现有 owned connection detail DTO、legacy full JSON/history/event、capture/core instance 双身份与 join/epoch fencing；暂不替换整个 WS wire contract，也不宣称已经消除所有 JSON 序列化。旧纯函数回归保留在测试模块。
+- CoreLogSettings 接入 typed Application 持久化、全量及条件提交验证、启动配置及 ref 风格 ApplicationDesired/ApplicationEffect::CoreLogStorage。现有 EffectsActor 负责版本、失败与重试；生产 executor 在启动前绑定同一个 StreamsClient，不另起日志 owner。保存配置后通过 postcommit effect 生效，不进入 runtime rebuild；保留 legacy App 日志字段和原 Clash log level 提交路径。主设置页复制 ref 日志分片大小、容量限制及压缩选择，适配本地 slider/setting API 和五种 locale，bindings 由 Specta 生成。日志设置的 effect 异步收敛，失败通过 effect health/status 报告。
+- L2。验收：ref rate derivation 接入实际 stream worker，配置从持久化到同一 CoreLogsClient，保留现有连接和 legacy UI 接口。非目标：全量替换 StreamsActor、App/Service 文件日志及 Diagnose、运行常规测试或实际存储旋转。Rustfmt、workspace Clippy all-targets/all-features、Specta 生成、interface/chimera typecheck、git diff --check 通过。为生成 bindings 清理项目 target 下旧的可重建测试构建产物；未触及用户配置、历史数据库和源码。回滚撤销本次 commit。
+
+### DIFF-REF-STREAMS-NATIVE-CONTRACT：删除旧后端兼容投影
+
+- 基线 d95b44c05516a3e2e4eb24e2285a7eeaa70e1769。完整替换 ref clash/ws.rs、connection_rates.rs、traffic_frames.rs（包含 upstream 测试），生产使用 CoreClient、ClashWsPacket、ClashWsUpdate、ClashConnectionsSummary、ConnectionDetails 与 Arc<ConnectionsSnapshot>。删除旧 ClashWsConnectionSnapshot、ClashWsLog、DetailCounters、JSON 全量历史及二次反序列化、旧 streams source trait；日志直接由 CoreLogsClient 单独保存。保留宿主必须的可选 API instance ID 校验、明确退出停止操作、shutdown drain 与实例绑定 Geo normalizer。复用现有 window-owned native Channel，传递 Arc 而非复制完整 detail frame。ref 的 status 生命周期识别真实 Core 停止；明确启动不再人为重启 socket。旧测试由 ref 测试替换并使用真实 CoreClient endpoint fixture；原 Geo 流量测试适配 typed snapshot。Agent diagnostics 改用摘要和最近一页 error 日志（最多 200 条，非完整日志总计）。
+- 前端适配方向：复制 ref sequence reducer，provider 先订阅再同步、检测 gap 并重新获取 snapshot、保留有限事件 buffer；Dashboard/Widget/计数使用 connectionCount，legacy connection table 使用 on-demand detail，legacy logs 使用持久化 query hook，仅 UI 层转换展示字段。移除旧 WS log/history 契约，重新生成 Specta bindings，更新 dashboard fixture 并迁入 ref sequence reducer 测试。当前前端 provider 保留 Chimera 的 context 入口，而非完整移入 ref RPC framework；仍不保留旧后端投影。
+- L2。验收：生产后端无旧 WS 全量 JSON/log 数组，按原生 ref wire 接线；前端负责兼容。Rustfmt、全 workspace Clippy all-targets/all-features、Specta 生成、interface/chimera typecheck、diff --check；未运行常规测试套件或真实 GUI/E2E，待 CI。回滚需同时撤销前后端接口变更。

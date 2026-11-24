@@ -1554,5 +1554,16 @@
   "dashboard_layout_loading": "正在加载仪表盘布局…",
   "dashboard_layout_load_failed": "无法加载仪表盘布局",
   "dashboard_layout_saving": "正在保存仪表盘布局…",
-  "dashboard_layout_save_failed": "无法保存仪表盘布局"
+  "dashboard_layout_save_failed": "无法保存仪表盘布局",
+  "logs_core_clear_history": "清空已保存的内核日志",
+  "logs_core_discarded": "有 {count} 条内核日志未能采集。",
+  "logs_core_preview_truncated": "列表显示的是缩略预览，打开 JSON 或复制可读取完整日志。",
+  "logs_load_older": "加载更早记录",
+  "logs_search_incomplete": "本页未匹配，加载更早记录以继续搜索。",
+  "settings_clash_settings_core_log_shard_size_label": "内核日志轮转大小",
+  "settings_clash_settings_core_log_max_size_label": "内核日志存储上限",
+  "settings_clash_settings_core_log_compression_label": "内核日志压缩",
+  "settings_clash_settings_core_log_compression_none": "关闭",
+  "settings_clash_settings_core_log_compression_preset": "内置字典",
+  "settings_clash_settings_core_log_compression_trained": "根据日志训练"
 }

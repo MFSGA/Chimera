@@ -31,6 +31,7 @@ pub(crate) struct ApplicationEffectExecutor {
     /// Production side effects enter the ref CoreActor mailbox. The legacy
     /// port is retained for injected test adapters only.
     core_router: Option<chimera_core::actor_v2::CoreClient>,
+    streams: std::sync::OnceLock<chimera_core::clash::ws::StreamsClient>,
 }
 
 impl ApplicationEffectExecutor {
@@ -48,6 +49,7 @@ impl ApplicationEffectExecutor {
             adapters,
             core,
             core_router: None,
+            streams: std::sync::OnceLock::new(),
         }
     }
 
@@ -230,6 +232,12 @@ impl ApplicationEffectExecutor {
 
 #[async_trait::async_trait]
 impl ApplicationEffectsPort for ApplicationEffectExecutor {
+    fn bind_streams(&self, streams: chimera_core::clash::ws::StreamsClient) -> anyhow::Result<()> {
+        self.streams
+            .set(streams)
+            .map_err(|_| anyhow::anyhow!("streams already bound"))
+    }
+
     async fn apply(
         &self,
         revision: EffectRevision,
@@ -246,6 +254,34 @@ impl ApplicationEffectsPort for ApplicationEffectExecutor {
                     self.adapters.set_locale(*language),
                 ),
                 ApplicationEffect::Logger(desired) => self.apply_logger(revision, desired),
+                ApplicationEffect::CoreLogStorage(desired) => {
+                    match self.streams.get().map(|streams| streams.core_logs()) {
+                        Some(logs) => match logs.configure(*desired).await {
+                            Ok(()) => healthy(EffectKind::CoreLogStorage, revision),
+                            Err(error) => degraded(
+                                EffectKind::CoreLogStorage,
+                                revision,
+                                "core_log_storage_failed",
+                                error.to_string(),
+                                true,
+                            ),
+                        },
+                        None => {
+                            #[cfg(test)]
+                            if self.streams.get().is_none() {
+                                statuses.push(healthy(EffectKind::CoreLogStorage, revision));
+                                continue;
+                            }
+                            degraded(
+                                EffectKind::CoreLogStorage,
+                                revision,
+                                "core_log_storage_unavailable",
+                                "Core log storage unavailable".into(),
+                                true,
+                            )
+                        }
+                    }
+                }
                 ApplicationEffect::AutoLaunch(_)
                 | ApplicationEffect::SystemProxy(_)
                 | ApplicationEffect::ProxyGuard(_) => {
@@ -593,8 +629,8 @@ mod tests {
             adapters.tray_refreshes.lock().unwrap().as_slice(),
             [(TrayRefresh::Full, inputs.tray_view())]
         );
-        assert_eq!(statuses[5].kind, EffectKind::TransparentProxy);
-        assert_eq!(statuses[6].kind, EffectKind::Hotkeys);
+        assert_eq!(statuses[6].kind, EffectKind::TransparentProxy);
+        assert_eq!(statuses[7].kind, EffectKind::Hotkeys);
     }
 
     #[tokio::test]

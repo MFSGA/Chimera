@@ -1482,7 +1482,8 @@ async fn streams_and_proxies_share_ref_core_api_lease_and_revoke_after_handoff()
     });
 
     let core = CoreClient::spawn(local).await.unwrap();
-    let ws = crate::clash::ws::ClashApiClientSource::api_client(&core)
+    let ws = core
+        .api_client()
         .await
         .expect("streams should obtain a lease from CoreActor");
     let proxy = crate::proxies_actor::ProxyApiClientSource::api_client(&core)
@@ -1497,7 +1498,8 @@ async fn streams_and_proxies_share_ref_core_api_lease_and_revoke_after_handoff()
     // a lease against the newly selected Service endpoint.
     assert!(ws.is_revoked());
     assert!(proxy.is_revoked());
-    let next = crate::clash::ws::ClashApiClientSource::api_client(&core)
+    let next = core
+        .api_client()
         .await
         .expect("streams should reacquire the Service capability");
     assert_eq!(next.instance_id(), Some("service-after-handoff"));

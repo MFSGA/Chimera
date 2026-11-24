@@ -1,157 +1,495 @@
-//! Core-owned derivation of per-connection transfer rates from successive
-//! controller frames. The WebSocket actor and Tauri Channel remain app-owned.
-//! This is intentionally pure and mirrors ref's clash/connection_rates.rs.
+//! Pure derivation of per-connection and per-chain-member transfer rates from
+//! two consecutive `clash_api::ConnectionsSnapshot` samples. No IO, no actor
+//! state: time and the previous sample's counters are explicit parameters.
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
 
-use std::{collections::HashMap, time::Instant};
-
-use serde::Serialize;
+use indexmap::IndexMap;
+use serde::{Deserialize, Serialize};
 use specta::Type;
+use tokio::time::Instant;
+use uuid::Uuid;
 
-/// One core connection plus its derived rates, as in ref's detail contract.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct TrafficRate {
+    pub download: u64,
+    pub upload: u64,
+}
+
+/// Pushed on every connection sample; size is independent of connection count.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ClashConnectionsSummary {
+    pub download_total: u64,
+    pub upload_total: u64,
+    pub download_speed: u64,
+    pub upload_speed: u64,
+    pub memory: Option<u64>,
+    pub connection_count: u32,
+    /// Keyed by chain member name (group or node); summed over every
+    /// connection whose `chains` contains that name.
+    pub member_rates: IndexMap<String, TrafficRate>,
+}
+
+/// One connection plus its derived rates, for IPC consumers that need the
+/// per-connection detail (only built when `with_details` is set).
 #[derive(Debug, Clone, Serialize, Type)]
 #[serde(rename_all = "camelCase")]
-pub struct ClashConnection {
+pub struct ClashConnection<'a> {
     #[serde(flatten)]
-    pub connection: clash_api::Connection,
+    pub connection: &'a clash_api::Connection,
     pub download_speed: u64,
     pub upload_speed: u64,
 }
 
-/// Latest full connection details, produced only while a UI subscriber exists.
-/// A single latest frame (not an unbounded event queue) follows ref's watch semantics.
-#[derive(Debug, Clone, Serialize, Type)]
-#[serde(rename_all = "camelCase")]
-pub struct ClashConnectionDetails {
-    pub sequence: u64,
-    pub connections: Vec<ClashConnection>,
+/// Shared source data and rates in source order. Serialization borrows each
+/// connection, so slow consumers retain an immutable snapshot without cloning it.
+#[derive(Debug)]
+pub struct ConnectionDetails {
+    snapshot: Arc<clash_api::ConnectionsSnapshot>,
+    rates: Vec<TrafficRate>,
 }
 
-#[derive(Default)]
-pub struct DetailCounters {
-    at: Option<Instant>,
-    connections: HashMap<String, (i64, i64)>,
+impl ConnectionDetails {
+    pub fn new(snapshot: Arc<clash_api::ConnectionsSnapshot>, rates: Vec<TrafficRate>) -> Self {
+        debug_assert_eq!(
+            snapshot.connections.as_ref().map_or(0, Vec::len),
+            rates.len()
+        );
+        Self { snapshot, rates }
+    }
 }
 
-/// Pure per-connection byte/sec derivation: time and the previous sample's
-/// counters are explicit, as in ref. Preserve the core model's extra fields.
-pub fn derive_connection_details(
-    counters: &mut DetailCounters,
-    rows: &[serde_json::Value],
-    at: Instant,
-) -> Vec<ClashConnection> {
-    let elapsed = counters
-        .at
-        .and_then(|last| at.checked_duration_since(last))
-        .map(|duration| duration.as_secs_f64())
-        .unwrap_or_default();
-    let mut next = HashMap::with_capacity(rows.len());
-    let details = rows
-        .iter()
-        .filter_map(|raw| {
-            let connection: clash_api::Connection = match serde_json::from_value(raw.clone()) {
-                Ok(value) => value,
-                Err(error) => {
-                    tracing::debug!(%error, "skipping malformed connection detail");
-                    return None;
-                }
-            };
-            let rate = |previous: i64, current: i64| -> u64 {
-                if elapsed <= 0.0 || current <= previous {
-                    return 0;
-                }
-                ((current.saturating_sub(previous)) as u64 as f64 / elapsed) as u64
-            };
-            let (download_speed, upload_speed) = counters
+impl Serialize for ConnectionDetails {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_seq(
+            self.snapshot
                 .connections
-                .get(&connection.id.to_string())
-                .map(|(before_down, before_up)| {
-                    (
-                        rate(*before_down, connection.download),
-                        rate(*before_up, connection.upload),
-                    )
-                })
-                .unwrap_or_default();
-            next.insert(
-                connection.id.to_string(),
-                (connection.download, connection.upload),
-            );
-            Some(ClashConnection {
-                connection,
+                .iter()
+                .flatten()
+                .zip(&self.rates)
+                .map(|(connection, rate)| ClashConnection {
+                    connection,
+                    download_speed: rate.download,
+                    upload_speed: rate.upload,
+                }),
+        )
+    }
+}
+
+/// Spare counter storage, owned by the stream actor and recycled after a commit.
+#[derive(Default)]
+pub struct ConnectionRateScratch {
+    per_connection: HashMap<Uuid, (i64, i64)>,
+}
+
+impl ConnectionRateScratch {
+    pub fn recycle(&mut self, counters: ConnectionCounters) {
+        self.per_connection = counters.per_connection;
+    }
+}
+
+/// The counters `ConnectionRates` needs from the previous sample to derive
+/// rates for the next one. Deliberately not a full connection list.
+#[derive(Debug, Clone)]
+pub struct ConnectionCounters {
+    pub at: Instant,
+    pub download_total: u64,
+    pub upload_total: u64,
+    pub per_connection: HashMap<Uuid, (i64, i64)>,
+}
+
+pub struct DerivedConnections {
+    pub summary: ClashConnectionsSummary,
+    pub details: Option<Vec<TrafficRate>>,
+    pub counters: ConnectionCounters,
+}
+
+pub struct ConnectionRates;
+
+impl ConnectionRates {
+    /// Derives a summary (and, if `with_details`, per-connection detail) from
+    /// `current` and the counters kept from the previous sample. Returns
+    /// `None` when the core reports negative totals, matching the actor's
+    /// existing behavior of dropping such samples.
+    pub fn derive(
+        scratch: &mut ConnectionRateScratch,
+        previous: Option<&ConnectionCounters>,
+        current: &clash_api::ConnectionsSnapshot,
+        at: Instant,
+        with_details: bool,
+    ) -> Option<DerivedConnections> {
+        let download_total = u64::try_from(current.download_total).ok()?;
+        let upload_total = u64::try_from(current.upload_total).ok()?;
+
+        let seconds = previous.map(|prev| {
+            at.checked_duration_since(prev.at)
+                .unwrap_or_default()
+                .as_secs_f64()
+        });
+        let (download_speed, upload_speed) = match (previous, seconds) {
+            (Some(prev), Some(seconds)) if seconds > 0.0 => (
+                (download_total.saturating_sub(prev.download_total) as f64 / seconds) as u64,
+                (upload_total.saturating_sub(prev.upload_total) as f64 / seconds) as u64,
+            ),
+            _ => (0, 0),
+        };
+
+        let connections = current.connections.as_deref().unwrap_or(&[]);
+        let mut member_rates: IndexMap<String, TrafficRate> = IndexMap::new();
+        let mut per_connection = std::mem::take(&mut scratch.per_connection);
+        per_connection.clear();
+        per_connection.reserve(connections.len());
+        let mut seen = HashSet::new();
+        let mut details = with_details.then(|| Vec::with_capacity(connections.len()));
+
+        for connection in connections {
+            let prev_counters = previous.and_then(|prev| prev.per_connection.get(&connection.id));
+            let (conn_download_speed, conn_upload_speed) = match (prev_counters, seconds) {
+                (Some(&(prev_download, prev_upload)), Some(seconds)) if seconds > 0.0 => (
+                    rate(prev_download, connection.download, seconds),
+                    rate(prev_upload, connection.upload, seconds),
+                ),
+                _ => (0, 0),
+            };
+            per_connection.insert(connection.id, (connection.download, connection.upload));
+
+            seen.clear();
+            for member in &connection.chains {
+                if seen.insert(member.as_str()) {
+                    if let Some(entry) = member_rates.get_mut(member.as_str()) {
+                        entry.download += conn_download_speed;
+                        entry.upload += conn_upload_speed;
+                    } else {
+                        member_rates.insert(
+                            member.clone(),
+                            TrafficRate {
+                                download: conn_download_speed,
+                                upload: conn_upload_speed,
+                            },
+                        );
+                    }
+                }
+            }
+
+            if let Some(details) = details.as_mut() {
+                details.push(TrafficRate {
+                    download: conn_download_speed,
+                    upload: conn_upload_speed,
+                });
+            }
+        }
+
+        let connection_count = u32::try_from(connections.len()).unwrap_or(u32::MAX);
+
+        Some(DerivedConnections {
+            summary: ClashConnectionsSummary {
+                download_total,
+                upload_total,
                 download_speed,
                 upload_speed,
-            })
+                memory: current.memory,
+                connection_count,
+                member_rates,
+            },
+            details,
+            counters: ConnectionCounters {
+                at,
+                download_total,
+                upload_total,
+                per_connection,
+            },
         })
-        .collect();
-    counters.at = Some(at);
-    counters.connections = next;
-    details
+    }
+}
+
+/// Bytes/second between two counter readings, clamped to 0 when the core's
+/// counter went backwards (e.g. it reset).
+fn rate(previous: i64, current: i64, seconds: f64) -> u64 {
+    let delta = current.saturating_sub(previous);
+    if delta <= 0 {
+        return 0;
+    }
+    (delta as u64 as f64 / seconds) as u64
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::time::Duration;
 
-    fn connection(download: i64, upload: i64) -> serde_json::Value {
-        serde_json::json!({
-            "id": "11111111-1111-1111-1111-111111111111",
-            "download": download,
+    use serde_json::json;
+
+    use super::*;
+
+    fn derive(
+        previous: Option<&ConnectionCounters>,
+        current: &clash_api::ConnectionsSnapshot,
+        at: Instant,
+        details: bool,
+    ) -> Option<DerivedConnections> {
+        ConnectionRates::derive(
+            &mut ConnectionRateScratch::default(),
+            previous,
+            current,
+            at,
+            details,
+        )
+    }
+
+    fn conn(id: &str, download: i64, upload: i64, chains: &[&str]) -> clash_api::Connection {
+        serde_json::from_value(json!({
+            "id": id,
+            "metadata": null,
             "upload": upload,
-            "metadata": { "host": "example.test", "unknownGeo": {"region": "test"} },
-            "customTag": "retain-me",
-            "chains": ["DIRECT"],
-            "start": "2024-01-01T00:00:00+00:00",
+            "download": download,
+            "start": "2024-01-01T00:00:00Z",
+            "chains": chains,
             "rule": "MATCH",
             "rulePayload": "",
-        })
+        }))
+        .unwrap()
+    }
+
+    fn snapshot(
+        download_total: i64,
+        upload_total: i64,
+        connections: Vec<clash_api::Connection>,
+    ) -> clash_api::ConnectionsSnapshot {
+        clash_api::ConnectionsSnapshot {
+            download_total,
+            upload_total,
+            connections: if connections.is_empty() {
+                None
+            } else {
+                Some(connections)
+            },
+            memory: Some(1024),
+        }
+    }
+
+    const A: &str = "11111111-1111-1111-1111-111111111111";
+    const B: &str = "22222222-2222-2222-2222-222222222222";
+
+    #[test]
+    fn first_sample_has_zero_rates() {
+        let current = snapshot(1000, 2000, vec![conn(A, 100, 200, &["Proxy"])]);
+        let derived = derive(None, &current, Instant::now(), false).unwrap();
+        assert_eq!(derived.summary.download_speed, 0);
+        assert_eq!(derived.summary.upload_speed, 0);
+        assert_eq!(derived.summary.download_total, 1000);
+        assert_eq!(derived.summary.upload_total, 2000);
+        assert_eq!(derived.summary.connection_count, 1);
+        assert_eq!(
+            derived.summary.member_rates["Proxy"],
+            TrafficRate {
+                download: 0,
+                upload: 0
+            }
+        );
+        assert!(derived.details.is_none());
     }
 
     #[test]
-    fn core_rate_derivation_keeps_protocol_fields_and_scales_by_elapsed_time() {
-        let now = Instant::now();
-        let mut counters = DetailCounters::default();
+    fn rates_use_elapsed_time_between_samples() {
+        let first = snapshot(0, 0, vec![conn(A, 0, 0, &["Proxy"])]);
+        let t0 = Instant::now();
+        let derived0 = derive(None, &first, t0, false).unwrap();
 
-        let first = derive_connection_details(&mut counters, &[connection(100, 50)], now);
-        assert_eq!(first[0].download_speed, 0);
-        assert_eq!(first[0].upload_speed, 0);
+        let second = snapshot(1000, 2000, vec![conn(A, 1000, 2000, &["Proxy"])]);
+        let t1 = t0 + Duration::from_secs(2);
+        let derived1 = derive(Some(&derived0.counters), &second, t1, false).unwrap();
 
-        let next = derive_connection_details(
-            &mut counters,
-            &[connection(700, 250)],
-            now + Duration::from_millis(500),
-        );
-        assert_eq!(next[0].download_speed, 1200);
-        assert_eq!(next[0].upload_speed, 400);
-        let wire = serde_json::to_value(&next[0]).unwrap();
-        assert_eq!(wire["_extra"]["customTag"], "retain-me");
-        assert_eq!(wire["metadata"]["_extra"]["unknownGeo"]["region"], "test");
+        assert_eq!(derived1.summary.download_speed, 500);
+        assert_eq!(derived1.summary.upload_speed, 1000);
+        assert_eq!(derived1.summary.member_rates["Proxy"].download, 500);
+        assert_eq!(derived1.summary.member_rates["Proxy"].upload, 1000);
     }
 
     #[test]
-    fn stale_connections_do_not_leak_counters_across_disconnection() {
-        let now = Instant::now();
-        let mut counters = DetailCounters::default();
-        derive_connection_details(&mut counters, &[connection(900, 100)], now);
-        derive_connection_details(&mut counters, &[], now + Duration::from_secs(1));
-        let new_session = derive_connection_details(
-            &mut counters,
-            &[connection(10, 5)],
-            now + Duration::from_secs(2),
-        );
-        assert_eq!(new_session[0].download_speed, 0);
-        assert_eq!(new_session[0].upload_speed, 0);
+    fn zero_elapsed_reports_zero_rates() {
+        let first = snapshot(0, 0, vec![conn(A, 0, 0, &[])]);
+        let t0 = Instant::now();
+        let derived0 = derive(None, &first, t0, false).unwrap();
+
+        let second = snapshot(1000, 1000, vec![conn(A, 1000, 1000, &[])]);
+        let derived1 = derive(Some(&derived0.counters), &second, t0, false).unwrap();
+
+        assert_eq!(derived1.summary.download_speed, 0);
+        assert_eq!(derived1.summary.upload_speed, 0);
     }
 
     #[test]
-    fn malformed_rows_do_not_block_valid_connection_updates() {
-        let now = Instant::now();
-        let mut counters = DetailCounters::default();
-        let results = derive_connection_details(
-            &mut counters,
-            &[serde_json::json!({"invalid": true}), connection(42, 8)],
-            now,
+    fn new_connection_has_zero_rate_and_closed_connection_is_dropped() {
+        let first = snapshot(0, 0, vec![conn(A, 0, 0, &["Proxy"])]);
+        let t0 = Instant::now();
+        let derived0 = derive(None, &first, t0, false).unwrap();
+
+        // A closes, B opens.
+        let second = snapshot(500, 500, vec![conn(B, 500, 500, &["Proxy"])]);
+        let t1 = t0 + Duration::from_secs(1);
+        let derived1 = derive(Some(&derived0.counters), &second, t1, true).unwrap();
+
+        assert_eq!(derived1.summary.connection_count, 1);
+        let details = derived1.details.unwrap();
+        assert_eq!(details.len(), 1);
+        assert_eq!(second.connections.as_ref().unwrap()[0].id.to_string(), B);
+        assert_eq!(details[0].download, 0);
+        assert_eq!(details[0].upload, 0);
+    }
+
+    #[test]
+    fn counter_going_backward_is_clamped_to_zero() {
+        let first = snapshot(1000, 1000, vec![conn(A, 1000, 1000, &[])]);
+        let t0 = Instant::now();
+        let derived0 = derive(None, &first, t0, false).unwrap();
+
+        // The core reset this connection's download counter.
+        let second = snapshot(1000, 2000, vec![conn(A, 200, 2000, &[])]);
+        let t1 = t0 + Duration::from_secs(1);
+        let derived1 = derive(Some(&derived0.counters), &second, t1, true).unwrap();
+
+        let details = derived1.details.unwrap();
+        assert_eq!(details[0].download, 0);
+        assert_eq!(details[0].upload, 1000);
+    }
+
+    #[test]
+    fn duplicate_chain_names_in_one_connection_count_once() {
+        let first = snapshot(0, 0, vec![conn(A, 0, 0, &["Proxy", "Proxy"])]);
+        let t0 = Instant::now();
+        let derived0 = derive(None, &first, t0, false).unwrap();
+
+        let second = snapshot(1000, 0, vec![conn(A, 1000, 0, &["Proxy", "Proxy"])]);
+        let t1 = t0 + Duration::from_secs(1);
+        let derived1 = derive(Some(&derived0.counters), &second, t1, false).unwrap();
+
+        assert_eq!(derived1.summary.member_rates["Proxy"].download, 1000);
+    }
+
+    #[test]
+    fn member_rates_sum_across_connections() {
+        let first = snapshot(
+            0,
+            0,
+            vec![
+                conn(A, 0, 0, &["Proxy"]),
+                conn(B, 0, 0, &["Proxy", "Direct"]),
+            ],
         );
-        assert_eq!(results.len(), 1);
-        assert_eq!(results[0].connection.download, 42);
+        let t0 = Instant::now();
+        let derived0 = derive(None, &first, t0, false).unwrap();
+
+        let second = snapshot(
+            2000,
+            0,
+            vec![
+                conn(A, 1000, 0, &["Proxy"]),
+                conn(B, 1000, 0, &["Proxy", "Direct"]),
+            ],
+        );
+        let t1 = t0 + Duration::from_secs(1);
+        let derived1 = derive(Some(&derived0.counters), &second, t1, false).unwrap();
+
+        assert_eq!(derived1.summary.member_rates["Proxy"].download, 2000);
+        assert_eq!(derived1.summary.member_rates["Direct"].download, 1000);
+    }
+
+    #[test]
+    fn shared_details_preserve_order_rates_and_extensions() {
+        let at = Instant::now();
+        let previous = snapshot(0, 0, vec![conn(A, 0, 0, &[]), conn(B, 0, 0, &[])]);
+        let counters = derive(None, &previous, at, false).unwrap().counters;
+        let mut current = snapshot(40, 60, vec![conn(B, 30, 40, &[]), conn(A, 10, 20, &[])]);
+        let connection = &mut current.connections.as_mut().unwrap()[0];
+        connection
+            .extra
+            .insert("future".into(), json!({"nested":[1,null,"text"]}));
+        connection.metadata =
+            Some(serde_json::from_value(json!({"sourcePort":"443","future":false})).unwrap());
+        let current = Arc::new(current);
+        let derived = derive(Some(&counters), &current, at + Duration::from_secs(1), true).unwrap();
+        let rates = derived.details.unwrap();
+        let mut expected = serde_json::to_value(current.connections.as_ref().unwrap()).unwrap();
+        expected[0]["downloadSpeed"] = json!(30);
+        expected[0]["uploadSpeed"] = json!(40);
+        expected[1]["downloadSpeed"] = json!(10);
+        expected[1]["uploadSpeed"] = json!(20);
+        let details = ConnectionDetails::new(Arc::clone(&current), rates);
+        let weak = Arc::downgrade(&current);
+        drop(current);
+        assert_eq!(serde_json::to_value(&details).unwrap(), expected);
+        drop(details);
+        assert!(weak.upgrade().is_none());
+    }
+
+    #[test]
+    fn recycled_counters_keep_previous_baselines_and_duplicate_id_behavior() {
+        let mut scratch = ConnectionRateScratch::default();
+        let mut previous = None;
+        let at = Instant::now();
+        for i in 0..5 {
+            let current = snapshot(
+                100 * i,
+                0,
+                vec![conn(A, 100 * i, 0, &[]), conn(A, 100 * i + 10, 0, &[])],
+            );
+            let derived = ConnectionRates::derive(
+                &mut scratch,
+                previous.as_ref(),
+                &current,
+                at + Duration::from_secs(i as u64),
+                true,
+            )
+            .unwrap();
+            let rates = derived.details.unwrap();
+            assert_eq!(rates[0].download, if i == 0 { 0 } else { 90 });
+            assert_eq!(rates[1].download, if i == 0 { 0 } else { 100 });
+            if let Some(old) = previous.replace(derived.counters) {
+                scratch.recycle(old);
+            }
+        }
+        let counters = previous.unwrap();
+        assert!(
+            ConnectionRates::derive(
+                &mut scratch,
+                Some(&counters),
+                &snapshot(-1, 0, vec![]),
+                at,
+                false
+            )
+            .is_none()
+        );
+        let empty = ConnectionRates::derive(
+            &mut scratch,
+            Some(&counters),
+            &snapshot(500, 0, vec![]),
+            at + Duration::from_secs(5),
+            false,
+        )
+        .unwrap();
+        assert_eq!(empty.summary.connection_count, 0);
+        assert!(empty.counters.per_connection.is_empty());
+    }
+
+    #[test]
+    fn no_connections_reports_zero_count() {
+        let current = clash_api::ConnectionsSnapshot {
+            download_total: 0,
+            upload_total: 0,
+            connections: None,
+            memory: None,
+        };
+        let derived = derive(None, &current, Instant::now(), true).unwrap();
+        assert_eq!(derived.summary.connection_count, 0);
+        assert!(derived.details.unwrap().is_empty());
+    }
+
+    #[test]
+    fn negative_totals_return_none() {
+        let current = snapshot(-1, 0, vec![]);
+        assert!(derive(None, &current, Instant::now(), false).is_none());
     }
 }

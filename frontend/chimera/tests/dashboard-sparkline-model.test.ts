@@ -27,24 +27,24 @@ test('empty or missing live traffic still draws a stable zero baseline', () => {
   assert.deepEqual(trafficSamples([], 'up', 0), []);
 });
 
-test('Chimera connection snapshots use connections array length instead of ref connectionCount', () => {
+test('connection summaries use ref connectionCount', () => {
   const snapshot = (n: number) => ({
     downloadTotal: 0,
     uploadTotal: 0,
     downloadSpeed: 0,
     uploadSpeed: 0,
-    connections: Array.from({ length: n }, (_, index) => ({
-      id: String(index),
-    })),
+    connectionCount: n,
+    memberRates: {},
+    memory: null,
   });
   assert.equal(connectionCount(undefined), 0);
-  assert.equal(connectionCount(snapshot(4) as never), 4);
+  assert.equal(connectionCount(snapshot(4)), 4);
   assert.deepEqual(
-    connectionSamples([snapshot(3), snapshot(5)] as never, 4),
+    connectionSamples([snapshot(3), snapshot(5)], 4),
     [0, 0, 3, 5],
   );
   assert.deepEqual(
-    connectionSamples([snapshot(1), snapshot(2), snapshot(3)] as never, 2),
+    connectionSamples([snapshot(1), snapshot(2), snapshot(3)], 2),
     [2, 3],
   );
 });

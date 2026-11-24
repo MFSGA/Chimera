@@ -53,7 +53,7 @@ impl FrameNormalizer for InstanceBoundNormalizer {
             .geo
             .borrow()
             .clone()
-            .filter(|index| index.instance_id == raw.core_instance_id);
+            .filter(|index| index.instance_id == raw.instance_id);
         frame_from_snapshot(
             raw,
             wall_ms,
@@ -75,7 +75,7 @@ impl FrameNormalizer for InstanceBoundNormalizer {
     ) -> Frame {
         let mut state = self.state.lock().await;
         let frame_instance_changed =
-            state.core_instance_id.as_deref() != Some(raw.core_instance_id.as_str());
+            state.core_instance_id.as_deref() != Some(raw.instance_id.as_str());
         let mut mode_ready = true;
         if frame_instance_changed {
             if let (Some(source), Some(refresh)) = (&self.geo_mode_source, &self.geo_mode_refresh) {
@@ -86,10 +86,10 @@ impl FrameNormalizer for InstanceBoundNormalizer {
                     state.last_mode_check = Some(tokio::time::Instant::now());
                     let mode = tokio::time::timeout(Duration::from_secs(3), source.mode()).await;
                     match mode {
-                        Ok(Ok(binding)) if binding.instance_id == raw.core_instance_id => {
+                        Ok(Ok(binding)) if binding.instance_id == raw.instance_id => {
                             match refresh.set_mode(binding).await {
                                 Ok(()) => {
-                                    state.core_instance_id = Some(raw.core_instance_id.clone());
+                                    state.core_instance_id = Some(raw.instance_id.clone());
                                     state.last_mode_check = None;
                                 }
                                 Err(error) => {
@@ -100,7 +100,7 @@ impl FrameNormalizer for InstanceBoundNormalizer {
                         }
                         Ok(Ok(binding)) => {
                             tracing::debug!(
-                                frame_core = %raw.core_instance_id,
+                                frame_core = %raw.instance_id,
                                 active_core = %binding.instance_id,
                                 "ignoring a stale traffic frame from a different core instance"
                             );
@@ -119,13 +119,13 @@ impl FrameNormalizer for InstanceBoundNormalizer {
                     mode_ready = false;
                 }
             } else {
-                state.core_instance_id = Some(raw.core_instance_id.clone());
+                state.core_instance_id = Some(raw.instance_id.clone());
             }
         }
         let index = mode_ready
             .then(|| self.geo.borrow().clone())
             .flatten()
-            .filter(|index| index.instance_id == raw.core_instance_id)
+            .filter(|index| index.instance_id == raw.instance_id)
             .map(|index| index.index.clone());
         frame_from_snapshot(
             raw,

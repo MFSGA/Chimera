@@ -272,6 +272,42 @@ impl ChimeraClient {
             &bridges,
             bundle_metadata.release_channel,
         ))?;
+        let streams_shutdown = shutdown.child_token();
+        // Keep Core log shards in a dedicated subdirectory, never in the
+        // app/service text-log rotation namespace. Optional storage failure
+        // must not prevent the desktop or core from starting.
+        let core_log_dir = paths.app_logs_dir().join("core");
+        let core_log_store = tauri::async_runtime::block_on(async {
+            tokio::task::spawn_blocking(move || {
+                chimera_core::logs::RedbCoreLogStore::open(core_log_dir)
+            })
+            .await
+        });
+        let core_log_store: Box<dyn chimera_core::logs::CoreLogStore> = match core_log_store {
+            Ok(Ok(store)) => Box::new(store),
+            Ok(Err(error)) => Box::new(chimera_core::logs::UnavailableCoreLogStore(
+                error.to_string(),
+            )),
+            Err(error) => Box::new(chimera_core::logs::UnavailableCoreLogStore(
+                error.to_string(),
+            )),
+        };
+        let core_logs = tauri::async_runtime::block_on(chimera_core::logs::CoreLogsClient::spawn(
+            core_log_store,
+            typed.application.get_typed().core_logs,
+            shutdown.child_token(),
+            &tasks,
+        ))?;
+        let streams =
+            tauri::async_runtime::block_on(chimera_core::clash::ws::StreamsClient::spawn(
+                core_v2.clone(),
+                core_logs,
+                typed.clash_config.get()?.overrides.log_level(),
+                streams_shutdown.clone(),
+                &tasks,
+            ))?;
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        effects_port.bind_streams(streams.clone())?;
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
         let effects = tauri::async_runtime::block_on(async {
             let initial = effects::plan::ApplicationEffectInputs::project(
@@ -343,40 +379,6 @@ impl ChimeraClient {
         )?;
         tauri::async_runtime::block_on(
             mutations.connect_with_runtime_gate(core_lifecycle.clone(), profile_gate.clone()),
-        )?;
-        let streams_shutdown = shutdown.child_token();
-        // Keep Core log shards in a dedicated subdirectory, never in the
-        // app/service text-log rotation namespace. Optional storage failure
-        // must not prevent the desktop or core from starting.
-        let core_log_dir = paths.app_logs_dir().join("core");
-        let core_log_store = tauri::async_runtime::block_on(async {
-            tokio::task::spawn_blocking(move || {
-                chimera_core::logs::RedbCoreLogStore::open(core_log_dir)
-            })
-            .await
-        });
-        let core_log_store = match core_log_store {
-            Ok(Ok(store)) => Some(Box::new(store) as Box<dyn chimera_core::logs::CoreLogStore>),
-            Ok(Err(error)) => {
-                tracing::warn!(%error, "optional Core log storage unavailable");
-                Some(Box::new(chimera_core::logs::UnavailableCoreLogStore(
-                    error.to_string(),
-                ))
-                    as Box<dyn chimera_core::logs::CoreLogStore>)
-            }
-            Err(error) => {
-                tracing::warn!(%error, "optional Core log storage worker failed");
-                None
-            }
-        };
-        let streams = tauri::async_runtime::block_on(
-            chimera_core::clash::ws::StreamsClient::spawn_with_logs(
-                Arc::new(core_v2.clone()),
-                typed.clash_config.get()?.overrides.log_level(),
-                streams_shutdown.clone(),
-                &tasks,
-                core_log_store,
-            ),
         )?;
         let proxies =
             tauri::async_runtime::block_on(chimera_core::proxies_actor::ProxiesClient::spawn(
@@ -538,7 +540,19 @@ impl ChimeraClient {
         let streams_shutdown = tokio_util::sync::CancellationToken::new();
         let streams_tasks = tokio_util::task::TaskTracker::new();
         let streams = chimera_core::clash::ws::StreamsClient::spawn(
-            clash_api::streams_api_client_source(core.clone()),
+            chimera_core::actor_v2::CoreClient::spawn(
+                chimera_core::actor_v2::test_support::endpoint("http://127.0.0.1:1/".into()),
+            )
+            .await
+            .unwrap(),
+            chimera_core::logs::CoreLogsClient::spawn(
+                Box::new(chimera_core::logs::UnavailableCoreLogStore("test".into())),
+                Default::default(),
+                streams_shutdown.clone(),
+                &streams_tasks,
+            )
+            .await
+            .unwrap(),
             chimera_config::clash::config::overrides::LogLevel::Info,
             streams_shutdown.clone(),
             &streams_tasks,

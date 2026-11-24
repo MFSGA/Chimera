@@ -1,4 +1,5 @@
 import {
+  useClashConnectionDetails,
   useClashConnections,
   type ClashConnectionItem,
 } from '@chimera/interface';
@@ -105,36 +106,31 @@ export default function ConnectionsTable({
   searchTerm?: string;
   viewportRef: RefObject<HTMLElement | null>;
 }) {
-  const { data: clashConnections, isLoading } = useClashConnections();
+  const { data: details, isLoading } = useClashConnectionDetails();
   const tableColumns = useAtomValue(connectionTableColumnsAtom);
   const [selected, setSelected] = useState<TableConnection>();
   const [columnSizing, setColumnSizing] = useState<ColumnSizingState>({});
 
   const data = useMemo<TableConnection[]>(() => {
-    const snapshots = clashConnections ?? [];
-    const latest = snapshots.at(-1)?.connections ?? [];
-    const previous = snapshots.at(-2)?.connections ?? [];
-    const previousById = new Map(
-      previous.map((connection) => [connection.id, connection]),
-    );
-
-    return latest
-      .map((connection) => {
-        const previousConnection = previousById.get(connection.id);
-        return {
-          ...connection,
-          downloadSpeed: previousConnection
-            ? connection.download - previousConnection.download
-            : 0,
-          uploadSpeed: previousConnection
-            ? connection.upload - previousConnection.upload
-            : 0,
-        };
-      })
+    return (details?.connections ?? [])
+      .map((connection) => ({
+        ...connection,
+        // Legacy table's display fields expect strings. The native detail DTO
+        // is nullable and retains extension keys; adapt here only.
+        metadata: {
+          ...connection.metadata,
+          network: connection.metadata?.network ?? '',
+          type: connection.metadata?.type ?? '',
+          host: connection.metadata?.host ?? '',
+          sourceIP: connection.metadata?.sourceIP ?? '',
+          sourcePort: connection.metadata?.sourcePort ?? '',
+          destinationPort: connection.metadata?.destinationPort ?? '',
+        } as ClashConnectionItem['metadata'],
+      }))
       .filter((connection) =>
         searchTerm ? containsSearchTerm(connection, searchTerm) : true,
       );
-  }, [clashConnections, searchTerm]);
+  }, [details, searchTerm]);
 
   const columns = useMemo(
     () =>
@@ -342,7 +338,7 @@ export default function ConnectionsTable({
       : 0;
   const tableRenderWidth = Math.max(tableBaseWidth, viewportWidth);
 
-  if (isLoading && !clashConnections?.length) {
+  if (isLoading && !details) {
     return null;
   }
 

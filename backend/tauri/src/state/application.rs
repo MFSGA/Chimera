@@ -68,6 +68,11 @@ pub(crate) fn validate_network_automation_policy(
     candidate: &ChimeraAppConfig,
 ) -> anyhow::Result<()> {
     candidate
+        .core_logs
+        .validate()
+        .map_err(anyhow::Error::msg)
+        .context("invalid Core log storage settings")?;
+    candidate
         .network_automation
         .validate()
         .map_err(|error| anyhow::anyhow!("invalid network automation policy: {error}"))?;

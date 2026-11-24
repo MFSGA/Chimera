@@ -5,8 +5,8 @@ use std::{collections::BTreeSet, time::Duration};
 
 use chimera_config::{
     application::{
-        ChimeraAppConfig, ClashCore, I18nLanguage, LoggingLevel, NetworkStatisticWidgetConfig,
-        ProxiesSelectorMode, TrayMenuMode,
+        ChimeraAppConfig, ClashCore, CoreLogSettings, I18nLanguage, LoggingLevel,
+        NetworkStatisticWidgetConfig, ProxiesSelectorMode, TrayMenuMode,
     },
     clash::config::{
         ClashConfig, ClashControlChannel, TransparentProxyConfig, TransparentProxyMode,
@@ -43,6 +43,7 @@ pub struct ApplicationEffectFields {
     pub language: I18nLanguage,
     pub app_log_level: LoggingLevel,
     pub max_log_files: usize,
+    pub core_logs: CoreLogSettings,
     pub tray_selector_mode: ProxiesSelectorMode,
     pub tray_menu_mode: TrayMenuMode,
     pub core: ClashCore,
@@ -91,6 +92,7 @@ impl ApplicationEffectInputs {
                 language: app.language,
                 app_log_level: app.app_log_level.clone(),
                 max_log_files: app.max_log_files,
+                core_logs: app.core_logs,
                 tray_selector_mode: app.tray_selector_mode,
                 tray_menu_mode: app.tray_menu_mode,
                 core: app.core,
@@ -132,6 +134,7 @@ impl ApplicationEffectInputs {
                 level: app.app_log_level.clone(),
                 max_files: app.max_log_files,
             },
+            core_log_storage: app.core_logs,
             auto_launch: app.enable_auto_launch,
             system_proxy: SystemProxyDesired {
                 enabled: app.enable_system_proxy,
@@ -198,6 +201,7 @@ impl ApplicationEffectInputs {
 pub enum EffectKind {
     Locale,
     Logger,
+    CoreLogStorage,
     AutoLaunch,
     SystemProxy,
     ProxyGuard,
@@ -281,6 +285,7 @@ pub struct TrayView {
 struct ApplicationDesired {
     locale: I18nLanguage,
     logger: LoggerDesired,
+    core_log_storage: CoreLogSettings,
     auto_launch: bool,
     system_proxy: SystemProxyDesired,
     transparent_proxy: TransparentProxyDesired,
@@ -312,6 +317,7 @@ impl ApplicationDesired {
 pub enum ApplicationEffect {
     Locale(I18nLanguage),
     Logger(LoggerDesired),
+    CoreLogStorage(CoreLogSettings),
     AutoLaunch(bool),
     SystemProxy(SystemProxyDesired),
     ProxyGuard(ProxyGuardDesired),
@@ -326,6 +332,7 @@ impl ApplicationEffect {
         match self {
             Self::Locale(_) => EffectKind::Locale,
             Self::Logger(_) => EffectKind::Logger,
+            Self::CoreLogStorage(_) => EffectKind::CoreLogStorage,
             Self::AutoLaunch(_) => EffectKind::AutoLaunch,
             Self::SystemProxy(_) => EffectKind::SystemProxy,
             Self::ProxyGuard(_) => EffectKind::ProxyGuard,
@@ -410,6 +417,7 @@ impl ApplicationEffectPlan {
         let ApplicationDesiredChanges {
             locale,
             logger,
+            core_log_storage,
             auto_launch,
             system_proxy,
             proxy_guard,
@@ -424,6 +432,7 @@ impl ApplicationEffectPlan {
         let mut effects = Vec::new();
         effects.extend(locale.map(ApplicationEffect::Locale));
         effects.extend(logger.map(ApplicationEffect::Logger));
+        effects.extend(core_log_storage.map(ApplicationEffect::CoreLogStorage));
         effects.extend(auto_launch.map(ApplicationEffect::AutoLaunch));
         effects.extend(system_proxy.map(ApplicationEffect::SystemProxy));
         effects.extend(proxy_guard.map(ApplicationEffect::ProxyGuard));
@@ -544,8 +553,8 @@ mod tests {
     use chimera_config::application::StatisticWidgetVariant;
     use chimera_config::{
         application::{
-            ChimeraAppConfig, ClashCore, I18nLanguage, LoggingLevel, NetworkStatisticWidgetConfig,
-            ProxiesSelectorMode, TrayMenuMode,
+            ChimeraAppConfig, ClashCore, CoreLogSettings, I18nLanguage, LoggingLevel,
+            NetworkStatisticWidgetConfig, ProxiesSelectorMode, TrayMenuMode,
         },
         clash::config::{
             ClashConfig, ClashControlChannel,
@@ -568,6 +577,7 @@ mod tests {
                 language: I18nLanguage::English,
                 app_log_level: LoggingLevel::Info,
                 max_log_files: 7,
+                core_logs: CoreLogSettings::default(),
                 tray_selector_mode: ProxiesSelectorMode::Normal,
                 tray_menu_mode: TrayMenuMode::Native,
                 core: ClashCore::default(),
@@ -906,6 +916,17 @@ mod tests {
     }
 
     #[test]
+    fn core_log_storage_change_produces_only_its_effect() {
+        let before = inputs();
+        let mut after = before.clone();
+        after.app.core_logs.compression = chimera_config::application::CoreLogCompression::None;
+        assert_eq!(
+            ApplicationEffectPlan::diff(&before, &after).effects(),
+            &[ApplicationEffect::CoreLogStorage(after.app.core_logs)]
+        );
+    }
+
+    #[test]
     fn full_plan_contains_every_kind_with_full_tray() {
         let inputs = inputs();
         let plan = ApplicationEffectPlan::full(&inputs);
@@ -915,6 +936,7 @@ mod tests {
             vec![
                 EffectKind::Locale,
                 EffectKind::Logger,
+                EffectKind::CoreLogStorage,
                 EffectKind::AutoLaunch,
                 EffectKind::SystemProxy,
                 EffectKind::ProxyGuard,
@@ -1328,6 +1350,9 @@ pub(crate) fn requested_owners(
     }
     if patch.app_log_level.is_some() || patch.max_log_files.is_some() {
         kinds.push(EffectKind::Logger);
+    }
+    if patch.core_logs.is_some() {
+        kinds.push(EffectKind::CoreLogStorage);
     }
     if patch.network_statistic_widget.is_some() {
         kinds.push(EffectKind::Widget);

@@ -16,6 +16,10 @@ use super::{
 #[cfg_attr(test, mockall::automock)]
 #[async_trait::async_trait]
 pub trait ApplicationEffectsPort: Send + Sync + 'static {
+    fn bind_streams(&self, _streams: chimera_core::clash::ws::StreamsClient) -> anyhow::Result<()> {
+        Ok(())
+    }
+
     /// Applies the plan in its own order and reports one status per effect.
     ///
     /// Infallible by design: the configuration is already committed, so a

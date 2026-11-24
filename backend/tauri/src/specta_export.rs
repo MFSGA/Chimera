@@ -120,6 +120,12 @@ macro_rules! build_builder {
                 crate::ipc::get_clash_ws_snapshot,
                 crate::ipc::set_clash_ws_recording,
                 crate::ipc::clear_clash_ws_history,
+                crate::ipc::query_core_logs,
+                crate::ipc::query_core_logs_summary,
+                crate::ipc::get_core_log,
+                crate::ipc::get_core_log_status,
+                crate::ipc::get_core_log_status_summary,
+                crate::ipc::clear_core_logs,
                 crate::ipc::subscribe_clash_connection_details,
                 crate::ipc::unsubscribe_clash_connection_details,
                 crate::ipc::get_app_update_state,
@@ -175,6 +181,7 @@ macro_rules! build_builder {
                 crate::core::storage::StorageResyncEvent,
                 crate::core::clash::ClashConnectionsEvent,
                 crate::core::clash::ws::ClashWsEvent,
+                crate::core::clash::CoreLogsChangedEvent,
             ])
             .dangerously_cast_bigints_to_number()
     };

@@ -19,8 +19,6 @@ use crate::core::{
         proxies::ProxyProviderSummary,
     },
 };
-#[cfg(test)]
-use chimera_core::clash::ws::ClashApiClientSource;
 use chimera_core::client::clash_api::{config_item, rule_provider_item};
 use chimera_core::proxies_actor::ProxyMutationOutcome;
 #[cfg(test)]
@@ -49,24 +47,6 @@ fn into_mutation_outcome(outcome: ProxyMutationOutcome) -> MutationOutcome<()> {
     let (_, typed) = outcome.into_parts();
     let degradations = typed.into_iter().map(Degradation::from_shared).collect();
     MutationOutcome::from_parts((), degradations)
-}
-
-#[cfg(test)]
-struct LifecycleStreamsApiClientSource(Arc<dyn CoreLifecyclePort>);
-
-#[cfg(test)]
-#[async_trait::async_trait]
-impl ClashApiClientSource for LifecycleStreamsApiClientSource {
-    async fn api_client(&self) -> Result<chimera_core::actor_v2::api::ApiClient> {
-        Ok(self.0.clash_api_client().await?.core_client())
-    }
-}
-
-#[cfg(test)]
-pub(crate) fn streams_api_client_source(
-    core: Arc<dyn CoreLifecyclePort>,
-) -> Arc<dyn ClashApiClientSource> {
-    Arc::new(LifecycleStreamsApiClientSource(core))
 }
 
 impl ChimeraClient {

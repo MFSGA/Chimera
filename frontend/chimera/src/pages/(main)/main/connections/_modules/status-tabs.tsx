@@ -109,9 +109,7 @@ export default function ConnectionsStatusTabs({
     { enabled: filtered },
   );
 
-  const activeCount = filtered
-    ? ids?.length
-    : samples?.at(-1)?.connections?.length;
+  const activeCount = filtered ? ids?.length : samples?.at(-1)?.connectionCount;
   const closedCount = filtered
     ? report?.total.connections
     : summary?.closed_connections;

@@ -163,7 +163,7 @@ pub(crate) async fn collect_network_snapshot(app: &AppHandle) -> AgentNetworkSna
         observed_host_active,
         core.state,
     );
-    let telemetry = summarize_telemetry(app, &mut failures);
+    let telemetry = summarize_telemetry(app, &mut failures).await;
     let findings = derive_findings(
         &core,
         &service,
@@ -390,7 +390,7 @@ fn summarize_profiles(profiles: &chimera_config::profile::Profiles) -> AgentProf
     }
 }
 
-fn summarize_telemetry(
+async fn summarize_telemetry(
     app: &AppHandle,
     failures: &mut Vec<AgentProbeFailure>,
 ) -> AgentTelemetrySnapshot {
@@ -408,7 +408,20 @@ fn summarize_telemetry(
             recent_error_count: 0,
         };
     };
-    let snapshot = client.streams().snapshot();
+    let Ok(snapshot) = client.streams().snapshot().await else {
+        failures.push(AgentProbeFailure {
+            code: AgentProbeCode::TelemetryUnavailable,
+        });
+        return AgentTelemetrySnapshot {
+            state: AgentConnectorState::Unknown,
+            active_connection_count: None,
+            upload_speed: None,
+            download_speed: None,
+            upload_total: None,
+            download_total: None,
+            recent_error_count: 0,
+        };
+    };
     let latest = snapshot.connections.last();
     AgentTelemetrySnapshot {
         state: match snapshot.state {
@@ -416,23 +429,24 @@ fn summarize_telemetry(
             ClashConnectionsConnectorState::Connecting => AgentConnectorState::Connecting,
             ClashConnectionsConnectorState::Connected => AgentConnectorState::Connected,
         },
-        active_connection_count: latest
-            .and_then(|sample| sample.connections.as_ref())
-            .map(|connections| connections.len() as u32),
+        active_connection_count: latest.map(|sample| sample.connection_count),
         upload_speed: latest.map(|sample| sample.upload_speed),
         download_speed: latest.map(|sample| sample.download_speed),
         upload_total: latest.map(|sample| sample.upload_total.to_string()),
         download_total: latest.map(|sample| sample.download_total.to_string()),
-        recent_error_count: snapshot
-            .logs
-            .iter()
-            .filter(|entry| {
-                matches!(
-                    entry.log_type.to_ascii_lowercase().as_str(),
-                    "error" | "fatal"
-                )
+        recent_error_count: client
+            .streams()
+            .core_logs()
+            .query(chimera_core::logs::query::CoreLogQuery {
+                direction: chimera_core::logs::query::CoreLogDirection::Latest,
+                cursor: None,
+                level: Some("error".into()),
+                keyword: String::new(),
+                limit: 200,
             })
-            .count() as u32,
+            .await
+            .map(|page| page.rows.len() as u32)
+            .unwrap_or_default(),
     }
 }
 

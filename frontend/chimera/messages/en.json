@@ -1581,5 +1581,16 @@
   "dashboard_layout_loading": "Loading dashboard layout…",
   "dashboard_layout_load_failed": "Could not load dashboard layout",
   "dashboard_layout_saving": "Saving dashboard layout…",
-  "dashboard_layout_save_failed": "Could not save dashboard layout"
+  "dashboard_layout_save_failed": "Could not save dashboard layout",
+  "logs_core_clear_history": "Clear saved Core log history",
+  "logs_core_discarded": "{count} Core log records could not be captured.",
+  "logs_core_preview_truncated": "The list shows a shortened preview. Open JSON or copy to read the complete record.",
+  "logs_load_older": "Load earlier records",
+  "logs_search_incomplete": "No matches in this page. Load earlier records to continue searching.",
+  "settings_clash_settings_core_log_shard_size_label": "Core Log Rotation Size",
+  "settings_clash_settings_core_log_max_size_label": "Core Log Storage Limit",
+  "settings_clash_settings_core_log_compression_label": "Core Log Compression",
+  "settings_clash_settings_core_log_compression_none": "Off",
+  "settings_clash_settings_core_log_compression_preset": "Built-in dictionary",
+  "settings_clash_settings_core_log_compression_trained": "Trained from logs"
 }

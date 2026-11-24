@@ -1572,7 +1572,7 @@ pub fn clear_storage(app_handle: AppHandle) -> Result {
 pub async fn get_clash_ws_connections_state(
     client: State<'_, ChimeraClient>,
 ) -> Result<chimera_core::clash::ws::ClashConnectionsConnectorState> {
-    Ok(client.streams().state())
+    Ok(client.streams().snapshot().await?.state)
 }
 
 #[tauri::command]
@@ -1580,7 +1580,7 @@ pub async fn get_clash_ws_connections_state(
 pub async fn get_clash_ws_snapshot(
     client: State<'_, ChimeraClient>,
 ) -> Result<chimera_core::clash::ws::ClashWsSnapshot> {
-    Ok(client.streams().snapshot())
+    Ok(client.streams().snapshot().await?)
 }
 
 #[tauri::command]
@@ -1603,6 +1603,74 @@ pub async fn clear_clash_ws_history(
     Ok(())
 }
 
+fn core_log_reader(
+    client: &ChimeraClient,
+) -> chimera_core::logs::query::CoreLogResult<chimera_core::logs::query::CoreLogReader> {
+    Ok(chimera_core::logs::query::CoreLogReader::new(
+        client.streams().core_logs(),
+    ))
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn query_core_logs(
+    client: State<'_, ChimeraClient>,
+    query: chimera_core::logs::query::CoreLogQuery,
+) -> chimera_core::logs::query::CoreLogResult<chimera_core::logs::query::CoreLogPage> {
+    core_log_reader(&client)?.query(query).await
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn query_core_logs_summary(
+    client: State<'_, ChimeraClient>,
+    query: chimera_core::logs::query::CoreLogSummaryQuery,
+) -> chimera_core::logs::query::CoreLogResult<chimera_core::logs::query::CoreLogPageSummary> {
+    core_log_reader(&client)?.summary(query).await
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn get_core_log(
+    client: State<'_, ChimeraClient>,
+    cursor: chimera_contracts::logs::CoreLogCursor,
+) -> chimera_core::logs::query::CoreLogResult<chimera_core::logs::query::CoreLogRecord> {
+    core_log_reader(&client)?.detail(cursor).await
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn get_core_log_status(
+    client: State<'_, ChimeraClient>,
+) -> chimera_core::logs::query::CoreLogResult<chimera_contracts::logs::CoreLogStatus> {
+    core_log_reader(&client)?.status().await
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn get_core_log_status_summary(
+    client: State<'_, ChimeraClient>,
+) -> chimera_core::logs::query::CoreLogResult<chimera_contracts::logs::CoreLogStatusSummary> {
+    core_log_reader(&client)?.status_summary().await
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn clear_core_logs(
+    client: State<'_, ChimeraClient>,
+) -> chimera_core::logs::query::CoreLogResult<()> {
+    let _ = core_log_reader(&client)?;
+    client
+        .streams()
+        .clear_history(chimera_core::clash::ws::ClashWsKind::Logs)
+        .await
+        .map_err(|_| {
+            chimera_core::logs::query::CoreLogError::Unavailable(
+                "core log storage unavailable".into(),
+            )
+        })
+}
+
 // Only a page that consumes full connection rows opens a native Channel.
 // Each subscriber is owned by its window and the connector keeps only the latest frame.
 #[tauri::command]
@@ -1611,7 +1679,7 @@ pub async fn subscribe_clash_connection_details(
     window: tauri::Window,
     client: State<'_, ChimeraClient>,
     subscriptions: State<'_, crate::core::clash::connection_details::ConnectionDetailSubscriptions>,
-    on_frame: tauri::ipc::Channel<chimera_core::clash::connection_rates::ClashConnectionDetails>,
+    on_frame: tauri::ipc::Channel<std::sync::Arc<chimera_core::clash::ws::ClashConnectionDetails>>,
 ) -> Result<crate::core::clash::connection_details::SubscriptionId> {
     let receiver = client.streams().subscribe_connection_details().await?;
     let task = tokio::spawn(crate::core::clash::connection_details::forward_details(

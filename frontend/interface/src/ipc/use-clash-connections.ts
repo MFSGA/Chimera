@@ -3,14 +3,8 @@ import { useClashWSContext } from '../provider/clash-ws-provider';
 import { unwrapResult } from '../utils';
 import { commands } from './bindings';
 
-export type ClashConnectionsSnapshot = {
-  downloadTotal: number;
-  uploadTotal: number;
-  downloadSpeed: number;
-  uploadSpeed: number;
-  memory?: number;
-  connections?: ClashConnectionItem[];
-};
+export type ClashConnectionsSnapshot =
+  import('./bindings').ClashConnectionsSummary;
 
 export type ClashConnectionItem = {
   id: string;

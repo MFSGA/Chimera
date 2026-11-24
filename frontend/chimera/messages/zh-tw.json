@@ -1555,5 +1555,16 @@
   "dashboard_layout_loading": "正在載入儀表板版面配置…",
   "dashboard_layout_load_failed": "無法載入儀表板版面配置",
   "dashboard_layout_saving": "正在儲存儀表板版面配置…",
-  "dashboard_layout_save_failed": "無法儲存儀表板版面配置"
+  "dashboard_layout_save_failed": "無法儲存儀表板版面配置",
+  "logs_core_clear_history": "清空已儲存的核心記錄",
+  "logs_core_discarded": "有 {count} 條核心記錄未能擷取。",
+  "logs_core_preview_truncated": "清單顯示的是縮略預覽，開啟 JSON 或複製可讀取完整記錄。",
+  "logs_load_older": "載入更早記錄",
+  "logs_search_incomplete": "本頁無符合記錄，載入更早記錄以繼續搜尋。",
+  "settings_clash_settings_core_log_shard_size_label": "核心記錄輪替大小",
+  "settings_clash_settings_core_log_max_size_label": "核心記錄儲存上限",
+  "settings_clash_settings_core_log_compression_label": "核心記錄壓縮",
+  "settings_clash_settings_core_log_compression_none": "關閉",
+  "settings_clash_settings_core_log_compression_preset": "內建字典",
+  "settings_clash_settings_core_log_compression_trained": "根據記錄訓練"
 }

@@ -7,15 +7,13 @@ use std::{
     time::Duration,
 };
 
-use super::ports::{
-    CountryIndexSource, GeoIndexError, GeodataMode, IndexDatabaseSnafu, IndexKey, ListHomeSnafu,
-    Loaded, OnChange, ReadDatabaseSnafu, WatchHomeSnafu,
-};
 use chimera_contracts::BoxedCause;
 use chimera_geodata::{IpIndex, MihomoGeoFiles, read_source};
+use chimera_observers::geo::{
+    CountryIndexSource, GeoIndexError, GeodataMode, IndexKey, Loaded, OnChange,
+};
 use notify_debouncer_full::{DebounceEventResult, new_debouncer, notify::RecursiveMode};
 use sha2::{Digest, Sha256};
-use snafu::ResultExt as _;
 
 /// The names the core resolves its country database from, compared ignoring ASCII case.
 const COUNTRY_DATABASES: [&str; 4] = ["Country.mmdb", "geoip.db", "geoip.metadb", "GeoIP.dat"];
@@ -87,7 +85,8 @@ impl FsCountryIndexSource {
 
 impl CountryIndexSource for FsCountryIndexSource {
     fn load(&self, mode: GeodataMode, current: Option<IndexKey>) -> Result<Loaded, GeoIndexError> {
-        let files = MihomoGeoFiles::discover(&self.home).context(ListHomeSnafu)?;
+        let files = MihomoGeoFiles::discover(&self.home)
+            .map_err(|source| GeoIndexError::ListHome { source })?;
         let path = match mode {
             GeodataMode::Mmdb => files.ip_mmdb,
             GeodataMode::Dat => files.geoip_dat,
@@ -95,7 +94,10 @@ impl CountryIndexSource for FsCountryIndexSource {
         let Some(path) = path else {
             return Ok(Loaded::Missing);
         };
-        let source = read_source(&path).context(ReadDatabaseSnafu { path: path.clone() })?;
+        let source = read_source(&path).map_err(|source| GeoIndexError::ReadDatabase {
+            path: path.clone(),
+            source,
+        })?;
         let key = IndexKey {
             mode,
             sha256: Sha256::digest(&*source).into(),
@@ -115,7 +117,7 @@ impl CountryIndexSource for FsCountryIndexSource {
                     GeodataMode::Mmdb => IpIndex::from_mmdb(&source),
                     GeodataMode::Dat => IpIndex::from_geoip_dat(&source),
                 }
-                .context(IndexDatabaseSnafu { path })?;
+                .map_err(|source| GeoIndexError::IndexDatabase { path, source })?;
                 drop(source);
                 // The image is only a cache: without it the index still serves, from
                 // anonymous memory instead of reclaimable file pages.
@@ -157,11 +159,11 @@ impl CountryIndexSource for FsCountryIndexSource {
             },
         )
         .map_err(BoxedCause::from)
-        .context(WatchHomeSnafu)?;
+        .map_err(|source| GeoIndexError::WatchHome { source })?;
         debouncer
             .watch(&self.home, RecursiveMode::NonRecursive)
             .map_err(BoxedCause::from)
-            .context(WatchHomeSnafu)?;
+            .map_err(|source| GeoIndexError::WatchHome { source })?;
         Ok(Box::new(debouncer))
     }
 }

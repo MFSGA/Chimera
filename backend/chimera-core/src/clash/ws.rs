@@ -1,71 +1,38 @@
-//! Actor-owned Clash WebSocket subscriptions.
-//!
-//! The actor owns stream workers, history, connection-rate state and the
-//! published snapshots. The host supplies only an instance-bound API client;
-//! Tauri owns event delivery and native Channel adapters.
-
-use std::{
-    any::Any,
-    collections::VecDeque,
-    sync::Arc,
-    time::{Duration, Instant},
-};
+//! Actor-owned Clash subscriptions. Transport and credentials come only from CoreClient.
+use std::{collections::VecDeque, sync::Arc, time::Duration};
 
 use anyhow::{Context, Result};
-use chimera_config::{application::CoreLogSettings, clash::config::overrides::LogLevel};
-use chimera_observers::logs::{CoreLogRecord, CoreLogSource, CoreLogStore, CoreLogsClient};
+use chimera_config::clash::config::overrides::LogLevel;
+use chimera_observers::logs::{CoreLogRecord, CoreLogSource, CoreLogsClient};
 use ractor::{Actor, ActorProcessingErr, ActorRef, RpcReplyPort, rpc::CallResult};
 use serde::{Deserialize, Serialize};
 use specta::Type;
 use tokio::{
     sync::{broadcast, watch},
-    task::{JoinError, JoinHandle, JoinSet},
+    task::JoinHandle,
 };
 use tokio_util::{sync::CancellationToken, task::TaskTracker};
 
 use crate::{
-    actor_v2::api::{ApiClient, ApiError, connection_snapshot_value},
-    clash::connection_rates::{ClashConnectionDetails, DetailCounters, derive_connection_details},
+    actor_v2::{
+        CoreClient,
+        api::{ApiClient, ApiError},
+    },
+    clash::connection_rates::{
+        ClashConnection, ClashConnectionsSummary, ConnectionCounters, ConnectionDetails,
+        ConnectionRateScratch, ConnectionRates,
+    },
 };
 
 const MAX_CONNECTIONS_HISTORY: usize = 32;
 const MAX_MEMORY_HISTORY: usize = 32;
 const MAX_TRAFFIC_HISTORY: usize = 32;
-const MAX_LOGS_HISTORY: usize = 1024;
 const MAX_REASONABLE_MEMORY_BYTES: u64 = 16 * 1024_u64.pow(4);
 
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, snafu::Snafu)]
 pub enum Error {
-    #[error("failed to spawn streams actor")]
-    SpawnActor {
-        #[source]
-        source: ractor::SpawnErr,
-    },
-}
-
-#[async_trait::async_trait]
-pub trait ClashApiClientSource: Send + Sync + 'static {
-    async fn api_client(&self) -> Result<ApiClient>;
-}
-
-/// Same authority as ref: WebSocket workers acquire an instance-bound API
-/// lease directly from the active CoreActor, not from a Tauri Facade cache.
-#[async_trait::async_trait]
-impl ClashApiClientSource for crate::actor_v2::CoreClient {
-    async fn api_client(&self) -> Result<ApiClient> {
-        crate::actor_v2::CoreClient::api_client(self)
-            .await
-            .map_err(Into::into)
-    }
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct ClashConnectionsMessage {
-    download_total: u64,
-    upload_total: u64,
-    memory: Option<u64>,
-    connections: Option<Vec<serde_json::Value>>,
+    #[snafu(display("failed to spawn actor"))]
+    SpawnActor { source: ractor::SpawnErr },
 }
 
 #[derive(Debug, Clone, Default, Copy, Type, Serialize, Deserialize)]
@@ -77,26 +44,26 @@ pub struct ClashConnectionsInfo {
     pub upload_speed: u64,
 }
 
-#[derive(Debug, Clone, Type, Serialize, Deserialize)]
+/// Latest per-connection detail frame, pushed only while at least one
+/// subscriber exists (see `StreamsClient::subscribe_connection_details`);
+/// only the newest frame is kept, never a history.
+#[derive(Debug, Serialize, Type)]
 #[serde(rename_all = "camelCase")]
-pub struct ClashWsConnectionSnapshot {
-    pub download_total: u64,
-    pub upload_total: u64,
-    pub download_speed: u64,
-    pub upload_speed: u64,
-    pub memory: Option<u64>,
-    #[specta(type = Option<specta_typescript::Any>)]
-    pub connections: Option<Vec<serde_json::Value>>,
+pub struct ClashConnectionDetails {
+    /// Equal to the sequence of the `ConnectionsUpdated` event emitted for
+    /// the same sample, so a subscriber can align the two.
+    pub sequence: u64,
+    #[specta(type = Vec<ClashConnection<'static>>)]
+    pub connections: ConnectionDetails,
 }
 
-/// Internal accounting frame consumed by the traffic recorder.
+/// Raw `/connections` snapshot of every accepted sample, tagged with the
+/// instance of the API it arrived from. Unlike the details frame it is
+/// published unconditionally, so accounting never depends on the UI.
 #[derive(Debug, Clone)]
 pub struct ClashConnectionsFrame {
-    /// Changes when the stream connector is explicitly restarted.
     pub instance_id: String,
-    /// Controller process identity that owned the API capability.
-    pub core_instance_id: String,
-    pub snapshot: ClashWsConnectionSnapshot,
+    pub snapshot: Arc<clash_api::ConnectionsSnapshot>,
 }
 
 #[derive(Debug, Clone, Type, Serialize, Deserialize)]
@@ -107,10 +74,9 @@ pub enum ClashConnectionsConnectorEvent {
     Update(ClashConnectionsInfo),
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Type, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Type, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ClashConnectionsConnectorState {
-    #[default]
     Disconnected,
     Connecting,
     Connected,
@@ -123,17 +89,6 @@ pub enum ClashWsKind {
     Logs,
     Traffic,
     Memory,
-}
-
-impl ClashWsKind {
-    fn index(self) -> usize {
-        match self {
-            Self::Connections => 0,
-            Self::Logs => 1,
-            Self::Traffic => 2,
-            Self::Memory => 3,
-        }
-    }
 }
 
 #[derive(Debug, Clone, Type, Serialize, Deserialize)]
@@ -166,45 +121,43 @@ impl ClashWsRecording {
     }
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Type, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Type, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ClashWsMemory {
     pub inuse: u64,
     pub oslimit: u64,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Type, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Type, Serialize, Deserialize)]
 pub struct ClashWsTraffic {
     pub up: u64,
     pub down: u64,
 }
 
 #[derive(Debug, Clone, Type, Serialize, Deserialize)]
-pub struct ClashWsLog {
-    #[serde(rename = "type")]
-    pub log_type: String,
-    pub time: Option<String>,
-    pub payload: String,
-}
-
-#[derive(Debug, Clone, Type, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ClashWsSnapshot {
+    pub sequence: u64,
     pub state: ClashConnectionsConnectorState,
     pub recording: ClashWsRecording,
-    pub connections: Vec<ClashWsConnectionSnapshot>,
-    pub logs: Vec<ClashWsLog>,
+    pub connections: Vec<ClashConnectionsSummary>,
     pub traffic: Vec<ClashWsTraffic>,
     pub memory: Vec<ClashWsMemory>,
 }
 
 #[derive(Debug, Clone, Type, Serialize, Deserialize)]
+pub struct ClashWsPacket {
+    pub sequence: u64,
+    pub update: ClashWsUpdate,
+}
+
+#[derive(Debug, Clone, Type, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[serde(tag = "kind", content = "data")]
-pub enum ClashWsEvent {
+pub enum ClashWsUpdate {
+    Reset(Box<ClashWsSnapshot>),
     StateChanged(ClashConnectionsConnectorState),
-    ConnectionsUpdated(ClashWsConnectionSnapshot),
-    LogAppended(ClashWsLog),
+    ConnectionsUpdated(ClashConnectionsSummary),
     TrafficUpdated(ClashWsTraffic),
     MemoryUpdated(ClashWsMemory),
     RecordingChanged(ClashWsRecording),
@@ -213,8 +166,7 @@ pub enum ClashWsEvent {
 
 #[derive(Default)]
 struct ClashWsHistory {
-    connections: VecDeque<ClashWsConnectionSnapshot>,
-    logs: VecDeque<ClashWsLog>,
+    connections: VecDeque<ClashConnectionsSummary>,
     traffic: VecDeque<ClashWsTraffic>,
     memory: VecDeque<ClashWsMemory>,
 }
@@ -223,7 +175,7 @@ impl ClashWsHistory {
     fn clear(&mut self, kind: ClashWsKind) {
         match kind {
             ClashWsKind::Connections => self.connections.clear(),
-            ClashWsKind::Logs => self.logs.clear(),
+            ClashWsKind::Logs => {}
             ClashWsKind::Traffic => self.traffic.clear(),
             ClashWsKind::Memory => self.memory.clear(),
         }
@@ -233,12 +185,13 @@ impl ClashWsHistory {
         &self,
         state: ClashConnectionsConnectorState,
         recording: ClashWsRecording,
+        sequence: u64,
     ) -> ClashWsSnapshot {
         ClashWsSnapshot {
+            sequence,
             state,
             recording,
             connections: self.connections.iter().cloned().collect(),
-            logs: self.logs.iter().cloned().collect(),
             traffic: self.traffic.iter().cloned().collect(),
             memory: self.memory.iter().cloned().collect(),
         }
@@ -261,7 +214,7 @@ fn normalize_memory(sample: clash_api::Memory) -> Option<ClashWsMemory> {
             inuse /= 8;
         }
 
-        while inuse > oslimit.saturating_mul(2) && inuse.is_multiple_of(1024) {
+        while inuse > oslimit.saturating_mul(2) && inuse % 1024 == 0 {
             inuse /= 1024;
         }
 
@@ -275,6 +228,7 @@ fn normalize_memory(sample: clash_api::Memory) -> Option<ClashWsMemory> {
     Some(ClashWsMemory { inuse, oslimit })
 }
 
+/// One socket worker; the logs socket subscribes at the capture level.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Stream {
     Connections,
@@ -283,70 +237,63 @@ enum Stream {
     Memory,
 }
 
+// Workers send at most one unacknowledged sample each. The capability fences
+// queued messages across process/controller changes.
+#[derive(Debug)]
 enum Sample {
     Connections(clash_api::ConnectionsSnapshot),
     Log(clash_api::LogEntry),
     Traffic(clash_api::Traffic),
     Memory(clash_api::Memory),
 }
-
 enum Delivery {
     Bind(ApiClient),
-    State(ApiClient, u64, ClashConnectionsConnectorState),
-    Sample(ApiClient, u64, Sample),
+    State(ApiClient, ClashConnectionsConnectorState),
+    Sample(ApiClient, Sample),
+    LogFailure(String),
     Invalidated,
 }
-
-#[derive(Debug, Clone, Copy)]
-enum DeliveryResult {
-    Rejected,
-    Accepted,
-    Bound([u64; 4]),
-}
-
 enum Message {
     Start(RpcReplyPort<()>),
     Stop(RpcReplyPort<()>),
-    Restart(RpcReplyPort<Result<()>>),
+    LifecycleChanged,
     SubscribeDetails(RpcReplyPort<watch::Receiver<Option<Arc<ClashConnectionDetails>>>>),
     DetailsClosed,
+    Snapshot(RpcReplyPort<ClashWsSnapshot>),
     Recording(ClashWsKind, bool, RpcReplyPort<ClashWsRecording>),
     Clear(ClashWsKind, RpcReplyPort<Result<()>>),
-    Deliver(Box<Delivery>, RpcReplyPort<DeliveryResult>),
+    Deliver(Box<Delivery>, RpcReplyPort<bool>),
     SetLogLevel(LogLevel, RpcReplyPort<()>),
 }
-
 struct Args {
-    core_logs: Option<CoreLogsClient>,
-    source: Arc<dyn ClashApiClientSource>,
+    core: CoreClient,
+    logs: CoreLogsClient,
+    /// The capture level, replaced by `SetLogLevel`.
     log_level: LogLevel,
     shutdown: CancellationToken,
     connections: broadcast::Sender<ClashConnectionsConnectorEvent>,
-    events: broadcast::Sender<ClashWsEvent>,
+    events: broadcast::Sender<ClashWsPacket>,
     details: watch::Sender<Option<Arc<ClashConnectionDetails>>>,
     frames: watch::Sender<Option<Arc<ClashConnectionsFrame>>>,
-    snapshot: watch::Sender<ClashWsSnapshot>,
 }
-
 struct StreamsActor;
-
 struct State {
     args: Args,
     task: Option<JoinHandle<()>>,
+    lifecycle: Option<JoinHandle<()>>,
+    /// The logs socket, restarted on its own when the capture level changes.
     logs: Option<JoinHandle<()>>,
+    log_session_active: bool,
     api: Option<ApiClient>,
     status: ClashConnectionsConnectorState,
     sequence: u64,
     history: ClashWsHistory,
     recording: ClashWsRecording,
-    previous_download_total: u64,
-    previous_upload_total: u64,
-    detail_counters: DetailCounters,
+    previous: Option<ConnectionCounters>,
+    rate_scratch: ConnectionRateScratch,
     details_closed: Option<JoinHandle<()>>,
-    capture_id: String,
-    stream_epochs: [u64; 4],
+    capture_prefix: String,
 }
-
 impl Drop for State {
     fn drop(&mut self) {
         if let Some(task) = self.details_closed.take() {
@@ -355,274 +302,184 @@ impl Drop for State {
         if let Some(task) = self.task.take() {
             task.abort();
         }
+        if let Some(task) = self.lifecycle.take() {
+            task.abort();
+        }
         if let Some(task) = self.logs.take() {
             task.abort();
         }
     }
 }
-
-/// Reap all stream owners before propagating an unexpected panic. Read-only
-/// websocket workers may be cancelled; unlike a Core mutation they own no
-/// lasting OS effect, but a lost JoinError must still reach supervision.
-type WorkerPanic = Box<dyn Any + Send + 'static>;
-
-fn collect_stream_join(
-    joined: std::result::Result<(), JoinError>,
-    name: &'static str,
-    first_panic: &mut Option<WorkerPanic>,
-) {
-    if let Err(error) = joined {
-        match error.try_into_panic() {
-            Ok(panic) if first_panic.is_none() => *first_panic = Some(panic),
-            Ok(_) => tracing::error!(name, "additional Clash stream worker panicked"),
-            Err(error) if error.is_cancelled() => {}
-            Err(error) => tracing::warn!(name, %error, "Clash stream worker failed"),
-        }
-    }
-}
-
-async fn cancel_stream_worker(
-    slot: &mut Option<JoinHandle<()>>,
-    name: &'static str,
-    first_panic: &mut Option<WorkerPanic>,
-) {
-    if let Some(task) = slot.take() {
-        task.abort();
-        collect_stream_join(task.await, name, first_panic);
-    }
-}
-
-fn resume_stream_panic(first_panic: Option<WorkerPanic>) {
-    if let Some(panic) = first_panic {
-        std::panic::resume_unwind(panic);
-    }
-}
-
 impl State {
     fn snapshot(&self) -> ClashWsSnapshot {
-        self.history.snapshot(self.status, self.recording.clone())
+        self.history
+            .snapshot(self.status, self.recording.clone(), self.sequence)
     }
-
-    fn publish_snapshot(&self) {
-        self.args.snapshot.send_replace(self.snapshot());
+    fn emit(&mut self, update: ClashWsUpdate) {
+        self.sequence += 1;
+        let _ = self.args.events.send(ClashWsPacket {
+            sequence: self.sequence,
+            update,
+        });
     }
-
-    fn emit(&mut self, event: ClashWsEvent) {
-        self.sequence = self.sequence.wrapping_add(1);
-        let _ = self.args.events.send(event);
-    }
-
     fn status(&mut self, status: ClashConnectionsConnectorState) {
         if self.status == status {
             return;
         }
         self.status = status;
-        if status != ClashConnectionsConnectorState::Connected {
-            self.previous_download_total = 0;
-            self.previous_upload_total = 0;
-            self.detail_counters = DetailCounters::default();
-            let _ = self.args.details.send_replace(None);
-            let _ = self.args.frames.send_replace(None);
-        }
         let _ = self
             .args
             .connections
             .send(ClashConnectionsConnectorEvent::StateChanged(status));
-        self.emit(ClashWsEvent::StateChanged(status));
+        self.emit(ClashWsUpdate::StateChanged(status));
     }
-
-    async fn reset(&mut self) {
-        let mut fatal = None;
-        cancel_stream_worker(&mut self.logs, "logs socket", &mut fatal).await;
-        // The previous logs subscription is fully retired before its lease
-        // and epoch are cleared. This also applies to a replaced Core host.
+    fn reset(&mut self) {
+        if let Some(task) = self.logs.take() {
+            task.abort();
+        }
         self.api = None;
-        // Shutdown must flush rather than clear the prior session's shards.
-        if !self.args.shutdown.is_cancelled()
-            && let Some(logs) = &self.args.core_logs
-            && let Err(error) = logs.set_instance(None).await
-        {
-            tracing::debug!(%error, "Core log instance reset failed");
-        }
         self.history = ClashWsHistory::default();
-        self.previous_download_total = 0;
-        self.previous_upload_total = 0;
-        self.detail_counters = DetailCounters::default();
-        self.capture_id = uuid::Uuid::new_v4().to_string();
-        for epoch in &mut self.stream_epochs {
-            *epoch = epoch.wrapping_add(1);
-        }
+        self.previous = None;
+        self.rate_scratch = ConnectionRateScratch::default();
         let _ = self.args.details.send_replace(None);
         let _ = self.args.frames.send_replace(None);
         self.status(ClashConnectionsConnectorState::Disconnected);
         let _ = self
             .args
             .connections
-            .send(ClashConnectionsConnectorEvent::Update(
-                ClashConnectionsInfo::default(),
-            ));
-        for kind in [
-            ClashWsKind::Connections,
-            ClashWsKind::Logs,
-            ClashWsKind::Traffic,
-            ClashWsKind::Memory,
-        ] {
-            self.emit(ClashWsEvent::HistoryCleared(kind));
-        }
-        self.publish_snapshot();
-        resume_stream_panic(fatal);
+            .send(ClashConnectionsConnectorEvent::Update(Default::default()));
+        self.sequence += 1;
+        let _ = self.args.events.send(ClashWsPacket {
+            sequence: self.sequence,
+            update: ClashWsUpdate::Reset(Box::new(self.snapshot())),
+        });
     }
-
+    fn publish_frame(&self, snapshot: Arc<clash_api::ConnectionsSnapshot>) {
+        if let Some(instance_id) = self.api.as_ref().and_then(ApiClient::instance_id) {
+            let _ = self
+                .args
+                .frames
+                .send_replace(Some(Arc::new(ClashConnectionsFrame {
+                    instance_id: instance_id.to_owned(),
+                    snapshot,
+                })));
+        }
+    }
+    /// Reopens only the logs socket, at the current level of the bound API.
+    /// A frame the replaced socket already queued is still a record the core
+    /// emitted, so it is not fenced.
+    fn restart_logs(&mut self, actor: &ActorRef<Message>) {
+        if let Some(task) = self.logs.take() {
+            task.abort();
+        }
+        if let Some(api) = self.api.clone()
+            && self.args.log_level != LogLevel::Silent
+        {
+            let stream = Stream::Logs(subscription_level(self.args.log_level));
+            self.logs = Some(tokio::spawn(run_stream(actor.clone(), api, stream)));
+        }
+    }
     fn accepts(&self, api: &ApiClient) -> bool {
         self.api
             .as_ref()
             .is_some_and(|current| current.same_instance(api))
     }
-
-    async fn restart_logs(&mut self, actor: &ActorRef<Message>) {
-        let epoch = &mut self.stream_epochs[ClashWsKind::Logs.index()];
-        *epoch = epoch.wrapping_add(1);
-        let new_epoch = *epoch;
-        let mut fatal = None;
-        // The old log socket must be joined before opening its replacement,
-        // not merely aborted and left to race new-epoch delivery.
-        cancel_stream_worker(&mut self.logs, "logs socket", &mut fatal).await;
-        resume_stream_panic(fatal);
-        if let Some(api) = self.api.clone()
-            && self.args.log_level != LogLevel::Silent
-        {
-            let stream = Stream::Logs(subscription_level(self.args.log_level));
-            self.logs = Some(tokio::spawn(run_stream(
-                actor.clone(),
-                api,
-                stream,
-                new_epoch,
-            )));
-        }
-    }
-
     async fn stop(&mut self) {
-        let mut fatal = None;
-        cancel_stream_worker(&mut self.task, "stream reconnect owner", &mut fatal).await;
-        cancel_stream_worker(&mut self.logs, "logs socket", &mut fatal).await;
-        cancel_stream_worker(&mut self.details_closed, "details subscriber", &mut fatal).await;
-        // Clear cached instance-bound API and publication state before any
-        // fatal panic is rethrown to the actor supervisor.
-        self.reset().await;
-        resume_stream_panic(fatal);
+        if let Some(task) = self.lifecycle.take() {
+            task.abort();
+            let _ = task.await;
+        }
+        if let Some(task) = self.task.take() {
+            task.abort();
+            let _ = task.await;
+        }
+        if let Some(task) = self.logs.take() {
+            task.abort();
+            let _ = task.await;
+        }
+        self.reset();
     }
-
     async fn update(&mut self, sample: Sample) {
         match sample {
             Sample::Connections(sample) => {
-                let value = match connection_snapshot_value(sample) {
-                    Ok(value) => value,
-                    Err(error) => {
-                        tracing::warn!(%error, "failed to serialize Clash connections sample");
-                        return;
-                    }
+                let sample = Arc::new(sample);
+                let now = tokio::time::Instant::now();
+                let with_details = self.args.details.receiver_count() > 0;
+                let Some(derived) = ConnectionRates::derive(
+                    &mut self.rate_scratch,
+                    self.previous.as_ref(),
+                    &sample,
+                    now,
+                    with_details,
+                ) else {
+                    self.publish_frame(sample);
+                    return;
                 };
-                let msg = match serde_json::from_value::<ClashConnectionsMessage>(value) {
-                    Ok(msg) => msg,
-                    Err(error) => {
-                        tracing::warn!(%error, "failed to parse Clash connections sample");
-                        return;
-                    }
-                };
-                let download_speed = msg
-                    .download_total
-                    .saturating_sub(self.previous_download_total);
-                let upload_speed = msg.upload_total.saturating_sub(self.previous_upload_total);
-                self.previous_download_total = msg.download_total;
-                self.previous_upload_total = msg.upload_total;
-
+                let summary = derived.summary;
+                if let Some(previous) = self.previous.replace(derived.counters) {
+                    self.rate_scratch.recycle(previous);
+                }
                 let info = ClashConnectionsInfo {
-                    download_total: msg.download_total,
-                    upload_total: msg.upload_total,
-                    download_speed,
-                    upload_speed,
+                    download_total: summary.download_total,
+                    upload_total: summary.upload_total,
+                    download_speed: summary.download_speed,
+                    upload_speed: summary.upload_speed,
                 };
                 let _ = self
                     .args
                     .connections
                     .send(ClashConnectionsConnectorEvent::Update(info));
-
-                let snapshot = ClashWsConnectionSnapshot {
-                    download_total: msg.download_total,
-                    upload_total: msg.upload_total,
-                    download_speed,
-                    upload_speed,
-                    memory: msg.memory,
-                    connections: msg.connections,
-                };
                 if self.recording.connections {
                     push_limited(
                         &mut self.history.connections,
-                        snapshot.clone(),
+                        summary.clone(),
                         MAX_CONNECTIONS_HISTORY,
                     );
                 }
-                self.emit(ClashWsEvent::ConnectionsUpdated(snapshot.clone()));
-
-                if self.args.details.receiver_count() > 0 {
-                    let rows = snapshot.connections.as_deref().unwrap_or_default();
-                    let connections =
-                        derive_connection_details(&mut self.detail_counters, rows, Instant::now());
+                self.emit(ClashWsUpdate::ConnectionsUpdated(summary));
+                if let Some(connections) = derived.details {
                     let _ =
                         self.args
                             .details
                             .send_replace(Some(Arc::new(ClashConnectionDetails {
                                 sequence: self.sequence,
-                                connections,
+                                connections: ConnectionDetails::new(
+                                    Arc::clone(&sample),
+                                    connections,
+                                ),
                             })));
-                } else {
-                    self.detail_counters = DetailCounters::default();
-                    let _ = self.args.details.send_replace(None);
                 }
-
-                if let Some(api) = &self.api {
-                    let _ = self
-                        .args
-                        .frames
-                        .send_replace(Some(Arc::new(ClashConnectionsFrame {
-                            instance_id: self.capture_id.clone(),
-                            core_instance_id: api.instance_id().unwrap_or("unbound").to_owned(),
-                            snapshot,
-                        })));
-                }
+                self.publish_frame(sample);
             }
             Sample::Log(sample) => {
-                let log = ClashWsLog {
-                    log_type: sample.level.as_str().to_owned(),
-                    time: Some(chrono::Local::now().format("%H:%M:%S").to_string()),
-                    payload: sample.payload,
-                };
-                if self.recording.logs {
-                    if let (Some(logs), Some(instance)) = (
-                        &self.args.core_logs,
-                        self.api.as_ref().and_then(ApiClient::instance_id),
-                    ) {
-                        let record = CoreLogRecord {
-                            source: CoreLogSource {
-                                capture: self.capture_id.clone(),
-                                instance_id: instance.to_owned(),
-                                core_kind: None,
-                            },
-                            received_at: chrono::Utc::now().timestamp_millis(),
-                            time: None,
-                            log_type: log.log_type.clone(),
-                            payload: log.payload.clone(),
-                        };
-                        // The ref observer batches writes and reports rejected
-                        // or discarded records. Storage failure must not stop
-                        // existing live stream delivery.
-                        if let Err(error) = logs.append(record).await {
-                            tracing::debug!(%error, "Core log persistence unavailable");
-                        }
-                    }
-                    push_limited(&mut self.history.logs, log.clone(), MAX_LOGS_HISTORY);
+                if self.recording.logs
+                    && let Some(instance_id) = self.api.as_ref().and_then(ApiClient::instance_id)
+                {
+                    let projection = self.args.core.status();
+                    let source = CoreLogSource {
+                        capture: format!(
+                            "{}:{:?}:{}",
+                            self.capture_prefix, projection.host, instance_id
+                        ),
+                        instance_id: instance_id.to_owned(),
+                        core_kind: projection
+                            .snapshot
+                            .and_then(|s| s.applied_kind)
+                            .map(|kind| format!("{kind:?}")),
+                    };
+                    let now = chrono::Local::now();
+                    let _ = self
+                        .args
+                        .logs
+                        .append(CoreLogRecord {
+                            source,
+                            received_at: now.timestamp_millis(),
+                            log_type: sample.level.as_str().to_owned(),
+                            time: Some(now.format("%H:%M:%S").to_string()),
+                            payload: sample.payload,
+                        })
+                        .await;
                 }
-                self.emit(ClashWsEvent::LogAppended(log));
             }
             Sample::Traffic(sample) => {
                 let (Ok(up), Ok(down)) = (
@@ -639,109 +496,68 @@ impl State {
                         MAX_TRAFFIC_HISTORY,
                     );
                 }
-                self.emit(ClashWsEvent::TrafficUpdated(traffic));
+                self.emit(ClashWsUpdate::TrafficUpdated(traffic));
             }
             Sample::Memory(sample) => {
                 if let Some(memory) = normalize_memory(sample) {
                     if self.recording.memory {
                         push_limited(&mut self.history.memory, memory.clone(), MAX_MEMORY_HISTORY);
                     }
-                    self.emit(ClashWsEvent::MemoryUpdated(memory));
+                    self.emit(ClashWsUpdate::MemoryUpdated(memory));
                 }
             }
         }
     }
 }
 
-async fn deliver(actor: &ActorRef<Message>, delivery: Delivery) -> DeliveryResult {
-    match actor
-        .call(|reply| Message::Deliver(Box::new(delivery), reply), None)
-        .await
-    {
-        Ok(CallResult::Success(result)) => result,
-        _ => DeliveryResult::Rejected,
-    }
+async fn deliver(actor: &ActorRef<Message>, delivery: Delivery) -> bool {
+    matches!(
+        actor
+            .call(|reply| Message::Deliver(Box::new(delivery), reply), None)
+            .await,
+        Ok(CallResult::Success(true))
+    )
 }
 
-async fn run(
-    actor: ActorRef<Message>,
-    source: Arc<dyn ClashApiClientSource>,
-    shutdown: CancellationToken,
-) {
+async fn run(actor: ActorRef<Message>, core: CoreClient) {
     loop {
-        let api = tokio::select! {
-            biased;
-            _ = shutdown.cancelled() => return,
-            result = source.api_client() => match result {
-                Ok(api) => api,
-                Err(error) => {
-                    tracing::debug!(%error, "Clash stream API is not available yet");
-                    tokio::select! {
-                        _ = shutdown.cancelled() => return,
-                        _ = tokio::time::sleep(Duration::from_secs(1)) => continue,
-                    }
-                }
+        let api = match core.api_client().await {
+            Ok(api) => api,
+            Err(error) => {
+                tracing::warn!(
+                    "failed to acquire the Clash stream API client: {:#}",
+                    anyhow::Error::new(error)
+                );
+                tokio::time::sleep(Duration::from_secs(1)).await;
+                continue;
             }
         };
-
-        let epochs = match deliver(&actor, Delivery::Bind(api.clone())).await {
-            DeliveryResult::Bound(epochs) => epochs,
-            DeliveryResult::Accepted => unreachable!("binding must return stream epochs"),
-            DeliveryResult::Rejected if api.is_revoked() => {
-                tokio::select! {
-                    _ = shutdown.cancelled() => return,
-                    _ = tokio::time::sleep(Duration::from_secs(1)) => continue,
-                }
+        if !deliver(&actor, Delivery::Bind(api.clone())).await {
+            if api.is_revoked() {
+                continue;
             }
-            DeliveryResult::Rejected => return,
-        };
-
-        let mut streams = JoinSet::new();
-        streams.spawn(run_stream(
-            actor.clone(),
-            api.clone(),
-            Stream::Connections,
-            epochs[ClashWsKind::Connections.index()],
-        ));
-        streams.spawn(run_stream(
-            actor.clone(),
-            api.clone(),
-            Stream::Traffic,
-            epochs[ClashWsKind::Traffic.index()],
-        ));
-        streams.spawn(run_stream(
-            actor.clone(),
-            api.clone(),
-            Stream::Memory,
-            epochs[ClashWsKind::Memory.index()],
-        ));
-
-        let mut fatal = None;
-        tokio::select! {
-            biased;
-            _ = shutdown.cancelled() => {},
-            _ = api.cancelled() => {},
-            result = streams.join_next() => {
-                if let Some(result) = result {
-                    collect_stream_join(result, "websocket worker", &mut fatal);
-                }
-            }
-        }
-        streams.abort_all();
-        // A fault in one socket must not detach the others before supervision
-        // sees it. Reap the complete JoinSet, then propagate the first panic.
-        while let Some(result) = streams.join_next().await {
-            collect_stream_join(result, "websocket worker", &mut fatal);
-        }
-        resume_stream_panic(fatal);
-
-        if matches!(
-            deliver(&actor, Delivery::Invalidated).await,
-            DeliveryResult::Rejected
-        ) {
             return;
         }
-        if shutdown.is_cancelled() {
+        // JoinSet owns all socket/retry tasks and aborts them when this worker is dropped.
+        let mut streams = tokio::task::JoinSet::new();
+        // The actor owns the logs socket, which it restarts on its own.
+        for kind in [Stream::Connections, Stream::Traffic, Stream::Memory] {
+            streams.spawn(run_stream(actor.clone(), api.clone(), kind));
+        }
+        tokio::select! {
+            _ = api.cancelled() => {},
+            result = streams.join_next() => {
+                if let Some(Err(error)) = result {
+                    match error.try_into_panic() {
+                        Ok(panic) => std::panic::resume_unwind(panic),
+                        Err(error) => tracing::warn!("Clash stream task failed: {error}"),
+                    }
+                }
+            },
+        }
+        streams.abort_all();
+        while streams.join_next().await.is_some() {}
+        if !deliver(&actor, Delivery::Invalidated).await {
             return;
         }
     }
@@ -757,43 +573,31 @@ fn subscription_level(level: LogLevel) -> clash_api::LogLevel {
     }
 }
 
-async fn run_stream(actor: ActorRef<Message>, api: ApiClient, kind: Stream, epoch: u64) {
+async fn run_stream(actor: ActorRef<Message>, api: ApiClient, kind: Stream) {
     let mut backoff = Duration::from_secs(1);
     loop {
         if kind == Stream::Connections
-            && !matches!(
-                deliver(
-                    &actor,
-                    Delivery::State(
-                        api.clone(),
-                        epoch,
-                        ClashConnectionsConnectorState::Connecting,
-                    ),
-                )
-                .await,
-                DeliveryResult::Accepted
+            && !deliver(
+                &actor,
+                Delivery::State(api.clone(), ClashConnectionsConnectorState::Connecting),
             )
+            .await
         {
             return;
         }
-
         macro_rules! consume {
             ($open:expr, $variant:ident) => {{
                 match $open.await {
                     Ok(mut stream) => {
                         if kind == Stream::Connections
-                            && !matches!(
-                                deliver(
-                                    &actor,
-                                    Delivery::State(
-                                        api.clone(),
-                                        epoch,
-                                        ClashConnectionsConnectorState::Connected,
-                                    ),
-                                )
-                                .await,
-                                DeliveryResult::Accepted
+                            && !deliver(
+                                &actor,
+                                Delivery::State(
+                                    api.clone(),
+                                    ClashConnectionsConnectorState::Connected,
+                                ),
                             )
+                            .await
                         {
                             return;
                         }
@@ -801,66 +605,63 @@ async fn run_stream(actor: ActorRef<Message>, api: ApiClient, kind: Stream, epoc
                             match frame {
                                 Ok(sample) => {
                                     backoff = Duration::from_secs(1);
-                                    if !matches!(
-                                        deliver(
-                                            &actor,
-                                            Delivery::Sample(
-                                                api.clone(),
-                                                epoch,
-                                                Sample::$variant(sample),
-                                            ),
-                                        )
-                                        .await,
-                                        DeliveryResult::Accepted
-                                    ) {
+                                    if !deliver(
+                                        &actor,
+                                        Delivery::Sample(api.clone(), Sample::$variant(sample)),
+                                    )
+                                    .await
+                                    {
                                         return;
                                     }
                                 }
-                                Err(ApiError::Protocol(clash_api::Error::Decode { .. })) => {
+                                Err(
+                                    error @ ApiError::Protocol(clash_api::Error::Decode { .. }),
+                                ) => {
+                                    if matches!(kind, Stream::Logs(_)) {
+                                        let _ = deliver(
+                                            &actor,
+                                            Delivery::LogFailure(format!(
+                                                "{:#}",
+                                                anyhow::Error::new(error)
+                                            )),
+                                        )
+                                        .await;
+                                    }
                                     tracing::warn!(?kind, "discarded malformed Clash stream frame");
                                 }
                                 Err(ApiError::Stale) => break,
                                 Err(error) => {
-                                    tracing::warn!(?kind, "Clash stream failed: {error:#}");
+                                    let error = anyhow::Error::new(error);
+                                    tracing::warn!(?kind, "Clash stream failed: {:#}", error);
                                     break;
                                 }
                             }
                         }
                     }
-                    Err(ApiError::Stale) => {
-                        tracing::debug!(?kind, "Clash stream instance retired");
-                    }
-                    Err(error) => {
-                        tracing::warn!(?kind, "Clash stream handshake failed: {error:#}");
-                    }
+                    Err(ApiError::Stale) => tracing::debug!(?kind, "Clash stream instance retired"),
+                    Err(error) => tracing::warn!(
+                        ?kind,
+                        "Clash stream handshake failed: {:#}",
+                        anyhow::Error::new(error)
+                    ),
                 }
             }};
         }
-
         match kind {
             Stream::Connections => consume!(api.connections_ws(), Connections),
             Stream::Logs(level) => consume!(api.logs_ws(level), Log),
             Stream::Traffic => consume!(api.traffic_ws(), Traffic),
             Stream::Memory => consume!(api.memory_ws(), Memory),
         }
-
         if kind == Stream::Connections
-            && !matches!(
-                deliver(
-                    &actor,
-                    Delivery::State(
-                        api.clone(),
-                        epoch,
-                        ClashConnectionsConnectorState::Disconnected,
-                    ),
-                )
-                .await,
-                DeliveryResult::Accepted
+            && !deliver(
+                &actor,
+                Delivery::State(api.clone(), ClashConnectionsConnectorState::Disconnected),
             )
+            .await
         {
             return;
         }
-
         tokio::select! {
             _ = api.cancelled() => return,
             _ = tokio::time::sleep(backoff) => {},
@@ -873,7 +674,6 @@ impl Actor for StreamsActor {
     type Msg = Message;
     type State = State;
     type Arguments = Args;
-
     async fn pre_start(
         &self,
         _: ActorRef<Message>,
@@ -882,35 +682,45 @@ impl Actor for StreamsActor {
         Ok(State {
             args,
             task: None,
+            lifecycle: None,
             logs: None,
+            log_session_active: false,
             api: None,
             status: ClashConnectionsConnectorState::Disconnected,
             sequence: 0,
-            history: ClashWsHistory::default(),
-            recording: ClashWsRecording::default(),
-            previous_download_total: 0,
-            previous_upload_total: 0,
-            detail_counters: DetailCounters::default(),
+            history: Default::default(),
+            recording: Default::default(),
+            previous: None,
+            rate_scratch: ConnectionRateScratch::default(),
             details_closed: None,
-            capture_id: uuid::Uuid::new_v4().to_string(),
-            stream_epochs: [0; 4],
+            capture_prefix: uuid::Uuid::new_v4().to_string(),
         })
     }
-
     async fn handle(
         &self,
         actor: ActorRef<Message>,
         message: Message,
         state: &mut State,
     ) -> Result<(), ActorProcessingErr> {
+        if state.api.as_ref().is_some_and(ApiClient::is_revoked) {
+            state.reset();
+        }
         match message {
             Message::Start(reply) => {
                 if !state.args.shutdown.is_cancelled() && state.task.is_none() {
-                    state.task = Some(tokio::spawn(run(
-                        actor,
-                        state.args.source.clone(),
-                        state.args.shutdown.clone(),
-                    )));
+                    let mut status = state.args.core.subscribe();
+                    let listener = actor.clone();
+                    state.lifecycle = Some(tokio::spawn(async move {
+                        loop {
+                            if listener.cast(Message::LifecycleChanged).is_err() {
+                                break;
+                            }
+                            if status.changed().await.is_err() {
+                                break;
+                            }
+                        }
+                    }));
+                    state.task = Some(tokio::spawn(run(actor, state.args.core.clone())));
                 }
                 let _ = reply.send(());
             }
@@ -918,17 +728,32 @@ impl Actor for StreamsActor {
                 state.stop().await;
                 let _ = reply.send(());
             }
-            Message::Restart(reply) => {
-                state.stop().await;
-                if !state.args.shutdown.is_cancelled() {
-                    state.task = Some(tokio::spawn(run(
-                        actor,
-                        state.args.source.clone(),
-                        state.args.shutdown.clone(),
-                    )));
-                    let _ = reply.send(Ok(()));
-                } else {
-                    let _ = reply.send(Err(anyhow::anyhow!("streams actor is shutting down")));
+            Message::LifecycleChanged => {
+                let projection = state.args.core.status();
+                // A missing or unreachable endpoint is not proof of process exit.
+                if state.log_session_active
+                    && let Some(snapshot) = projection.snapshot
+                    && matches!(
+                        projection.connectivity,
+                        crate::actor_v2::EndpointConnectivity::Connected
+                    )
+                    && matches!(
+                        snapshot.state,
+                        Some(chimera_ipc::api::status::CoreStateDetail::Stopped { .. })
+                    )
+                {
+                    // Display projections can contain a late pre-restart snapshot.
+                    // Re-read before deleting; clearing this flag also avoids reacting
+                    // again to the confirmation's own status publication.
+                    if let Ok(current) = state.args.core.refresh_status().await
+                        && matches!(
+                            current.snapshot.and_then(|s| s.state),
+                            Some(chimera_ipc::api::status::CoreStateDetail::Stopped { .. })
+                        )
+                    {
+                        state.log_session_active = false;
+                        let _ = state.args.logs.set_instance(None).await;
+                    }
                 }
             }
             Message::SubscribeDetails(reply) => {
@@ -936,10 +761,9 @@ impl Actor for StreamsActor {
                     let _ = state.args.details.send_replace(None);
                 }
                 let receiver = state.args.details.subscribe();
-                let mut fatal = None;
-                cancel_stream_worker(&mut state.details_closed, "details subscriber", &mut fatal)
-                    .await;
-                resume_stream_panic(fatal);
+                if let Some(task) = state.details_closed.take() {
+                    task.abort();
+                }
                 let details = state.args.details.clone();
                 let owner = actor.clone();
                 state.details_closed = Some(tokio::spawn(async move {
@@ -950,207 +774,154 @@ impl Actor for StreamsActor {
             }
             Message::DetailsClosed => {
                 if state.args.details.receiver_count() == 0 {
-                    state.detail_counters = DetailCounters::default();
                     let _ = state.args.details.send_replace(None);
                 }
             }
+            Message::Snapshot(reply) => {
+                let _ = reply.send(state.snapshot());
+            }
             Message::Recording(kind, enabled, reply) => {
                 state.recording.set(kind, enabled);
-                state.emit(ClashWsEvent::RecordingChanged(state.recording.clone()));
-                state.publish_snapshot();
+                state.emit(ClashWsUpdate::RecordingChanged(state.recording.clone()));
                 let _ = reply.send(state.recording.clone());
             }
             Message::Clear(kind, reply) => {
                 let result = if kind == ClashWsKind::Logs {
-                    match &state.args.core_logs {
-                        Some(logs) => logs.clear().await.map_err(anyhow::Error::from),
-                        None => Ok(()),
-                    }
+                    state.args.logs.clear().await.map_err(anyhow::Error::new)
                 } else {
+                    state.history.clear(kind);
                     Ok(())
                 };
-                state.history.clear(kind);
-                state.emit(ClashWsEvent::HistoryCleared(kind));
-                state.publish_snapshot();
+                if result.is_ok() {
+                    state.emit(ClashWsUpdate::HistoryCleared(kind));
+                }
                 let _ = reply.send(result);
             }
             Message::Deliver(delivery, reply) => {
-                let mut result = DeliveryResult::Rejected;
-                if !state.args.shutdown.is_cancelled() && state.task.is_some() {
+                let mut accepted = !state.args.shutdown.is_cancelled() && state.task.is_some();
+                if accepted {
                     match *delivery {
                         Delivery::Bind(api) => {
-                            if !api.is_revoked() {
+                            accepted = !api.is_revoked() && api.instance_id().is_some();
+                            if accepted {
                                 if !state.accepts(&api) {
-                                    state.reset().await;
+                                    state.reset();
                                 }
-                                if let Some(logs) = &state.args.core_logs
-                                    && let Err(error) = logs
-                                        .set_instance(api.instance_id().map(str::to_owned))
-                                        .await
+                                // Identity survives socket/controller reconnects. Complete the
+                                // reset before any samples from the new instance are admitted.
+                                if let Err(error) = state
+                                    .args
+                                    .logs
+                                    .set_instance(api.instance_id().map(str::to_owned))
+                                    .await
                                 {
-                                    tracing::debug!(%error, "Core log instance binding failed");
+                                    tracing::warn!(%error, "Core log session reset failed");
                                 }
+                                state.log_session_active = true;
                                 state.api = Some(api);
-                                state.restart_logs(&actor).await;
-                                result = DeliveryResult::Bound(state.stream_epochs);
+                                state.restart_logs(&actor);
                             }
                         }
-                        Delivery::State(api, epoch, status) => {
-                            if state.accepts(&api)
-                                && epoch == state.stream_epochs[ClashWsKind::Connections.index()]
-                            {
+                        Delivery::State(api, status) => {
+                            accepted = state.accepts(&api);
+                            if accepted {
+                                if status != ClashConnectionsConnectorState::Connected {
+                                    state.previous = None;
+                                    let _ = state.args.details.send_replace(None);
+                                    let _ = state.args.frames.send_replace(None);
+                                }
                                 state.status(status);
-                                result = DeliveryResult::Accepted;
                             }
                         }
-                        Delivery::Sample(api, epoch, sample) => {
-                            let kind = match &sample {
-                                Sample::Connections(_) => ClashWsKind::Connections,
-                                Sample::Log(_) => ClashWsKind::Logs,
-                                Sample::Traffic(_) => ClashWsKind::Traffic,
-                                Sample::Memory(_) => ClashWsKind::Memory,
-                            };
-                            if state.accepts(&api) && epoch == state.stream_epochs[kind.index()] {
+                        Delivery::Sample(api, sample) => {
+                            accepted = state.accepts(&api);
+                            if accepted {
                                 state.update(sample).await;
-                                result = DeliveryResult::Accepted;
                             }
                         }
-                        Delivery::Invalidated => {
-                            if state.api.is_some() {
-                                state.reset().await;
-                                result = DeliveryResult::Accepted;
-                            }
+                        Delivery::LogFailure(error) => {
+                            let _ = state.args.logs.discard(error).await;
                         }
+                        Delivery::Invalidated => state.reset(),
                     }
                 }
-                state.publish_snapshot();
-                let _ = reply.send(result);
+                let _ = reply.send(accepted);
             }
             Message::SetLogLevel(level, reply) => {
                 if state.args.log_level != level {
                     state.args.log_level = level;
-                    state.restart_logs(&actor).await;
+                    state.restart_logs(&actor);
                 }
                 let _ = reply.send(());
             }
         }
-        state.publish_snapshot();
         Ok(())
     }
-
     async fn post_stop(
         &self,
         _: ActorRef<Message>,
         state: &mut State,
     ) -> Result<(), ActorProcessingErr> {
         state.stop().await;
-        state.publish_snapshot();
         Ok(())
     }
 }
 
 #[derive(Clone)]
 pub struct StreamsClient(Arc<Inner>);
-
 struct Inner {
-    core_logs: Option<CoreLogsClient>,
     actor: ActorRef<Message>,
-    shutdown: CancellationToken,
+    logs: CoreLogsClient,
     connections: broadcast::Sender<ClashConnectionsConnectorEvent>,
-    events: broadcast::Sender<ClashWsEvent>,
-    snapshot: watch::Receiver<ClashWsSnapshot>,
-    frames: watch::Receiver<Option<Arc<ClashConnectionsFrame>>>,
+    events: broadcast::Sender<ClashWsPacket>,
+    frames: watch::Sender<Option<Arc<ClashConnectionsFrame>>>,
 }
-
 impl Drop for Inner {
     fn drop(&mut self) {
-        self.shutdown.cancel();
         self.actor.stop(None);
     }
 }
-
 impl StreamsClient {
     pub async fn spawn(
-        source: Arc<dyn ClashApiClientSource>,
+        core: CoreClient,
+        logs: CoreLogsClient,
         log_level: LogLevel,
         shutdown: CancellationToken,
         tasks: &TaskTracker,
     ) -> std::result::Result<Self, Error> {
-        Self::spawn_with_logs(source, log_level, shutdown, tasks, None).await
-    }
-
-    /// The desktop injects one current-session store. Existing headless and
-    /// compatibility stream callers do not create a second log database.
-    pub async fn spawn_with_logs(
-        source: Arc<dyn ClashApiClientSource>,
-        log_level: LogLevel,
-        shutdown: CancellationToken,
-        tasks: &TaskTracker,
-        store: Option<Box<dyn CoreLogStore>>,
-    ) -> std::result::Result<Self, Error> {
-        let actor_shutdown = shutdown.child_token();
-        let core_logs = match store {
-            Some(store) => match CoreLogsClient::spawn(
-                store,
-                CoreLogSettings::default(),
-                shutdown.child_token(),
-                tasks,
-            )
-            .await
-            {
-                Ok(logs) => Some(logs),
-                Err(error) => {
-                    tracing::warn!(%error, "optional Core log observer could not start");
-                    None
-                }
-            },
-            None => None,
-        };
         let connections = broadcast::channel(16).0;
         let events = broadcast::channel(64).0;
         let details = watch::channel(None).0;
-        let (frames, frames_rx) = watch::channel(None);
-        let initial_snapshot = ClashWsHistory::default().snapshot(
-            ClashConnectionsConnectorState::Disconnected,
-            ClashWsRecording::default(),
-        );
-        let (snapshot, snapshot_rx) = watch::channel(initial_snapshot);
+        let frames = watch::channel(None).0;
         let (actor, _) = Actor::spawn(
             None,
             StreamsActor,
             Args {
-                core_logs: core_logs.clone(),
-                source,
+                core,
+                logs: logs.clone(),
                 log_level,
-                shutdown: actor_shutdown.clone(),
+                shutdown: shutdown.clone(),
                 connections: connections.clone(),
                 events: events.clone(),
                 details,
                 frames: frames.clone(),
-                snapshot,
             },
         )
         .await
         .map_err(|source| Error::SpawnActor { source })?;
-
-        let shutdown_actor = actor.clone();
-        let shutdown_task = actor_shutdown.clone();
+        let cell = actor.get_cell();
         tasks.spawn(async move {
-            shutdown_task.cancelled().await;
-            let _ = shutdown_actor.stop_and_wait(None, None).await;
+            shutdown.cancelled().await;
+            let _ = cell.drain_and_wait(None).await;
         });
-
         Ok(Self(Arc::new(Inner {
-            core_logs,
             actor,
-            shutdown: actor_shutdown,
+            logs,
             connections,
             events,
-            snapshot: snapshot_rx,
-            frames: frames_rx,
+            frames,
         })))
     }
-
     async fn call<T: Send + 'static>(
         &self,
         message: impl FnOnce(RpcReplyPort<T>) -> Message,
@@ -1160,42 +931,28 @@ impl StreamsClient {
             .actor
             .call(message, None)
             .await
-            .context("Clash streams actor unavailable")?
+            .context("Clash stream actor unavailable")?
         {
             CallResult::Success(value) => Ok(value),
-            _ => anyhow::bail!("Clash streams actor reply dropped"),
+            _ => anyhow::bail!("Clash stream actor reply dropped"),
         }
     }
-
     pub async fn start(&self) -> Result<()> {
         self.call(Message::Start).await
     }
-
     pub async fn stop(&self) -> Result<()> {
         self.call(Message::Stop).await
     }
-
-    pub async fn restart(&self) -> Result<()> {
-        self.call(Message::Restart).await?
-    }
-
+    /// Returns once the logs socket follows `level`.
     pub async fn set_log_level(&self, level: LogLevel) -> Result<()> {
         self.call(|reply| Message::SetLogLevel(level, reply)).await
     }
-
-    /// Full ref query/export API backed by the one stream capture owner.
-    pub fn core_logs(&self) -> Option<&CoreLogsClient> {
-        self.0.core_logs.as_ref()
+    pub fn core_logs(&self) -> &CoreLogsClient {
+        &self.0.logs
     }
-
-    pub fn state(&self) -> ClashConnectionsConnectorState {
-        self.0.snapshot.borrow().state
+    pub async fn snapshot(&self) -> Result<ClashWsSnapshot> {
+        self.call(Message::Snapshot).await
     }
-
-    pub fn snapshot(&self) -> ClashWsSnapshot {
-        self.0.snapshot.borrow().clone()
-    }
-
     pub async fn set_recording(
         &self,
         kind: ClashWsKind,
@@ -1204,32 +961,747 @@ impl StreamsClient {
         self.call(|reply| Message::Recording(kind, enabled, reply))
             .await
     }
-
     pub async fn clear_history(&self, kind: ClashWsKind) -> Result<()> {
         self.call(|reply| Message::Clear(kind, reply)).await?
     }
-
     pub fn subscribe(&self) -> broadcast::Receiver<ClashConnectionsConnectorEvent> {
         self.0.connections.subscribe()
     }
-
-    pub fn subscribe_ws(&self) -> broadcast::Receiver<ClashWsEvent> {
+    pub fn subscribe_ws(&self) -> broadcast::Receiver<ClashWsPacket> {
         self.0.events.subscribe()
     }
-
-    pub fn subscribe_connection_frames(
-        &self,
-    ) -> watch::Receiver<Option<Arc<ClashConnectionsFrame>>> {
-        self.0.frames.clone()
-    }
-
+    /// The latest connection-detail frame, kept only while at least one
+    /// receiver exists (`receiver_count()` gates the actor's per-sample
+    /// work). The first subscriber starts with `None`; additional subscribers
+    /// receive the current frame. The owner clears it after the last drop.
     pub async fn subscribe_connection_details(
         &self,
     ) -> Result<watch::Receiver<Option<Arc<ClashConnectionDetails>>>> {
         self.call(Message::SubscribeDetails).await
     }
+    /// The latest raw connections snapshot of every accepted sample,
+    /// independent of recording flags and detail subscribers; `None` until
+    /// the first sample and again after every reset.
+    pub fn subscribe_connection_frames(
+        &self,
+    ) -> watch::Receiver<Option<Arc<ClashConnectionsFrame>>> {
+        self.0.frames.subscribe()
+    }
 }
 
 #[cfg(test)]
-#[path = "ws_tests.rs"]
-mod tests;
+mod tests {
+    use super::*;
+    use crate::actor_v2::test_support::{endpoint, server};
+    use axum::{Router, extract::WebSocketUpgrade, response::IntoResponse, routing::get};
+    use chimera_observers::logs::{CoreLogDirection, CoreLogQuery};
+
+    async fn idle(ws: WebSocketUpgrade) -> impl IntoResponse {
+        ws.on_upgrade(|mut socket| async move { while socket.recv().await.is_some() {} })
+    }
+    async fn connected(events: &mut broadcast::Receiver<ClashWsPacket>) {
+        tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                if matches!(
+                    events.recv().await.unwrap().update,
+                    ClashWsUpdate::StateChanged(ClashConnectionsConnectorState::Connected)
+                ) {
+                    break;
+                }
+            }
+        })
+        .await
+        .unwrap();
+    }
+    fn sample(total: i64) -> Sample {
+        Sample::Connections(clash_api::ConnectionsSnapshot {
+            download_total: total,
+            upload_total: total,
+            connections: None,
+            memory: None,
+        })
+    }
+
+    #[tokio::test]
+    async fn replacement_rejects_old_capability_and_clears_all_histories() {
+        let (url, server) = server(Router::new().route("/connections", get(idle))).await;
+        let endpoint = endpoint(url);
+        let core = CoreClient::spawn(endpoint.clone()).await.unwrap();
+        let client = StreamsClient::spawn(
+            core.clone(),
+            crate::logs::test_support::test_client().await,
+            LogLevel::Debug,
+            CancellationToken::new(),
+            &TaskTracker::new(),
+        )
+        .await
+        .unwrap();
+        let mut events = client.subscribe_ws();
+        client.start().await.unwrap();
+        connected(&mut events).await;
+        let old = core.api_client().await.unwrap();
+        assert!(deliver(&client.0.actor, Delivery::Sample(old.clone(), sample(100))).await);
+        endpoint
+            .binding
+            .send_modify(|binding| binding.as_mut().unwrap().instance_id = "replacement".into());
+        let new = core.api_client().await.unwrap();
+        assert!(!old.same_instance(&new));
+        assert!(!deliver(&client.0.actor, Delivery::Sample(old, sample(200))).await);
+        connected(&mut events).await;
+        assert!(client.snapshot().await.unwrap().connections.is_empty());
+        assert!(deliver(&client.0.actor, Delivery::Sample(new, sample(300))).await);
+        assert_eq!(
+            client.snapshot().await.unwrap().connections[0].download_speed,
+            0
+        );
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn recording_clear_and_history_limits_are_serialized_with_samples() {
+        let (url, server) = server(Router::new().route("/connections", get(idle))).await;
+        let core = CoreClient::spawn(endpoint(url)).await.unwrap();
+        let client = StreamsClient::spawn(
+            core.clone(),
+            crate::logs::test_support::test_client().await,
+            LogLevel::Debug,
+            CancellationToken::new(),
+            &TaskTracker::new(),
+        )
+        .await
+        .unwrap();
+        let mut events = client.subscribe_ws();
+        client.start().await.unwrap();
+        connected(&mut events).await;
+        let api = core.api_client().await.unwrap();
+        for total in 0..40 {
+            assert!(
+                deliver(
+                    &client.0.actor,
+                    Delivery::Sample(api.clone(), sample(total))
+                )
+                .await
+            );
+        }
+        let snapshot = client.snapshot().await.unwrap();
+        assert_eq!(snapshot.connections.len(), MAX_CONNECTIONS_HISTORY);
+        assert_eq!(snapshot.connections[0].download_total, 8);
+        client
+            .set_recording(ClashWsKind::Connections, false)
+            .await
+            .unwrap();
+        assert!(deliver(&client.0.actor, Delivery::Sample(api.clone(), sample(50))).await);
+        assert_eq!(
+            client
+                .snapshot()
+                .await
+                .unwrap()
+                .connections
+                .last()
+                .unwrap()
+                .download_total,
+            39
+        );
+        client
+            .clear_history(ClashWsKind::Connections)
+            .await
+            .unwrap();
+        assert!(client.snapshot().await.unwrap().connections.is_empty());
+        client
+            .set_recording(ClashWsKind::Connections, true)
+            .await
+            .unwrap();
+        assert!(deliver(&client.0.actor, Delivery::Sample(api, sample(60))).await);
+        let new = client.snapshot().await.unwrap();
+        assert!(new.sequence > snapshot.sequence);
+        assert_eq!(new.connections.len(), 1);
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn level_changes_reopen_only_the_logs_socket() {
+        use axum::extract::{Path, Query, State as AxumState};
+        use tokio::sync::mpsc;
+        type Events = mpsc::UnboundedSender<(String, String)>;
+        async fn next(
+            received: &mut mpsc::UnboundedReceiver<(String, String)>,
+            count: usize,
+        ) -> Vec<(String, String)> {
+            let mut events = Vec::new();
+            for _ in 0..count {
+                events.push(
+                    tokio::time::timeout(Duration::from_secs(3), received.recv())
+                        .await
+                        .unwrap()
+                        .unwrap(),
+                );
+            }
+            events.sort();
+            events
+        }
+        async fn stream(
+            Path(kind): Path<String>,
+            Query(query): Query<std::collections::HashMap<String, String>>,
+            AxumState(events): AxumState<Events>,
+            ws: WebSocketUpgrade,
+        ) -> impl IntoResponse {
+            let level = query.get("level").cloned().unwrap_or_default();
+            ws.on_upgrade(move |mut socket| async move {
+                let _ = events.send((kind.clone(), level.clone()));
+                while let Some(Ok(_)) = socket.recv().await {}
+                let _ = events.send((format!("{kind} closed"), level));
+            })
+        }
+        let (events, mut received) = mpsc::unbounded_channel();
+        let (url, server) = server(
+            Router::new()
+                .route("/{kind}", get(stream))
+                .with_state(events),
+        )
+        .await;
+        let pair = |kind: &str, level: &str| (kind.to_owned(), level.to_owned());
+        let core = CoreClient::spawn(endpoint(url)).await.unwrap();
+        let client = StreamsClient::spawn(
+            core,
+            crate::logs::test_support::test_client().await,
+            LogLevel::Info,
+            CancellationToken::new(),
+            &TaskTracker::new(),
+        )
+        .await
+        .unwrap();
+        client.start().await.unwrap();
+        assert_eq!(
+            next(&mut received, 4).await,
+            [
+                pair("connections", ""),
+                pair("logs", "info"),
+                pair("memory", ""),
+                pair("traffic", "")
+            ]
+        );
+
+        client.set_log_level(LogLevel::Error).await.unwrap();
+        assert_eq!(
+            next(&mut received, 2).await,
+            [pair("logs", "error"), pair("logs closed", "info")]
+        );
+        // An unchanged level keeps the socket; silent closes it and opens none.
+        client.set_log_level(LogLevel::Error).await.unwrap();
+        client.set_log_level(LogLevel::Silent).await.unwrap();
+        assert_eq!(next(&mut received, 1).await, [pair("logs closed", "error")]);
+        client.set_log_level(LogLevel::Debug).await.unwrap();
+        assert_eq!(next(&mut received, 1).await, [pair("logs", "debug")]);
+        assert!(received.try_recv().is_err());
+        drop(client);
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn all_typed_workers_publish_and_actor_drop_releases_every_socket() {
+        use axum::extract::{Path, Query, State as AxumState, ws::Message as Frame};
+        use tokio::sync::mpsc;
+        async fn stream(
+            Path(kind): Path<String>,
+            Query(query): Query<std::collections::HashMap<String, String>>,
+            AxumState(closed): AxumState<mpsc::UnboundedSender<String>>,
+            ws: WebSocketUpgrade,
+        ) -> impl IntoResponse {
+            if kind == "logs" {
+                assert_eq!(query.get("level").map(String::as_str), Some("debug"));
+            }
+            ws.on_upgrade(move |mut socket| async move {
+                let json = match kind.as_str() {
+                    "connections" => {
+                        r#"{"downloadTotal":100,"uploadTotal":200,"connections":null}"#
+                    }
+                    "logs" => r#"{"type":"trace","payload":"test log"}"#,
+                    "traffic" => r#"{"up":3,"down":4}"#,
+                    "memory" => r#"{"inuse":12}"#,
+                    _ => unreachable!(),
+                };
+                socket.send(Frame::Text(json.into())).await.unwrap();
+                while socket.recv().await.is_some() {}
+                let _ = closed.send(kind);
+            })
+        }
+        let (closed, mut rx) = mpsc::unbounded_channel();
+        let (url, server) = server(
+            Router::new()
+                .route("/{kind}", get(stream))
+                .with_state(closed),
+        )
+        .await;
+        let core = CoreClient::spawn(endpoint(url)).await.unwrap();
+        let client = StreamsClient::spawn(
+            core,
+            crate::logs::test_support::test_client().await,
+            LogLevel::Debug,
+            CancellationToken::new(),
+            &TaskTracker::new(),
+        )
+        .await
+        .unwrap();
+        let mut events = client.subscribe_ws();
+        let mut logs = client.0.logs.subscribe();
+        client.start().await.unwrap();
+        tokio::time::timeout(Duration::from_secs(3), async {
+            let mut seen = [false; 3];
+            while !seen.iter().all(|seen| *seen) {
+                match events.recv().await.unwrap().update {
+                    ClashWsUpdate::ConnectionsUpdated(_) => seen[0] = true,
+                    ClashWsUpdate::TrafficUpdated(_) => seen[1] = true,
+                    ClashWsUpdate::MemoryUpdated(_) => seen[2] = true,
+                    _ => {}
+                }
+            }
+        })
+        .await
+        .unwrap();
+        let snapshot = client.snapshot().await.unwrap();
+        assert_eq!(snapshot.connections[0].download_total, 100);
+        tokio::time::timeout(Duration::from_secs(3), async {
+            while logs.borrow().head.is_none() {
+                logs.changed().await.unwrap();
+            }
+        })
+        .await
+        .unwrap();
+        let page = client
+            .0
+            .logs
+            .query(CoreLogQuery {
+                direction: CoreLogDirection::Latest,
+                cursor: None,
+                level: None,
+                keyword: String::new(),
+                limit: 200,
+            })
+            .await
+            .unwrap();
+        assert_eq!(page.rows[0].record.log_type, "trace");
+        assert_eq!(snapshot.traffic[0].down, 4);
+        assert_eq!(snapshot.memory[0].oslimit, 0);
+        drop(client);
+        tokio::time::timeout(Duration::from_secs(3), async {
+            for _ in 0..4 {
+                rx.recv().await.unwrap();
+            }
+        })
+        .await
+        .unwrap();
+        server.abort();
+    }
+
+    #[test]
+    fn normalize_memory_clamps_obvious_unit_mismatch() {
+        let memory = normalize_memory(clash_api::Memory {
+            in_use: 8000,
+            os_limit: 1000,
+        })
+        .unwrap();
+        assert_eq!(memory.inuse, 1000);
+        assert_eq!(memory.oslimit, 1000);
+    }
+
+    #[tokio::test]
+    async fn details_watch_stays_none_without_a_subscriber() {
+        let (url, server) = server(Router::new().route("/connections", get(idle))).await;
+        let core = CoreClient::spawn(endpoint(url)).await.unwrap();
+        let client = StreamsClient::spawn(
+            core.clone(),
+            crate::logs::test_support::test_client().await,
+            LogLevel::Debug,
+            CancellationToken::new(),
+            &TaskTracker::new(),
+        )
+        .await
+        .unwrap();
+        let mut events = client.subscribe_ws();
+        client.start().await.unwrap();
+        connected(&mut events).await;
+        let api = core.api_client().await.unwrap();
+        assert!(deliver(&client.0.actor, Delivery::Sample(api, sample(100))).await);
+
+        // Subscribing only now must still observe the untouched initial
+        // value: nothing was ever published while no receiver existed (G2).
+        let details = client.subscribe_connection_details().await.unwrap();
+        assert!(details.borrow().is_none());
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn details_frame_matches_the_connections_updated_sequence() {
+        let (url, server) = server(Router::new().route("/connections", get(idle))).await;
+        let core = CoreClient::spawn(endpoint(url)).await.unwrap();
+        let client = StreamsClient::spawn(
+            core.clone(),
+            crate::logs::test_support::test_client().await,
+            LogLevel::Debug,
+            CancellationToken::new(),
+            &TaskTracker::new(),
+        )
+        .await
+        .unwrap();
+        let mut events = client.subscribe_ws();
+        let mut details = client.subscribe_connection_details().await.unwrap();
+        client.start().await.unwrap();
+        connected(&mut events).await;
+        let api = core.api_client().await.unwrap();
+        assert!(deliver(&client.0.actor, Delivery::Sample(api, sample(100))).await);
+
+        let event = tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                let event = events.recv().await.unwrap();
+                if matches!(event.update, ClashWsUpdate::ConnectionsUpdated(_)) {
+                    return event;
+                }
+            }
+        })
+        .await
+        .unwrap();
+        tokio::time::timeout(Duration::from_secs(3), details.changed())
+            .await
+            .unwrap()
+            .unwrap();
+        let frame = details.borrow_and_update().clone().unwrap();
+        assert_eq!(frame.sequence, event.sequence);
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn slow_details_consumers_keep_immutable_frames_and_last_drop_releases_them() {
+        let (url, server) = server(Router::new().route("/connections", get(idle))).await;
+        let core = CoreClient::spawn(endpoint(url)).await.unwrap();
+        let client = StreamsClient::spawn(
+            core.clone(),
+            crate::logs::test_support::test_client().await,
+            LogLevel::Debug,
+            CancellationToken::new(),
+            &TaskTracker::new(),
+        )
+        .await
+        .unwrap();
+        let mut events = client.subscribe_ws();
+        let details = client.subscribe_connection_details().await.unwrap();
+        let raw = client.subscribe_connection_frames();
+        client.start().await.unwrap();
+        connected(&mut events).await;
+        let api = core.api_client().await.unwrap();
+        assert!(deliver(&client.0.actor, Delivery::Sample(api.clone(), sample(100))).await);
+        let first = details.borrow().clone().unwrap();
+        let first_json = serde_json::to_value(&first).unwrap();
+        let first_snapshot = Arc::downgrade(&raw.borrow().as_ref().unwrap().snapshot);
+        assert!(deliver(&client.0.actor, Delivery::Sample(api, sample(200))).await);
+        assert_eq!(serde_json::to_value(&first).unwrap(), first_json);
+        assert!(first_snapshot.upgrade().is_some());
+        drop(first);
+        assert!(first_snapshot.upgrade().is_none());
+
+        let second = client.subscribe_connection_details().await.unwrap();
+        drop(details);
+        assert!(second.borrow().is_some());
+        let retained = Arc::downgrade(second.borrow().as_ref().unwrap());
+        drop(second);
+        tokio::time::timeout(Duration::from_secs(3), async {
+            while retained.upgrade().is_some() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        let subscribed = client.subscribe_connection_details().await.unwrap();
+        assert!(subscribed.borrow().is_none());
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn reset_clears_the_details_watch() {
+        let (url, server) = server(Router::new().route("/connections", get(idle))).await;
+        let core = CoreClient::spawn(endpoint(url)).await.unwrap();
+        let client = StreamsClient::spawn(
+            core.clone(),
+            crate::logs::test_support::test_client().await,
+            LogLevel::Debug,
+            CancellationToken::new(),
+            &TaskTracker::new(),
+        )
+        .await
+        .unwrap();
+        let mut events = client.subscribe_ws();
+        let mut details = client.subscribe_connection_details().await.unwrap();
+        client.start().await.unwrap();
+        connected(&mut events).await;
+        let api = core.api_client().await.unwrap();
+        assert!(deliver(&client.0.actor, Delivery::Sample(api, sample(100))).await);
+        tokio::time::timeout(Duration::from_secs(3), details.changed())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(details.borrow().is_some());
+
+        assert!(deliver(&client.0.actor, Delivery::Invalidated).await);
+        tokio::time::timeout(Duration::from_secs(3), details.changed())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(details.borrow().is_none());
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn connection_frames_carry_the_instance_id_and_reset_clears_them() {
+        let (url, server) = server(Router::new().route("/connections", get(idle))).await;
+        let core = CoreClient::spawn(endpoint(url)).await.unwrap();
+        let client = StreamsClient::spawn(
+            core.clone(),
+            crate::logs::test_support::test_client().await,
+            LogLevel::Debug,
+            CancellationToken::new(),
+            &TaskTracker::new(),
+        )
+        .await
+        .unwrap();
+        let mut events = client.subscribe_ws();
+        let mut frames = client.subscribe_connection_frames();
+        client.start().await.unwrap();
+        connected(&mut events).await;
+        client
+            .set_recording(ClashWsKind::Connections, false)
+            .await
+            .unwrap();
+        let api = core.api_client().await.unwrap();
+        assert!(deliver(&client.0.actor, Delivery::Sample(api.clone(), sample(100))).await);
+        tokio::time::timeout(Duration::from_secs(3), frames.changed())
+            .await
+            .unwrap()
+            .unwrap();
+        let frame = frames.borrow_and_update().clone().unwrap();
+        assert_eq!(frame.instance_id, "first-process");
+        assert_eq!(frame.snapshot.download_total, 100);
+
+        // A sample the live derivation drops is still a real core frame.
+        assert!(deliver(&client.0.actor, Delivery::Sample(api.clone(), sample(-1))).await);
+        tokio::time::timeout(Duration::from_secs(3), frames.changed())
+            .await
+            .unwrap()
+            .unwrap();
+        let frame = frames.borrow_and_update().clone().unwrap();
+        assert_eq!(frame.snapshot.download_total, -1);
+
+        // A dropped socket clears the frame without a full reset.
+        assert!(
+            deliver(
+                &client.0.actor,
+                Delivery::State(api.clone(), ClashConnectionsConnectorState::Disconnected)
+            )
+            .await
+        );
+        tokio::time::timeout(Duration::from_secs(3), frames.changed())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(frames.borrow_and_update().is_none());
+
+        assert!(deliver(&client.0.actor, Delivery::Sample(api, sample(200))).await);
+        tokio::time::timeout(Duration::from_secs(3), frames.changed())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(frames.borrow_and_update().is_some());
+
+        assert!(deliver(&client.0.actor, Delivery::Invalidated).await);
+        tokio::time::timeout(Duration::from_secs(3), frames.changed())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(frames.borrow().is_none());
+        server.abort();
+    }
+
+    /// `count` connections, all sharing one `chain` member, so `member_rates`
+    /// always has exactly one entry regardless of `count` (G1/G4).
+    fn connections_sample(count: usize, chain: &str) -> clash_api::ConnectionsSnapshot {
+        let connections: Vec<clash_api::Connection> = (0..count)
+            .map(|i| {
+                serde_json::from_value(serde_json::json!({
+                    "id": uuid::Uuid::from_u128(i as u128 + 1),
+                    "metadata": null,
+                    "upload": 1,
+                    "download": 1,
+                    "start": "2024-01-01T00:00:00Z",
+                    "chains": [chain],
+                    "rule": "MATCH",
+                    "rulePayload": "",
+                }))
+                .unwrap()
+            })
+            .collect();
+        clash_api::ConnectionsSnapshot {
+            // Fixed, N-independent totals: only `connectionCount`'s own
+            // digit width should differ between the two sample sizes below.
+            download_total: 12345,
+            upload_total: 12345,
+            connections: Some(connections),
+            memory: None,
+        }
+    }
+
+    #[test]
+    fn connections_updated_event_size_is_independent_of_connection_count() {
+        let now = tokio::time::Instant::now();
+        // A first-ever sample (no `previous`) keeps every rate at zero
+        // regardless of N, and same-digit-width counts (100 / 999) keep
+        // `connectionCount` itself from perturbing the byte count (G1).
+        let small = ConnectionRates::derive(
+            &mut ConnectionRateScratch::default(),
+            None,
+            &connections_sample(100, "Proxy"),
+            now,
+            false,
+        )
+        .unwrap()
+        .summary;
+        let large = ConnectionRates::derive(
+            &mut ConnectionRateScratch::default(),
+            None,
+            &connections_sample(999, "Proxy"),
+            now,
+            false,
+        )
+        .unwrap()
+        .summary;
+        let small_len = serde_json::to_vec(&ClashWsUpdate::ConnectionsUpdated(small))
+            .unwrap()
+            .len();
+        let large_len = serde_json::to_vec(&ClashWsUpdate::ConnectionsUpdated(large))
+            .unwrap()
+            .len();
+        assert_eq!(small_len, large_len);
+    }
+
+    #[test]
+    fn snapshot_size_is_independent_of_connection_count() {
+        let now = tokio::time::Instant::now();
+        let small = ConnectionRates::derive(
+            &mut ConnectionRateScratch::default(),
+            None,
+            &connections_sample(100, "Proxy"),
+            now,
+            false,
+        )
+        .unwrap()
+        .summary;
+        let large = ConnectionRates::derive(
+            &mut ConnectionRateScratch::default(),
+            None,
+            &connections_sample(999, "Proxy"),
+            now,
+            false,
+        )
+        .unwrap()
+        .summary;
+
+        let mut small_history = ClashWsHistory::default();
+        small_history.connections.push_back(small);
+        let mut large_history = ClashWsHistory::default();
+        large_history.connections.push_back(large);
+
+        let recording = ClashWsRecording::default();
+        let small_snapshot = small_history.snapshot(
+            ClashConnectionsConnectorState::Connected,
+            recording.clone(),
+            1,
+        );
+        let large_snapshot =
+            large_history.snapshot(ClashConnectionsConnectorState::Connected, recording, 1);
+
+        assert_eq!(
+            serde_json::to_vec(&small_snapshot).unwrap().len(),
+            serde_json::to_vec(&large_snapshot).unwrap().len(),
+        );
+    }
+
+    #[tokio::test]
+    async fn log_file_survives_controller_rebind_and_is_deleted_on_confirmed_stop() {
+        let directory = tempfile::tempdir().unwrap();
+        let token = CancellationToken::new();
+        let tasks = TaskTracker::new();
+        let logs = CoreLogsClient::spawn(
+            Box::new(crate::logs::RedbCoreLogStore::open(directory.path().into()).unwrap()),
+            Default::default(),
+            token.clone(),
+            &tasks,
+        )
+        .await
+        .unwrap();
+        let (url, server) = server(Router::new().route("/connections", get(idle))).await;
+        let endpoint = endpoint(url);
+        let core = CoreClient::spawn(endpoint.clone()).await.unwrap();
+        let client = StreamsClient::spawn(
+            core.clone(),
+            logs.clone(),
+            LogLevel::Debug,
+            token.clone(),
+            &tasks,
+        )
+        .await
+        .unwrap();
+        let mut events = client.subscribe_ws();
+        client.start().await.unwrap();
+        connected(&mut events).await;
+        let api = core.api_client().await.unwrap();
+        let sample = || {
+            Sample::Log(clash_api::LogEntry {
+                level: clash_api::ConfigEnum::Known(clash_api::LogLevel::Debug),
+                payload: "x".repeat(70 * 1024),
+            })
+        };
+        assert!(deliver(&client.0.actor, Delivery::Sample(api.clone(), sample())).await);
+        let before = logs.status().await.unwrap();
+        assert!(before.head.is_some());
+        assert!(directory.path().join("current.redb").exists());
+        // A new API capability for the same process is not a new log session.
+        endpoint
+            .binding
+            .send_modify(|binding| binding.as_mut().unwrap().secret = Some("changed".into()));
+        let rebound = core.api_client().await.unwrap();
+        assert!(deliver(&client.0.actor, Delivery::Bind(rebound)).await);
+        assert_eq!(logs.status().await.unwrap().generation, before.generation);
+        assert_eq!(logs.status().await.unwrap().head, before.head);
+        let mut changed = logs.subscribe();
+        let mut replacement_binding = endpoint.binding.borrow().clone().unwrap();
+        replacement_binding.instance_id = "replacement".into();
+        endpoint.binding.send_replace(None);
+        core.refresh_status().await.unwrap();
+        tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                let status = changed.borrow_and_update().clone();
+                if status.generation != before.generation && status.head.is_none() {
+                    break;
+                }
+                changed.changed().await.unwrap();
+            }
+        })
+        .await
+        .unwrap();
+        assert!(!directory.path().join("current.redb").exists());
+        assert!(!deliver(&client.0.actor, Delivery::Sample(api, sample())).await);
+        endpoint.binding.send_replace(Some(replacement_binding));
+        let replacement = core.api_client().await.unwrap();
+        assert!(deliver(&client.0.actor, Delivery::Bind(replacement.clone())).await);
+        assert!(deliver(&client.0.actor, Delivery::Sample(replacement, sample())).await);
+        let current = logs.status().await.unwrap();
+        assert!(current.head.is_some());
+        // This notification may still refer to the displayed stopped state.
+        client.0.actor.cast(Message::LifecycleChanged).unwrap();
+        client.snapshot().await.unwrap(); // acknowledge lifecycle handling
+        assert_eq!(logs.status().await.unwrap().generation, current.generation);
+        assert_eq!(logs.status().await.unwrap().head, current.head);
+        assert!(directory.path().join("current.redb").exists());
+        token.cancel();
+        tasks.close();
+        tasks.wait().await;
+        server.abort();
+    }
+}

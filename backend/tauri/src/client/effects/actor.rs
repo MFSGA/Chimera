@@ -138,7 +138,11 @@ fn group(kind: EffectKind) -> usize {
         // One owner: the system proxy actor also applies auto-launch.
         EffectKind::SystemProxy | EffectKind::ProxyGuard | EffectKind::AutoLaunch => 0,
         EffectKind::Hotkeys => 1,
-        EffectKind::Locale | EffectKind::Logger | EffectKind::Widget | EffectKind::Tray => 2,
+        EffectKind::Locale
+        | EffectKind::Logger
+        | EffectKind::CoreLogStorage
+        | EffectKind::Widget
+        | EffectKind::Tray => 2,
         EffectKind::TransparentProxy => 3,
     }
 }
