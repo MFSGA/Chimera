@@ -2796,7 +2796,7 @@ impl RuntimeReconcilerClient {
                     Arc::new(
                         crate::client::reconciler::authority::LiveSourceAuthority::new(
                             application.clone(),
-                            clash.clone(),
+                            (*clash).clone(),
                             reader,
                             content,
                         ),
