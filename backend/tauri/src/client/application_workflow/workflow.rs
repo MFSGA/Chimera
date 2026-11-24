@@ -485,6 +485,22 @@ impl ApplicationWorkflow {
         Ok(())
     }
 
+    #[cfg(not(test))]
+    async fn recover_after_reconcile(&mut self, core: &dyn ProfileRuntime) -> anyhow::Result<()> {
+        if let Some(operation_id) =
+            chimera_core::client::reconciler::reestablish::reconciled_native_attempt(
+                self.live.as_ref(),
+                core.status().uncertain,
+            )?
+        {
+            core.discard_profile_runtime(&operation_id).await;
+            self.live = None;
+            self.deferred = None;
+            self.publish_recovery_context().await;
+        }
+        Ok(())
+    }
+
     pub(in crate::client) async fn execute_lifecycle(
         &mut self,
         command: CoreCommand,
@@ -852,6 +868,7 @@ impl ApplicationWorkflow {
         context
     }
 
+    #[cfg(test)]
     pub(in crate::client) async fn mark_recovery_with_attempt(
         &mut self,
         operation_id: OperationId,

@@ -22,8 +22,19 @@ pub enum StartupOutcome {
     RecoveryRequired {
         reason: String,
     },
+    Unsettled {
+        reason: String,
+    },
 }
 impl StartupOutcome {
+    pub fn failure_reason(&self) -> Option<&str> {
+        match self {
+            Self::Ready => None,
+            Self::ReadyDegraded { reason, .. }
+            | Self::RecoveryRequired { reason }
+            | Self::Unsettled { reason } => Some(reason),
+        }
+    }
     pub fn from_conclusion(conclusion: &Conclusion) -> Self {
         match conclusion {
             Conclusion::Converged | Conclusion::Inactive => Self::Ready,

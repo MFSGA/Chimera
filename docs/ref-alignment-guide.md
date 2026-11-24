@@ -723,3 +723,9 @@ cargo clippy --manifest-path backend/Cargo.toml --all-targets --all-features
 - 基线 f243240afaae2227432c808d6c7122e56835b019，ref d95b44c05516a3e2e4eb24e2285a7eeaa70e1769。将实际 Completed round 的运行回执验证、应用选择恢复、一次性连接中断、attempt/Conclusion 原子结算迁入 chimera-core/client/reconciler/round.rs；原唯一 Actor 直接使用共享 RuntimeObservationPort、RuntimeProgress 与 source authority。保持 worker join、source-version fence、E2E tracing 与已有状态发布顺序。
 - 原 ProfileMutation、ConnectApplicationWorkflow、动态事务接线、ApplicationWorkflowClient/participant 与 TCC prepare/cancel 入口仅保留在 cfg(test)，正式构建不再接受该旧事务。生产 Profiles 继续走共享 source owner 和 RuntimeGate；旧启动恢复依赖的 TCC recovery 辅助逻辑仍在，未删除现有恢复路径。重试错误分类进入 shared check_record。未新增前端兼容 DTO 或第二 actor。完整 ref Actor、CoreLifecycleWorkflow、legacy config mirror 仍待迁移。
 - L2。Rustfmt、workspace Clippy all-targets/all-features offline、diff--check；保留旧回归测试，未运行常规测试或真实 Core/Service/GUI E2E。未主动改变 wire schema。回滚撤销本轮代码，不改用户配置。
+
+### DIFF-REF-NATIVE-REESTABLISH：启动重试与原生恢复
+
+- 基线 e7e3818cd0b712371d381eefea06e19b53255799，ref d95b44c05516a3e2e4eb24e2285a7eeaa70e1769。将实际 committed target、retry budget、LiveAttempt 与 startup observation/report 迁入 chimera-core/client/reconciler/reestablish.rs；统一 StartupOutcome 为现有 ref 共享类型（保留本地 Unsettled），ConfigDomain 使用 contracts。启动重试实际调度使用共享 update_reestablish_target；保留 committed identity 变化重置预算、dependency wait、下层 owner 不确定时禁止清除 attempt。报告仍使用本地 operation sequence/evidence，尚未完全统一为 ref report。
+- 正式构建的 recover_after_reconcile 只清除已结算的 native lifecycle/reestablish attempt，拒绝旧 Profile source-decision/rollback evidence；旧 TCC replay、confirm、restore 与 source decision 恢复逻辑仅在 cfg(test) 编译，保留原有回归测试。生产恢复不再重放旧 Profile 事务。完整上游 Actor、宿主 lifecycle 命令、旧配置镜像与尚存的旧 Profile runtime 端口仍待迁移。
+- L2。Rustfmt、workspace Clippy all-targets/all-features offline、diff--check；未运行常规测试、真实 Core/Service/GUI E2E。未主动改变 wire schema。回滚撤销本轮代码，不改用户配置。

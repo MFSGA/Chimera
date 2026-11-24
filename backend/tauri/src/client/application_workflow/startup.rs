@@ -118,15 +118,9 @@ pub(crate) fn startup_owner_outcome(failure: StartupOwnerFailure) -> StartupOutc
     }
 }
 
-/// What StartupReconcile observed and how it concluded.
-#[derive(Debug, Clone)]
-pub(crate) struct StartupReport {
-    /// The CoreLifecycle actor's operation sequence number.
-    pub(crate) operation_id: u64,
-    /// `None` when the workflow could not obtain a trustworthy observation.
-    pub(crate) observation: Option<StartupObservation>,
-    pub(crate) outcome: StartupOutcome,
-}
+pub use chimera_core::client::reconciler::reestablish::{
+    RuntimeEvidence, StartupObservation, StartupReport,
+};
 
 /// Startup state owned by ApplicationWorkflow. The owner signal is mirrored
 /// through an atomic only for the Service readiness observer outside the actor.
@@ -178,20 +172,7 @@ impl StartupWorkflowState {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum StartupOutcome {
-    /// The committed runtime was reconciled under the selected host.
-    Ready,
-    /// Startup completed safely, but runtime convergence is still pending.
-    ReadyDegraded {
-        health: ConvergenceHealth,
-        reason: String,
-    },
-    /// A side effect or owner could not be established safely.
-    RecoveryRequired { reason: String },
-    /// The startup workflow did not return a terminal report.
-    Unsettled { reason: String },
-}
+pub use chimera_core::client::reconciler::startup::StartupOutcome;
 
 /// Compatibility state used only by the test-only Direct CoreLifecycle adapter.
 /// Production startup retries use ApplicationWorkflow's shared DeferredTarget.
@@ -454,34 +435,6 @@ mod retry_tests {
         assert!(target.next_attempt.is_none());
         assert_eq!(target.health, ConvergenceHealth::Pending);
     }
-}
-
-impl StartupOutcome {
-    pub(crate) fn failure_reason(&self) -> Option<&str> {
-        match self {
-            Self::Ready => None,
-            Self::ReadyDegraded { reason, .. }
-            | Self::RecoveryRequired { reason }
-            | Self::Unsettled { reason } => Some(reason),
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct StartupObservation {
-    pub(crate) desired: ExecutionHost,
-    pub(crate) service: Option<ServiceEvidence>,
-    /// Chimera's current app-side Core status projection is narrower than
-    /// ref's CoreStatusProjection. A missing state on the Service host means
-    /// the legacy adapter supplied its timestamp-zero unreachable sentinel.
-    pub(crate) runtime: Option<RuntimeEvidence>,
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct RuntimeEvidence {
-    pub(crate) host: ExecutionHost,
-    pub(crate) state: Option<CoreState>,
-    pub(crate) state_changed_at: i64,
 }
 
 pub use chimera_core::client::reconciler::service_evidence::{
@@ -2144,106 +2097,20 @@ impl ApplicationWorkflow {
 
 async fn update_reestablish_target(
     lifecycle: &CoreLifecycleWorkflow,
-    mut report: StartupReport,
+    report: StartupReport,
     automatic: bool,
     cause: ReestablishCause,
     deferred: &mut Option<DeferredTarget>,
 ) -> StartupReport {
-    match &report.outcome {
-        StartupOutcome::Ready => {
-            *deferred = None;
-            return report;
-        }
-        StartupOutcome::RecoveryRequired { .. } | StartupOutcome::Unsettled { .. } => {
-            if let Some(target) = deferred.as_mut() {
-                target.health = ConvergenceHealth::RecoveryRequired;
-                target.next_attempt = None;
-            }
-            return report;
-        }
-        StartupOutcome::ReadyDegraded { .. } => {}
-    }
-
-    let identity = match lifecycle.startup_target_identity().await {
-        Ok(identity) => identity,
-        Err(error) => {
-            let reason = format!(
-                "{}; committed runtime target identity is unavailable: {error:#}",
-                report
-                    .outcome
-                    .failure_reason()
-                    .unwrap_or("startup did not converge")
-            );
-            if let Some(identity) = lifecycle.unresolved_startup_target_identity().await {
-                if deferred
-                    .as_ref()
-                    .is_none_or(|target| target.identity != identity)
-                {
-                    *deferred = Some(DeferredTarget::reestablish(
-                        OperationId::generate(),
-                        identity,
-                        cause,
-                    ));
-                }
-                if let Some(target) = deferred.as_mut() {
-                    target.origin = TargetOrigin::Reestablish(cause);
-                    let health = target.schedule_dependency(reason);
-                    report.outcome = StartupOutcome::ReadyDegraded {
-                        health,
-                        reason: target.cause.message.clone(),
-                    };
-                    return report;
-                }
-            }
-            if let Some(target) = deferred.as_mut().filter(|target| target.is_reestablish()) {
-                target.block(reason.clone());
-            }
-            report.outcome = StartupOutcome::ReadyDegraded {
-                health: ConvergenceHealth::Blocked,
-                reason,
-            };
-            return report;
-        }
-    };
-
-    if deferred
-        .as_ref()
-        .is_none_or(|target| target.identity != identity)
-    {
-        *deferred = Some(DeferredTarget::reestablish(
-            OperationId::generate(),
-            identity,
-            cause,
-        ));
-    }
-    let target = deferred
-        .as_mut()
-        .expect("reestablish target was initialized");
-    target.origin = TargetOrigin::Reestablish(cause);
-    let reason = report
-        .outcome
-        .failure_reason()
-        .unwrap_or("startup did not converge")
-        .to_owned();
-    let health = match report.outcome {
-        StartupOutcome::ReadyDegraded {
-            health: ConvergenceHealth::WaitingDependency | ConvergenceHealth::RecoveryRequired,
-            ..
-        } => target.schedule_dependency(reason.clone()),
-        StartupOutcome::ReadyDegraded {
-            health: ConvergenceHealth::RetryScheduled,
-            ..
-        } => target.schedule_application(reason.clone(), automatic),
-        StartupOutcome::ReadyDegraded { .. } => target.block(reason.clone()),
-        StartupOutcome::Ready
-        | StartupOutcome::RecoveryRequired { .. }
-        | StartupOutcome::Unsettled { .. } => unreachable!("handled above"),
-    };
-    report.outcome = StartupOutcome::ReadyDegraded {
-        health,
-        reason: target.cause.message.clone(),
-    };
-    report
+    chimera_core::client::reconciler::reestablish::update_reestablish_target(
+        || lifecycle.startup_target_identity(),
+        || lifecycle.unresolved_startup_target_identity(),
+        report,
+        automatic,
+        cause,
+        deferred,
+    )
+    .await
 }
 
 #[cfg(test)]

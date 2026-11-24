@@ -1,12 +1,17 @@
 //! Profile mutation phases coordinated by the tracked application workflow.
 
+#[cfg(test)]
 use std::sync::Arc;
+#[cfg(test)]
 use std::time::Duration;
 
+#[cfg(test)]
 use anyhow::Context;
 #[cfg(test)]
 use chimera_config::profile::Profiles;
+#[cfg(test)]
 use chimera_core::state::{AbortResourceState, StateDecision};
+#[cfg(test)]
 use chimera_core_manager::OperationId;
 #[cfg(test)]
 use chimera_core_manager::{CoreError, CoreErrorKind};
@@ -26,24 +31,20 @@ use super::{
     },
     workflow::{ApplicationWorkflow, ProfileRuntime, RecoveryContext},
 };
-#[cfg(not(test))]
-use super::{
-    attempt::{AppliedVerdict, AttemptOrigin, AttemptStage, LiveAttempt},
-    mutation::{KnownRuntimeState, MutationReceipt},
-    workflow::{ApplicationWorkflow, ProfileRuntime},
-};
 #[cfg(test)]
 use crate::client::runtime::{Degradation, DegradationPhase};
 
 #[cfg(test)]
 pub(in crate::client) const MUTATION_DECISION_TIMEOUT: Duration = Duration::from_secs(90);
 
+#[cfg(test)]
 enum DecisionOutcome {
     Committed,
     Aborted,
     Unresolved(String),
 }
 
+#[cfg(test)]
 impl ApplicationWorkflow {
     /// Runs prepare, awaits the transaction's authoritative decision, and
     /// confirms or restores the Profile runtime before releasing the workflow.
@@ -805,6 +806,7 @@ impl ApplicationWorkflow {
         }
     }
 
+    #[cfg(test)]
     pub(in crate::client) async fn recover_previous(
         &mut self,
         core: &dyn ProfileRuntime,
@@ -812,6 +814,7 @@ impl ApplicationWorkflow {
         self.recover_previous_inner(core, false).await
     }
 
+    #[cfg(test)]
     pub(in crate::client) async fn recover_after_reconcile(
         &mut self,
         core: &dyn ProfileRuntime,
@@ -819,6 +822,7 @@ impl ApplicationWorkflow {
         self.recover_previous_inner(core, true).await
     }
 
+    #[cfg(test)]
     async fn recover_previous_inner(
         &mut self,
         core: &dyn ProfileRuntime,
@@ -1016,6 +1020,7 @@ impl ApplicationWorkflow {
         Ok(())
     }
 
+    #[cfg(test)]
     async fn finish_applied(
         &mut self,
         core: &dyn ProfileRuntime,
@@ -1039,6 +1044,7 @@ impl ApplicationWorkflow {
         Ok(())
     }
 
+    #[cfg(test)]
     async fn recover_applied(
         &mut self,
         core: &dyn ProfileRuntime,
@@ -1084,6 +1090,7 @@ impl ApplicationWorkflow {
         self.finish_applied(core, operation_id, &applied).await
     }
 
+    #[cfg(test)]
     async fn set_outcome(&self, operation_id: &OperationId, receipt: MutationReceipt) {
         self.outcomes
             .lock()
@@ -1092,6 +1099,7 @@ impl ApplicationWorkflow {
     }
 }
 
+#[cfg(test)]
 fn ensure_reconciled_source_decision(
     decision: &chimera_core::state::DecisionHandle,
 ) -> anyhow::Result<()> {
@@ -1114,6 +1122,7 @@ fn ensure_reconciled_source_decision(
     }
 }
 
+#[cfg(test)]
 fn runtime_state_matches(expected: &KnownRuntimeState, actual: &KnownRuntimeState) -> bool {
     match (expected, actual) {
         (KnownRuntimeState::Applied(expected), KnownRuntimeState::Applied(actual)) => {
