@@ -120,7 +120,7 @@ export default function RuntimeConfigDiffDialog({
                 </Button>
               </div>
             )}
-          {loaded && (
+          {open && loaded && (
             <Suspense
               fallback={<span className="text-sm">{m.common_loading()}</span>}
             >
