@@ -75,13 +75,14 @@ use std::{borrow::Cow, sync::LazyLock};
 static TEXT_RULES: LazyLock<Vec<(Regex, &'static str)>> = LazyLock::new(|| {
     vec![
     (Regex::new(r"(?i)([a-z][a-z0-9+.-]*://)[^\s/@]+@").unwrap(), "${1}<redacted>@"),
+    // Scrub controller userinfo before the generic user/password rules.
+    (Regex::new(r#"(?i)(\bexternal-controller(?:-tls)?[\"']?\s*[:=]\s*[\"']?)[^\s@]+@"#).unwrap(), "${1}<redacted>@"),
     (Regex::new(r#"([?&][^\s=&#?]+=)[^\s&#\"']*"#).unwrap(), "${1}<redacted>"),
     (Regex::new(r#"(?i)(\b(?:secret|password|token|private[-_]key|auth[-_]str|authentication|auth|authorization|uuid|username|user|psk|api[-_]key|access[-_]token|refresh[-_]token|client[-_]secret|credential|credentials)\b[\"']?\s*[:=]\s*\")(?:\\.|[^\"\\])*"#).unwrap(), "${1}<redacted>"),
     (Regex::new(r#"(?i)(\b(?:secret|password|token|private[-_]key|auth[-_]str|authentication|auth|authorization|uuid|username|user|psk|api[-_]key|access[-_]token|refresh[-_]token|client[-_]secret|credential|credentials)\b[\"']?\s*[:=]\s*')(?:\\.|[^'\\])*"#).unwrap(), "${1}<redacted>"),
     (Regex::new(r#"(?i)(\b(?:secret|password|token|private[-_]key|auth[-_]str|authentication|auth|authorization|uuid|username|user|psk|api[-_]key|access[-_]token|refresh[-_]token|client[-_]secret|credential|credentials)\b[\"']?\s*[:=]\s*)[^\s,;}&\"']+"#).unwrap(), "${1}<redacted>"),
     (Regex::new(r"(?i)(\bAuthorization:\s*)[^\r\n]+").unwrap(), "${1}<redacted>"),
     (Regex::new(r"(?i)(\bBearer\s+)[^\s,;]+" ).unwrap(), "${1}<redacted>"),
-    (Regex::new(r#"(?i)(\bexternal-controller(?:-tls)?[\"']?\s*[:=]\s*[\"']?)[^\s@]+@"#).unwrap(), "${1}<redacted>@"),
 ]
 });
 
@@ -207,6 +208,10 @@ mod text_redaction_tests {
             (
                 "external-controller: user:pass@host:9090",
                 "external-controller: <redacted>@host:9090",
+            ),
+            (
+                r#"{"external-controller-tls":"user:pass@host:9443","user":"secret-user"}"#,
+                r#"{"external-controller-tls":"<redacted>@host:9443","user":"<redacted>"}"#,
             ),
             ("你好 C:/Users/test/file", "你好 ~/file"),
         ] {

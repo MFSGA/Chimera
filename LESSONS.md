@@ -1479,3 +1479,8 @@ backend/Cargo.toml -p chimera --lib core::clash::proxies::tests:: -- --nocapture
 - 剩余 14 个 Reconciler 用例涉及旧 fixture 缺少 canonical CandidateCheck 与 ProfileContentReader/source authority；S4 拒绝 legacy Core submit。迁移 fixture 时必须以已校验的冻结输入构建候选，并让模拟 Core 从提交的 prepared bytes 读取内容；禁止为通过测试恢复 inline fallback、跳过校验或删除行为断言。该观察不证明生产路径没有其他问题。
 - 在保留前述修复后快进整合 `a55fc9c0`（4 个共享 Runtime 提交），仍复现 14 个 Reconciler 失败。将这组用例接入真实 CandidateCheck 与 LiveSourceAuthority，并让 fake builder 序列化冻结 Profiles，fake Core 从 exact prepared bytes 解码而不回读当前源文档。Ref `plan.rs` 对 Running + verified 的新 target 直接 S4 Apply，只有 unverified Running 才需 S3 Stop；拒绝同 target 应保留 NotInEffect 及原始 cause，显式 Retry 方可重试。测试保留提交次数、来源版本、拒绝原因及所有权保护断言。
 - macOS 回归：SystemProxy 2/2、Traffic 3/3、整合后的 Reconciler 161/161；CI 对应 rustfmt 和 git diff --check 通过。候选 fixture 是合成产品，不证明真实 Core 启动或跨平台 E2E；完整 workspace 与远端 CI 结果另行记录。
+
+### LESSON-20261124-002：扩展 credential 脱敏规则不能先吞掉 controller userinfo 边界
+
+- 在修复首轮 Tauri 单测后，全 workspace 测试继续运行 `chimera-config`，发现 `redact_text_rules_are_idempotent_and_preserve_unicode` 失败：`external-controller: user:pass@host:9090` 被通用 user 规则先改为 `external-controller: user:<redacted>`，丢失 host:port。
+- Ref `redact.rs` 的 controller 专用规则本来不会与较窄的敏感键集合冲突；Chimera 扩展了 user/username 等敏感键。保留扩展脱敏能力，将 controller userinfo 规则放在通用键规则前。新增 JSON TLS controller 与普通 user 字段同时出现的幂等回归；macOS `cargo test --locked --manifest-path backend/Cargo.toml -p chimera-config --all-features redact::` 6/6 通过。
