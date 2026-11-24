@@ -504,7 +504,7 @@ async fn partial_production_core_drains_router_then_local_executor() {
         ControlOptions::new(runtime_dir.join("staging"), runtime_dir.join("working")),
     );
     let router = chimera_core::actor_v2::CoreClient::spawn(Arc::new(
-        crate::core::actor_v2::control_endpoint::LocalEndpoint::new(control.clone()),
+        chimera_core::actor_v2::endpoint::LocalEndpoint::new(control.clone()),
     ))
     .await
     .unwrap();

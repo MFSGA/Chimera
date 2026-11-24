@@ -2,7 +2,7 @@
 use crate::client::application_workflow::startup::ServiceEvidence;
 use crate::client::core_lifecycle::CoreLifecycleWorkflow;
 use crate::client::core_lifecycle::ports::ServiceTransitionLease;
-use crate::core::actor_v2::control_endpoint::ExecutionHost;
+use chimera_core::actor_v2::endpoint::ExecutionHost;
 use chimera_core::actor_v2::service_status::ServiceHostStatus;
 use chimera_ipc::api::status::CoreState;
 use std::sync::atomic::Ordering;

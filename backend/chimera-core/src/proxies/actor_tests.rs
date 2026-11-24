@@ -1,4 +1,5 @@
 use super::*;
+use crate::actor_v2::api::ApiError;
 use axum::{
     Json, Router,
     extract::{Path, State as HttpState},
@@ -1073,7 +1074,7 @@ fn proxy_interruption_causes_keep_the_upstream_classification() {
             InterruptFailure::Unavailable,
         ),
     ] {
-        assert_eq!(interrupt_failure(&error), expected);
+        assert_eq!(InterruptFailure::from(&error), expected);
     }
 }
 

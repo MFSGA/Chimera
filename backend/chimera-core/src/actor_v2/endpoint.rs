@@ -12,19 +12,26 @@
 //! lifecycle state (invariant I-R3). The normalized snapshot below is a
 //! field-by-field projection of what the host published, nothing more.
 
-use std::{borrow::Cow, sync::Arc, time::Duration};
+use std::{
+    borrow::Cow,
+    path::{Path, PathBuf},
+    sync::Arc,
+    time::Duration,
+};
 
 use chimera_core_manager::{
-    ApplyOutcome, CoreCommandEnvelope, CoreError, CoreErrorKind, CoreKind, OperationId,
-    OperationOutput, OperationState,
+    ApplyOutcome, ConfigInput, CoreCommand, CoreCommandEnvelope, CoreControl, CoreError,
+    CoreErrorKind, CoreKind, OperationId, OperationOutput, OperationState,
 };
 use chimera_ipc::api::{
     core::v2::{
-        OperationInfo, OperationOutputInfo, OperationPhase, ReconcileOutcomeInfo,
-        ReconcileOutcomeKind,
+        CoreCommandInfo, CoreOperationReq, CoreOwnerInfo, CoreSubmitReq, OperationInfo,
+        OperationOutputInfo, OperationPhase, ReconcileOutcomeInfo, ReconcileOutcomeKind,
     },
-    status::CoreStateDetail,
+    status::{CoreStateDetail, RevisionIdInfo},
 };
+
+use chimera_ipc::client::{ClientError, shortcuts::Client};
 
 // The pinned upstream execution-host identity lives in the shared runtime
 // values layer; retain this path for existing CoreActor endpoint consumers.
@@ -181,13 +188,125 @@ pub trait ControlEndpoint: Send + Sync {
     async fn status(&self) -> Result<CoreStatusSnapshot, CoreError>;
 }
 
-// The host-specific Local and Service ControlEndpoint implementations remain
-// in Tauri as adapters. They implement *this core-owned trait*.
-// In particular, Chimera's service client is not type-compatible with the
-// upstream owned IPC client and cannot simply be copied verbatim.
 pub type EndpointHandle = Arc<dyn ControlEndpoint>;
 pub type ApiChanges =
     std::pin::Pin<Box<dyn futures_util::Stream<Item = Result<(), CoreError>> + Send>>;
+
+pub struct LocalEndpoint {
+    control: CoreControl,
+}
+
+impl LocalEndpoint {
+    pub fn new(control: CoreControl) -> Self {
+        Self { control }
+    }
+}
+
+#[async_trait::async_trait]
+impl ControlEndpoint for LocalEndpoint {
+    async fn effective_config(
+        &self,
+    ) -> Result<Option<chimera_ipc::api::core::v2::CoreEffectiveConfig>, CoreError> {
+        self.control
+            .effective_config()
+            .await
+            .map(|snapshot| {
+                Ok(chimera_ipc::api::core::v2::CoreEffectiveConfig {
+                    instance_id: snapshot.instance_id.to_string(),
+                    revision: chimera_ipc::api::status::ConfigRevisionInfo {
+                        epoch: snapshot.revision.epoch.get(),
+                        generation: snapshot.revision.generation,
+                        source_hash: snapshot.revision.source_hash.clone(),
+                        effective_hash: snapshot.revision.effective_hash.clone(),
+                    },
+                    config: serde_yaml::to_string(snapshot.config.as_ref()).map_err(|_| {
+                        CoreError::new(
+                            CoreErrorKind::Internal,
+                            "failed to serialize effective config",
+                            false,
+                        )
+                    })?,
+                })
+            })
+            .transpose()
+    }
+
+    async fn api_connection(
+        &self,
+    ) -> Result<Option<chimera_ipc::api::core::v2::CoreApiConnection>, CoreError> {
+        let Some(connection) = self.control.api_connection().await else {
+            return Ok(None);
+        };
+        let controller = match connection.controller.host {
+            chimera_core_manager::Host::Http(url) => {
+                chimera_ipc::api::status::CoreControllerInfo::Http(url.to_string())
+            }
+            chimera_core_manager::Host::UnixSocket(path) => {
+                chimera_ipc::api::status::CoreControllerInfo::UnixSocket(path)
+            }
+            chimera_core_manager::Host::NamedPipe(path) => {
+                chimera_ipc::api::status::CoreControllerInfo::NamedPipe(path)
+            }
+            _ => {
+                return Err(CoreError::new(
+                    CoreErrorKind::BackendUnavailable,
+                    "unsupported API transport",
+                    false,
+                ));
+            }
+        };
+        Ok(Some(chimera_ipc::api::core::v2::CoreApiConnection {
+            instance_id: connection.instance_id.to_string(),
+            controller,
+            secret: connection.controller.secret,
+        }))
+    }
+
+    async fn api_changes(&self) -> Result<Option<ApiChanges>, CoreError> {
+        let changes = futures_util::stream::unfold(self.control.subscribe(), |mut rx| async move {
+            rx.changed().await.ok()?;
+            Some((Ok(()), rx))
+        });
+        Ok(Some(Box::pin(changes)))
+    }
+
+    fn host(&self) -> ExecutionHost {
+        ExecutionHost::Local
+    }
+
+    /// The in-process control plane takes the document inline, so the staged
+    /// file a remote host would need is irrelevant here: these are literally
+    /// the bytes the reconcile will carry.
+    async fn check_config(&self, submission: CheckSubmission) -> CheckSupport {
+        CheckSupport::Ran(
+            self.control
+                .check(chimera_core_manager::CheckRequest {
+                    core: submission.core_spec,
+                    config: chimera_core_manager::ConfigInput::Inline {
+                        bytes: submission.config_bytes,
+                        expected_digest: Some(submission.digest),
+                    },
+                })
+                .await,
+        )
+    }
+
+    async fn submit(&self, submission: CoreSubmission) -> Result<OperationInfo, CoreError> {
+        let handle = self.control.submit(submission.envelope)?;
+        Ok(map_local_operation(handle.id(), handle.state()))
+    }
+
+    async fn wait_operation(&self, id: OperationId, timeout: Duration) -> Option<OperationInfo> {
+        self.control
+            .wait_operation(id, timeout)
+            .await
+            .map(|state| map_local_operation(id, state))
+    }
+
+    async fn status(&self) -> Result<CoreStatusSnapshot, CoreError> {
+        Ok(map_local_status(&self.control.status()))
+    }
+}
 
 // Original ref endpoint projections moved out of the desktop adapter.
 /// The local sibling of the daemon bridge's wire mapping. Duplicated on
@@ -368,6 +487,542 @@ pub fn map_service_status(infos: &chimera_ipc::api::status::CoreInfos) -> CoreSt
     }
 }
 
+/// Service adapter using the app's shared IPC client.
+#[derive(Clone)]
+pub struct ServiceEndpoint {
+    client: &'static Client<'static>,
+    owner_dirs: Arc<dyn Fn() -> Result<(PathBuf, PathBuf), CoreError> + Send + Sync>,
+}
+
+impl ServiceEndpoint {
+    /// The desktop supplies its owner-directory resolver, invoked only for
+    /// the owner-fenced Recover command. No global application state here.
+    pub fn new(
+        client: &'static Client<'static>,
+        owner_dirs: impl Fn() -> Result<(PathBuf, PathBuf), CoreError> + Send + Sync + 'static,
+    ) -> Self {
+        Self {
+            client,
+            owner_dirs: Arc::new(owner_dirs),
+        }
+    }
+}
+
+impl std::fmt::Debug for ServiceEndpoint {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ServiceEndpoint")
+            .finish_non_exhaustive()
+    }
+}
+
+fn legacy_disabled_transparent_proxy_response(
+    mode: chimera_ipc::api::network::transparent_proxy::NetworkTransparentProxyMode,
+    error: &ClientError<'_>,
+) -> Option<chimera_ipc::api::network::transparent_proxy::NetworkTransparentProxyStatus> {
+    use chimera_ipc::api::network::transparent_proxy::{
+        NetworkTransparentProxyMode::Disabled, NetworkTransparentProxyStatus,
+    };
+
+    (mode == Disabled
+        && matches!(
+            error,
+            ClientError::HttpStatus { status, .. } if status.as_u16() == 404
+        ))
+    .then_some(NetworkTransparentProxyStatus {
+        supported: false,
+        active: false,
+        mode: None,
+        revision: None,
+        error: None,
+    })
+}
+
+#[async_trait::async_trait]
+impl ControlEndpoint for ServiceEndpoint {
+    async fn reconcile_transparent_proxy(
+        &self,
+        request: &chimera_ipc::api::network::transparent_proxy::NetworkTransparentProxyRequest,
+    ) -> Result<
+        chimera_ipc::api::network::transparent_proxy::NetworkTransparentProxyStatus,
+        CoreError,
+    > {
+        match self.client.reconcile_transparent_proxy(request).await {
+            Ok(status) => Ok(status),
+            Err(error) => legacy_disabled_transparent_proxy_response(request.mode, &error)
+                .ok_or_else(|| map_client_error(error)),
+        }
+    }
+
+    async fn transparent_proxy_status(
+        &self,
+    ) -> Result<
+        chimera_ipc::api::network::transparent_proxy::NetworkTransparentProxyStatus,
+        CoreError,
+    > {
+        match self.client.transparent_proxy_status().await {
+            Ok(status) => Ok(status),
+            Err(error) => legacy_disabled_transparent_proxy_response(
+                chimera_ipc::api::network::transparent_proxy::NetworkTransparentProxyMode::Disabled,
+                &error,
+            )
+            .ok_or_else(|| map_client_error(error)),
+        }
+    }
+
+    async fn effective_config(
+        &self,
+    ) -> Result<Option<chimera_ipc::api::core::v2::CoreEffectiveConfig>, CoreError> {
+        self.client
+            .effective_config_v2()
+            .await
+            .map_err(map_client_error)
+    }
+
+    async fn api_connection(
+        &self,
+    ) -> Result<Option<chimera_ipc::api::core::v2::CoreApiConnection>, CoreError> {
+        self.client
+            .core_api_connection()
+            .await
+            .map_err(map_client_error)
+    }
+
+    async fn api_changes(&self) -> Result<Option<ApiChanges>, CoreError> {
+        use futures_util::StreamExt;
+
+        let changes = self
+            .client
+            .events()
+            .await
+            .map_err(map_client_error)?
+            .filter_map(|event| async move {
+                match event {
+                    Ok(chimera_ipc::api::ws::events::Event::CoreStatusChanged(_)) => Some(Ok(())),
+                    Ok(_) => None,
+                    Err(error) => Some(Err(map_client_error(error))),
+                }
+            });
+        Ok(Some(Box::pin(changes)))
+    }
+
+    fn host(&self) -> ExecutionHost {
+        ExecutionHost::Service
+    }
+
+    async fn check_config(&self, submission: CheckSubmission) -> CheckSupport {
+        let Some(path) = submission.staged_config else {
+            return CheckSupport::Unsupported {
+                reason: "the service host validates a config file, and none was staged".into(),
+            };
+        };
+        CheckSupport::Ran(
+            self.client
+                .check_config(&chimera_ipc::api::core::check::CoreCheckReq {
+                    core_type: Cow::Owned(submission.core_type),
+                    config_file: Cow::Owned(path.into_std_path_buf()),
+                })
+                .await
+                .map_err(map_client_error),
+        )
+    }
+
+    async fn submit(&self, submission: CoreSubmission) -> Result<OperationInfo, CoreError> {
+        let request = wire_submit_request(&submission, self.owner_dirs.as_ref())?;
+        self.client
+            .submit_core(&request)
+            .await
+            .map_err(map_client_error)
+    }
+
+    async fn wait_operation(&self, id: OperationId, timeout: Duration) -> Option<OperationInfo> {
+        let id = id.to_string();
+        let request = CoreOperationReq {
+            operation_id: Cow::Borrowed(id.as_str()),
+            wait_ms: Some(timeout.as_millis().min(u128::from(u64::MAX)) as u64),
+        };
+        self.client
+            .core_operation(&request)
+            .await
+            .map_err(map_client_error)
+            .inspect_err(|error| {
+                tracing::debug!(%id, %error, "service operation query failed");
+            })
+            .ok()
+    }
+
+    async fn status(&self) -> Result<CoreStatusSnapshot, CoreError> {
+        let infos = self
+            .client
+            .core_status_v2()
+            .await
+            .map_err(map_client_error)?;
+        Ok(map_service_status(&infos))
+    }
+}
+
+fn map_client_error(error: ClientError<'_>) -> CoreError {
+    tracing::warn!(%error, "service IPC request failed");
+    if let ClientError::ServerResponseFailed(response) = &error {
+        let kind = error.server_error_kind().and_then(CoreErrorKind::from_wire);
+        let retryable = error
+            .server_retryable()
+            .unwrap_or_else(|| kind.is_some_and(|kind| kind.default_retryable()));
+        return CoreError {
+            kind,
+            message: response.msg.to_string(),
+            retryable,
+            operation_id: None,
+        };
+    }
+
+    CoreError::new(
+        CoreErrorKind::BackendUnavailable,
+        format!("service endpoint unreachable: {error}"),
+        true,
+    )
+}
+
+fn normalized_path_string(path: &Path) -> String {
+    dunce::canonicalize(path)
+        .unwrap_or_else(|_| path.to_path_buf())
+        .to_string_lossy()
+        .into_owned()
+}
+
+fn service_owner_recovery_command(config_dir: &Path, data_dir: &Path) -> CoreCommandInfo<'static> {
+    CoreCommandInfo::RecoverIfServiceOwner {
+        expected_config_dir: Cow::Owned(normalized_path_string(config_dir)),
+        expected_data_dir: Cow::Owned(normalized_path_string(data_dir)),
+    }
+}
+
+fn wire_submit_request(
+    submission: &CoreSubmission,
+    owner_dirs: &dyn Fn() -> Result<(PathBuf, PathBuf), CoreError>,
+) -> Result<CoreSubmitReq<'static>, CoreError> {
+    let command = match &submission.envelope.command {
+        CoreCommand::Reconcile(request) => {
+            let ConfigInput::Inline {
+                bytes,
+                expected_digest,
+            } = &request.config;
+            let config = String::from_utf8(bytes.clone()).map_err(|_| {
+                CoreError::new(
+                    CoreErrorKind::InvalidConfig,
+                    "config bytes are not UTF-8 text",
+                    false,
+                )
+            })?;
+            CoreCommandInfo::Reconcile {
+                local_ipc: request.options.local_ipc.map(|settings| {
+                    chimera_ipc::api::core::v2::LocalIpcSettingsInfo {
+                        policy: match settings.policy {
+                            chimera_core_manager::LocalIpcPolicy::Force => {
+                                chimera_ipc::api::core::v2::LocalIpcPolicyInfo::Force
+                            }
+                            chimera_core_manager::LocalIpcPolicy::Prefer => {
+                                chimera_ipc::api::core::v2::LocalIpcPolicyInfo::Prefer
+                            }
+                            chimera_core_manager::LocalIpcPolicy::Disable => {
+                                chimera_ipc::api::core::v2::LocalIpcPolicyInfo::Disable
+                            }
+                            _ => chimera_ipc::api::core::v2::LocalIpcPolicyInfo::Disable,
+                        },
+                        keep_http_controller: settings.keep_http_controller,
+                    }
+                }),
+                core_type: Cow::Owned(match &submission.core_type {
+                    Some(core_type) => core_type.clone(),
+                    None => app_core_kind_to_type(request.core.kind)?,
+                }),
+                config: Cow::Owned(config),
+                expected_digest: expected_digest.clone().map(Cow::Owned),
+                expected_applied: request.expected_applied.as_ref().map(|revision| {
+                    RevisionIdInfo {
+                        epoch: revision.epoch.get(),
+                        generation: revision.generation,
+                        effective_hash: revision.effective_hash.clone(),
+                    }
+                }),
+            }
+        }
+        CoreCommand::Stop => CoreCommandInfo::Stop,
+        CoreCommand::StopIfOwner(expected_owner) => CoreCommandInfo::StopIfOwner {
+            expected_owner: CoreOwnerInfo {
+                instance_id: expected_owner.instance_id.to_string(),
+                revision: RevisionIdInfo {
+                    epoch: expected_owner.revision.epoch.get(),
+                    generation: expected_owner.revision.generation,
+                    effective_hash: expected_owner.revision.effective_hash.clone(),
+                },
+            },
+        },
+        CoreCommand::Recover => {
+            let (config_dir, data_dir) = owner_dirs()?;
+            service_owner_recovery_command(&config_dir, &data_dir)
+        }
+        CoreCommand::Shutdown => {
+            return Err(CoreError::new(
+                CoreErrorKind::OperationConflict,
+                "the service core lifecycle cannot be shut down over IPC",
+                false,
+            ));
+        }
+    };
+
+    Ok(CoreSubmitReq {
+        operation_id: Cow::Owned(submission.envelope.operation_id.to_string()),
+        command,
+    })
+}
+
+fn app_core_kind_to_type(kind: CoreKind) -> Result<chimera_utils::core::CoreType, CoreError> {
+    use chimera_utils::core::{ClashCoreType, CoreType};
+
+    let core_type = match kind {
+        CoreKind::Mihomo => ClashCoreType::Mihomo,
+        CoreKind::ClashRust => ClashCoreType::ClashRust,
+        CoreKind::ClashPremium => ClashCoreType::ClashPremium,
+        // Keep Chimera Client a first-class wire identity. It accepts the
+        // clash-rs config contract, but must not collapse to `ClashRust`.
+        CoreKind::ChimeraClient => ClashCoreType::ChimeraClient,
+        CoreKind::Meow => {
+            return Err(CoreError::new(
+                CoreErrorKind::Internal,
+                "Meow has no matching Chimera IPC CoreType",
+                false,
+            ));
+        }
+    };
+    Ok(CoreType::Clash(core_type))
+}
+
+#[cfg(test)]
+mod service_tests {
+    use super::*;
+    use camino::Utf8PathBuf;
+    use chimera_core_manager::{
+        CoreCommandEnvelope, CoreOwner, CoreSpec, Epoch, InstanceOptions, ReconcileRequest,
+        RevisionId,
+    };
+    use chimera_ipc::api::core::v2::CoreCommandInfo;
+
+    #[test]
+    fn recover_wire_uses_injected_owner_directories_and_fails_closed() {
+        let submission = CoreSubmission {
+            expected_owner: None,
+            envelope: CoreCommandEnvelope {
+                operation_id: OperationId::generate(),
+                command: CoreCommand::Recover,
+            },
+            core_type: None,
+        };
+        let dirs = tempfile::tempdir().unwrap();
+        let config = dirs.path().join("config");
+        let data = dirs.path().join("data");
+        std::fs::create_dir(&config).unwrap();
+        std::fs::create_dir(&data).unwrap();
+        let wire =
+            wire_submit_request(&submission, &|| Ok((config.clone(), data.clone()))).unwrap();
+        let CoreCommandInfo::RecoverIfServiceOwner {
+            expected_config_dir,
+            expected_data_dir,
+        } = wire.command
+        else {
+            panic!("recovery must be owner-fenced")
+        };
+        assert_eq!(expected_config_dir, normalized_path_string(&config));
+        assert_eq!(expected_data_dir, normalized_path_string(&data));
+        let result = wire_submit_request(&submission, &|| {
+            Err(CoreError::new(
+                CoreErrorKind::BackendUnavailable,
+                "owner directories unavailable",
+                false,
+            ))
+        });
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn reconcile_wire_keeps_chimera_client_alpha_channel_identity() {
+        let core_type = chimera_utils::core::CoreType::Clash(
+            chimera_utils::core::ClashCoreType::ChimeraClientAlpha,
+        );
+        let submission = CoreSubmission {
+            expected_owner: None,
+            envelope: CoreCommandEnvelope {
+                operation_id: "0011223344556677-8899aabb-ccddeeff".parse().unwrap(),
+                command: CoreCommand::Reconcile(Box::new(ReconcileRequest {
+                    core: CoreSpec {
+                        kind: CoreKind::ChimeraClient,
+                        binary_path: Utf8PathBuf::from("/opt/chimera/chimera-client-alpha"),
+                        version: None,
+                        features: Vec::new(),
+                    },
+                    config: ConfigInput::inline(b"mode: rule\n".to_vec()),
+                    options: InstanceOptions::default(),
+                    expected_applied: None,
+                })),
+            },
+            core_type: Some(core_type.clone()),
+        };
+
+        let wire = wire_submit_request(&submission, &|| {
+            panic!("non-recover command must not resolve owner dirs")
+        })
+        .unwrap();
+        let CoreCommandInfo::Reconcile {
+            core_type: wire_type,
+            config,
+            ..
+        } = wire.command
+        else {
+            panic!("reconcile command changed shape");
+        };
+
+        assert_eq!(wire_type.as_ref(), &core_type);
+        assert_eq!(config, "mode: rule\n");
+    }
+
+    /// The fallback half of ref's alpha-routing test belongs to the Service
+    /// wire adapter: a missing explicit CoreType must use CoreKind's base
+    /// identity, without rewriting an explicitly supplied alpha type.
+    #[test]
+    fn reconcile_wire_without_core_type_uses_base_kind() {
+        let submission = CoreSubmission {
+            expected_owner: None,
+            envelope: CoreCommandEnvelope {
+                operation_id: chimera_core_manager::OperationId::generate(),
+                command: CoreCommand::Reconcile(Box::new(ReconcileRequest {
+                    core: CoreSpec {
+                        kind: CoreKind::Mihomo,
+                        binary_path: Utf8PathBuf::from("mihomo-alpha"),
+                        version: None,
+                        features: vec![],
+                    },
+                    config: ConfigInput::inline(b"proxies: []".to_vec()),
+                    options: InstanceOptions::default(),
+                    expected_applied: None,
+                })),
+            },
+            core_type: None,
+        };
+
+        let wire = wire_submit_request(&submission, &|| {
+            panic!("non-recover command must not resolve owner dirs")
+        })
+        .expect("wire fallback must resolve");
+        let CoreCommandInfo::Reconcile { core_type, .. } = wire.command else {
+            panic!("expected reconcile wire command");
+        };
+        assert_eq!(
+            core_type.into_owned(),
+            chimera_utils::core::CoreType::Clash(chimera_utils::core::ClashCoreType::Mihomo)
+        );
+    }
+
+    #[test]
+    fn stop_if_owner_wire_keeps_process_and_revision_fence() {
+        let owner = CoreOwner::from_parts(
+            "9af54a67-fc31-4dcb-8422-26644c6277c8",
+            RevisionId {
+                epoch: Epoch::new(4).unwrap(),
+                generation: 12,
+                effective_hash: "0123456789abcdef".into(),
+            },
+        )
+        .unwrap();
+        let submission = CoreSubmission {
+            expected_owner: None,
+            envelope: CoreCommandEnvelope {
+                operation_id: "0011223344556677-8899aabb-ccddeeff".parse().unwrap(),
+                command: CoreCommand::StopIfOwner(owner),
+            },
+            core_type: None,
+        };
+
+        let wire = wire_submit_request(&submission, &|| {
+            panic!("non-recover command must not resolve owner dirs")
+        })
+        .unwrap();
+        let CoreCommandInfo::StopIfOwner { expected_owner } = wire.command else {
+            panic!("owner-fenced stop changed shape");
+        };
+
+        assert_eq!(
+            expected_owner.instance_id,
+            "9af54a67-fc31-4dcb-8422-26644c6277c8"
+        );
+        assert_eq!(expected_owner.revision.epoch, 4);
+        assert_eq!(expected_owner.revision.generation, 12);
+        assert_eq!(expected_owner.revision.effective_hash, "0123456789abcdef");
+    }
+
+    #[test]
+    fn service_quarantine_recovery_wire_names_the_current_installation() {
+        let root = tempfile::tempdir().unwrap();
+        let config_dir = root.path().join("config");
+        let data_dir = root.path().join("data");
+        std::fs::create_dir_all(&config_dir).unwrap();
+        std::fs::create_dir_all(&data_dir).unwrap();
+
+        let command = service_owner_recovery_command(&config_dir, &data_dir);
+        let CoreCommandInfo::RecoverIfServiceOwner {
+            expected_config_dir,
+            expected_data_dir,
+        } = command
+        else {
+            panic!("Service recovery must include the app installation identity");
+        };
+
+        assert_eq!(expected_config_dir, normalized_path_string(&config_dir));
+        assert_eq!(expected_data_dir, normalized_path_string(&data_dir));
+    }
+
+    #[test]
+    fn disabled_transparent_proxy_treats_missing_legacy_route_as_unsupported() {
+        use chimera_ipc::api::network::transparent_proxy::NetworkTransparentProxyMode;
+
+        let not_found = ClientError::HttpStatus {
+            status: 404_u16.try_into().unwrap(),
+            message: "route not found".into(),
+        };
+        let status = legacy_disabled_transparent_proxy_response(
+            NetworkTransparentProxyMode::Disabled,
+            &not_found,
+        )
+        .expect("missing legacy route should be reported as unsupported");
+
+        assert!(!status.supported);
+        assert!(
+            legacy_disabled_transparent_proxy_response(
+                NetworkTransparentProxyMode::Tproxy,
+                &not_found,
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn known_server_error_metadata_maps_without_message_parsing() {
+        let error = ClientError::ServerResponseFailed(chimera_ipc::api::R {
+            code: chimera_ipc::api::ResponseCode::OtherError,
+            msg: Cow::Borrowed("stale revision"),
+            data: None,
+            ts: 1,
+            error_kind: Some(Cow::Borrowed("revision_conflict")),
+            retryable: Some(false),
+        });
+
+        let mapped = map_client_error(error);
+
+        assert_eq!(mapped.kind, Some(CoreErrorKind::RevisionConflict));
+        assert!(!mapped.retryable);
+        assert_eq!(mapped.message, "stale revision");
+    }
+}
+
 #[cfg(test)]
 mod endpoint_contract_tests {
     use super::*;
@@ -442,5 +1097,25 @@ mod endpoint_contract_tests {
         assert!(status.state.is_none());
         assert!(status.revision.is_none());
         assert!(status.instance_id.is_none());
+    }
+}
+
+#[cfg(test)]
+mod controller_tests {
+    use super::*;
+
+    #[test]
+    fn controller_status_projection_removes_embedded_credentials() {
+        let host = chimera_core_manager::Host::Http(
+            url::Url::parse("http://support-user:private-token@127.0.0.1:9090").unwrap(),
+        );
+
+        let projected = map_controller(&host).unwrap();
+
+        assert!(matches!(
+            projected,
+            chimera_ipc::api::status::CoreControllerInfo::Http(url)
+                if url == "http://127.0.0.1:9090/"
+        ));
     }
 }

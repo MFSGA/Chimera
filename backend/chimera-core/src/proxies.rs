@@ -23,7 +23,7 @@ use tokio::{sync::watch, time::Instant};
 use tokio_util::{sync::CancellationToken, task::TaskTracker};
 
 use crate::{
-    actor_v2::api::{ApiClient, ApiError},
+    actor_v2::api::ApiClient,
     clash::proxies::{Proxies, ProxyProviderSummary},
     connections::{ConnectionScope, interrupt_connections},
 };
@@ -36,17 +36,6 @@ pub use chimera_contracts::runtime::{
     DegradationReason as ProxyDegradationReason, InterruptFailure,
 };
 pub type ProxyMutationOutcome = MutationOutcome<()>;
-
-/// Preserve the typed cause of a source-instance interruption instead of
-/// reducing every controller failure to the same string code.
-fn interrupt_failure(error: &ApiError) -> InterruptFailure {
-    match error {
-        ApiError::Stale => InterruptFailure::Stale,
-        ApiError::Timeout => InterruptFailure::Timeout,
-        ApiError::Unavailable(_) => InterruptFailure::Unavailable,
-        ApiError::Protocol(_) => InterruptFailure::Protocol,
-    }
-}
 
 use crate::actor_v2::CoreClient;
 
@@ -419,7 +408,7 @@ impl State {
             degradations.push(ProxyDegradation {
                 phase: ProxyDegradationPhase::SystemEffect,
                 reason: ProxyDegradationReason::ProxyInterruptionFailed {
-                    cause: interrupt_failure(&error),
+                    cause: InterruptFailure::from(&error),
                 },
                 message: format!(
                     "{}, but source-instance connection interruption failed: {error}",

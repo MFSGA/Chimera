@@ -32,13 +32,20 @@ impl ConnectionScope {
 /// capability. Do not retry deletes: a lost reply does not prove the
 /// connection is still open.
 pub async fn interrupt_connections(
-    api: &ApiClient,
+    source: &ApiClient,
     scope: &ConnectionScope,
 ) -> Result<(), ApiError> {
     match scope {
-        ConnectionScope::All => Ok(api.delete_connections(None).await?),
-        ConnectionScope::ProxyGroup { name } => interrupt_by_chains(api, &[name.as_str()]).await,
+        ConnectionScope::All => source.close_all_connections().await?,
+        ConnectionScope::ProxyGroup { name } => {
+            for connection in source.connections().await?.connections.unwrap_or_default() {
+                if connection.chains.contains(name) {
+                    source.close_connection(connection.id).await?;
+                }
+            }
+        }
     }
+    Ok(())
 }
 
 /// Chimera's existing multi-group compatibility entrypoint. The model still

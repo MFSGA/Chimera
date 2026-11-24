@@ -40,9 +40,9 @@ use crate::{
     config::{chimera::ClashCore, clash::ClashInfo, core::Config},
     core::{
         actor_v2::{
-            CoreStatusSnapshot, control_endpoint::CheckSubmission, control_endpoint::CheckSupport,
-            control_endpoint::ControlEndpoint, control_endpoint::CoreSubmission,
-            control_endpoint::ExecutionHost, local_host,
+            CoreStatusSnapshot, endpoint::CheckSubmission, endpoint::CheckSupport,
+            endpoint::ControlEndpoint, endpoint::CoreSubmission, endpoint::ExecutionHost,
+            local_host,
         },
         clash::core::RunType,
     },
@@ -234,11 +234,11 @@ impl LocalRuntimeHost {
     /// retired and then verify the destination owner before applying config.
     pub(crate) fn select_execution_host(
         &self,
-        host: super::control_endpoint::ExecutionHost,
+        host: chimera_core::actor_v2::endpoint::ExecutionHost,
     ) -> anyhow::Result<()> {
         let run_type = match host {
-            super::control_endpoint::ExecutionHost::Local => RunType::Normal,
-            super::control_endpoint::ExecutionHost::Service => RunType::Service,
+            chimera_core::actor_v2::endpoint::ExecutionHost::Local => RunType::Normal,
+            chimera_core::actor_v2::endpoint::ExecutionHost::Service => RunType::Service,
         };
         let mut selected = self.run_type.write();
         if *selected != run_type {
@@ -248,8 +248,8 @@ impl LocalRuntimeHost {
         Ok(())
     }
 
-    pub(crate) fn local_endpoint(&self) -> super::control_endpoint::LocalEndpoint {
-        super::control_endpoint::LocalEndpoint::new(self.control.clone())
+    pub(crate) fn local_endpoint(&self) -> chimera_core::actor_v2::endpoint::LocalEndpoint {
+        chimera_core::actor_v2::endpoint::LocalEndpoint::new(self.control.clone())
     }
 
     pub(crate) fn outcome_uncertain(&self) -> bool {
@@ -1571,7 +1571,7 @@ async fn cleanup_candidate(candidate: crate::client::runtime::CandidateFile, rea
 }
 
 fn expected_applied_revision(
-    status: &super::control_endpoint::CoreStatusSnapshot,
+    status: &chimera_core::actor_v2::endpoint::CoreStatusSnapshot,
 ) -> anyhow::Result<Option<RevisionId>> {
     let Some(state) = status.state.as_ref() else {
         bail!("core host did not publish an authoritative runtime state");
@@ -1607,7 +1607,7 @@ fn expected_applied_revision(
 
 fn confirmed_applied_revision(
     _host: ExecutionHost,
-    status: &super::control_endpoint::CoreStatusSnapshot,
+    status: &chimera_core::actor_v2::endpoint::CoreStatusSnapshot,
     expected: &chimera_ipc::api::status::ConfigRevisionInfo,
     core_spec: &chimera_core_manager::CoreSpec,
 ) -> anyhow::Result<chimera_ipc::api::status::ConfigRevisionInfo> {
@@ -1762,7 +1762,7 @@ mod tests {
     }
 
     struct RecordingEndpoint {
-        status: StdMutex<super::super::control_endpoint::CoreStatusSnapshot>,
+        status: StdMutex<chimera_core::actor_v2::endpoint::CoreStatusSnapshot>,
         submitted: StdMutex<
             Vec<(
                 Vec<u8>,
@@ -1910,7 +1910,7 @@ mod tests {
         async fn status(
             &self,
         ) -> Result<
-            super::super::control_endpoint::CoreStatusSnapshot,
+            chimera_core::actor_v2::endpoint::CoreStatusSnapshot,
             chimera_core_manager::CoreError,
         > {
             Ok(self
@@ -1940,7 +1940,7 @@ mod tests {
 
     fn recording_endpoint(apply_submission: bool) -> RecordingEndpoint {
         RecordingEndpoint {
-            status: StdMutex::new(super::super::control_endpoint::CoreStatusSnapshot {
+            status: StdMutex::new(chimera_core::actor_v2::endpoint::CoreStatusSnapshot {
                 instance_id: None,
                 controller: None,
                 state: Some(CoreStateDetail::Running { epoch: 1, pid: 42 }),

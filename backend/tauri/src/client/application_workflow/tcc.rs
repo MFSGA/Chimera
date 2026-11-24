@@ -131,9 +131,9 @@ impl ApplicationWorkflow {
                 &baseline,
                 Some(KnownRuntimeState::Applied(receipt))
                     if receipt.host
-                        == crate::core::actor_v2::control_endpoint::ExecutionHost::Service
+                        == chimera_core::actor_v2::endpoint::ExecutionHost::Service
             ) && candidate.receipt.host
-                == crate::core::actor_v2::control_endpoint::ExecutionHost::Local;
+                == chimera_core::actor_v2::endpoint::ExecutionHost::Local;
             let verdict = AppliedVerdict::new(candidate, releases_service);
             if let Some(attempt) = self
                 .live
@@ -886,7 +886,7 @@ impl ApplicationWorkflow {
                     current,
                     KnownRuntimeState::Applied(ref receipt)
                         if receipt.host
-                            == crate::core::actor_v2::control_endpoint::ExecutionHost::Local
+                            == chimera_core::actor_v2::endpoint::ExecutionHost::Local
                 ) && let Err(reason) = core.try_release_service_owner().await
                 {
                     let message = format!(
@@ -1179,7 +1179,7 @@ mod tests {
                 RuntimeApplyReceipt, RuntimeCommitStatus, RuntimeRevisionAllocator, RuntimeSnapshot,
             },
         },
-        core::{actor_v2::control_endpoint::ExecutionHost, clash::core::RunType},
+        core::{actor_v2::endpoint::ExecutionHost, clash::core::RunType},
     };
 
     struct TestProfileRuntime {

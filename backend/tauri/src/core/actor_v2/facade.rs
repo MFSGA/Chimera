@@ -5,6 +5,7 @@
 //! protocol. The legacy manager remains only as a compatibility path for
 //! facades constructed without the production `LocalRuntimeHost`.
 
+use chimera_core::actor_v2::endpoint::{ControlEndpoint, CoreStatusSnapshot as HostStatusSnapshot};
 use chimera_core::actor_v2::{
     routed_endpoint::RoutedEndpoint, router::CoreClient,
     service_command_actor::ServiceCommandActor, service_command_port::ServiceCommandPort,
@@ -30,7 +31,6 @@ use tokio_util::{sync::CancellationToken, task::TaskTracker};
 
 use super::{
     api::{ApiClient, ApiLease},
-    control_endpoint::{ControlEndpoint, CoreStatusSnapshot as HostStatusSnapshot},
     endpoint::CoreStatusSnapshot,
 };
 use crate::{
@@ -78,7 +78,7 @@ pub(crate) struct CoreFacade {
     manager: Arc<CoreManager>,
     local_runtime: Option<Arc<super::local_runtime::LocalRuntimeHost>>,
     core_router: Option<CoreClient>,
-    service_endpoint: super::service_endpoint::ServiceEndpoint,
+    service_endpoint: chimera_core::actor_v2::endpoint::ServiceEndpoint,
     api_client: tokio::sync::Mutex<Option<ApiLease>>,
     outcome_uncertain: Arc<AtomicBool>,
     local_operations: Arc<LocalOperationRegistry>,
@@ -298,7 +298,7 @@ impl CoreFacade {
             manager: Arc::new(CoreManager::new()),
             local_runtime: None,
             core_router: None,
-            service_endpoint: super::service_endpoint::ServiceEndpoint::service_default(),
+            service_endpoint: super::service_endpoint_factory::default_service_endpoint(),
             api_client: tokio::sync::Mutex::new(None),
             outcome_uncertain: Arc::new(AtomicBool::new(false)),
             local_operations: Arc::new(LocalOperationRegistry::new()),
@@ -341,7 +341,7 @@ impl CoreFacade {
                 ),
             )),
             core_router: Some(core_router),
-            service_endpoint: super::service_endpoint::ServiceEndpoint::service_default(),
+            service_endpoint: super::service_endpoint_factory::default_service_endpoint(),
             api_client: tokio::sync::Mutex::new(None),
             outcome_uncertain: Arc::new(AtomicBool::new(false)),
             local_operations: Arc::new(LocalOperationRegistry::new()),
@@ -359,19 +359,19 @@ impl CoreFacade {
     /// retains its admission ticket only for its own wait.
     fn endpoint_for(
         &self,
-        host: super::control_endpoint::ExecutionHost,
+        host: chimera_core::actor_v2::endpoint::ExecutionHost,
     ) -> Arc<dyn ControlEndpoint> {
         if let Some(router) = &self.core_router {
             return Arc::new(RoutedEndpoint::new(router.clone(), host));
         }
         match host {
-            super::control_endpoint::ExecutionHost::Local => Arc::new(
+            chimera_core::actor_v2::endpoint::ExecutionHost::Local => Arc::new(
                 self.local_runtime
                     .as_ref()
                     .expect("local runtime exists when selecting a core endpoint")
                     .local_endpoint(),
             ),
-            super::control_endpoint::ExecutionHost::Service => {
+            chimera_core::actor_v2::endpoint::ExecutionHost::Service => {
                 Arc::new(self.service_endpoint.clone())
             }
         }
@@ -379,9 +379,11 @@ impl CoreFacade {
 
     fn endpoint_for_run_type(&self, run_type: RunType) -> anyhow::Result<Arc<dyn ControlEndpoint>> {
         match run_type {
-            RunType::Normal => Ok(self.endpoint_for(super::control_endpoint::ExecutionHost::Local)),
+            RunType::Normal => {
+                Ok(self.endpoint_for(chimera_core::actor_v2::endpoint::ExecutionHost::Local))
+            }
             RunType::Service => {
-                Ok(self.endpoint_for(super::control_endpoint::ExecutionHost::Service))
+                Ok(self.endpoint_for(chimera_core::actor_v2::endpoint::ExecutionHost::Service))
             }
             RunType::Elevated => anyhow::bail!("elevated core execution is not implemented"),
         }
@@ -1024,7 +1026,7 @@ impl CoreFacade {
             matches!(
                 router.status().connectivity,
                 chimera_core::actor_v2::router::EndpointConnectivity::Degraded {
-                    desired: super::control_endpoint::ExecutionHost::Service,
+                    desired: chimera_core::actor_v2::endpoint::ExecutionHost::Service,
                     ..
                 }
             )
@@ -1040,7 +1042,7 @@ impl CoreFacade {
     /// than doing a second unproven Service stop. This only selects Local;
     /// committed runtime bytes are applied by the *next* Core mutation.
     pub(crate) async fn select_local_after_confirmed_service_release(&self) -> anyhow::Result<()> {
-        use super::control_endpoint::ExecutionHost;
+        use chimera_core::actor_v2::endpoint::ExecutionHost;
 
         let local_runtime = self
             .local_runtime
@@ -1066,13 +1068,13 @@ impl CoreFacade {
 
     pub(crate) async fn select_execution_host(
         &self,
-        host: super::control_endpoint::ExecutionHost,
+        host: chimera_core::actor_v2::endpoint::ExecutionHost,
     ) -> anyhow::Result<()> {
         let Some(local_runtime) = self.local_runtime.as_ref().cloned() else {
             let (_, _, run_type) = self.manager.status().await;
             let selected = match run_type {
-                RunType::Normal => super::control_endpoint::ExecutionHost::Local,
-                RunType::Service => super::control_endpoint::ExecutionHost::Service,
+                RunType::Normal => chimera_core::actor_v2::endpoint::ExecutionHost::Local,
+                RunType::Service => chimera_core::actor_v2::endpoint::ExecutionHost::Service,
                 RunType::Elevated => {
                     anyhow::bail!("elevated core execution is not implemented")
                 }
@@ -1086,10 +1088,12 @@ impl CoreFacade {
         self.run_local_mutation("startup execution host selection", async move {
             if let Some(router) = core_router {
                 let target: Arc<dyn ControlEndpoint> = match host {
-                    super::control_endpoint::ExecutionHost::Local => {
+                    chimera_core::actor_v2::endpoint::ExecutionHost::Local => {
                         Arc::new(local_runtime.local_endpoint())
                     }
-                    super::control_endpoint::ExecutionHost::Service => Arc::new(service_endpoint),
+                    chimera_core::actor_v2::endpoint::ExecutionHost::Service => {
+                        Arc::new(service_endpoint)
+                    }
                 };
                 // The ref router proves the old host stopped and fences its
                 // generation before LocalRuntimeHost adopts the new host.
@@ -1129,7 +1133,7 @@ impl CoreFacade {
                 return Ok(unsupported_transparent_proxy_status());
             }
         };
-        if endpoint.host() != super::control_endpoint::ExecutionHost::Service {
+        if endpoint.host() != chimera_core::actor_v2::endpoint::ExecutionHost::Service {
             anyhow::ensure!(
                 request.mode == Disabled,
                 "transparent capture requires Service mode"
@@ -1230,8 +1234,8 @@ impl CoreFacade {
                 "the compatibility core manager cannot restore a confirmed runtime receipt",
             )?;
         let destination = match receipt.host {
-            super::control_endpoint::ExecutionHost::Local => RunType::Normal,
-            super::control_endpoint::ExecutionHost::Service => RunType::Service,
+            chimera_core::actor_v2::endpoint::ExecutionHost::Local => RunType::Normal,
+            chimera_core::actor_v2::endpoint::ExecutionHost::Service => RunType::Service,
         };
         let endpoint = self.endpoint_for_run_type(destination)?;
         let previous = local_runtime.run_type();
@@ -1243,13 +1247,13 @@ impl CoreFacade {
             .run_local_mutation("runtime receipt restore", async move {
                 let (endpoint, expected_owner): (
                     Arc<dyn ControlEndpoint>,
-                    Option<(super::control_endpoint::ExecutionHost, u64)>,
+                    Option<(chimera_core::actor_v2::endpoint::ExecutionHost, u64)>,
                 ) = if let Some(router) = router {
                     let target: Arc<dyn ControlEndpoint> = match receipt.host {
-                        super::control_endpoint::ExecutionHost::Local => {
+                        chimera_core::actor_v2::endpoint::ExecutionHost::Local => {
                             Arc::new(local_runtime.local_endpoint())
                         }
-                        super::control_endpoint::ExecutionHost::Service => {
+                        chimera_core::actor_v2::endpoint::ExecutionHost::Service => {
                             Arc::new(service_endpoint)
                         }
                     };
@@ -1519,8 +1523,8 @@ impl CoreFacade {
     pub(crate) fn last_confirmed_runtime_receipt(&self) -> Option<Arc<RuntimeApplyReceipt>> {
         let local_runtime = self.local_runtime.as_ref()?;
         let expected_host = match local_runtime.run_type() {
-            RunType::Normal => super::control_endpoint::ExecutionHost::Local,
-            RunType::Service => super::control_endpoint::ExecutionHost::Service,
+            RunType::Normal => chimera_core::actor_v2::endpoint::ExecutionHost::Local,
+            RunType::Service => chimera_core::actor_v2::endpoint::ExecutionHost::Service,
             RunType::Elevated => return None,
         };
         local_runtime
@@ -1809,12 +1813,15 @@ impl CoreFacade {
         let outcome_uncertain = self.outcome_uncertain.clone();
         self.run_local_mutation("startup Service Core retirement", async move {
             if let Some(router) = core_router
-                && router.status().host == super::control_endpoint::ExecutionHost::Service
+                && router.status().host == chimera_core::actor_v2::endpoint::ExecutionHost::Service
             {
                 // Already adopted Service: every Core stop is serialized by
                 // the same actor that owns the host handoff generation.
                 return stop_service_core(
-                    RoutedEndpoint::new(router, super::control_endpoint::ExecutionHost::Service),
+                    RoutedEndpoint::new(
+                        router,
+                        chimera_core::actor_v2::endpoint::ExecutionHost::Service,
+                    ),
                     outcome_uncertain,
                     Some(expected_owner),
                 )
@@ -1943,7 +1950,7 @@ async fn service_core_operation(
     use chimera_ipc::api::core::v2::OperationPhase;
 
     let operation_id = OperationId::generate();
-    let submission = super::control_endpoint::CoreSubmission {
+    let submission = chimera_core::actor_v2::endpoint::CoreSubmission {
         expected_owner: None,
         envelope: CoreCommandEnvelope {
             operation_id,
@@ -2096,13 +2103,13 @@ mod tests {
 
     #[async_trait::async_trait]
     impl ControlEndpoint for SuccessfulServiceRecoveryEndpoint {
-        fn host(&self) -> super::super::control_endpoint::ExecutionHost {
-            super::super::control_endpoint::ExecutionHost::Service
+        fn host(&self) -> chimera_core::actor_v2::endpoint::ExecutionHost {
+            chimera_core::actor_v2::endpoint::ExecutionHost::Service
         }
 
         async fn submit(
             &self,
-            submission: super::super::control_endpoint::CoreSubmission,
+            submission: chimera_core::actor_v2::endpoint::CoreSubmission,
         ) -> Result<chimera_ipc::api::core::v2::OperationInfo, CoreError> {
             assert!(matches!(&submission.envelope.command, CoreCommand::Recover));
             Ok(chimera_ipc::api::core::v2::OperationInfo {
@@ -2132,13 +2139,13 @@ mod tests {
 
     #[async_trait::async_trait]
     impl ControlEndpoint for FailedServiceStopEndpoint {
-        fn host(&self) -> super::super::control_endpoint::ExecutionHost {
-            super::super::control_endpoint::ExecutionHost::Service
+        fn host(&self) -> chimera_core::actor_v2::endpoint::ExecutionHost {
+            chimera_core::actor_v2::endpoint::ExecutionHost::Service
         }
 
         async fn submit(
             &self,
-            submission: super::super::control_endpoint::CoreSubmission,
+            submission: chimera_core::actor_v2::endpoint::CoreSubmission,
         ) -> Result<chimera_ipc::api::core::v2::OperationInfo, CoreError> {
             Ok(chimera_ipc::api::core::v2::OperationInfo {
                 id: submission.envelope.operation_id.to_string(),

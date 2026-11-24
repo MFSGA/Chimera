@@ -4,12 +4,12 @@
 
 use std::{ops::Deref, sync::Arc};
 
-use super::control_endpoint::ControlEndpoint;
 use anyhow::Result;
 use chimera_core::actor_v2::api::{
     ApiChanges as CoreApiChanges, ApiClient as CoreApiClient, ApiLease as CoreApiLease,
     CoreApiEndpoint,
 };
+use chimera_core::actor_v2::endpoint::ControlEndpoint;
 use chimera_ipc::api::core::v2::CoreApiConnection;
 use futures_util::StreamExt;
 
@@ -144,7 +144,7 @@ mod tests {
     use std::time::Duration;
 
     use super::{ApiClient, ClashRuntimeConfig, forward_api_stream, serialize_api_sample};
-    use crate::core::actor_v2::control_endpoint::{
+    use chimera_core::actor_v2::endpoint::{
         ApiChanges, ControlEndpoint, CoreStatusSnapshot, CoreSubmission, ExecutionHost,
     };
 

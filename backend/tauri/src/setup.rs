@@ -176,7 +176,7 @@ pub fn setup(
     // for the partial-startup cleanup path.
     let core_router = crate::startup_failure::report_boundary_with_backup_and_capture(
         tauri::async_runtime::block_on(chimera_core::actor_v2::CoreClient::spawn(Arc::new(
-            crate::core::actor_v2::control_endpoint::LocalEndpoint::new(local_control.clone()),
+            chimera_core::actor_v2::endpoint::LocalEndpoint::new(local_control.clone()),
         )))
         .context("failed to spawn ref Core Actor"),
         crate::startup_failure::StartupStage::CoreHost,

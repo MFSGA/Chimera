@@ -31,7 +31,7 @@ impl CoreLifecycleWorkflow {
 
     pub(in crate::client) async fn startup_select_execution_host(
         &self,
-        host: crate::core::actor_v2::control_endpoint::ExecutionHost,
+        host: chimera_core::actor_v2::endpoint::ExecutionHost,
     ) -> anyhow::Result<()> {
         self.core.select_execution_host(host).await?;
         self.follow_service_recovery_host(host);

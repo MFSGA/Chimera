@@ -188,13 +188,10 @@ impl CheckedConnectionEffect {
         use crate::actor_v2::api::ApiError;
         use chimera_contracts::runtime::InterruptFailure;
         // Keep REF's typed API failure identity; avoid parsing error strings.
-        let cause = match error.downcast_ref::<ApiError>() {
-            Some(ApiError::Stale) => InterruptFailure::Stale,
-            Some(ApiError::Unavailable(_)) => InterruptFailure::Unavailable,
-            Some(ApiError::Timeout) => InterruptFailure::Timeout,
-            Some(ApiError::Protocol(_)) => InterruptFailure::Protocol,
-            None => InterruptFailure::Unavailable,
-        };
+        let cause = error
+            .downcast_ref::<ApiError>()
+            .map(InterruptFailure::from)
+            .unwrap_or(InterruptFailure::Unavailable);
         Self::degradation(change, format!("{error:#}"), cause)
     }
 

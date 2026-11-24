@@ -6,13 +6,11 @@
 //! migrating to the shared runtime contract.
 
 pub mod api;
-pub mod control_endpoint;
 pub mod endpoint;
 pub mod facade;
 pub mod intent;
 pub mod local_host;
 mod local_runtime;
-pub mod service_endpoint;
 pub mod service_endpoint_factory;
 
 pub(crate) use endpoint::CoreStatusSnapshot;

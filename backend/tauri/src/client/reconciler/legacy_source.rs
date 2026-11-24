@@ -4,9 +4,9 @@ use crate::client::core_lifecycle::CoreLifecycleWorkflow;
 use crate::client::reconciler::{inputs::RuntimeInputs, legacy_preparation::RuntimePreparation};
 #[cfg(test)]
 use crate::config::chimera::ClashCore;
-use crate::core::actor_v2::control_endpoint::ExecutionHost;
 use crate::enhance::FsProfileContentSource;
 use chimera_config::application::{ChimeraAppConfig, ChimeraAppConfigPatch};
+use chimera_core::actor_v2::endpoint::ExecutionHost;
 use std::sync::Arc;
 use struct_patch::Patch;
 

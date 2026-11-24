@@ -1700,13 +1700,13 @@ fn startup_test_receipt(
 ) -> Arc<crate::client::runtime::RuntimeApplyReceipt> {
     startup_test_receipt_for(
         target,
-        crate::core::actor_v2::control_endpoint::ExecutionHost::Local,
+        chimera_core::actor_v2::endpoint::ExecutionHost::Local,
     )
 }
 
 fn startup_test_receipt_for(
     target: Option<String>,
-    host: crate::core::actor_v2::control_endpoint::ExecutionHost,
+    host: chimera_core::actor_v2::endpoint::ExecutionHost,
 ) -> Arc<crate::client::runtime::RuntimeApplyReceipt> {
     let mut receipt = crate::client::ports::test_runtime_receipt(Default::default());
     receipt.target = target;
@@ -2586,15 +2586,15 @@ impl CoreLifecyclePort for RetiringCore {
 
     async fn select_execution_host(
         &self,
-        host: crate::core::actor_v2::control_endpoint::ExecutionHost,
+        host: chimera_core::actor_v2::endpoint::ExecutionHost,
     ) -> anyhow::Result<()> {
         *self.selected.lock().unwrap() = match host {
-            crate::core::actor_v2::control_endpoint::ExecutionHost::Local => RunType::Normal,
-            crate::core::actor_v2::control_endpoint::ExecutionHost::Service => RunType::Service,
+            chimera_core::actor_v2::endpoint::ExecutionHost::Local => RunType::Normal,
+            chimera_core::actor_v2::endpoint::ExecutionHost::Service => RunType::Service,
         };
         self.inner.events.lock().unwrap().push(match host {
-            crate::core::actor_v2::control_endpoint::ExecutionHost::Local => "select-local",
-            crate::core::actor_v2::control_endpoint::ExecutionHost::Service => "select-service",
+            chimera_core::actor_v2::endpoint::ExecutionHost::Local => "select-local",
+            chimera_core::actor_v2::endpoint::ExecutionHost::Service => "select-service",
         });
         Ok(())
     }
@@ -2734,11 +2734,11 @@ impl CoreLifecyclePort for StartupOwnerCore {
 
     async fn select_execution_host(
         &self,
-        host: crate::core::actor_v2::control_endpoint::ExecutionHost,
+        host: chimera_core::actor_v2::endpoint::ExecutionHost,
     ) -> anyhow::Result<()> {
         let run_type = match host {
-            crate::core::actor_v2::control_endpoint::ExecutionHost::Local => RunType::Normal,
-            crate::core::actor_v2::control_endpoint::ExecutionHost::Service => RunType::Service,
+            chimera_core::actor_v2::endpoint::ExecutionHost::Local => RunType::Normal,
+            chimera_core::actor_v2::endpoint::ExecutionHost::Service => RunType::Service,
         };
         *self.selected.lock().unwrap() = run_type;
         self.events.lock().unwrap().push(match run_type {
@@ -3116,15 +3116,15 @@ impl CoreLifecyclePort for StartupDegradedServiceCore {
 
     async fn select_execution_host(
         &self,
-        host: crate::core::actor_v2::control_endpoint::ExecutionHost,
+        host: chimera_core::actor_v2::endpoint::ExecutionHost,
     ) -> anyhow::Result<()> {
         *self.selected.lock().unwrap() = match host {
-            crate::core::actor_v2::control_endpoint::ExecutionHost::Local => RunType::Normal,
-            crate::core::actor_v2::control_endpoint::ExecutionHost::Service => RunType::Service,
+            chimera_core::actor_v2::endpoint::ExecutionHost::Local => RunType::Normal,
+            chimera_core::actor_v2::endpoint::ExecutionHost::Service => RunType::Service,
         };
         self.events.lock().unwrap().push(match host {
-            crate::core::actor_v2::control_endpoint::ExecutionHost::Local => "select-local",
-            crate::core::actor_v2::control_endpoint::ExecutionHost::Service => "select-service",
+            chimera_core::actor_v2::endpoint::ExecutionHost::Local => "select-local",
+            chimera_core::actor_v2::endpoint::ExecutionHost::Service => "select-service",
         });
         Ok(())
     }
@@ -5843,7 +5843,7 @@ async fn recovery_keeps_adopted_service_owner_only_with_matching_receipt() {
     .await;
     *core.service_receipt.lock().unwrap() = Some(startup_test_receipt_for(
         Some(target),
-        crate::core::actor_v2::control_endpoint::ExecutionHost::Service,
+        chimera_core::actor_v2::endpoint::ExecutionHost::Service,
     ));
     let client =
         spawn_startup_client_with_application_and_clash(core, service, application, clash).await;
@@ -7360,7 +7360,7 @@ async fn ready_service_reconcile_failure_retires_owned_core_before_local_fallbac
     assert_eq!(completed.report.outcome, StartupOutcome::Ready);
     assert_eq!(
         completed.report.observation.as_ref().unwrap().desired,
-        crate::core::actor_v2::control_endpoint::ExecutionHost::Local
+        chimera_core::actor_v2::endpoint::ExecutionHost::Local
     );
     let failed_reconcile = events
         .iter()
@@ -7418,7 +7418,7 @@ async fn startup_adoption_falls_back_when_service_reconcile_fails() {
     assert_eq!(completed.report.outcome, StartupOutcome::Ready);
     assert_eq!(
         completed.report.observation.as_ref().unwrap().desired,
-        crate::core::actor_v2::control_endpoint::ExecutionHost::Local
+        chimera_core::actor_v2::endpoint::ExecutionHost::Local
     );
     assert_eq!(core.status().await.unwrap().run_type, RunType::Normal);
 
@@ -11188,7 +11188,7 @@ impl CoreLifecyclePort for SelectedServicePreparedCore {
             .expect("the prepared Core submission produced its receipt")
             .as_ref()
             .clone();
-        receipt.host = crate::core::actor_v2::control_endpoint::ExecutionHost::Service;
+        receipt.host = chimera_core::actor_v2::endpoint::ExecutionHost::Service;
         *lock = Some(Arc::new(receipt));
         Ok(result)
     }
@@ -11350,7 +11350,7 @@ async fn service_startup_submits_one_prepared_core_only_for_ready_owned_service(
     let receipt = inner.active.lock().unwrap().clone().unwrap();
     assert_eq!(
         receipt.host,
-        crate::core::actor_v2::control_endpoint::ExecutionHost::Service
+        chimera_core::actor_v2::endpoint::ExecutionHost::Service
     );
     assert_eq!(receipt.target.as_deref(), Some(target.as_str()));
     assert_eq!(

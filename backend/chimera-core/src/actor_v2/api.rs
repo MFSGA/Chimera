@@ -46,6 +46,19 @@ pub enum ApiError {
     Protocol(#[from] clash_api::Error),
 }
 
+use chimera_contracts::runtime::InterruptFailure;
+
+impl From<&ApiError> for InterruptFailure {
+    fn from(error: &ApiError) -> Self {
+        match error {
+            ApiError::Stale => Self::Stale,
+            ApiError::Unavailable(_) => Self::Unavailable,
+            ApiError::Timeout => Self::Timeout,
+            ApiError::Protocol(_) => Self::Protocol,
+        }
+    }
+}
+
 pub type ApiResult<T> = std::result::Result<T, ApiError>;
 
 /// A single instance-bound read of the proxy view, matching ref's actor API.
@@ -58,6 +71,12 @@ pub struct ProxySnapshot {
 
 const DEFAULT_API_TIMEOUT: Duration = Duration::from_secs(30);
 const DELAY_DEADLINE_MARGIN: Duration = Duration::from_secs(5);
+
+/// A latency test legitimately runs for its whole measurement timeout, so its
+/// deadline follows the query instead of the fixed default.
+fn delay_deadline(query: &clash_api::DelayQuery) -> Duration {
+    query.timeout + DELAY_DEADLINE_MARGIN
+}
 
 #[derive(Debug, Clone, Copy)]
 pub enum ApiStreamKind {
@@ -377,10 +396,23 @@ impl ApiClient {
         }
     }
 
+    pub async fn connections(&self) -> ApiResult<clash_api::ConnectionsSnapshot> {
+        self.execute(DEFAULT_API_TIMEOUT, self.client.connections())
+            .await
+    }
+
+    pub async fn close_connection(&self, id: uuid::Uuid) -> ApiResult<()> {
+        self.execute(DEFAULT_API_TIMEOUT, self.client.close_connection(id))
+            .await
+    }
+
+    pub async fn close_all_connections(&self) -> ApiResult<()> {
+        self.execute(DEFAULT_API_TIMEOUT, self.client.close_all_connections())
+            .await
+    }
+
     pub async fn get_connections(&self) -> ApiResult<ConnectionsRes> {
-        let snapshot = self
-            .execute(DEFAULT_API_TIMEOUT, self.client.connections())
-            .await?;
+        let snapshot = self.connections().await?;
         Ok(ConnectionsRes {
             connections: snapshot
                 .connections
@@ -400,10 +432,7 @@ impl ApiClient {
                 self.execute(DEFAULT_API_TIMEOUT, self.client.close_connection_id(id))
                     .await
             }
-            None => {
-                self.execute(DEFAULT_API_TIMEOUT, self.client.close_all_connections())
-                    .await
-            }
+            None => self.close_all_connections().await,
         }
     }
 
@@ -451,7 +480,7 @@ impl ApiClient {
         provider: Option<&clash_api::ProviderName>,
         query: &clash_api::DelayQuery,
     ) -> ApiResult<clash_api::Delay> {
-        let deadline = query.timeout + DELAY_DEADLINE_MARGIN;
+        let deadline = delay_deadline(query);
         match provider {
             Some(provider) => {
                 self.execute(
@@ -473,11 +502,8 @@ impl ApiClient {
         group: &clash_api::ProxyName,
         query: &clash_api::DelayQuery,
     ) -> ApiResult<IndexMap<clash_api::ProxyName, u16>> {
-        self.execute(
-            query.timeout + DELAY_DEADLINE_MARGIN,
-            self.client.group_delay(group, query),
-        )
-        .await
+        self.execute(delay_deadline(query), self.client.group_delay(group, query))
+            .await
     }
 
     /// Existing Tauri/legacy compatibility entry point; the native request
@@ -1159,5 +1185,384 @@ Connection: close
         assert!(matches!(result, Err(ApiError::Stale)));
         assert_eq!(endpoint.checks.load(Ordering::SeqCst), 2);
         assert!(client.revoked.is_cancelled());
+    }
+}
+
+#[cfg(test)]
+mod ref_core_actor_tests {
+    use std::sync::Arc;
+
+    use axum::{Json, Router, body::Body, response::Response, routing::get};
+    use tokio::sync::{Notify, watch};
+
+    use super::*;
+    use crate::actor_v2::{
+        CoreClient,
+        test_support::{Endpoint, endpoint, server},
+    };
+    use chimera_contracts::execution_host::ExecutionHost;
+    use chimera_ipc::api::status::CoreControllerInfo;
+    use clash_api::DelayQuery;
+
+    #[test]
+    fn interrupt_failure_mapping_preserves_all_api_error_categories() {
+        for (error, expected) in [
+            (ApiError::Stale, InterruptFailure::Stale),
+            (
+                ApiError::Unavailable("offline".into()),
+                InterruptFailure::Unavailable,
+            ),
+            (ApiError::Timeout, InterruptFailure::Timeout),
+            (
+                ApiError::Protocol(clash_api::Error::UnsupportedUrlScheme {
+                    scheme: "file".into(),
+                }),
+                InterruptFailure::Protocol,
+            ),
+        ] {
+            assert_eq!(InterruptFailure::from(&error), expected, "{error:?}");
+        }
+    }
+
+    async fn revoked(api: &ApiClient) {
+        tokio::time::timeout(Duration::from_secs(2), api.revoked.cancelled())
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn config_reads_accept_partial_responses_and_reject_retired_instances() {
+        let (url, server) = server(Router::new().route(
+            "/configs",
+            get(|| async { Json(serde_json::json!({"mixed-port":7890,"mode":"rule"})) }),
+        ))
+        .await;
+        let endpoint = endpoint(url);
+        let core = CoreClient::spawn(endpoint.clone()).await.unwrap();
+        let api = core.api_client().await.unwrap();
+        let config = api.configs().await.unwrap();
+        assert_eq!(config.mixed_port, Some(7890));
+        assert_eq!(config.allow_lan, None);
+        endpoint.binding.send_replace(None);
+        assert!(matches!(api.configs().await, Err(ApiError::Stale)));
+        core.actor.stop(None);
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn provider_reads_preserve_order_and_reject_retired_instances() {
+        let (url, server) = server(Router::new().route(
+            "/providers/rules/",
+            get(|| async {
+                Response::builder()
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"{"providers":{"z":{"name":"z"},"a":{"name":"a"}}}"#,
+                    ))
+                    .unwrap()
+            }),
+        ))
+        .await;
+        let endpoint = endpoint(url);
+        let core = CoreClient::spawn(endpoint.clone()).await.unwrap();
+        let api = core.api_client().await.unwrap();
+        let providers = api.rule_providers().await.unwrap();
+        assert_eq!(
+            providers
+                .keys()
+                .map(|name| name.as_str())
+                .collect::<Vec<_>>(),
+            ["z", "a"]
+        );
+        endpoint.binding.send_replace(None);
+        assert!(matches!(api.rule_providers().await, Err(ApiError::Stale)));
+        core.actor.stop(None);
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn rules_and_provider_refresh_use_the_bound_client() {
+        use axum::{extract::Path, http::StatusCode, routing::put};
+        let (url, server) = server(
+            Router::new()
+                .route(
+                    "/rules/",
+                    get(|| async {
+                        Json(serde_json::json!({"rules":[
+                            {"type":"Match","payload":"","proxy":"DIRECT"}
+                        ]}))
+                    }),
+                )
+                .route(
+                    "/providers/rules/{name}/",
+                    put(|Path(name): Path<String>| async move {
+                        assert_eq!(name, "rules/日本 ?#");
+                        StatusCode::NO_CONTENT
+                    }),
+                ),
+        )
+        .await;
+        let endpoint = endpoint(url);
+        let core = CoreClient::spawn(endpoint.clone()).await.unwrap();
+        let api = core.api_client().await.unwrap();
+        let rules = api.rules().await.unwrap();
+        assert_eq!(rules[0].proxy, "DIRECT");
+        assert_eq!(rules[0].index, None);
+        let provider = clash_api::RuleProviderName::new("rules/日本 ?#");
+        api.update_rule_provider(&provider).await.unwrap();
+        endpoint.binding.send_replace(None);
+        assert!(matches!(api.rules().await, Err(ApiError::Stale)));
+        assert!(matches!(
+            api.update_rule_provider(&provider).await,
+            Err(ApiError::Stale)
+        ));
+        core.actor.stop(None);
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn same_epoch_and_pid_replacement_revokes_every_clone_without_reviving() {
+        let endpoint = endpoint("http://127.0.0.1:1/".into());
+        let core = CoreClient::spawn(endpoint.clone()).await.unwrap();
+        let first = core.api_client().await.unwrap();
+        let clone = first.clone();
+        endpoint
+            .binding
+            .send_modify(|binding| binding.as_mut().unwrap().instance_id = "second-process".into());
+        revoked(&first).await;
+        assert!(matches!(clone.version().await, Err(ApiError::Stale)));
+        let second = core.api_client().await.unwrap();
+        assert_eq!(second.instance_id(), Some("second-process"));
+        assert!(!second.revoked.is_cancelled());
+        endpoint
+            .binding
+            .send_modify(|binding| binding.as_mut().unwrap().instance_id = "first-process".into());
+        assert!(matches!(first.version().await, Err(ApiError::Stale)));
+        core.actor.stop(None);
+    }
+
+    #[tokio::test]
+    async fn unchanged_binding_keeps_capability_and_shutdown_revokes_it() {
+        let (url, server) = server(Router::new().route(
+            "/version",
+            get(|| async { Json(serde_json::json!({"version":"test"})) }),
+        ))
+        .await;
+        let endpoint = endpoint(url);
+        let core = CoreClient::spawn(endpoint.clone()).await.unwrap();
+        let api = core.api_client().await.unwrap();
+        // Hot patch notification: revision may change, process and credentials do not.
+        endpoint.binding.send_modify(|_| {});
+        assert_eq!(api.version().await.unwrap().version, "test");
+        let reacquired = core.api_client().await.unwrap();
+        assert!(api.same_instance(&reacquired));
+        core.shutdown().await.unwrap();
+        assert!(matches!(api.version().await, Err(ApiError::Stale)));
+        assert!(core.api_client().await.is_err());
+        core.actor.stop(None);
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn changed_secret_or_endpoint_revokes_cached_capability() {
+        for change_secret in [true, false] {
+            let endpoint = endpoint("http://127.0.0.1:1/".into());
+            let core = CoreClient::spawn(endpoint.clone()).await.unwrap();
+            let api = core.api_client().await.unwrap();
+            endpoint.binding.send_modify(|binding| {
+                let binding = binding.as_mut().unwrap();
+                if change_secret {
+                    binding.secret = Some("replacement-secret".into());
+                } else {
+                    binding.controller = CoreControllerInfo::Http("http://127.0.0.1:2/".into());
+                }
+            });
+            // Acquisition uses an authoritative binding, independent of the status pump.
+            let replacement = core.api_client().await.unwrap();
+            revoked(&api).await;
+            assert!(!replacement.revoked.is_cancelled());
+            assert!(!format!("{replacement:?}").contains("replacement-secret"));
+            core.actor.stop(None);
+        }
+    }
+
+    #[tokio::test]
+    async fn invalidation_cancels_a_partially_received_response_body() {
+        let started = Arc::new(Notify::new());
+        let signal = started.clone();
+        let (url, server) = server(Router::new().route(
+            "/version",
+            get(move || {
+                let signal = signal.clone();
+                async move {
+                    use futures_util::StreamExt;
+                    let first = futures_util::stream::once(async move {
+                        signal.notify_one();
+                        Ok::<_, std::io::Error>("{\"version\":")
+                    });
+                    Response::new(Body::from_stream(
+                        first.chain(futures_util::stream::pending()),
+                    ))
+                }
+            }),
+        ))
+        .await;
+        let endpoint = endpoint(url);
+        let core = CoreClient::spawn(endpoint.clone()).await.unwrap();
+        let api = core.api_client().await.unwrap();
+        let call = tokio::spawn(async move { api.version().await });
+        tokio::time::timeout(Duration::from_secs(2), started.notified())
+            .await
+            .unwrap();
+        endpoint.binding.send_replace(None);
+        let result = tokio::time::timeout(Duration::from_secs(2), call)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(matches!(result, Err(ApiError::Stale)));
+        core.actor.stop(None);
+        server.abort();
+    }
+
+    fn delay_query(timeout: Duration) -> DelayQuery {
+        DelayQuery::new("http://example.com/".parse().unwrap(), timeout).unwrap()
+    }
+
+    #[test]
+    fn a_delay_deadline_outlasts_the_query_timeout() {
+        assert_eq!(
+            delay_deadline(&delay_query(Duration::from_secs(5))),
+            Duration::from_secs(10)
+        );
+        assert!(delay_deadline(&delay_query(Duration::from_secs(30))) > DEFAULT_API_TIMEOUT);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_delay_call_waits_for_its_own_timeout_plus_the_margin() {
+        let (url, server) = server(Router::new().route(
+            "/proxies/node/delay",
+            get(|| async { std::future::pending::<Json<()>>().await }),
+        ))
+        .await;
+        let core = CoreClient::spawn(endpoint(url)).await.unwrap();
+        let api = core.api_client().await.unwrap();
+        let query = delay_query(Duration::from_secs(30));
+        let name = ProxyName::from("node");
+        let call = tokio::spawn(async move { api.proxy_delay(&name, None, &query).await });
+
+        // The fixed 30 s default would already have fired here.
+        tokio::time::sleep(Duration::from_secs(31)).await;
+        assert!(!call.is_finished());
+        tokio::time::sleep(Duration::from_secs(5)).await;
+        assert!(matches!(call.await.unwrap(), Err(ApiError::Timeout)));
+        core.actor.stop(None);
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn actor_termination_revokes_outstanding_client() {
+        let endpoint = endpoint("http://127.0.0.1:1/".into());
+        let core = CoreClient::spawn(endpoint).await.unwrap();
+        let api = core.api_client().await.unwrap();
+        core.actor.stop(None);
+        revoked(&api).await;
+        assert!(matches!(api.version().await, Err(ApiError::Stale)));
+    }
+    #[tokio::test]
+    async fn handoff_revokes_even_when_target_has_the_same_binding() {
+        let source = endpoint("http://127.0.0.1:1/".into());
+        let (binding, _) = watch::channel(source.binding.borrow().clone());
+        let target = Arc::new(Endpoint {
+            binding,
+            host: ExecutionHost::Service,
+        });
+        let core = CoreClient::spawn(source).await.unwrap();
+        let old = core.api_client().await.unwrap();
+        core.change_host(target).await.unwrap();
+        assert!(matches!(old.version().await, Err(ApiError::Stale)));
+        let new = core.api_client().await.unwrap();
+        assert!(!new.revoked.is_cancelled());
+        core.actor.stop(None);
+    }
+}
+
+#[cfg(test)]
+mod proxy_snapshot_tests {
+    use super::*;
+    use crate::actor_v2::{
+        CoreClient,
+        test_support::{endpoint, server},
+    };
+    use axum::{Json, Router, http::StatusCode, response::IntoResponse, routing::get};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    fn router(
+        group: impl Fn(usize) -> axum::response::Response + Clone + Send + Sync + 'static,
+    ) -> (Router, Arc<AtomicUsize>) {
+        let reads = Arc::new(AtomicUsize::new(0));
+        let counter = reads.clone();
+        let router = Router::new()
+            .route(
+                "/proxies",
+                get(|| async { Json(serde_json::json!({"proxies":{}})) }),
+            )
+            .route(
+                "/providers/proxies",
+                get(|| async { Json(serde_json::json!({"providers":{}})) }),
+            )
+            .route(
+                "/group",
+                get(move || {
+                    let response = group(counter.fetch_add(1, Ordering::SeqCst));
+                    async move { response }
+                }),
+            );
+        (router, reads)
+    }
+
+    #[tokio::test]
+    async fn missing_group_route_is_probed_once_per_instance() {
+        let (router, reads) = router(|_| StatusCode::NOT_FOUND.into_response());
+        let (url, server) = server(router).await;
+        let endpoint = endpoint(url);
+        let core = CoreClient::spawn(endpoint.clone()).await.unwrap();
+        let api = core.api_client().await.unwrap();
+        for _ in 0..2 {
+            assert!(api.proxy_snapshot().await.unwrap().groups.is_none());
+        }
+        assert_eq!(reads.load(Ordering::SeqCst), 1);
+
+        endpoint.binding.send_modify(|binding| {
+            binding.as_mut().unwrap().instance_id = "second-process".into();
+        });
+        let api = core.api_client().await.unwrap();
+        assert!(api.proxy_snapshot().await.unwrap().groups.is_none());
+        assert_eq!(reads.load(Ordering::SeqCst), 2);
+        core.shutdown().await.unwrap();
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn transient_group_failures_fall_back_until_the_list_answers() {
+        let (router, reads) = router(|attempt| match attempt {
+            0 => StatusCode::SERVICE_UNAVAILABLE.into_response(),
+            1 => Json(serde_json::json!({"proxies":{
+                "Meow": {"name":"Meow","type":"Selector","udp":true,"history":[],"all":[]}
+            }}))
+            .into_response(),
+            _ => StatusCode::NOT_FOUND.into_response(),
+        });
+        let (url, server) = server(router).await;
+        let core = CoreClient::spawn(endpoint(url)).await.unwrap();
+        let api = core.api_client().await.unwrap();
+        assert!(api.proxy_snapshot().await.unwrap().groups.is_none());
+        let groups = api.proxy_snapshot().await.unwrap().groups.unwrap();
+        assert!(groups.contains_key(&ProxyName::from("Meow")));
+        // A later failure no longer changes what the instance supports.
+        assert!(api.proxy_snapshot().await.unwrap().groups.is_none());
+        assert!(api.proxy_snapshot().await.unwrap().groups.is_none());
+        assert_eq!(reads.load(Ordering::SeqCst), 4);
+        core.shutdown().await.unwrap();
+        server.abort();
     }
 }

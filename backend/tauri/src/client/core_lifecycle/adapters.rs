@@ -504,7 +504,7 @@ impl CoreLifecyclePort for LegacyCoreBridge {
 
     async fn select_execution_host(
         &self,
-        host: crate::core::actor_v2::control_endpoint::ExecutionHost,
+        host: chimera_core::actor_v2::endpoint::ExecutionHost,
     ) -> anyhow::Result<()> {
         self.facade().select_execution_host(host).await
     }
