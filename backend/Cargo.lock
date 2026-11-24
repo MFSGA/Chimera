@@ -1279,6 +1279,7 @@ dependencies = [
  "chimera-diagnose",
  "chimera-geodata",
  "chimera-ipc",
+ "chimera-jobs",
  "chimera-logging",
  "chimera-migration",
  "chimera-observers",

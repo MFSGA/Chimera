@@ -6,9 +6,11 @@ license.workspace = true
 authors.workspace = true
 
 [features]
+e2e = []
 test-support = ["dep:mockall", "chimera-observers/test-support"]
 
 [dependencies]
+chimera-jobs = { path = "../chimera-jobs", features = ["specta"] }
 chimera-migration = { path = "../chimera-migration" }
 chimera-state-engine = { path = "../chimera-state-engine" }
 struct-patch = "0.14"

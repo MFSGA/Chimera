@@ -673,7 +673,19 @@ impl CoreLifecycleWorkflow {
             )
             .await?;
 
-        if let Err(error) = self.application.patch_core(candidate_app.core).await {
+        if let Err(error) = async {
+            self.application
+                .patch_typed(chimera_config::application::ChimeraAppConfigPatch {
+                    core: Some(candidate_app.core),
+                    ..Default::default()
+                })
+                .await?;
+            crate::config::core::Config::verge().data().save_file()?;
+            crate::core::handle::Handle::refresh_verge();
+            Ok::<(), anyhow::Error>(())
+        }
+        .await
+        {
             let previous_core = previous_app.core;
             let (previous_target, previous_app, previous_clash, previous_profiles, staged_content) =
                 self.capture_reconcile_target(

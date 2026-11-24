@@ -8,7 +8,7 @@ use url::Url;
 
 /// Filesystem access for materialized profile files. Paths are relative to the
 /// app profiles dir; resolution is the implementation's concern.
-#[cfg_attr(test, mockall::automock)]
+#[cfg_attr(any(test, feature = "test-support"), mockall::automock)]
 pub trait ProfileFsPort: Send + Sync + 'static {
     fn read(&self, path: &ManagedProfilePath) -> anyhow::Result<String>;
     fn write_atomic(&self, path: &ManagedProfilePath, content: &str) -> anyhow::Result<()>;
@@ -36,7 +36,7 @@ pub use chimera_contracts::profiles::ports::FetchedSubscription;
 /// Subscription download. Network timeouts are managed inside the
 /// implementation (D9); content validation is the caller's concern (per
 /// target profile kind, design fig. 13.3).
-#[cfg_attr(test, mockall::automock)]
+#[cfg_attr(any(test, feature = "test-support"), mockall::automock)]
 #[async_trait::async_trait]
 pub trait SubscriptionFetcher: Send + Sync + 'static {
     async fn fetch(
@@ -48,7 +48,7 @@ pub trait SubscriptionFetcher: Send + Sync + 'static {
 
 /// Background-commit rebuild signal (design §6.4). Fire-and-forget; debouncing
 /// is the receiver's concern.
-#[cfg_attr(test, mockall::automock)]
+#[cfg_attr(any(test, feature = "test-support"), mockall::automock)]
 pub trait RebuildNotifier: Send + Sync + 'static {
     fn request_rebuild(&self);
 }
@@ -56,7 +56,7 @@ pub trait RebuildNotifier: Send + Sync + 'static {
 // These are exact upstream contract values, not actor-owned transaction state.
 // Keep the legacy port's anyhow signatures until the adapter preserves typed
 // filesystem causes and IPC behavior on all supported platforms.
-pub(crate) use chimera_contracts::profiles::ports::{
+pub use chimera_contracts::profiles::ports::{
     CleanupOutcome, MaterializationReconcileReport, MaterializationResource, PreparedCleanup,
     PreparedMaterialization, ProfileDegradation, ProfileDegradationCode, ProfileDegradationPhase,
 };
@@ -74,8 +74,8 @@ pub(crate) use chimera_contracts::profiles::ports::{
 /// - file-first: prepare(next) -> promote -> state CAS -> complete/compensate;
 /// - cleanup: prepare(next) -> state CAS -> activate -> retry;
 /// - recovery: reconcile(loaded profiles) before watchers or mutations.
-#[cfg_attr(test, mockall::automock)]
-pub(crate) trait ProfileMaterializationPort: Send + Sync + 'static {
+#[cfg_attr(any(test, feature = "test-support"), mockall::automock)]
+pub trait ProfileMaterializationPort: Send + Sync + 'static {
     fn prepare_state_first(
         &self,
         path: &ManagedProfilePath,

@@ -12,15 +12,15 @@ use tokio::sync::oneshot;
 
 use super::{CommitReport, ProfilesActorMessage, ProfilesError};
 
-pub(crate) const SCOPE: &str = "profiles";
-pub(crate) fn sync_key(uid: &ProfileId) -> String {
+pub const SCOPE: &str = "profiles";
+pub fn sync_key(uid: &ProfileId) -> String {
     format!("profiles/sync/{uid}")
 }
 
 type SyncReply = oneshot::Sender<Result<CommitReport, ProfilesError>>;
 
 #[derive(Clone)]
-pub(crate) struct ProfileJobs {
+pub struct ProfileJobs {
     pub client: JobsClient,
     // Only transports non-serializable RPC replies; domain state and execution
     // remain in ProfilesActor. The handler takes its sender before doing work.
@@ -53,7 +53,7 @@ struct SyncInput {
 }
 #[derive(Serialize)]
 struct SyncSummary {
-    commit: crate::client::runtime::CommitReceipt,
+    commit: crate::client::mutation_outcome::CommitReceipt,
     degradation_count: usize,
 }
 
@@ -91,7 +91,12 @@ impl ProfileJobs {
                 return Err(error.into());
             }
         };
-        let completion = crate::client::jobs::wait(&self.client, run).await?;
+        let completion = loop {
+            match self.client.wait(run, None).await {
+                Err(chimera_jobs::Error::WaitTimedOut(_)) => continue,
+                result => break result?,
+            }
+        };
         let mut journal_unavailable = completion.journal != chimera_jobs::JournalState::Durable;
         if !journal_unavailable {
             // Durable result publication precedes final maintenance. Do not
@@ -115,8 +120,8 @@ impl ProfileJobs {
         if journal_unavailable {
             report
                 .runtime_degradations
-                .push(crate::client::runtime::Degradation {
-                    phase: crate::client::runtime::DegradationPhase::SystemEffect,
+                .push(crate::client::mutation_outcome::Degradation {
+                    phase: crate::client::mutation_outcome::DegradationPhase::SystemEffect,
                     code: "jobs_journal_unavailable".into(),
                     message: "Profile committed, but the sync journal is unavailable".into(),
                     retryable: true,

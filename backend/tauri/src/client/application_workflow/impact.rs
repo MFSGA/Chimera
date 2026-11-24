@@ -417,51 +417,16 @@ pub(crate) fn classify_profiles(
     candidate: &Profiles,
     hints: &MutationHints,
 ) -> RuntimeImpact {
-    let before = ProfilesActor::current_closure(previous);
-    let after = ProfilesActor::current_closure(candidate);
-
-    // `global_transforms` is compared as a list, not through the closure: the
-    // closure is a set, and reordering the global transforms leaves it equal
-    // while changing the order they run in.
-    if previous.current != candidate.current
-        || previous.global_transforms != candidate.global_transforms
-        || previous.valid != candidate.valid
-        || before != after
-    {
-        return RuntimeImpact::Reconcile;
-    }
-
-    for uid in &after {
-        match (definition_of(previous, uid), definition_of(candidate, uid)) {
-            // Dangling in both documents: the executor resolves neither, so
-            // nothing about the build changed.
-            (None, None) => {}
-            (Some(previous), Some(candidate)) => {
-                let (Ok(previous), Ok(candidate)) =
-                    (serde_json::to_vec(previous), serde_json::to_vec(candidate))
-                else {
-                    // Unable to prove them equal, so assume they are not.
-                    return RuntimeImpact::Reconcile;
-                };
-                if previous != candidate {
-                    return RuntimeImpact::Reconcile;
-                }
-            }
-            // The member appeared in or disappeared from the closure.
-            _ => return RuntimeImpact::Reconcile,
-        }
-    }
-
-    let closure_files = closure_files(candidate, &after);
-    if hints
+    let touched = hints
         .touched
         .iter()
-        .any(|touched| closure_files.contains(&touched.path))
-    {
-        return RuntimeImpact::Reconcile;
+        .map(|entry| entry.path.clone())
+        .collect::<Vec<_>>();
+    if chimera_core::state::impact::profile_inputs_changed(previous, candidate, &touched) {
+        RuntimeImpact::Reconcile
+    } else {
+        RuntimeImpact::None
     }
-
-    RuntimeImpact::None
 }
 
 /// The runtime target a candidate asks for, as a stable identity.

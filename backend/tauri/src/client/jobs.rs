@@ -5,14 +5,13 @@ use crate::utils::{
     recovery_io::IoFailure,
     redb_ext::{RedbFailure, find_failure},
 };
-use chimera_config::profile::{ProfileId, ProfileSource};
 use chimera_jobs::{JobsClient, JobsService, Limits, LogCapture, LogPolicy, RedbJobStore};
 use snafu::ResultExt as _;
 use tokio_util::{sync::CancellationToken, task::TaskTracker};
 use tracing::instrument::WithSubscriber;
 
 pub(crate) const SYNC_LOG_TARGET: &str = "chimera::profile_sync";
-pub(crate) const DEFAULT_HISTORY_LIMIT: usize = 10;
+pub(crate) use chimera_core::client::profiles::DEFAULT_HISTORY_LIMIT;
 
 pub(crate) fn capture() -> LogCapture {
     let mut policy = LogPolicy::default();
@@ -181,16 +180,7 @@ impl Error {
     }
 }
 
-#[derive(Debug, serde::Serialize, specta::Type)]
-pub struct ProfileSyncStatus {
-    pub scheduled: bool,
-    pub next_run_at: Option<String>,
-    pub latest_run_sequence: Option<String>,
-    pub active: Vec<chimera_jobs::dto::RunDto>,
-    pub journal_degraded: bool,
-    pub registration_error: Option<String>,
-    pub history_limit: usize,
-}
+pub use chimera_core::client::profiles::ProfileSyncStatus;
 
 /// Secret-free status for ordinary UI surfaces. Registration errors may carry
 /// subscription URLs, so expose only their presence.
@@ -296,104 +286,6 @@ impl From<&chimera_jobs::dto::RunPageDto> for SyncRunPageSummary {
             items: page.items.iter().map(Into::into).collect(),
             next: page.next.clone(),
         }
-    }
-}
-
-impl super::profiles::ProfilesClient {
-    pub(crate) fn profile_sync_key(
-        &self,
-        uid: &ProfileId,
-    ) -> Result<String, crate::state::profiles::ProfilesError> {
-        let snapshot = self.inner.snapshot.load();
-        let item = snapshot
-            .items
-            .get(uid)
-            .ok_or_else(|| crate::state::profiles::ProfilesError::ProfileNotFound(uid.clone()))?;
-        if !matches!(item.definition.source(), Some(ProfileSource::Remote { .. })) {
-            return Err(crate::state::profiles::ProfilesError::NotARemoteProfile);
-        }
-        Ok(crate::state::profiles::jobs::sync_key(uid))
-    }
-
-    pub(crate) async fn profile_sync_status(
-        &self,
-        uid: ProfileId,
-    ) -> Result<ProfileSyncStatus, crate::state::profiles::ProfilesError> {
-        let key = self.profile_sync_key(&uid)?;
-        let view = self.inner.jobs.client.inspect().await?;
-        let latest_run_sequence = self
-            .inner
-            .jobs
-            .client
-            .runs(key.clone(), None, DEFAULT_HISTORY_LIMIT)
-            .await?
-            .items
-            .into_iter()
-            .map(|run| run.admission_sequence)
-            .max()
-            .map(|sequence| sequence.to_string());
-        let definition = view.jobs.iter().find(|job| job.definition.key == key);
-        Ok(ProfileSyncStatus {
-            scheduled: definition.is_some_and(|job| {
-                !matches!(job.definition.schedule, chimera_jobs::Schedule::Manual)
-            }),
-            next_run_at: definition.and_then(|job| job.next_run_at.map(|time| time.to_string())),
-            latest_run_sequence,
-            active: view
-                .active
-                .into_iter()
-                .filter(|run| run.job == key)
-                .map(Into::into)
-                .collect(),
-            journal_degraded: view.journal_degraded,
-            registration_error: view
-                .scopes
-                .get(crate::state::profiles::jobs::SCOPE)
-                .and_then(|scope| scope.last_error.clone()),
-            history_limit: DEFAULT_HISTORY_LIMIT,
-        })
-    }
-
-    pub(crate) async fn profile_sync_runs(
-        &self,
-        uid: ProfileId,
-        after: Option<chimera_jobs::dto::RunCursorDto>,
-    ) -> Result<chimera_jobs::dto::RunPageDto, crate::state::profiles::ProfilesError> {
-        let key = self.profile_sync_key(&uid)?;
-        Ok(self
-            .inner
-            .jobs
-            .client
-            .runs(key, after.map(TryInto::try_into).transpose()?, 10)
-            .await?
-            .into())
-    }
-
-    pub(crate) async fn profile_sync_logs(
-        &self,
-        uid: ProfileId,
-        run: String,
-        after: Option<String>,
-    ) -> Result<chimera_jobs::dto::LogPageDto, crate::state::profiles::ProfilesError> {
-        let key = self.profile_sync_key(&uid)?;
-        let id = run
-            .parse()
-            .map_err(|_| chimera_jobs::Error::Invalid("invalid run ID".into()))?;
-        let client = self.inner.jobs.client.clone();
-        if client.get_run(id).await?.job != key {
-            return Err(chimera_jobs::Error::NotFound.into());
-        }
-        let after = after
-            .map(|value| value.parse::<u64>())
-            .transpose()
-            .map_err(|_| chimera_jobs::Error::Invalid("invalid log cursor".into()))?
-            .unwrap_or(0);
-        Ok(client.logs(id, after, 100).await?.into())
-    }
-
-    #[cfg(test)]
-    pub(crate) fn jobs(&self) -> JobsClient {
-        self.inner.jobs.client.clone()
     }
 }
 

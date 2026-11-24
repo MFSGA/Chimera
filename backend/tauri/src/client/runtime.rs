@@ -123,27 +123,7 @@ impl<T> MutationOutcome<T> {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
-pub struct Degradation {
-    pub phase: DegradationPhase,
-    pub code: String,
-    pub message: String,
-    pub retryable: bool,
-}
-
-impl Degradation {
-    /// The application retains the existing flat desktop IPC DTO while the
-    /// independent Core, Profiles, and Runtime owners use REF's typed reason.
-    /// Keep this the only place that discards a structured `reason.cause`.
-    pub fn from_shared(degradation: chimera_contracts::runtime::Degradation) -> Self {
-        Self {
-            phase: degradation.phase,
-            code: degradation.reason.code().into(),
-            message: degradation.message,
-            retryable: degradation.retryable,
-        }
-    }
-}
+pub use chimera_core::client::mutation_outcome::Degradation;
 
 pub const RUNTIME_CONFIG_DIR: &str = "runtime";
 pub const RUNTIME_CONFIG_FILE: &str = "clash-config.yaml";

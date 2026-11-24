@@ -5,7 +5,7 @@
 //! this transitional client keeps those storage semantics while centralizing
 //! reads, validation, mutation, and running-core coordination here.
 
-use std::{future::Future, net::SocketAddr, sync::Arc, time::Duration};
+use std::{future::Future, net::SocketAddr, sync::Arc};
 
 use anyhow::{Context as _, Result, bail};
 use camino::Utf8PathBuf;
@@ -15,8 +15,6 @@ use chimera_config::clash::config::{
     overrides::ClashGuardOverridesPatch,
 };
 use chimera_ipc::api::status::CoreState;
-use chimera_state_engine::{PersistentStateManagerSetup, StateSnapshot};
-use ractor::{Actor, ActorRef, RpcReplyPort, rpc::CallResult};
 use serde_yaml::{Mapping, Value};
 use struct_patch::Patch;
 
@@ -25,11 +23,7 @@ use crate::{
     core::{clash::transaction::TransactionOutcome, handle},
     log_err,
     state::{
-        ConditionalReplaceResult,
-        clash_config::{
-            ClashConfigActor, ClashConfigActorArgs, ClashConfigActorMessage, ClashConfigSnapshot,
-        },
-        mirror::{ClashLegacyBridge, PreparedTypedReplace},
+        ConditionalReplaceResult, clash_config::ClashConfigSnapshot, mirror::ClashLegacyBridge,
     },
 };
 
@@ -38,24 +32,16 @@ use super::{
     runtime::{Degradation, DegradationPhase},
 };
 
-const CLASH_CONFIG_READ_TIMEOUT: Duration = Duration::from_secs(5);
-
+/// Desktop runtime orchestration over the shared persistent source owner.
+/// No duplicate state, mailbox or persistence.
 #[derive(Clone)]
-pub(crate) struct ClashConfigClient {
-    state: Arc<ClashConfigStateBackend>,
-}
+pub(crate) struct ClashConfigClient(chimera_core::client::clash_config::ClashConfigClient);
 
-enum ClashConfigStateBackend {
-    Actor {
-        actor_ref: ActorRef<ClashConfigActorMessage>,
-        snapshot: StateSnapshot<ClashConfig>,
-    },
-    #[cfg(test)]
-    Static {
-        // The compatibility fixture must expose real monotonic versions or
-        // the committed-version fence mistakes a successful write for a race.
-        state: parking_lot::RwLock<(ClashConfig, u64)>,
-    },
+impl std::ops::Deref for ClashConfigClient {
+    type Target = chimera_core::client::clash_config::ClashConfigClient;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
 }
 
 #[derive(Debug)]
@@ -77,228 +63,27 @@ struct ClashPatchPlan {
 }
 
 impl ClashConfigClient {
-    #[cfg(test)]
-    pub(crate) fn legacy() -> anyhow::Result<Self> {
-        Self::legacy_with(ClashConfig::default())
-    }
-
-    #[cfg(test)]
-    pub(crate) fn legacy_with(config: ClashConfig) -> anyhow::Result<Self> {
-        Ok(Self::with_state(ClashConfigStateBackend::Static {
-            state: parking_lot::RwLock::new((config, 0)),
-        }))
-    }
-
     pub(super) async fn new(
-        config_path: Utf8PathBuf,
+        path: Utf8PathBuf,
         seed: ClashConfig,
         bridge: Arc<dyn ClashLegacyBridge>,
-    ) -> anyhow::Result<Self> {
-        // Ref's typed client fails on malformed config; also keep existing
-        // dangling links and inaccessible nodes from becoming default seeds.
-        let should_load = crate::core::corrupt::config_node_exists(config_path.as_std_path())
-            .with_context(|| format!("failed to inspect clash config {config_path}"))?;
-        let setup = PersistentStateManagerSetup::<ClashConfig>::builder()
-            .config_path(config_path)
-            .assemble();
-        let manager = if should_load {
-            setup
-                .load()
-                .await
-                .context("failed to load clash persistent state manager")?
-        } else {
-            setup.from_state(seed)
-        };
-        let snapshot = manager.snapshot_handle();
-        let (actor_ref, _handle) = Actor::spawn(
-            None,
-            ClashConfigActor,
-            ClashConfigActorArgs {
-                manager,
-                bridge: bridge.clone(),
-            },
-        )
-        .await
-        .context("failed to spawn clash config actor")?;
-
-        let client = Self::with_state(ClashConfigStateBackend::Actor {
-            actor_ref,
-            snapshot,
-        });
-        bridge
-            .prepare(&client.get_typed())
-            .context("failed to prepare loaded clash legacy mirror")?
-            .apply();
-        Ok(client)
+    ) -> Result<Self> {
+        Ok(Self(
+            chimera_core::client::clash_config::ClashConfigClient::new(path, seed, bridge).await?,
+        ))
     }
-
-    fn with_state(state: ClashConfigStateBackend) -> Self {
-        Self {
-            state: Arc::new(state),
-        }
+    #[cfg(test)]
+    pub(crate) fn legacy() -> Result<Self> {
+        Ok(Self(
+            chimera_core::client::clash_config::ClashConfigClient::legacy()?,
+        ))
     }
-
-    /// Read-only ref RuntimeGate source handle, shared with the exact
-    /// committing actor. An isolated fixture has no backing persisted manager.
-    pub(crate) fn committed_snapshot_handle(&self) -> anyhow::Result<StateSnapshot<ClashConfig>> {
-        match self.state.as_ref() {
-            ClashConfigStateBackend::Actor { snapshot, .. } => Ok(snapshot.clone()),
-            #[cfg(test)]
-            ClashConfigStateBackend::Static { .. } => {
-                anyhow::bail!("test-only Clash fixture has no persistent state handle")
-            }
-        }
+    #[cfg(test)]
+    pub(crate) fn legacy_with(config: ClashConfig) -> Result<Self> {
+        Ok(Self(
+            chimera_core::client::clash_config::ClashConfigClient::legacy_with(config)?,
+        ))
     }
-
-    /// Read the immutable committed config+version pair without a writer
-    /// Actor RPC; a queued source mutation may be awaiting CoreLifecycle.
-    pub(crate) fn committed_runtime_source(&self) -> (ClashConfig, u64) {
-        match self.state.as_ref() {
-            ClashConfigStateBackend::Actor { snapshot, .. } => {
-                let observed = snapshot.load();
-                (observed.state.clone(), *observed.version)
-            }
-            #[cfg(test)]
-            ClashConfigStateBackend::Static { state } => state.read().clone(),
-        }
-    }
-
-    fn get_typed(&self) -> ClashConfig {
-        match self.state.as_ref() {
-            ClashConfigStateBackend::Actor { snapshot, .. } => snapshot.load().state.clone(),
-            #[cfg(test)]
-            ClashConfigStateBackend::Static { state } => state.read().0.clone(),
-        }
-    }
-
-    pub(crate) fn get(&self) -> Result<ClashConfig> {
-        Ok(self.get_typed())
-    }
-
-    pub(super) async fn get_snapshot(&self) -> anyhow::Result<ClashConfigSnapshot> {
-        match self.state.as_ref() {
-            ClashConfigStateBackend::Actor { .. } => {
-                self.call(
-                    ClashConfigActorMessage::Get,
-                    Some(CLASH_CONFIG_READ_TIMEOUT),
-                )
-                .await
-            }
-            #[cfg(test)]
-            ClashConfigStateBackend::Static { state } => {
-                let source = state.read();
-                Ok(ClashConfigSnapshot {
-                    state: source.0.clone(),
-                    version: source.1,
-                    reaches_runtime: false,
-                    operation_id: None,
-                })
-            }
-        }
-    }
-
-    pub(super) async fn prepare_replace(
-        &self,
-        state: ClashConfig,
-    ) -> anyhow::Result<PreparedTypedReplace<ClashConfig>> {
-        match self.state.as_ref() {
-            ClashConfigStateBackend::Actor { actor_ref, .. } => {
-                match actor_ref
-                    .call(
-                        |reply| ClashConfigActorMessage::PrepareReplace { state, reply },
-                        None,
-                    )
-                    .await?
-                {
-                    CallResult::Success(result) => result,
-                    CallResult::SenderError => anyhow::bail!("clash config actor reply dropped"),
-                    CallResult::Timeout => anyhow::bail!("clash config actor call timed out"),
-                }
-            }
-            #[cfg(test)]
-            ClashConfigStateBackend::Static { .. } => Ok(PreparedTypedReplace::new(
-                state,
-                Box::new(crate::state::mirror::NoopPreparedLegacyMirror),
-            )),
-        }
-    }
-
-    pub(super) async fn replace_prepared_if_version(
-        &self,
-        expected_version: u64,
-        prepared: PreparedTypedReplace<ClashConfig>,
-    ) -> anyhow::Result<ConditionalReplaceResult<ClashConfigSnapshot>> {
-        match self.state.as_ref() {
-            ClashConfigStateBackend::Actor { actor_ref, .. } => {
-                match actor_ref
-                    .call(
-                        |reply| ClashConfigActorMessage::ReplacePreparedIfVersion {
-                            expected_version,
-                            prepared,
-                            reply,
-                        },
-                        None,
-                    )
-                    .await?
-                {
-                    CallResult::Success(result) => result,
-                    CallResult::SenderError => anyhow::bail!("clash config actor reply dropped"),
-                    CallResult::Timeout => anyhow::bail!("clash config actor call timed out"),
-                }
-            }
-            #[cfg(test)]
-            ClashConfigStateBackend::Static { state } => {
-                let mut source = state.write();
-                if source.1 != expected_version {
-                    return Ok(ConditionalReplaceResult::Conflict {
-                        actual_version: source.1,
-                    });
-                }
-                let next_version = source
-                    .1
-                    .checked_add(1)
-                    .context("test Clash version overflow")?;
-                let (next, mirror) = prepared.into_parts();
-                let reaches_runtime =
-                    crate::state::mutation::impact::reaches_runtime(&source.0, &next, &[]);
-                source.0 = next.clone();
-                source.1 = next_version;
-                let version = source.1;
-                drop(source);
-                mirror.apply();
-                Ok(ConditionalReplaceResult::Replaced(ClashConfigSnapshot {
-                    state: next,
-                    version,
-                    reaches_runtime,
-                    operation_id: reaches_runtime.then(chimera_core_manager::OperationId::generate),
-                }))
-            }
-        }
-    }
-
-    async fn call<F>(
-        &self,
-        make: F,
-        timeout: Option<Duration>,
-    ) -> anyhow::Result<ClashConfigSnapshot>
-    where
-        F: FnOnce(RpcReplyPort<anyhow::Result<ClashConfigSnapshot>>) -> ClashConfigActorMessage,
-    {
-        match self.state.as_ref() {
-            ClashConfigStateBackend::Actor { actor_ref, .. } => {
-                match actor_ref.call(make, timeout).await? {
-                    CallResult::Success(result) => result,
-                    CallResult::SenderError => anyhow::bail!("clash config actor reply dropped"),
-                    CallResult::Timeout => anyhow::bail!("clash config actor call timed out"),
-                }
-            }
-            #[cfg(test)]
-            ClashConfigStateBackend::Static { .. } => {
-                anyhow::bail!("clash config actor is unavailable in the static test backend")
-            }
-        }
-    }
-
     pub(super) async fn apply_legacy_patch_runtime(
         &self,
         owner: &ChimeraClient,
@@ -711,16 +496,6 @@ impl ClashConfigClient {
                 .any(|item| item.code == "clash_runtime_deferred" && item.retryable),
         );
         Ok(report)
-    }
-}
-
-impl Drop for ClashConfigStateBackend {
-    fn drop(&mut self) {
-        match self {
-            ClashConfigStateBackend::Actor { actor_ref, .. } => actor_ref.stop(None),
-            #[cfg(test)]
-            ClashConfigStateBackend::Static { .. } => {}
-        }
     }
 }
 

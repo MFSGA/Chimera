@@ -3,6 +3,10 @@
 
 use std::{collections::HashMap, sync::Arc, time::Duration};
 
+use crate::{
+    profile_import::remote_import_definition,
+    state::{PersistentStateManager, ReplaceIfVersionResult, Version},
+};
 use chimera_config::profile::{
     ExternalMode, FolderId, LocalBinding, ManagedProfilePath, NewProfileRequest, ProfileDefinition,
     ProfileDependencyIndex, ProfileFolder, ProfileId, ProfileItem, ProfileLayout, ProfileMetadata,
@@ -16,28 +20,15 @@ use chimera_contracts::profiles::{
     },
     error::{ProfileFileError, SubscriptionFetchError},
 };
-use chimera_contracts::{
-    mutation::CommitAborted,
-    runtime_error::{RuntimeCheckUnavailable, RuntimeError},
-};
-use chimera_core::{
-    profile_import::remote_import_definition,
-    state::{PersistentStateManager, ReplaceIfVersionResult, Version},
-};
+use chimera_contracts::{mutation::CommitAborted, runtime_error::RuntimeError};
 use chimera_core_manager::OperationId;
 use ractor::{Actor, ActorProcessingErr, ActorRef, RpcReplyPort};
 
-use crate::{
-    client::application_workflow::{
-        impact::{
-            self, ActivationIntent, ContentDigest, MutationHints, RequestedRuntimeFields,
-            RuntimeImpact, StagedResourceToken, TouchedContent,
-        },
-        policy::CommandClass,
-    },
-    core::migration::modules::profiles::ProfilesFormat,
-    state::mutation::{MutationCoordinator, ProfileContentLock},
+use crate::state::{
+    impact,
+    mutation::{ProfileContentLock, ProfileMutationPort},
 };
+use chimera_migration::modules::profiles::ProfilesFormat;
 use tokio::task::JoinHandle;
 
 use super::{
@@ -101,7 +92,7 @@ pub enum ProfilesError {
     #[error("profiles source transaction failed: {source}; staging cleanup: {cleanup:?}")]
     SourceTransaction {
         #[source]
-        source: chimera_core::state::ReplaceIfVersionError,
+        source: crate::state::ReplaceIfVersionError,
         /// Derived from the actual conditional-write result, never a string
         /// guessed from a user-visible error message.
         reason: Option<CommitFailureReason>,
@@ -158,7 +149,7 @@ impl ProfilesError {
     /// shared Runtime Values boundary. The remaining variants keep their
     /// original Tauri owner and source chain; never fabricate a file, commit
     /// or materialization reason from a diagnostic string.
-    pub(crate) fn typed_failure(&self) -> Option<ProfileFailure> {
+    pub fn typed_failure(&self) -> Option<ProfileFailure> {
         match self {
             Self::ProfileNotFound(uid) => {
                 Some(ProfileFailure::ProfileNotFound { uid: uid.clone() })
@@ -255,9 +246,9 @@ pub struct CommitReport {
     /// Dependency-closure judgement per the T04 affects_current rule table.
     pub affects_current: bool,
     /// Crate-internal detail for committed mutations that left maintenance work.
-    pub(crate) degradations: Vec<ProfileDegradation>,
-    pub(crate) receipt: crate::client::runtime::CommitReceipt,
-    pub(crate) runtime_degradations: Vec<crate::client::runtime::Degradation>,
+    pub degradations: Vec<ProfileDegradation>,
+    pub receipt: crate::client::mutation_outcome::CommitReceipt,
+    pub runtime_degradations: Vec<crate::client::mutation_outcome::Degradation>,
     /// Server-generated uid (D13); set by Add / import commit, consumed by
     /// facade auto-activation (design §9).
     pub created: Option<ProfileId>,
@@ -270,17 +261,17 @@ pub enum ReorderOp {
 }
 
 pub struct ProfilesActorArgs {
-    pub(crate) mutations: MutationCoordinator,
+    pub mutations: Arc<dyn ProfileMutationPort>,
     pub manager: PersistentStateManager<Profiles, ProfilesFormat>,
-    pub(crate) content_lock: ProfileContentLock,
+    pub content_lock: ProfileContentLock,
     pub fs: Arc<dyn ProfileFsPort>,
     pub fetcher: Arc<dyn SubscriptionFetcher>,
-    pub(crate) materialization: Arc<dyn ProfileMaterializationPort>,
-    pub(crate) jobs: ProfileJobs,
+    pub materialization: Arc<dyn ProfileMaterializationPort>,
+    pub jobs: ProfileJobs,
 }
 
 pub struct ProfilesActorState {
-    mutations: MutationCoordinator,
+    mutations: Arc<dyn ProfileMutationPort>,
     manager: PersistentStateManager<Profiles, ProfilesFormat>,
     content_lock: ProfileContentLock,
     index: ProfileDependencyIndex,
@@ -316,7 +307,7 @@ struct PendingRefresh {
 
 /// In-memory handle for one fetch-before-commit import. Never durable.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(crate) struct ImportOperationToken(u64);
+pub struct ImportOperationToken(u64);
 
 struct PendingImport {
     transform: Option<TransformKind>,
@@ -329,7 +320,7 @@ struct PendingImport {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub(crate) enum RefreshOrigin {
+pub enum RefreshOrigin {
     Manual,
     Scheduled,
 }
@@ -507,9 +498,15 @@ pub enum ProfilesActorMessage {
     },
 }
 
+#[derive(Default)]
+struct SourceHints {
+    requested: bool,
+    touched: Vec<ManagedProfilePath>,
+    staged_content: std::collections::BTreeMap<String, String>,
+}
 pub struct ProfilesActor;
 
-pub(super) enum AffectsRule {
+enum AffectsRule {
     Never,
     CurrentChanged,
     GlobalChanged,
@@ -522,8 +519,8 @@ impl ProfilesActor {
         state.manager.snapshot_handle().load().state.clone()
     }
 
-    pub(crate) fn current_closure(profiles: &Profiles) -> indexmap::IndexSet<ProfileId> {
-        chimera_core::client::runtime_build_port::current_profile_closure(profiles)
+    pub fn current_closure(profiles: &Profiles) -> indexmap::IndexSet<ProfileId> {
+        crate::client::runtime_build_port::current_profile_closure(profiles)
     }
 
     fn evaluate_affects(rule: &AffectsRule, before: &Profiles, after: &Profiles) -> bool {
@@ -555,22 +552,20 @@ impl ProfilesActor {
     fn source_only_document_change(
         before: &Profiles,
         next: &Profiles,
-        hints: &MutationHints,
-        class: CommandClass,
+        hints: &SourceHints,
     ) -> bool {
-        class == CommandClass::Save
-            && !hints.names_runtime_field()
+        !hints.requested
             && hints.touched.is_empty()
             && hints.staged_content.is_empty()
-            && impact::classify_profiles(before, next, hints) == RuntimeImpact::None
+            && !impact::profile_inputs_changed(before, next, &hints.touched)
     }
 
     /// Classify only concrete failures returned by the conditional source
     /// owner. CAS conflicts are handled by the separate version-conflict path.
     fn commit_failure_reason(
-        source: &chimera_core::state::ReplaceIfVersionError,
+        source: &crate::state::ReplaceIfVersionError,
     ) -> Option<CommitFailureReason> {
-        use chimera_core::state::{ReplaceIfVersionError, error::StateChangedError};
+        use crate::state::{ReplaceIfVersionError, error::StateChangedError};
         match source {
             ReplaceIfVersionError::WriteConfig(_) => Some(CommitFailureReason::WriteConfig),
             ReplaceIfVersionError::LocalWrite(_) => Some(CommitFailureReason::LocalWrite),
@@ -610,14 +605,13 @@ impl ProfilesActor {
         expected_version: Version,
         before: &Profiles,
         next: Profiles,
-        hints: MutationHints,
-        class: CommandClass,
+        hints: SourceHints,
     ) -> Result<
         (
             Arc<Profiles>,
             (
-                crate::client::runtime::CommitReceipt,
-                Vec<crate::client::runtime::Degradation>,
+                crate::client::mutation_outcome::CommitReceipt,
+                Vec<crate::client::mutation_outcome::Degradation>,
             ),
         ),
         ProfilesError,
@@ -628,7 +622,7 @@ impl ProfilesActor {
             .map_err(|error| ProfilesError::Persist(error.to_string()))?;
         #[cfg(feature = "e2e")]
         tracing::warn!(target: "chimera::e2e_profile", stage = "state_write_ready", "Profile source transaction stage");
-        let reaches_runtime = !Self::source_only_document_change(before, &next, &hints, class);
+        let reaches_runtime = !Self::source_only_document_change(before, &next, &hints);
         if reaches_runtime {
             state
                 .mutations
@@ -675,11 +669,8 @@ impl ProfilesActor {
                     actual: *actual_version.as_ref(),
                 })
             }
-            Err(chimera_core::state::ReplaceIfVersionError::State(
-                chimera_core::state::error::StateChangedError::StateCasMismatch {
-                    expected,
-                    actual,
-                },
+            Err(crate::state::ReplaceIfVersionError::State(
+                crate::state::error::StateChangedError::StateCasMismatch { expected, actual },
             )) => Err(ProfilesError::VersionConflict {
                 expected: *expected.as_ref(),
                 actual: *actual.as_ref(),
@@ -784,10 +775,9 @@ impl ProfilesActor {
         let mut next = before.clone();
         let affects = mutate(&mut next)?;
         let candidate = Self::prepare_candidate(next)?;
-        let (hints, class) = Self::mutation_hints(&affects, &candidate);
+        let hints = Self::mutation_hints(&affects, &candidate);
         let (snapshot, (receipt, runtime_degradations)) =
-            Self::persist_candidate(state, expected_version, &before, candidate, hints, class)
-                .await?;
+            Self::persist_candidate(state, expected_version, &before, candidate, hints).await?;
         Self::reconcile_committed(myself, state, &snapshot).await;
         #[cfg(feature = "e2e")]
         tracing::warn!(target: "chimera::e2e_profile", stage = "state_write_reconcile_finished", "Profile source transaction stage");
@@ -961,38 +951,22 @@ impl ProfilesActor {
         Vec::new()
     }
 
-    fn mutation_hints(
-        affects: &AffectsRule,
-        candidate: &Profiles,
-    ) -> (MutationHints, CommandClass) {
-        let mut hints = MutationHints::default();
+    fn mutation_hints(affects: &AffectsRule, candidate: &Profiles) -> SourceHints {
+        let mut hints = SourceHints::default();
         if let AffectsRule::Touched(uid) = affects {
             if let Some(source) = candidate
                 .items
                 .get(uid)
                 .and_then(|item| item.definition.source())
             {
-                hints.touched.push(TouchedContent {
-                    path: source.materialized().file.clone(),
-                    content_digest: None,
-                    resource: None,
-                });
+                hints.touched.push(source.materialized().file.clone());
             }
         }
-        let class = if matches!(affects, AffectsRule::CurrentChanged) {
-            hints.activation = candidate
-                .current
-                .clone()
-                .map(ActivationIntent::Activate)
-                .unwrap_or(ActivationIntent::Deactivate);
-            CommandClass::ExplicitSwitch
-        } else {
-            if matches!(affects, AffectsRule::Always | AffectsRule::GlobalChanged) {
-                hints.requested = RequestedRuntimeFields::runtime();
-            }
-            CommandClass::Save
-        };
-        (hints, class)
+        hints.requested = matches!(
+            affects,
+            AffectsRule::CurrentChanged | AffectsRule::Always | AffectsRule::GlobalChanged
+        );
+        hints
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1016,7 +990,7 @@ impl ProfilesActor {
             .ensure_ready()
             .map_err(|error| ProfilesError::Persist(error.to_string()))?;
         let operation = OperationId::generate();
-        let (mut hints, class) = Self::mutation_hints(&affects, &candidate);
+        let mut hints = Self::mutation_hints(&affects, &candidate);
         if let Some((path, resource)) = &resource {
             let content = match resource {
                 MaterializationResource::File { content } => Some(content.clone()),
@@ -1044,21 +1018,14 @@ impl ProfilesActor {
                     )
                 }
             };
-            hints.touched.push(TouchedContent {
-                path: (*path).clone(),
-                content_digest: content.as_ref().map(|content| {
-                    ContentDigest::new(crate::state::profiles::payload_digest(content.as_bytes()))
-                }),
-                resource: Some(StagedResourceToken::new(operation.to_string())),
-            });
+            hints.touched.push((*path).clone());
             if let Some(content) = content {
                 hints.staged_content.insert(path.to_string(), content);
             }
         }
         // Complete the full candidate check before preparing a file/journal.
-        let source_only = class == CommandClass::Save
-            && !hints.names_runtime_field()
-            && impact::classify_profiles(&before, &candidate, &hints) == RuntimeImpact::None;
+        let source_only = !hints.requested
+            && !impact::profile_inputs_changed(&before, &candidate, &hints.touched);
         if !source_only {
             state
                 .mutations
@@ -1190,8 +1157,8 @@ impl ProfilesActor {
                 let before_write = matches!(
                     &result,
                     Ok(ReplaceIfVersionResult::Conflict { .. })
-                        | Err(chimera_core::state::ReplaceIfVersionError::State(
-                            chimera_core::state::error::StateChangedError::PrepareAck(_)
+                        | Err(crate::state::ReplaceIfVersionError::State(
+                            crate::state::error::StateChangedError::PrepareAck(_)
                         ))
                 );
                 let mut failures = Vec::new();
@@ -1233,8 +1200,8 @@ impl ProfilesActor {
                         .join("; ")
                 });
                 return Err(match result {
-                    Err(chimera_core::state::ReplaceIfVersionError::State(
-                        chimera_core::state::error::StateChangedError::StateCasMismatch {
+                    Err(crate::state::ReplaceIfVersionError::State(
+                        crate::state::error::StateChangedError::StateCasMismatch {
                             expected,
                             actual,
                         },
@@ -1519,7 +1486,7 @@ impl ProfilesActor {
         definition: &ProfileDefinition,
         content: &str,
     ) -> Result<(), ProfileContentError> {
-        chimera_core::profile_import::validate_fetched_content(definition, content)
+        crate::profile_import::validate_fetched_content(definition, content)
     }
 
     /// Legacy call sites still need the exact historical text for sync jobs
@@ -2764,6 +2731,7 @@ impl Actor for ProfilesActor {
 mod tests {
     use super::*;
     use chimera_config::profile::{ConfigDefinition, FileConfig, MaterializedFile};
+    use chimera_contracts::runtime_error::RuntimeCheckUnavailable;
 
     fn config_definition() -> ProfileDefinition {
         ProfileDefinition::Config {
@@ -2800,20 +2768,12 @@ mod tests {
     /// overlays only require a mapping.
     #[test]
     fn runtime_check_failure_retains_real_core_kind_and_retryability() {
-        use crate::client::application_workflow::mutation::RuntimeCheckFailure;
-        use chimera_contracts::runtime_error::RuntimeCheckUnavailable;
-        use chimera_core_manager::{CoreError, CoreErrorKind};
-
-        let refusal = ProfilesActor::runtime_gate_failure(
-            crate::client::reconciler::legacy_check::typed_gate_error(
-                "profiles",
-                anyhow::Error::new(RuntimeCheckFailure::from_core_error(CoreError::new(
-                    CoreErrorKind::ConfigCheckFailed,
-                    "invalid proposed YAML",
-                    false,
-                ))),
-            ),
-        );
+        use chimera_core_manager::CoreErrorKind;
+        let refusal =
+            ProfilesActor::runtime_gate_failure(Arc::new(RuntimeError::CoreRejectedConfig {
+                core_kind: Some(CoreErrorKind::ConfigCheckFailed),
+                message: "invalid proposed YAML".into(),
+            }));
         let ProfilesError::Commit {
             source: CommitAborted::RuntimeRefused { errors, source },
         } = &refusal
@@ -2833,16 +2793,14 @@ mod tests {
             "runtime_refused"
         );
 
-        let unavailable = ProfilesActor::runtime_gate_failure(
-            crate::client::reconciler::legacy_check::typed_gate_error(
-                "profiles",
-                anyhow::Error::new(RuntimeCheckFailure::from_core_error(CoreError::new(
-                    CoreErrorKind::BackendUnavailable,
-                    "service is reconnecting",
-                    true,
-                ))),
-            ),
-        );
+        let unavailable =
+            ProfilesActor::runtime_gate_failure(Arc::new(RuntimeError::CheckUnavailable {
+                reason: RuntimeCheckUnavailable::Backend {
+                    kind: Some(CoreErrorKind::BackendUnavailable),
+                    retryable: true,
+                    message: "service is reconnecting".into(),
+                },
+            }));
         let ProfilesError::Commit {
             source: CommitAborted::RuntimeFailed { errors, .. },
         } = &unavailable
@@ -2863,12 +2821,11 @@ mod tests {
 
     #[test]
     fn unknown_validator_error_does_not_forge_an_explicit_core_rejection() {
-        let error = ProfilesActor::runtime_gate_failure(
-            crate::client::reconciler::legacy_check::typed_gate_error(
-                "profiles",
-                anyhow::anyhow!("candidate input resolver could not be reached"),
-            ),
-        );
+        let error = ProfilesActor::runtime_gate_failure(Arc::new(RuntimeError::CheckUnavailable {
+            reason: RuntimeCheckUnavailable::Other {
+                reason: "candidate input resolver could not be reached".into(),
+            },
+        }));
         assert!(matches!(
             &error,
             ProfilesError::Commit {
@@ -2915,7 +2872,7 @@ mod tests {
 
     #[test]
     fn source_write_failures_keep_actual_manager_error_and_typed_commit_class() {
-        use chimera_core::state::ReplaceIfVersionError;
+        use crate::state::ReplaceIfVersionError;
 
         for (source, expected) in [
             (
@@ -2949,7 +2906,7 @@ mod tests {
 
     #[test]
     fn failed_materialization_recovery_retains_both_independent_port_causes() {
-        use chimera_core::state::ReplaceIfVersionError;
+        use crate::state::ReplaceIfVersionError;
 
         let resource = ProfileFileError::JournalNotFound {
             operation_id: "resource-staged".into(),

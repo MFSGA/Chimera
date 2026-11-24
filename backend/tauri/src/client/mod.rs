@@ -334,7 +334,7 @@ impl ChimeraClient {
         let mutations = MutationCoordinator::pending();
         let typed_profiles =
             tauri::async_runtime::block_on(profiles::ProfilesClient::new_with_jobs(
-                mutations.clone(),
+                Arc::new(mutations.clone()),
                 utf8_path(paths.profiles_path())?,
                 jobs,
                 profile_service.clone(),

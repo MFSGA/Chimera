@@ -413,3 +413,21 @@ mod tests {
         );
     }
 }
+
+impl chimera_core::state::mutation::ProfileMutationPort for MutationCoordinator {
+    fn ensure_ready(&self) -> anyhow::Result<()> {
+        self.ensure_ready()
+    }
+    fn runtime_gate(&self) -> Result<Arc<dyn RuntimeGate>, Arc<RuntimeError>> {
+        self.runtime_gate()
+    }
+    fn source_committed(
+        &self,
+        version: u64,
+        reaches_runtime: bool,
+        operation: Option<OperationId>,
+        files: Vec<chimera_config::profile::ProfileId>,
+    ) -> CommitReceipt {
+        self.source_committed(version, reaches_runtime, operation, files)
+    }
+}

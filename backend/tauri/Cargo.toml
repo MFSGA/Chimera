@@ -274,7 +274,7 @@ nightly = []
 verge-dev = ["chimera-os/verge-dev"]
 default-meta = []
 deadlock-detection = ["parking_lot/deadlock_detection"]
-e2e = ["dep:tauri-plugin-wdio-webdriver"]
+e2e = ["dep:tauri-plugin-wdio-webdriver", "chimera-core/e2e"]
 # Records the Rust heap's allocation sites and writes a DHAT profile to the
 # logs directory.
 dhat-heap = ['dep:dhat']
