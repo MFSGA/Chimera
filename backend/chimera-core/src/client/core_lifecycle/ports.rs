@@ -1,6 +1,24 @@
+use super::status::{CoreStatusSnapshot, RunType};
 use crate::client::runtime::RuntimeApplyReceipt;
+use crate::{
+    clash::api::ClashRuntimeConfig,
+    client::{
+        artifact_snapshot::PostProcessingOutput,
+        reconciler::{
+            check_record::CheckRecord,
+            reestablish::{AppliedCandidate, KnownRuntimeState},
+        },
+        runtime::{RuntimeSnapshot, ScriptType},
+    },
+};
 use async_trait::async_trait;
-use std::sync::Arc;
+use chimera_config::{application::ClashCore, clash::config::ClashConfig};
+use chimera_core_manager::OperationId;
+use serde::{Deserialize, Serialize};
+use serde_yaml::Mapping;
+use std::{path::PathBuf, sync::Arc};
+use tempfile::TempDir;
+type ProfileUid = String;
 /// Checked Core apply result after the lower owner confirmed its revision.
 /// The legacy port lacks replacement evidence: unknown must not be treated
 /// as an in-place config patch when deciding whether to interrupt a Core.
@@ -163,30 +181,6 @@ pub struct PreparedRuntime {
     pub target: Option<String>,
 }
 
-/// Runtime execution capability consumed by the single reconciler.
-#[async_trait]
-pub trait RuntimeApplyPort: Send + Sync {
-    async fn reconcile_prepared_submission(
-        &self,
-        prepared: PreparedRuntime,
-        spec: chimera_core_manager::CoreSpec,
-    ) -> anyhow::Result<PreparedSubmission>;
-    async fn capture_interruption_source(
-        &self,
-    ) -> anyhow::Result<Option<crate::actor_v2::api::ApiClient>>;
-    async fn active_runtime_receipt(&self) -> anyhow::Result<Option<Arc<RuntimeApplyReceipt>>>;
-    fn outcome_uncertain(&self) -> bool;
-    fn pending_runtime_product_target(&self) -> Option<String>;
-    async fn republish_pending_runtime_product(&self, target: &str) -> anyhow::Result<bool>;
-}
-
-/// Read-only observation used for runtime ownership proofs. The same
-/// instance-bound receipt authority supplies both the observation and the fence.
-#[async_trait]
-pub trait RuntimeObservationPort: RuntimeApplyPort {
-    async fn observe_core_status(&self) -> anyhow::Result<super::status::CoreStatusSnapshot>;
-}
-
 #[async_trait]
 pub trait ServiceTransitionLease: Send {
     async fn report_endpoint_down(&mut self) -> anyhow::Result<()> {
@@ -202,23 +196,452 @@ pub trait ServiceTransitionLease: Send {
     async fn confirm_stopped(&mut self) -> anyhow::Result<()>;
 }
 
-/// Runtime ownership operations on the existing selected Core and Service
-/// manager. The reconciler remains the sole caller of mutating operations.
+/// Owns the staged core binary until installation and any restart have finished.
+pub struct PreparedCoreBinary {
+    pub target: ClashCore,
+    pub source: PathBuf,
+    pub destination: PathBuf,
+    pub staging: Arc<TempDir>,
+    pub progress: Arc<dyn BinaryInstallProgress>,
+}
+
+pub trait BinaryInstallProgress: Send + Sync + 'static {
+    fn restarting(&self);
+    fn finished(&self, error: Option<&str>);
+}
+
+// Upstream core_install owns the port; the legacy UI keeps its progress wrapper.
+pub use chimera_contracts::core_install::BinaryInstaller;
+
 #[async_trait]
-pub trait RuntimeOwnershipPort: RuntimeObservationPort {
-    async fn stop_core(&self) -> anyhow::Result<()>;
-    async fn baseline_stopped(&self) -> anyhow::Result<bool>;
+pub trait ServiceLifecyclePort: Send + Sync + 'static {
+    async fn probe(&self) -> anyhow::Result<chimera_ipc::types::StatusInfo<'static>>;
+
+    /// Ref ServiceActor is the authoritative readiness-generation source.
+    /// Legacy test ports have no ref actor and return None.
+    fn actor_status(&self) -> Option<crate::actor_v2::service_status::ServiceHostStatus> {
+        None
+    }
+
+    /// The actor's watch is used for production startup-recovery wakeups,
+    /// rather than treating CoreLifecycle's compatibility watch as another
+    /// readiness-generation publisher.
+    fn actor_status_updates(
+        &self,
+    ) -> Option<tokio::sync::watch::Receiver<crate::actor_v2::service_router::ServiceHostStatus>>
+    {
+        None
+    }
+
+    /// Actual instance ownership must be supplied by the host. No global
+    /// desktop path is read in the shared lifecycle.
+    fn runtime_owned(&self, info: &chimera_ipc::types::StatusInfo<'_>) -> bool;
+    /// Whether a Service command from an earlier transition has reached a
+    /// terminal state. Startup must not make an owner decision while it runs.
+    async fn command_settled(&self) -> bool {
+        true
+    }
+    async fn report_endpoint_down(
+        &self,
+        transition: &mut dyn ServiceTransitionLease,
+    ) -> anyhow::Result<()> {
+        transition.report_endpoint_down().await
+    }
+    fn restart_policy(&self) -> crate::actor_v2::service_policy::ServiceRestartPolicySnapshot {
+        crate::actor_v2::service_policy::ServiceRestartPolicySnapshot {
+            attempts: 0,
+            exhausted: false,
+        }
+    }
+    async fn begin_transition(&self) -> anyhow::Result<Box<dyn ServiceTransitionLease>>;
+    /// Try to acquire the host transition lease without waiting. This is for
+    /// work running inside the serialized CoreLifecycle actor: waiting here
+    /// could deadlock behind a transition caller queued on that same actor.
+    async fn try_begin_transition(&self) -> anyhow::Result<Box<dyn ServiceTransitionLease>> {
+        anyhow::bail!("this Service adapter does not support nonblocking transitions")
+    }
+}
+
+/// Narrow boundary around the running core's `/configs` API.
+///
+/// The legacy API remains behind this port while the ref core lifecycle is
+/// migrated. Keeping read and patch together lets the transaction path verify
+/// the applied state without reaching into the global core manager directly.
+#[async_trait]
+pub trait RunningConfigPort: Send + Sync {
+    async fn read(&self) -> anyhow::Result<ClashRuntimeConfig>;
+    async fn patch(&self, patch: &Mapping) -> anyhow::Result<()>;
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
+pub struct RuntimeTransformFailureDiagnostics {
+    pub attempt_revision: u64,
+    pub transform_uid: ProfileUid,
+    pub scope_uid: Option<ProfileUid>,
+    pub script_type: Option<ScriptType>,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
+pub struct RuntimeTransformDiagnostics {
+    pub revision: u64,
+    pub output: PostProcessingOutput,
+    pub failure: Option<RuntimeTransformFailureDiagnostics>,
+}
+
+#[async_trait]
+pub trait CoreLifecyclePort: Send + Sync {
+    /// The canonical prepared-runtime session, only present when this port
+    /// delegates to the active LocalRuntimeHost. A compatibility port without
+    /// that owner cannot safely start a new independent revision/port pool.
+    fn runtime_preparation_session(
+        &self,
+    ) -> Option<crate::client::ports::RuntimePreparationSession> {
+        None
+    }
+
+    async fn reconcile_transparent_proxy(
+        &self,
+        request: &chimera_ipc::api::network::transparent_proxy::NetworkTransparentProxyRequest,
+    ) -> anyhow::Result<chimera_ipc::api::network::transparent_proxy::NetworkTransparentProxyStatus>
+    {
+        use chimera_ipc::api::network::transparent_proxy::{
+            NetworkTransparentProxyMode::Disabled, NetworkTransparentProxyStatus,
+        };
+        if request.mode == Disabled {
+            return Ok(NetworkTransparentProxyStatus {
+                supported: false,
+                active: false,
+                mode: None,
+                revision: None,
+                error: None,
+            });
+        }
+        anyhow::bail!("this core lifecycle adapter does not support transparent capture")
+    }
+
+    async fn transparent_proxy_status(
+        &self,
+    ) -> anyhow::Result<chimera_ipc::api::network::transparent_proxy::NetworkTransparentProxyStatus>
+    {
+        Ok(
+            chimera_ipc::api::network::transparent_proxy::NetworkTransparentProxyStatus {
+                supported: false,
+                active: false,
+                mode: None,
+                revision: None,
+                error: None,
+            },
+        )
+    }
+
+    async fn reconcile(
+        &self,
+        clash: ClashConfig,
+        target_core: ClashCore,
+        run_type: RunType,
+    ) -> anyhow::Result<()>;
+    /// The upstream checked-product apply port. No adapter may re-build the
+    /// candidate at this boundary; unsupported ports must explicitly refuse.
+    async fn reconcile_prepared(
+        &self,
+        _prepared: PreparedRuntime,
+        _core_spec: chimera_core_manager::CoreSpec,
+    ) -> anyhow::Result<()> {
+        anyhow::bail!("this CoreLifecycle port cannot submit checked runtime bytes")
+    }
+
+    /// Ref AppliedCandidate.replaced: only production hosts that retain the
+    /// authoritative Core reconcile verdict may report Some(replaced).
+    /// Legacy test adapters execute the original port and report Unknown.
+    async fn reconcile_prepared_outcome(
+        &self,
+        prepared: PreparedRuntime,
+        core_spec: chimera_core_manager::CoreSpec,
+    ) -> anyhow::Result<CheckedApplyOutcome> {
+        self.reconcile_prepared(prepared, core_spec).await?;
+        Ok(CheckedApplyOutcome { replaced: None })
+    }
+
+    /// Ref's AppliedCandidate boundary. Unlike the compatibility Result<bool>
+    /// entry above, a confirmed Core revision may be successful even when
+    /// publishing its derived RuntimeProduct fails. Only a real production
+    /// owner can supply the corresponding receipt and product evidence.
+    async fn reconcile_prepared_settlement(
+        &self,
+        prepared: PreparedRuntime,
+        core_spec: chimera_core_manager::CoreSpec,
+    ) -> anyhow::Result<PreparedCoreSettlement> {
+        let applied = self.reconcile_prepared_outcome(prepared, core_spec).await?;
+        Ok(PreparedCoreSettlement {
+            report: None,
+            outcome: None,
+            replaced: applied.replaced,
+            confirmed: None,
+            product: None,
+            publication: PreparedProductPublication::Unobserved,
+        })
+    }
+
+    /// An observed, typed result of the actual Core operation. Production
+    /// overrides this instead of flattening RolledBack and Unknown into
+    /// general anyhow errors. Existing compatibility ports provide only
+    /// the safe legacy Applied/Err boundary.
+    async fn reconcile_prepared_submission(
+        &self,
+        prepared: PreparedRuntime,
+        core_spec: chimera_core_manager::CoreSpec,
+    ) -> anyhow::Result<PreparedSubmission> {
+        Ok(PreparedSubmission::Applied(
+            self.reconcile_prepared_settlement(prepared, core_spec)
+                .await?,
+        ))
+    }
+
+    /// Capture the *previous* running Core's instance-bound API before
+    /// replacing/patching it. Missing proof is not a license to interrupt
+    /// whichever Core happens to be running after the apply.
+    async fn capture_interruption_source(
+        &self,
+    ) -> anyhow::Result<Option<crate::actor_v2::api::ApiClient>> {
+        anyhow::bail!("this Core port cannot prove the pre-apply API instance")
+    }
+
+    /// Stop a Service-hosted Core after startup evidence proved that this
+    /// instance owns it. The caller must re-probe before starting Local.
     async fn retire_service_core(
         &self,
-        expected: chimera_core_manager::CoreOwner,
-    ) -> anyhow::Result<()>;
-    async fn recover_service_quarantine(&self) -> anyhow::Result<()>;
-    fn service_endpoint_degraded(&self) -> bool;
-    fn service_endpoint_recovery_supported(&self) -> bool;
-    async fn settle_service_recovery_action(&self) -> Option<Result<(), String>>;
+        _expected_owner: chimera_core_manager::CoreOwner,
+    ) -> anyhow::Result<()> {
+        anyhow::bail!("this core lifecycle adapter cannot retire a Service-hosted Core")
+    }
+    /// Ask the Service manager to recover any quarantined Core epochs. This
+    /// succeeds only after the manager proves those processes dead and cleans
+    /// their runtime artifacts.
+    async fn recover_service_quarantine(&self) -> anyhow::Result<()> {
+        anyhow::bail!("this core lifecycle adapter cannot recover Service quarantine")
+    }
+    /// Reconcile Local after fresh evidence established that this application
+    /// no longer owns the shared Service core. The production adapter skips
+    /// the generic Service Stop handoff here.
+    async fn reconcile_after_service_release(
+        &self,
+        clash: ClashConfig,
+        target_core: ClashCore,
+    ) -> anyhow::Result<()> {
+        self.reconcile(clash, target_core, RunType::Normal).await
+    }
+    /// Candidate Profile input for the ref-aligned runtime builder. Existing
+    /// lifecycle adapters can retain their compatibility behavior until they
+    /// implement the typed snapshot path.
+    async fn reconcile_profiles(
+        &self,
+        clash: ClashConfig,
+        target_core: ClashCore,
+        run_type: RunType,
+        _profiles: Arc<chimera_config::profile::Profiles>,
+        _app: chimera_config::application::ChimeraAppConfig,
+        _staged_content: std::collections::BTreeMap<String, String>,
+        _target: Option<String>,
+    ) -> anyhow::Result<()> {
+        self.reconcile(clash, target_core, run_type).await
+    }
+    async fn reconcile_profiles_after_service_release(
+        &self,
+        clash: ClashConfig,
+        target_core: ClashCore,
+        profiles: Arc<chimera_config::profile::Profiles>,
+        app: chimera_config::application::ChimeraAppConfig,
+        staged_content: std::collections::BTreeMap<String, String>,
+        target: Option<String>,
+    ) -> anyhow::Result<()> {
+        self.reconcile_profiles(
+            clash,
+            target_core,
+            RunType::Normal,
+            profiles,
+            app,
+            staged_content,
+            target,
+        )
+        .await
+    }
+    async fn validate_profile_runtime(
+        &self,
+        _clash: ClashConfig,
+        _target_core: ClashCore,
+        _run_type: RunType,
+        _profiles: Arc<chimera_config::profile::Profiles>,
+        _app: chimera_config::application::ChimeraAppConfig,
+        _staged_content: std::collections::BTreeMap<String, String>,
+    ) -> anyhow::Result<CheckRecord> {
+        anyhow::bail!("this core lifecycle adapter cannot validate a typed Profile runtime")
+    }
+    /// Profile TCC's precommit Try: consume the same Core-owned prepared
+    /// candidate as source Checked, but retain its staged file until the
+    /// source transaction explicitly Confirms or Cancels. Only the production
+    /// Core host supports this path; no second revision allocator is allowed.
+    async fn prepare_profile_runtime_prepared(
+        &self,
+        _prepared: PreparedRuntime,
+        _core_spec: chimera_core_manager::CoreSpec,
+        _run_type: RunType,
+        _operation_id: OperationId,
+    ) -> anyhow::Result<(AppliedCandidate, CheckRecord)> {
+        anyhow::bail!("this Core adapter cannot hold a prepared Profile TCC candidate")
+    }
+
+    async fn confirm_profile_runtime(
+        &self,
+        _operation_id: OperationId,
+        _candidate: AppliedCandidate,
+    ) -> anyhow::Result<()> {
+        anyhow::bail!("this core lifecycle adapter cannot confirm a held Profile runtime")
+    }
+    async fn discard_profile_runtime(&self, _operation_id: OperationId) {}
+    async fn stop(&self) -> anyhow::Result<()>;
+    /// Ref binary replacement must settle quarantined Core epochs before
+    /// installing an executable. Legacy mock ports have no manager epochs.
+    async fn recover_before_binary_install(&self) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    /// Drain the full Core Actor and its in-process executor at application
+    /// exit. Unlike Stop Core, this is terminal for the current session.
+    async fn finish_shutdown(&self) -> anyhow::Result<()> {
+        Ok(())
+    }
+    async fn change_core(&self, clash_core: ClashCore) -> anyhow::Result<()>;
+    async fn status(&self) -> anyhow::Result<CoreStatusSnapshot>;
+    /// Whether the shared Core router currently reports an unreachable Service
+    /// endpoint. Compatibility ports without the ref router report `false`.
+    fn service_endpoint_degraded(&self) -> bool {
+        false
+    }
+    fn service_endpoint_recovery_supported(&self) -> bool {
+        false
+    }
+    /// Clear a completed operation retained by the shared Core facade before
+    /// another endpoint recovery is submitted. `Err` means prior work is still
+    /// pending, so the retry budget must not be spent yet.
+    async fn settle_service_recovery_action(&self) -> Option<Result<(), String>> {
+        None
+    }
+    /// Reconnect and re-adopt the Service endpoint through the shared Core
+    /// router. `None` is reserved for compatibility fixtures that still use
+    /// the legacy Service transition adapter.
     async fn recover_service_endpoint(
         &self,
-        closing: &tokio_util::sync::CancellationToken,
-    ) -> Option<Result<(), chimera_core_manager::CoreError>>;
-    fn startup_failure_is_retryable(&self, error: &anyhow::Error) -> bool;
+        _closing: &tokio_util::sync::CancellationToken,
+    ) -> Option<Result<(), chimera_core_manager::CoreError>> {
+        None
+    }
+    /// Select an already proven execution host without applying a runtime.
+    /// Startup uses this between the host handoff (S2) and owner verification
+    /// (S3), matching the reference lifecycle's separate `move_execution_host`
+    /// and `apply_committed` operations.
+    /// Only the caller that already proved the previous Service Core was
+    /// released may select Local with `source_released=true`. This must not
+    /// submit any runtime bytes; the subsequent PreparedRuntime submission
+    /// remains a separate single-owner Core operation.
+    async fn select_local_after_confirmed_service_release(&self) -> anyhow::Result<()> {
+        anyhow::bail!(
+            "this lifecycle adapter cannot select Local after a confirmed Service release"
+        )
+    }
+
+    async fn select_execution_host(
+        &self,
+        host: crate::actor_v2::endpoint::ExecutionHost,
+    ) -> anyhow::Result<()> {
+        use crate::actor_v2::endpoint::ExecutionHost;
+
+        let status = self.status().await?;
+        let selected = match status.run_type {
+            RunType::Normal => ExecutionHost::Local,
+            RunType::Service => ExecutionHost::Service,
+            RunType::Elevated => ExecutionHost::Local,
+        };
+        anyhow::ensure!(
+            selected == host,
+            "the lifecycle adapter cannot select {host:?}"
+        );
+        Ok(())
+    }
+    async fn confirmed_runtime_receipt(&self) -> anyhow::Result<Option<Arc<RuntimeApplyReceipt>>> {
+        Ok(None)
+    }
+    async fn active_runtime_receipt(&self) -> anyhow::Result<Option<Arc<RuntimeApplyReceipt>>> {
+        Ok(None)
+    }
+
+    /// Read-only and instance-bound: unsupported compatibility ports return no view.
+    async fn active_effective_config(
+        &self,
+    ) -> anyhow::Result<Option<chimera_ipc::api::core::v2::CoreEffectiveConfig>> {
+        Ok(None)
+    }
+    fn last_confirmed_runtime_receipt(&self) -> Option<Arc<RuntimeApplyReceipt>> {
+        None
+    }
+    async fn observe_runtime_baseline(&self) -> anyhow::Result<KnownRuntimeState> {
+        anyhow::bail!(
+            "this core lifecycle adapter does not expose authoritative runtime baseline evidence"
+        )
+    }
+    async fn restore_runtime_receipt(
+        &self,
+        _receipt: Arc<RuntimeApplyReceipt>,
+    ) -> anyhow::Result<()> {
+        anyhow::bail!("this core lifecycle adapter cannot restore a confirmed runtime receipt")
+    }
+    async fn restore_runtime_baseline(&self, baseline: &KnownRuntimeState) -> anyhow::Result<()> {
+        match baseline {
+            KnownRuntimeState::Applied(receipt) => {
+                self.restore_runtime_receipt(receipt.clone()).await
+            }
+            KnownRuntimeState::Stopped | KnownRuntimeState::NeverApplied => self.stop().await,
+        }
+    }
+    fn recovery_notify(&self) -> Option<Arc<tokio::sync::Notify>>;
+    fn outcome_uncertain(&self) -> bool {
+        false
+    }
+
+    fn runtime_transform_diagnostics(&self) -> anyhow::Result<Option<RuntimeTransformDiagnostics>> {
+        Ok(None)
+    }
+
+    fn promoted_runtime_snapshot(&self) -> Option<Arc<RuntimeSnapshot>> {
+        None
+    }
+
+    /// Ref pending-product maintenance: no new Core submit is permitted.
+    /// The production bridge checks the currently accepted runtime receipt.
+    fn pending_runtime_product_target(&self) -> Option<String> {
+        None
+    }
+    async fn republish_pending_runtime_product(&self, _target: &str) -> anyhow::Result<bool> {
+        Ok(false)
+    }
+
+    fn effective_clash_info(&self) -> crate::client::clash_info::ClashInfo;
+
+    async fn active_clash_info(&self) -> anyhow::Result<crate::client::clash_info::ClashInfo> {
+        let status = self.status().await?;
+        if !matches!(status.state, chimera_ipc::api::status::CoreState::Running) {
+            anyhow::bail!("the core API is unavailable because the core is not running");
+        }
+        Ok(self.effective_clash_info())
+    }
+
+    /// Acquires the running controller API through the lifecycle owner. The
+    /// legacy default remains only for compatibility ports without a v2 host
+    /// endpoint; production bridges override it with an instance-bound client.
+    async fn clash_api_client(&self) -> anyhow::Result<crate::actor_v2::api::ApiClient> {
+        let info = self.active_clash_info().await?;
+        crate::actor_v2::api::ApiClient::new_unbound(info.server, info.secret)
+    }
+
+    async fn on_profile_change(&self, break_when: bool);
 }

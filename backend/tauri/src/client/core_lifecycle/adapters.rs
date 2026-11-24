@@ -50,6 +50,10 @@ struct LegacyServiceTransition {
 
 #[async_trait]
 impl ServiceLifecyclePort for LegacyServiceBridge {
+    fn runtime_owned(&self, info: &chimera_ipc::types::StatusInfo<'_>) -> bool {
+        crate::core::service::is_service_runtime_owned(info)
+    }
+
     fn actor_status(&self) -> Option<chimera_core::actor_v2::service_status::ServiceHostStatus> {
         self.service_actor.as_ref().map(|actor| {
             crate::client::service_status::project_actor_service_status(&actor.status())
@@ -341,13 +345,13 @@ impl CoreLifecyclePort for LegacyCoreBridge {
 
     async fn capture_interruption_source(
         &self,
-    ) -> anyhow::Result<Option<crate::core::actor_v2::api::ApiClient>> {
+    ) -> anyhow::Result<Option<chimera_core::actor_v2::api::ApiClient>> {
         // Active runtime receipt is fenced against the selected owner and
         // its instance/revision. Never use the process-global ClashInfo cache.
         if self.facade().active_runtime_receipt().await?.is_none() {
             return Ok(None);
         }
-        Ok(Some(self.facade().clash_api_client().await?))
+        Ok(Some(self.facade().clash_api_client().await?.core_client()))
     }
 
     async fn retire_service_core(
@@ -600,8 +604,11 @@ impl CoreLifecyclePort for LegacyCoreBridge {
         self.facade().active_clash_info().await
     }
 
-    async fn clash_api_client(&self) -> anyhow::Result<crate::core::actor_v2::api::ApiClient> {
-        self.facade().clash_api_client().await
+    async fn clash_api_client(&self) -> anyhow::Result<chimera_core::actor_v2::api::ApiClient> {
+        self.facade()
+            .clash_api_client()
+            .await
+            .map(|client| client.core_client())
     }
 
     async fn on_profile_change(&self, break_when: bool) {

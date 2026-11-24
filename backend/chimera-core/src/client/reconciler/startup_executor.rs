@@ -16,11 +16,7 @@ use crate::{
     actor_v2::endpoint::ExecutionHost,
     client::{
         convergence::ConvergenceHealth,
-        core_lifecycle::{
-            ownership,
-            ports::{RuntimeApplyPort, RuntimeObservationPort, RuntimeOwnershipPort},
-            status::CoreStatusSnapshot,
-        },
+        core_lifecycle::{ownership, ports::CoreLifecyclePort, status::CoreStatusSnapshot},
     },
 };
 use chimera_config::application::ChimeraAppConfig;
@@ -28,7 +24,7 @@ use chimera_ipc::api::status::CoreState;
 
 #[async_trait::async_trait]
 pub trait StartupHost: Send + Sync {
-    type Core: RuntimeOwnershipPort + ?Sized;
+    type Core: CoreLifecyclePort + ?Sized;
     fn core(&self) -> &Self::Core;
     fn startup_application_config(&self) -> ChimeraAppConfig;
     fn startup_failed_generation(&self) -> u64;
@@ -70,7 +66,7 @@ impl<'a, H: StartupHost + ?Sized> StartupExecutor<'a, H> {
         let core = lifecycle.core();
         self.startup.mark_owner_unproven();
         let app = lifecycle.startup_application_config();
-        let current = match core.observe_core_status().await {
+        let current = match core.status().await {
             Ok(current) => current,
             Err(error) => {
                 return StartupReport {
@@ -141,7 +137,7 @@ impl<'a, H: StartupHost + ?Sized> StartupExecutor<'a, H> {
                 );
             }
         };
-        let current = match core.observe_core_status().await {
+        let current = match core.status().await {
             Ok(current) => current,
             Err(error) => {
                 return StartupReport {
@@ -250,7 +246,7 @@ impl<'a, H: StartupHost + ?Sized> StartupExecutor<'a, H> {
                         );
                     }
                 };
-                current = match core.observe_core_status().await {
+                current = match core.status().await {
                     Ok(current) => current,
                     Err(error) => {
                         return StartupReport {
@@ -330,7 +326,7 @@ impl<'a, H: StartupHost + ?Sized> StartupExecutor<'a, H> {
                         )
                         .await;
                 }
-                current = match core.observe_core_status().await {
+                current = match core.status().await {
                     Ok(current) => current,
                     Err(error) => {
                         return StartupReport {
@@ -467,7 +463,7 @@ impl<'a, H: StartupHost + ?Sized> StartupExecutor<'a, H> {
                         )
                         .await;
                 }
-                current = match core.observe_core_status().await {
+                current = match core.status().await {
                     Ok(current) => current,
                     Err(error) => {
                         return StartupReport {
@@ -694,7 +690,7 @@ impl<'a, H: StartupHost + ?Sized> StartupExecutor<'a, H> {
             && startup_service_fallback_refused(&result, lifecycle.core().outcome_uncertain())
         {
             let failed_owner = core
-                .observe_core_status()
+                .status()
                 .await
                 .ok()
                 .map(|current| host_for_run_type(current.run_type));
@@ -883,7 +879,7 @@ impl<'a, H: StartupHost + ?Sized> StartupExecutor<'a, H> {
             return false;
         }
         let app = lifecycle.startup_application_config();
-        let Ok(current) = core.observe_core_status().await else {
+        let Ok(current) = core.status().await else {
             return false;
         };
         // Ref's recovery-priority rule is evaluated by plan(Facts), rather
@@ -898,11 +894,11 @@ impl<'a, H: StartupHost + ?Sized> StartupExecutor<'a, H> {
         // S2 cannot queue a host handoff from a single stale Core/Service
         // pairing. Verify that both independently owned facts stayed fixed
         // across the asynchronous readiness observation, just as S3/S4 do.
-        let Ok(resampled_core) = core.observe_core_status().await else {
+        let Ok(resampled_core) = core.status().await else {
             return false;
         };
         let (resampled_service, resampled_generation) = lifecycle.service_evidence().await;
-        let Ok(final_core) = core.observe_core_status().await else {
+        let Ok(final_core) = core.status().await else {
             return false;
         };
         if !crate::client::reconciler::decision::stable_owner_facts(

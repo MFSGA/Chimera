@@ -12,7 +12,7 @@ use crate::{
     actor_v2::facade::{ReconcileReport, ReconcileResult},
     client::{
         core_lifecycle::ports::{
-            PreparedCoreSettlement, PreparedRuntime, RuntimeApplyPort, RuntimePreparationPort,
+            CoreLifecyclePort, PreparedCoreSettlement, PreparedRuntime, RuntimePreparationPort,
         },
         runtime::RuntimeSnapshot,
     },
@@ -270,7 +270,7 @@ pub fn checked_mode_effect_can_finish(
 /// this maintenance must never submit runtime bytes or allocate a revision.
 /// No automatic SourceCommitted/Tick replay of a stale pending product.
 pub async fn retry_pending_product<Read, ReadFuture>(
-    core: &(impl crate::client::core_lifecycle::ports::RuntimeApplyPort + ?Sized),
+    core: &(impl crate::client::core_lifecycle::ports::CoreLifecyclePort + ?Sized),
     trigger: Trigger,
     read_current_target: Read,
 ) -> anyhow::Result<bool>
@@ -300,7 +300,7 @@ where
 /// Return the independently observed upstream terminal alongside the legacy
 /// Result so the mailbox can record the true Applied/Refused/Unknown outcome.
 pub async fn submit_prepared(
-    core: &(impl crate::client::core_lifecycle::ports::RuntimeApplyPort + ?Sized),
+    core: &(impl crate::client::core_lifecycle::ports::CoreLifecyclePort + ?Sized),
     prepared: PreparedRuntime,
     spec: chimera_core_manager::CoreSpec,
 ) -> (
@@ -458,7 +458,7 @@ pub fn submission_outcome(result: ReconcileResult, product: Arc<RuntimeSnapshot>
 /// Perform the actual checked submission. A newer source or uncertain
 /// Core cannot settle its selection or one-shot connection effect.
 pub async fn apply_checked(
-    core: &(impl RuntimeApplyPort + ?Sized),
+    core: &(impl CoreLifecyclePort + ?Sized),
     prepared: PreparedRuntime,
     core_spec: chimera_core_manager::CoreSpec,
     domain: super::committed::SourceDomain,

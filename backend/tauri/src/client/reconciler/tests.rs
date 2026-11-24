@@ -769,6 +769,12 @@ struct PausedFirstReconcileCore {
 
 #[async_trait]
 impl CoreLifecyclePort for PausedFirstReconcileCore {
+    fn effective_clash_info(&self) -> chimera_core::client::clash_info::ClashInfo {
+        crate::config::core::Config::clash()
+            .latest()
+            .get_client_info()
+    }
+
     async fn reconcile(
         &self,
         _clash: ClashConfig,
@@ -843,6 +849,12 @@ struct PendingProductCore {
 
 #[async_trait]
 impl CoreLifecyclePort for PendingProductCore {
+    fn effective_clash_info(&self) -> chimera_core::client::clash_info::ClashInfo {
+        crate::config::core::Config::clash()
+            .latest()
+            .get_client_info()
+    }
+
     async fn reconcile(&self, _: ClashConfig, _: ClashCore, _: RunType) -> anyhow::Result<()> {
         anyhow::bail!("this fixture needs a typed committed target")
     }
@@ -935,6 +947,12 @@ impl CoreLifecyclePort for PendingProductCore {
 
 #[async_trait]
 impl CoreLifecyclePort for ReceiptProofCore {
+    fn effective_clash_info(&self) -> chimera_core::client::clash_info::ClashInfo {
+        crate::config::core::Config::clash()
+            .latest()
+            .get_client_info()
+    }
+
     async fn reconcile(&self, _: ClashConfig, _: ClashCore, _: RunType) -> anyhow::Result<()> {
         anyhow::bail!("this fixture requires typed committed Profiles")
     }
@@ -1140,6 +1158,10 @@ struct PausedStartupRecoveryLeaseService {
 
 #[async_trait]
 impl ServiceLifecyclePort for PausedStartupRecoveryLeaseService {
+    fn runtime_owned(&self, info: &chimera_ipc::types::StatusInfo<'_>) -> bool {
+        crate::core::service::is_service_runtime_owned(info)
+    }
+
     async fn probe(&self) -> anyhow::Result<chimera_ipc::types::StatusInfo<'static>> {
         self.inner.probe().await
     }
@@ -1368,6 +1390,12 @@ struct PostcommitServiceFallbackCore {
 
 #[async_trait]
 impl CoreLifecyclePort for PostcommitServiceFallbackCore {
+    fn effective_clash_info(&self) -> chimera_core::client::clash_info::ClashInfo {
+        crate::config::core::Config::clash()
+            .latest()
+            .get_client_info()
+    }
+
     async fn reconcile(
         &self,
         _: ClashConfig,
@@ -2171,6 +2199,10 @@ impl ServiceTransitionLease for RecordingServiceTransition {
 
 #[async_trait]
 impl ServiceLifecyclePort for RecordingService {
+    fn runtime_owned(&self, info: &chimera_ipc::types::StatusInfo<'_>) -> bool {
+        crate::core::service::is_service_runtime_owned(info)
+    }
+
     async fn probe(&self) -> anyhow::Result<chimera_ipc::types::StatusInfo<'static>> {
         self.events.lock().unwrap().push("service-probe");
         Ok(chimera_ipc::types::StatusInfo {
@@ -2191,6 +2223,10 @@ impl ServiceLifecyclePort for RecordingService {
 
 #[async_trait]
 impl ServiceLifecyclePort for ActorEvidenceService {
+    fn runtime_owned(&self, info: &chimera_ipc::types::StatusInfo<'_>) -> bool {
+        crate::core::service::is_service_runtime_owned(info)
+    }
+
     async fn probe(&self) -> anyhow::Result<chimera_ipc::types::StatusInfo<'static>> {
         self.probes.fetch_add(1, AtomicOrdering::Relaxed);
         if self.probe_failed.load(Ordering::Acquire) {
@@ -2217,6 +2253,10 @@ impl ServiceLifecyclePort for ActorEvidenceService {
 
 #[async_trait]
 impl ServiceLifecyclePort for TransitionUnavailableService {
+    fn runtime_owned(&self, info: &chimera_ipc::types::StatusInfo<'_>) -> bool {
+        crate::core::service::is_service_runtime_owned(info)
+    }
+
     async fn probe(&self) -> anyhow::Result<chimera_ipc::types::StatusInfo<'static>> {
         self.inner.probe().await
     }
@@ -2233,6 +2273,10 @@ impl ServiceLifecyclePort for TransitionUnavailableService {
 
 #[async_trait]
 impl ServiceLifecyclePort for UnreadableService {
+    fn runtime_owned(&self, info: &chimera_ipc::types::StatusInfo<'_>) -> bool {
+        crate::core::service::is_service_runtime_owned(info)
+    }
+
     async fn probe(&self) -> anyhow::Result<chimera_ipc::types::StatusInfo<'static>> {
         self.events.lock().unwrap().push("service-probe-failed");
         anyhow::bail!("test Service probe is unavailable")
@@ -2394,6 +2438,12 @@ impl ServiceTransitionLease for StartupTransitionRaceLease {
 
 #[async_trait]
 impl CoreLifecyclePort for RetiringCore {
+    fn effective_clash_info(&self) -> chimera_core::client::clash_info::ClashInfo {
+        crate::config::core::Config::clash()
+            .latest()
+            .get_client_info()
+    }
+
     async fn reconcile(
         &self,
         _clash: ClashConfig,
@@ -2491,6 +2541,12 @@ impl CoreLifecyclePort for RetiringCore {
 
 #[async_trait]
 impl CoreLifecyclePort for StartupOwnerCore {
+    fn effective_clash_info(&self) -> chimera_core::client::clash_info::ClashInfo {
+        crate::config::core::Config::clash()
+            .latest()
+            .get_client_info()
+    }
+
     async fn reconcile(
         &self,
         _clash: ClashConfig,
@@ -2866,6 +2922,12 @@ impl ServiceLifecyclePort for ForeignAfterRecoveryServiceProbe {
 
 #[async_trait]
 impl CoreLifecyclePort for StartupReceiptCore {
+    fn effective_clash_info(&self) -> chimera_core::client::clash_info::ClashInfo {
+        crate::config::core::Config::clash()
+            .latest()
+            .get_client_info()
+    }
+
     async fn reconcile(
         &self,
         _clash: ClashConfig,
@@ -2931,6 +2993,12 @@ impl CoreLifecyclePort for StartupReceiptCore {
 
 #[async_trait]
 impl CoreLifecyclePort for StartupDegradedServiceCore {
+    fn effective_clash_info(&self) -> chimera_core::client::clash_info::ClashInfo {
+        crate::config::core::Config::clash()
+            .latest()
+            .get_client_info()
+    }
+
     async fn reconcile(
         &self,
         _clash: ClashConfig,
@@ -3022,6 +3090,12 @@ impl CoreLifecyclePort for StartupDegradedServiceCore {
 
 #[async_trait]
 impl CoreLifecyclePort for StartupTransientCore {
+    fn effective_clash_info(&self) -> chimera_core::client::clash_info::ClashInfo {
+        crate::config::core::Config::clash()
+            .latest()
+            .get_client_info()
+    }
+
     async fn reconcile(
         &self,
         _clash: ClashConfig,
@@ -3100,6 +3174,10 @@ impl CoreLifecyclePort for StartupTransientCore {
 
 #[async_trait]
 impl ServiceLifecyclePort for RestartBudgetService {
+    fn runtime_owned(&self, info: &chimera_ipc::types::StatusInfo<'_>) -> bool {
+        crate::core::service::is_service_runtime_owned(info)
+    }
+
     async fn probe(&self) -> anyhow::Result<chimera_ipc::types::StatusInfo<'static>> {
         self.events.lock().unwrap().push("service-probe");
         Ok(chimera_ipc::types::StatusInfo {
@@ -3141,6 +3219,10 @@ impl ServiceLifecyclePort for RestartBudgetService {
 
 #[async_trait]
 impl ServiceLifecyclePort for StartupRetryLeaseService {
+    fn runtime_owned(&self, info: &chimera_ipc::types::StatusInfo<'_>) -> bool {
+        crate::core::service::is_service_runtime_owned(info)
+    }
+
     async fn probe(&self) -> anyhow::Result<chimera_ipc::types::StatusInfo<'static>> {
         self.inner.probe().await
     }
@@ -3226,6 +3308,12 @@ impl BinaryInstallProgress for RecordingProgress {
 
 #[async_trait]
 impl CoreLifecyclePort for CoreUpdateRecordingCore {
+    fn effective_clash_info(&self) -> chimera_core::client::clash_info::ClashInfo {
+        crate::config::core::Config::clash()
+            .latest()
+            .get_client_info()
+    }
+
     async fn reconcile(
         &self,
         _clash: ClashConfig,
@@ -3289,6 +3377,12 @@ impl CoreLifecyclePort for CoreUpdateRecordingCore {
 
 #[async_trait]
 impl CoreLifecyclePort for PanicOnStopCore {
+    fn effective_clash_info(&self) -> chimera_core::client::clash_info::ClashInfo {
+        crate::config::core::Config::clash()
+            .latest()
+            .get_client_info()
+    }
+
     async fn reconcile(
         &self,
         _clash: ClashConfig,
@@ -3382,6 +3476,12 @@ impl CoreLifecyclePort for BindingCore {
 
 #[async_trait]
 impl CoreLifecyclePort for LowerUncertainCore {
+    fn effective_clash_info(&self) -> chimera_core::client::clash_info::ClashInfo {
+        crate::config::core::Config::clash()
+            .latest()
+            .get_client_info()
+    }
+
     async fn reconcile(
         &self,
         _clash: ClashConfig,
@@ -3425,6 +3525,12 @@ impl CoreLifecyclePort for LowerUncertainCore {
 
 #[async_trait]
 impl CoreLifecyclePort for RecordingCore {
+    fn effective_clash_info(&self) -> chimera_core::client::clash_info::ClashInfo {
+        crate::config::core::Config::clash()
+            .latest()
+            .get_client_info()
+    }
+
     async fn reconcile(
         &self,
         _clash: ClashConfig,
@@ -3475,6 +3581,12 @@ impl CoreLifecyclePort for RecordingCore {
 
 #[async_trait]
 impl CoreLifecyclePort for ConfirmedStoppedCore {
+    fn effective_clash_info(&self) -> chimera_core::client::clash_info::ClashInfo {
+        crate::config::core::Config::clash()
+            .latest()
+            .get_client_info()
+    }
+
     async fn reconcile(
         &self,
         _clash: ClashConfig,
@@ -3519,6 +3631,12 @@ impl CoreLifecyclePort for ConfirmedStoppedCore {
 
 #[async_trait]
 impl CoreLifecyclePort for ProfileTccCore {
+    fn effective_clash_info(&self) -> chimera_core::client::clash_info::ClashInfo {
+        crate::config::core::Config::clash()
+            .latest()
+            .get_client_info()
+    }
+
     async fn reconcile(
         &self,
         _clash: ClashConfig,
@@ -3593,6 +3711,12 @@ impl CoreLifecyclePort for ProfileTccCore {
 
 #[async_trait]
 impl CoreLifecyclePort for ServiceHandoffCore {
+    fn effective_clash_info(&self) -> chimera_core::client::clash_info::ClashInfo {
+        crate::config::core::Config::clash()
+            .latest()
+            .get_client_info()
+    }
+
     async fn reconcile(
         &self,
         _clash: ClashConfig,
@@ -3634,6 +3758,12 @@ impl CoreLifecyclePort for ServiceHandoffCore {
 
 #[async_trait]
 impl CoreLifecyclePort for ServiceModeRecordingCore {
+    fn effective_clash_info(&self) -> chimera_core::client::clash_info::ClashInfo {
+        crate::config::core::Config::clash()
+            .latest()
+            .get_client_info()
+    }
+
     async fn reconcile(
         &self,
         _clash: ClashConfig,
@@ -3692,6 +3822,12 @@ impl CoreLifecyclePort for ServiceModeRecordingCore {
 
 #[async_trait]
 impl CoreLifecyclePort for ApplicationPatchRecordingCore {
+    fn effective_clash_info(&self) -> chimera_core::client::clash_info::ClashInfo {
+        crate::config::core::Config::clash()
+            .latest()
+            .get_client_info()
+    }
+
     async fn validate_profile_runtime(
         &self,
         _clash: ClashConfig,
@@ -7694,6 +7830,12 @@ struct PausedProfilesCore {
 
 #[async_trait]
 impl CoreLifecyclePort for PausedProfilesCore {
+    fn effective_clash_info(&self) -> chimera_core::client::clash_info::ClashInfo {
+        crate::config::core::Config::clash()
+            .latest()
+            .get_client_info()
+    }
+
     async fn reconcile(&self, _: ClashConfig, _: ClashCore, _: RunType) -> anyhow::Result<()> {
         anyhow::bail!("a typed Profiles source must use reconcile_profiles")
     }
@@ -10730,6 +10872,12 @@ struct ServiceReleasedPreparedCore {
 
 #[async_trait]
 impl CoreLifecyclePort for ServiceReleasedPreparedCore {
+    fn effective_clash_info(&self) -> chimera_core::client::clash_info::ClashInfo {
+        crate::config::core::Config::clash()
+            .latest()
+            .get_client_info()
+    }
+
     fn runtime_preparation_session(
         &self,
     ) -> Option<crate::client::ports::RuntimePreparationSession> {
@@ -10819,6 +10967,12 @@ struct SelectedServicePreparedCore {
 
 #[async_trait]
 impl CoreLifecyclePort for SelectedServicePreparedCore {
+    fn effective_clash_info(&self) -> chimera_core::client::clash_info::ClashInfo {
+        crate::config::core::Config::clash()
+            .latest()
+            .get_client_info()
+    }
+
     async fn reconcile(&self, _: ClashConfig, _: ClashCore, _: RunType) -> anyhow::Result<()> {
         anyhow::bail!("selected Service startup must not invoke legacy inline Core reconcile")
     }
@@ -11394,6 +11548,12 @@ struct ExactCheckedCore {
 
 #[async_trait]
 impl CoreLifecyclePort for ExactCheckedCore {
+    fn effective_clash_info(&self) -> chimera_core::client::clash_info::ClashInfo {
+        crate::config::core::Config::clash()
+            .latest()
+            .get_client_info()
+    }
+
     async fn reconcile(&self, _: ClashConfig, _: ClashCore, _: RunType) -> anyhow::Result<()> {
         anyhow::bail!("legacy runtime must never rebuild a checked candidate")
     }
@@ -11450,6 +11610,12 @@ struct ExplicitModeEffectCore {
 
 #[async_trait]
 impl CoreLifecyclePort for ExplicitModeEffectCore {
+    fn effective_clash_info(&self) -> chimera_core::client::clash_info::ClashInfo {
+        crate::config::core::Config::clash()
+            .latest()
+            .get_client_info()
+    }
+
     async fn reconcile(&self, _: ClashConfig, _: ClashCore, _: RunType) -> anyhow::Result<()> {
         anyhow::bail!("checked mode must not use legacy reconcile")
     }
@@ -11465,7 +11631,7 @@ impl CoreLifecyclePort for ExplicitModeEffectCore {
     }
     async fn capture_interruption_source(
         &self,
-    ) -> anyhow::Result<Option<crate::core::actor_v2::api::ApiClient>> {
+    ) -> anyhow::Result<Option<chimera_core::actor_v2::api::ApiClient>> {
         self.captures.fetch_add(1, AtomicOrdering::Relaxed);
         anyhow::bail!("fixture: previous Core API unavailable")
     }
@@ -11665,6 +11831,12 @@ struct DelayedCheckedCore {
 
 #[async_trait]
 impl CoreLifecyclePort for DelayedCheckedCore {
+    fn effective_clash_info(&self) -> chimera_core::client::clash_info::ClashInfo {
+        crate::config::core::Config::clash()
+            .latest()
+            .get_client_info()
+    }
+
     async fn reconcile(&self, _: ClashConfig, _: ClashCore, _: RunType) -> anyhow::Result<()> {
         anyhow::bail!("an explicit Checked apply cannot use the old builder")
     }

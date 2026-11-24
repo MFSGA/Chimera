@@ -301,7 +301,7 @@ impl CoreLifecycleWorkflow {
                 self.stage_connection_effect(CheckedConnectionEffect {
                     change,
                     replaced: applied.replaced,
-                    prior: old_api.unwrap_or(Ok(None)).map(|api| api.map(|api| api.core_client())),
+                    prior: old_api.unwrap_or(Ok(None)),
                 });
             }
             Ok(())

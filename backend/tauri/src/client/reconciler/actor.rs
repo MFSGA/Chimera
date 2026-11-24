@@ -2684,6 +2684,10 @@ struct DirectNoDaemonService {
 #[cfg(test)]
 #[async_trait::async_trait]
 impl ports::ServiceLifecyclePort for DirectNoDaemonService {
+    fn runtime_owned(&self, info: &chimera_ipc::types::StatusInfo<'_>) -> bool {
+        crate::core::service::is_service_runtime_owned(info)
+    }
+
     async fn probe(&self) -> anyhow::Result<chimera_ipc::types::StatusInfo<'static>> {
         Ok(chimera_ipc::types::StatusInfo {
             name: "chimera-test-service".into(),

@@ -1,5 +1,5 @@
 //! Shared conditional retirement and quarantine recovery.
-use super::{ports::RuntimeOwnershipPort, status::CoreStatusSnapshot};
+use super::{ports::CoreLifecyclePort, status::CoreStatusSnapshot};
 use crate::client::reconciler::{decision::same_core_status, service_evidence::ServiceEvidence};
 use chimera_core_manager::{CoreError, CoreErrorKind};
 use chimera_ipc::api::status::CoreState;
@@ -20,24 +20,24 @@ pub fn startup_stop_error_is_idempotent(error: &anyhow::Error) -> bool {
 }
 
 fn stop_rejected(
-    core: &(impl RuntimeOwnershipPort + ?Sized),
+    core: &(impl CoreLifecyclePort + ?Sized),
     error: anyhow::Error,
     uncertain: bool,
 ) -> StartupOwnerFailure {
     let reason = format!("the Core owner could not be stopped: {error:#}");
     if uncertain {
         StartupOwnerFailure::RecoveryRequired(reason)
-    } else if core.startup_failure_is_retryable(&error) {
+    } else if crate::client::reconciler::startup_policy::startup_failure_is_retryable(&error) {
         StartupOwnerFailure::WaitingDependency(reason)
     } else {
         StartupOwnerFailure::Blocked(reason)
     }
 }
 pub async fn confirm_local_owner_stopped(
-    core: &(impl RuntimeOwnershipPort + ?Sized),
+    core: &(impl CoreLifecyclePort + ?Sized),
     current: &CoreStatusSnapshot,
 ) -> Result<(), StartupOwnerFailure> {
-    let before_stop = core.observe_core_status().await.map_err(|error| {
+    let before_stop = core.status().await.map_err(|error| {
         StartupOwnerFailure::WaitingDependency(format!(
             "could not refresh the Local Core owner: {error:#}"
         ))
@@ -48,13 +48,13 @@ pub async fn confirm_local_owner_stopped(
             "the Local Core owner changed before it could be stopped".into(),
         ));
     }
-    let stop_result = core.stop_core().await;
+    let stop_result = core.stop().await;
     if core.outcome_uncertain() {
         return Err(StartupOwnerFailure::RecoveryRequired(
             "the Local Core stop outcome is uncertain".into(),
         ));
     }
-    let stopped = match core.observe_core_status().await {
+    let stopped = match core.status().await {
         Ok(stopped) => stopped,
         Err(error) => {
             return Err(match stop_result {
@@ -88,22 +88,31 @@ pub async fn confirm_local_owner_stopped(
 }
 
 pub async fn confirm_local_stopped_baseline(
-    core: &(impl RuntimeOwnershipPort + ?Sized),
+    core: &(impl CoreLifecyclePort + ?Sized),
     stopped: &CoreStatusSnapshot,
 ) -> Result<(), String> {
     if stopped.state_changed_at == 0 {
         return Ok(());
     }
-    let baseline = core.baseline_stopped().await.map_err(|error| {
-        format!("the Local Core stop lacks authoritative state evidence: {error:#}")
-    })?;
+    let baseline = core
+        .observe_runtime_baseline()
+        .await
+        .map(|baseline| {
+            matches!(
+                baseline,
+                super::super::reconciler::reestablish::KnownRuntimeState::Stopped
+            )
+        })
+        .map_err(|error| {
+            format!("the Local Core stop lacks authoritative state evidence: {error:#}")
+        })?;
     if !baseline {
         return Err(format!(
             "the Local Core runtime is not proven stopped after retirement: {baseline:?}"
         ));
     }
     let confirmed = core
-        .observe_core_status()
+        .status()
         .await
         .map_err(|error| format!("could not recheck the stopped Local Core: {error:#}"))?;
     if !same_core_status(stopped, &confirmed) || !matches!(&confirmed.state, CoreState::Stopped(_))
@@ -114,7 +123,7 @@ pub async fn confirm_local_stopped_baseline(
 }
 
 pub async fn recover_service_error_stop<F: std::future::Future<Output = (ServiceEvidence, u64)>>(
-    core: &(impl RuntimeOwnershipPort + ?Sized),
+    core: &(impl CoreLifecyclePort + ?Sized),
     observe_service: impl Fn() -> F,
     service: ServiceEvidence,
     previous_generation: u64,
@@ -163,7 +172,7 @@ pub async fn recover_service_error_stop<F: std::future::Future<Output = (Service
 pub async fn retire_service_startup_owner<
     F: std::future::Future<Output = (ServiceEvidence, u64)>,
 >(
-    core: &(impl RuntimeOwnershipPort + ?Sized),
+    core: &(impl CoreLifecyclePort + ?Sized),
     observe_service: impl Fn() -> F,
     service: &ServiceEvidence,
     require_ready_stopped: bool,
@@ -219,7 +228,7 @@ pub async fn retire_service_startup_owner<
 /// Execute S3 Stop against the same selected instance and committed target.
 /// The caller retains the round and selection owner; no independent actor.
 pub async fn stop_planned_unverified_core<F, S>(
-    core: &(impl RuntimeOwnershipPort + ?Sized),
+    core: &(impl CoreLifecyclePort + ?Sized),
     target_identity: impl Fn() -> F,
     observe_service: impl Fn() -> S,
     invalidate_selection: impl FnOnce(),
@@ -242,7 +251,7 @@ where
     if target_identity().await? != target {
         return Err(CommittedTargetAdvanced.into());
     }
-    let before = core.observe_core_status().await?;
+    let before = core.status().await?;
     if !same_core_status(observed, &before) || !matches!(before.state, CoreState::Running) {
         return Err(OwnershipTransitionPending::waiting(
             "the selected Core changed before its S3 stop could begin",
@@ -273,7 +282,7 @@ where
         let (fresh, fresh_generation) = observe_service().await;
         if &fresh != expected
             || fresh_generation != generation
-            || !same_core_status(&before, &core.observe_core_status().await?)
+            || !same_core_status(&before, &core.status().await?)
             || target_identity().await? != target
             || core.outcome_uncertain()
         {
@@ -307,12 +316,12 @@ where
                 )))
             })
     } else {
-        core.stop_core().await
+        core.stop().await
     };
     if core.outcome_uncertain() {
         anyhow::bail!("S3 Core stop outcome is uncertain; do not apply a second runtime");
     }
-    let stopped = core.observe_core_status().await?;
+    let stopped = core.status().await?;
     if !confirmed_planned_stop(&before, &stopped) {
         // A failed Stop RPC retains its actual error; a successful reply
         // without a stopped observation is a dependency wait.
@@ -331,7 +340,7 @@ where
     {
         return Err(error);
     }
-    let confirmed = core.observe_core_status().await?;
+    let confirmed = core.status().await?;
     if !same_core_status(&stopped, &confirmed) {
         return Err(OwnershipTransitionPending::waiting(
             "the selected Core changed while confirming its S3 stop",
