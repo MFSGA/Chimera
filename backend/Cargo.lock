@@ -1720,6 +1720,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "chimera-single-instance"
+version = "0.1.0"
+dependencies = [
+ "interprocess",
+ "libc",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "snafu",
+ "socket2",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "widestring",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "chimera-state-engine"
 version = "0.1.0"
 dependencies = [
@@ -4329,9 +4347,9 @@ dependencies = [
 
 [[package]]
 name = "interprocess"
-version = "2.4.4"
+version = "2.4.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6cb02ffbf25e8ef0f4a95bff054eef75f6d1bf16919474cf2caa63b21997478a"
+checksum = "2f243523bf126ddfc5cddf87a8193a941bfca29476ce3c842e24c916cf5a22ec"
 dependencies = [
  "doctest-file",
  "futures-core",

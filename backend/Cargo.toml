@@ -20,6 +20,7 @@ members = [
   "chimera-jobs",
   "chimera-macro",
   'chimera-paths',
+  'chimera-single-instance',
   "tauri",
 ]
 # `chimera-runtime` is a submodule with its own workspace root. Keep it out of
@@ -42,6 +43,7 @@ lto = true
 opt-level = "s"
 
 [workspace.dependencies]
+interprocess = '2.4.8'
 # --- chimera runtime ---
 # The gitlink under `backend/chimera-runtime` is the pin. The IPC client is read
 # from that exact runtime revision, while scripts derive the service sidecar
