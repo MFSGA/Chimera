@@ -128,6 +128,7 @@ impl ServiceProcessControl for FakeDaemon {
         let detail = self.core_detail.lock().unwrap().clone();
         let blind = self.probe_blind.load(Ordering::SeqCst);
         let server = (installed && running && !blind).then(|| StatusResBody {
+            log_query_version: None,
             version: Cow::Owned(version.clone()),
             core_infos: CoreInfos {
                 instance_id: None,

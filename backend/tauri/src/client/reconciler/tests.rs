@@ -69,6 +69,7 @@ fn startup_recovery_evidence_detects_same_generation_probe_recovery() {
             version: std::borrow::Cow::Borrowed("1.0.0"),
             status: chimera_ipc::types::ServiceStatus::Running,
             server: Some(chimera_ipc::api::status::StatusResBody {
+                log_query_version: None,
                 version: std::borrow::Cow::Borrowed("1.11.1"),
                 core_infos: chimera_ipc::api::status::CoreInfos {
                     instance_id: Some("service-instance".into()),
@@ -202,6 +203,7 @@ fn service_followup_retains_generation_owner_core_and_policy_transitions() {
     use chimera_ipc::types::ServiceStatus;
     current.status = ServiceStatus::Running;
     current.server = Some(StatusResBody {
+        log_query_version: None,
         version: std::borrow::Cow::Borrowed("test"),
         core_infos: CoreInfos {
             instance_id: None,
@@ -2259,6 +2261,7 @@ impl ServiceLifecyclePort for StartupServiceProbe {
             version: std::borrow::Cow::Borrowed("1.11.1"),
             status: chimera_ipc::types::ServiceStatus::Running,
             server: Some(chimera_ipc::api::status::StatusResBody {
+                log_query_version: None,
                 version: std::borrow::Cow::Borrowed("1.11.1"),
                 core_infos: chimera_ipc::api::status::CoreInfos {
                     instance_id: Some("9af54a67-fc31-4dcb-8422-26644c6277c8".into()),
@@ -2707,6 +2710,7 @@ impl ServiceLifecyclePort for MutableStartupServiceProbe {
             version: std::borrow::Cow::Borrowed("1.11.1"),
             status: chimera_ipc::types::ServiceStatus::Running,
             server: Some(chimera_ipc::api::status::StatusResBody {
+                log_query_version: None,
                 version: std::borrow::Cow::Borrowed("1.11.1"),
                 core_infos: chimera_ipc::api::status::CoreInfos {
                     instance_id: Some("9af54a67-fc31-4dcb-8422-26644c6277c8".into()),
@@ -2770,6 +2774,7 @@ impl ServiceLifecyclePort for ToggleStartupServiceProbe {
                 chimera_ipc::types::ServiceStatus::Stopped
             },
             server: ready.then(|| chimera_ipc::api::status::StatusResBody {
+                log_query_version: None,
                 version: std::borrow::Cow::Borrowed("1.11.1"),
                 core_infos: chimera_ipc::api::status::CoreInfos {
                     instance_id: Some("9af54a67-fc31-4dcb-8422-26644c6277c8".into()),

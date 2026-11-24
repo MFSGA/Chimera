@@ -87,6 +87,7 @@ mod tests {
 
     fn status(status: ServiceStatus, server_version: Option<&str>) -> StatusInfo<'static> {
         let server = server_version.map(|version| StatusResBody {
+            log_query_version: None,
             version: Cow::Owned(version.to_owned()),
             core_infos: CoreInfos {
                 instance_id: None,

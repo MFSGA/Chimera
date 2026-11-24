@@ -13,10 +13,12 @@ import { LogLevelsLayout } from '../route';
  * intentionally deferred until the file-log and core-log RPCs are available.
  */
 export function LogsLayout({
+  sourceControl,
   search,
   actions,
   children,
 }: {
+  sourceControl?: ReactNode;
   search: ReactNode;
   actions: ReactNode;
   children: ReactNode;
@@ -27,6 +29,7 @@ export function LogsLayout({
         title={m.navbar_label_logs()}
         toolbar={
           <DataPageToolbar data-slot="logs-toolbar">
+            {sourceControl}
             {search}
             <GlassControlGroup
               className="max-w-full flex-wrap"

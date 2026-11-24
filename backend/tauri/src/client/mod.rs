@@ -187,6 +187,7 @@ struct ChimeraClientInner {
     core: Arc<dyn CoreLifecyclePort>,
     shutdown: tokio_util::sync::CancellationToken,
     tasks: tokio_util::task::TaskTracker,
+    file_logs: Option<chimera_core::client::logs::FileLogsClient>,
     streams: chimera_core::clash::ws::StreamsClient,
     streams_shutdown: tokio_util::sync::CancellationToken,
     proxies: chimera_core::proxies_actor::ProxiesClient,
@@ -413,12 +414,27 @@ impl ChimeraClient {
             },
             &tasks,
         ))?;
+        let file_logs = tauri::async_runtime::block_on(
+            chimera_core::client::logs::FileLogsClient::start(paths.app_logs_dir()),
+        )
+        .ok();
+        if let Some(logs) = file_logs.clone() {
+            let token = shutdown.clone();
+            tasks.spawn_on(
+                async move {
+                    token.cancelled().await;
+                    let _ = logs.shutdown().await;
+                },
+                tauri::async_runtime::handle().inner(),
+            );
+        }
         let client = Self::with_parts_and_typed_config(
             typed,
             core_lifecycle,
             core,
             Some(core_v2),
             Some(service_v2),
+            file_logs,
             streams,
             streams_shutdown,
             proxies,
@@ -566,6 +582,7 @@ impl ChimeraClient {
             core,
             None,
             None,
+            None,
             streams,
             streams_shutdown,
             proxies,
@@ -597,6 +614,7 @@ impl ChimeraClient {
         core: Arc<dyn CoreLifecyclePort>,
         core_api: Option<CoreClientV2>,
         service_actor: Option<ServiceClient>,
+        file_logs: Option<chimera_core::client::logs::FileLogsClient>,
         streams: chimera_core::clash::ws::StreamsClient,
         streams_shutdown: tokio_util::sync::CancellationToken,
         proxies: chimera_core::proxies_actor::ProxiesClient,
@@ -647,6 +665,7 @@ impl ChimeraClient {
             core,
             shutdown,
             tasks,
+            file_logs,
             streams,
             streams_shutdown,
             proxies,
@@ -727,6 +746,15 @@ impl ChimeraClient {
         }
         self.inner.tasks.spawn(task);
         true
+    }
+
+    pub(crate) fn file_logs(
+        &self,
+    ) -> chimera_logging::LogResult<&chimera_core::client::logs::FileLogsClient> {
+        self.inner
+            .file_logs
+            .as_ref()
+            .ok_or(chimera_logging::LogError::Unavailable)
     }
 
     pub(crate) fn streams(&self) -> &chimera_core::clash::ws::StreamsClient {

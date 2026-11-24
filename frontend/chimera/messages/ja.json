@@ -1565,5 +1565,22 @@
   "settings_clash_settings_core_log_compression_label": "コアログの圧縮",
   "settings_clash_settings_core_log_compression_none": "オフ",
   "settings_clash_settings_core_log_compression_preset": "内蔵辞書",
-  "settings_clash_settings_core_log_compression_trained": "ログから学習"
+  "settings_clash_settings_core_log_compression_trained": "ログから学習",
+  "date_time_open_calendar": "カレンダーを開く",
+  "logs_current_file": "現在のファイル",
+  "logs_file_gone": "このログファイルはもう利用できません。別のファイルを選択してください。",
+  "logs_file_label": "ログファイル",
+  "logs_filters": "フィルター",
+  "logs_from_label": "開始（ローカル時刻）",
+  "logs_invalid_filter": "フィルターの値と期間を確認してください。",
+  "logs_parse_diagnostics": "未解析: {malformed}；切り詰めまたはスキップ: {truncated}",
+  "logs_partial_coverage": "ファイルの最近の範囲に限定して表示しています。それより古いレコードや大きすぎるレコードは含まれない場合があります。",
+  "logs_resource_limit": "開いているログビューアーまたはファイルが多すぎます。別のビューアーを閉じてから再試行してください。",
+  "logs_service_unsupported": "このサービスのバージョンではログの検索に対応していません。サービスを更新すると、そのログを表示できます。",
+  "logs_source_app": "アプリ",
+  "logs_source_core": "コア",
+  "logs_source_label": "ログのソース",
+  "logs_source_service": "サービス",
+  "logs_target_label": "Target（完全一致）",
+  "logs_to_label": "終了（含まない、ローカル時刻）"
 }

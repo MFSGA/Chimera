@@ -34,6 +34,7 @@ import {
 import { useLockFn } from '@/hooks/use-lock-fn';
 import * as m from '@/paraglide/messages';
 import { useDataPageBottomInset } from '../_modules/data-page';
+import FileLogs from './_modules/file-logs';
 import {
   LogClearButton,
   LogFollowButton,
@@ -296,6 +297,37 @@ function Viewer({
 }
 
 function RouteComponent() {
+  const [source, setSource] = useState<'core' | 'app' | 'service'>('core');
+  const sourceControl = (
+    <div
+      className="flex shrink-0 gap-1"
+      role="group"
+      aria-label={m.logs_source_label()}
+    >
+      {(['core', 'app', 'service'] as const).map((value) => (
+        <Button
+          key={value}
+          variant={source === value ? 'flat' : 'glass'}
+          aria-pressed={source === value}
+          onClick={() => setSource(value)}
+        >
+          {value === 'core'
+            ? m.logs_source_core()
+            : value === 'app'
+              ? m.logs_source_app()
+              : m.logs_source_service()}
+        </Button>
+      ))}
+    </div>
+  );
+  return source === 'core' ? (
+    <KernelLogs sourceControl={sourceControl} />
+  ) : (
+    <FileLogs key={source} source={source} sourceControl={sourceControl} />
+  );
+}
+
+function KernelLogs({ sourceControl }: { sourceControl: React.ReactNode }) {
   const { level } = IndexRoute.useSearch();
   const [following, setFollowing] = useState(true);
   const [search, setSearch] = useState('');
@@ -316,6 +348,7 @@ function RouteComponent() {
 
   return (
     <LogsLayout
+      sourceControl={sourceControl}
       search={
         <LogSearch
           value={search}

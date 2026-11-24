@@ -9,6 +9,7 @@ authors.workspace = true
 test-support = ["dep:mockall", "chimera-observers/test-support"]
 
 [dependencies]
+chimera-logging = { path = "../chimera-runtime/crates/chimera-logging", features = ["specta"] }
 chimera-diagnose = { path = "../chimera-diagnose" }
 chimera-owner-support = { path = "../chimera-owner-support" }
 hex = "0.4"

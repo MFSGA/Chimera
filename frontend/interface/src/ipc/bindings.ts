@@ -526,6 +526,26 @@ export const commands = {
     typedError<null, string>(
       __TAURI_INVOKE('clear_clash_ws_history', { kind }),
     ),
+  listLogFiles: (source: LogSource) =>
+    typedError<LogFileInfo[], LogError>(
+      __TAURI_INVOKE('list_log_files', { source }),
+    ),
+  openLogSession: (source: LogSource, request: OpenLogs) =>
+    typedError<LogSession, LogError>(
+      __TAURI_INVOKE('open_log_session', { source, request }),
+    ),
+  queryLogs: (source: LogSource, request: QueryLogs) =>
+    typedError<LogPage, LogError>(
+      __TAURI_INVOKE('query_logs', { source, request }),
+    ),
+  queryLogsSummary: (source: LogSource, request: QueryLogSummary) =>
+    typedError<LogPageSummary, LogError>(
+      __TAURI_INVOKE('query_logs_summary', { source, request }),
+    ),
+  closeLogSession: (source: LogSource, session: string) =>
+    typedError<null, LogError>(
+      __TAURI_INVOKE('close_log_session', { source, session }),
+    ),
   queryCoreLogs: (query: CoreLogQuery) =>
     typedError<CoreLogPage, CoreLogError>(
       __TAURI_INVOKE('query_core_logs', { query }),
@@ -2450,6 +2470,8 @@ export type DirectEgress =
   | { kind: 'transparent_proxy_enabled' }
   | { kind: 'probed'; ipv4: EgressAddress | null; ipv6: EgressAddress | null };
 
+export type Direction = 'latest' | 'before' | 'after';
+
 /**  DNS keys and value forms understood by the selected core. */
 export type DnsFeatures = {
   keys: FieldSupport<DnsKey>;
@@ -2626,6 +2648,14 @@ export type FieldSupport<T> =
   | { kind: 'ignored' }
   /**  The core reads the key and fails on any value outside this list. */
   | { kind: 'values'; value: T[] };
+
+export type Filter = {
+  levels: Level[];
+  target: string | null;
+  from_ms: number | null;
+  to_ms: number | null;
+  text: string | null;
+};
 
 /**
  *  Stable identifier of a profile folder. It is minted by the profiles actor and
@@ -2919,6 +2949,9 @@ export type JsonValue =
   | (JsonValue | null)[]
   | { [key in string]: JsonValue | null };
 
+export type Level =
+  'trace' | 'debug' | 'info' | 'warn' | 'error' | 'fatal' | 'unknown';
+
 export type LocalBinding = LocalBinding_Serialize | LocalBinding_Deserialize;
 
 export type LocalBinding_Deserialize =
@@ -2949,6 +2982,11 @@ export type LocalBinding_Serialize =
       mode: ExternalMode;
     };
 
+export type LogCursor = {
+  generation: string;
+  offset: string;
+};
+
 export type LogDto = {
   run_id: string;
   sequence: string;
@@ -2958,12 +2996,93 @@ export type LogDto = {
   fields: { [key in string]: string };
 };
 
+export type LogError =
+  | 'unavailable'
+  | 'unsupported'
+  | 'session_expired'
+  | 'cursor_reset'
+  | 'file_gone'
+  | 'limit'
+  | 'invalid_request';
+
+export type LogFileInfo = {
+  id: string;
+  name: string;
+  bytes: string;
+};
+
+/**  Public filter for app/service log summaries without text or target substring search. */
+export type LogFilterSummary = {
+  levels: Level[];
+  from_ms: number | null;
+  to_ms: number | null;
+};
+
 export type LogLevel = 'silent' | 'error' | 'warning' | 'info' | 'debug';
+
+export type LogPage = {
+  rows: LogRow[];
+  cursor: LogCursor;
+  head: LogCursor;
+  start: string;
+  file: string;
+  building: boolean;
+  more: boolean;
+  partial: boolean;
+  malformed: string;
+  truncated: string;
+  indexed_bytes: string;
+  file_bytes: string;
+};
 
 export type LogPageDto = {
   items: LogDto[];
   next: string | null;
 };
+
+/**  Public app/service log page without raw line text, log messages, or target names. */
+export type LogPageSummary = {
+  rows: LogRowSummary[];
+  cursor: LogCursor;
+  head: LogCursor;
+  start: string;
+  file: string;
+  building: boolean;
+  more: boolean;
+  partial: boolean;
+  malformed: string;
+  truncated: string;
+  indexed_bytes: string;
+  file_bytes: string;
+};
+
+export type LogRow = {
+  id: string;
+  timestamp: string | null;
+  level: Level;
+  target: string;
+  message: string;
+  raw: string;
+  unparsed: boolean;
+  truncated: boolean;
+};
+
+/**  Public app/service log row without message text, raw line text, or target string. */
+export type LogRowSummary = {
+  id: string;
+  timestamp: string | null;
+  level: Level;
+  has_target: boolean;
+  unparsed: boolean;
+  truncated: boolean;
+};
+
+export type LogSession = {
+  id: string;
+  lease_ms: number;
+};
+
+export type LogSource = 'app' | 'service';
 
 export type LogSpan = 'log' | 'info' | 'warn' | 'error';
 
@@ -3171,6 +3290,11 @@ export type NewProfileRequest_Serialize = {
 };
 
 export type OneOrMany = string | string[];
+
+export type OpenLogs = {
+  request_id: string;
+  file: string | null;
+};
 
 /**  The pipeline operator that produced a snapshot node. */
 export type OperatorTag =
@@ -3820,6 +3944,23 @@ export type Proxy_Serialize = {
   provider: string | null;
 };
 
+/**  Public query parameters for [`NyanpasuClient::query_logs_summary`]. */
+export type QueryLogSummary = {
+  session: string;
+  filter: LogFilterSummary;
+  direction: Direction;
+  cursor: LogCursor | null;
+  limit: number;
+};
+
+export type QueryLogs = {
+  session: string;
+  filter: Filter;
+  direction: Direction;
+  cursor: LogCursor | null;
+  limit: number;
+};
+
 export type Ranking = {
   dimension: Dimension;
   /**
@@ -4119,12 +4260,14 @@ export type StatisticWidgetVariant = 'large' | 'small';
 export type StatusResBody = StatusResBody_Serialize | StatusResBody_Deserialize;
 
 export type StatusResBody_Deserialize = {
+  log_query_version?: number | null;
   version: string;
   core_infos: CoreInfos_Deserialize;
   runtime_infos: RuntimeInfos;
 };
 
 export type StatusResBody_Serialize = {
+  log_query_version?: number | null;
   version: string;
   core_infos: CoreInfos_Serialize;
   runtime_infos: RuntimeInfos;

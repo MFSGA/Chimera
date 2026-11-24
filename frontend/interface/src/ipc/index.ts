@@ -71,3 +71,5 @@ export const openLogsDir = commands.openLogsDir;
 export const collectLogs = commands.collectLogs;
 export const getCustomAppDir = commands.getCustomAppDir;
 export const setCustomAppDir = commands.setCustomAppDir;
+
+export * from './use-file-logs';

@@ -203,6 +203,7 @@ mod tests {
             version: Cow::Borrowed("1.10.1"),
             status,
             server: Some(chimera_ipc::api::status::StatusResBody {
+                log_query_version: None,
                 version: Cow::Borrowed(crate::service::compat::REQUIRED_SERVICE_MIN),
                 core_infos: chimera_ipc::api::status::CoreInfos {
                     instance_id: None,

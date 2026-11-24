@@ -1596,6 +1596,67 @@ pub async fn clear_clash_ws_history(
     Ok(())
 }
 
+#[tauri::command]
+#[specta::specta]
+pub async fn list_log_files(
+    client: State<'_, ChimeraClient>,
+    source: chimera_contracts::logs::LogSource,
+) -> chimera_logging::LogResult<Vec<chimera_logging::LogFileInfo>> {
+    client.file_logs()?.list_log_files(source).await
+}
+#[tauri::command]
+#[specta::specta]
+pub async fn open_log_session(
+    client: State<'_, ChimeraClient>,
+    window: tauri::WebviewWindow,
+    source: chimera_contracts::logs::LogSource,
+    request: chimera_logging::OpenLogs,
+) -> chimera_logging::LogResult<chimera_logging::LogSession> {
+    client
+        .file_logs()?
+        .open_log_session(source, window.label().to_owned(), request)
+        .await
+}
+#[tauri::command]
+#[specta::specta]
+pub async fn query_logs(
+    client: State<'_, ChimeraClient>,
+    window: tauri::WebviewWindow,
+    source: chimera_contracts::logs::LogSource,
+    request: chimera_logging::QueryLogs,
+) -> chimera_logging::LogResult<chimera_logging::LogPage> {
+    client
+        .file_logs()?
+        .query_logs(source, window.label().to_owned(), request)
+        .await
+}
+#[tauri::command]
+#[specta::specta]
+pub async fn query_logs_summary(
+    client: State<'_, ChimeraClient>,
+    window: tauri::WebviewWindow,
+    source: chimera_contracts::logs::LogSource,
+    request: chimera_core::client::logs::QueryLogSummary,
+) -> chimera_logging::LogResult<chimera_core::client::logs::LogPageSummary> {
+    client
+        .file_logs()?
+        .query_logs_summary(source, window.label().to_owned(), request)
+        .await
+}
+#[tauri::command]
+#[specta::specta]
+pub async fn close_log_session(
+    client: State<'_, ChimeraClient>,
+    window: tauri::WebviewWindow,
+    source: chimera_contracts::logs::LogSource,
+    session: String,
+) -> chimera_logging::LogResult<()> {
+    client
+        .file_logs()?
+        .close_log_session(source, window.label().to_owned(), session)
+        .await
+}
+
 fn core_log_reader(
     client: &ChimeraClient,
 ) -> chimera_core::logs::query::CoreLogResult<chimera_core::logs::query::CoreLogReader> {

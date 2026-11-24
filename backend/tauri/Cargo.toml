@@ -23,6 +23,7 @@ chrono = "0.4"
 rustc_version = "0.4"
 
 [dependencies]
+chimera-logging = { path = "../chimera-runtime/crates/chimera-logging", features = ["specta"] }
 chimera-diagnose = { path = "../chimera-diagnose" }
 dirs = "6"
 chimera-scripts = { path = "../chimera-scripts" }

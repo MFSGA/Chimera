@@ -1598,5 +1598,22 @@
   "settings_clash_settings_core_log_compression_label": "Сжатие журнала ядра",
   "settings_clash_settings_core_log_compression_none": "Выкл.",
   "settings_clash_settings_core_log_compression_preset": "Встроенный словарь",
-  "settings_clash_settings_core_log_compression_trained": "Обученный на журналах"
+  "settings_clash_settings_core_log_compression_trained": "Обученный на журналах",
+  "date_time_open_calendar": "Открыть календарь",
+  "logs_current_file": "Текущий файл (следить за ротацией)",
+  "logs_file_gone": "Этот файл журнала больше недоступен. Выберите другой файл.",
+  "logs_file_label": "Файл журнала",
+  "logs_filters": "Фильтры",
+  "logs_from_label": "С (местное время)",
+  "logs_invalid_filter": "Проверьте фильтры и диапазон времени.",
+  "logs_parse_diagnostics": "Не разобрано: {malformed}; обрезано/пропущено: {truncated}",
+  "logs_partial_coverage": "Показан ограниченный недавний диапазон; старые или слишком длинные записи могут отсутствовать.",
+  "logs_resource_limit": "Открыто слишком много журналов. Закройте другой просмотр и повторите.",
+  "logs_service_unsupported": "Эта версия службы не поддерживает запрос журналов. Обновите службу.",
+  "logs_source_app": "Приложение",
+  "logs_source_core": "Ядро",
+  "logs_source_label": "Источник журналов",
+  "logs_source_service": "Служба",
+  "logs_target_label": "Target (точное совпадение)",
+  "logs_to_label": "До (не включая, местное время)"
 }

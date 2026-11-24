@@ -1565,5 +1565,22 @@
   "settings_clash_settings_core_log_compression_label": "内核日志压缩",
   "settings_clash_settings_core_log_compression_none": "关闭",
   "settings_clash_settings_core_log_compression_preset": "内置字典",
-  "settings_clash_settings_core_log_compression_trained": "根据日志训练"
+  "settings_clash_settings_core_log_compression_trained": "根据日志训练",
+  "date_time_open_calendar": "打开日历",
+  "logs_current_file": "当前文件 (跟随轮转)",
+  "logs_file_gone": "日志文件已不存在，请选择其他文件。",
+  "logs_file_label": "日志文件",
+  "logs_filters": "筛选条件",
+  "logs_from_label": "开始时间 (本地时间)",
+  "logs_invalid_filter": "请检查筛选条件和时间范围。",
+  "logs_parse_diagnostics": "未解析：{malformed}；截断或跳过：{truncated}",
+  "logs_partial_coverage": "仅覆盖文件最近的有限范围，较早或超长记录可能未包含。",
+  "logs_resource_limit": "打开的日志页面或文件过多，请关闭其他页面后重试。",
+  "logs_service_unsupported": "当前服务版本不支持日志查询，请更新服务。",
+  "logs_source_app": "应用程序",
+  "logs_source_core": "内核",
+  "logs_source_label": "日志来源",
+  "logs_source_service": "服务",
+  "logs_target_label": "Target (精确匹配)",
+  "logs_to_label": "结束时间 (不含，本地时间)"
 }

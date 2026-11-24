@@ -1592,5 +1592,22 @@
   "settings_clash_settings_core_log_compression_label": "Core Log Compression",
   "settings_clash_settings_core_log_compression_none": "Off",
   "settings_clash_settings_core_log_compression_preset": "Built-in dictionary",
-  "settings_clash_settings_core_log_compression_trained": "Trained from logs"
+  "settings_clash_settings_core_log_compression_trained": "Trained from logs",
+  "date_time_open_calendar": "Open calendar",
+  "logs_current_file": "Current file (follow rotation)",
+  "logs_file_gone": "This log file is no longer available. Select another file.",
+  "logs_file_label": "Log file",
+  "logs_filters": "Filters",
+  "logs_from_label": "From (local time)",
+  "logs_invalid_filter": "Check the filter values and time range.",
+  "logs_parse_diagnostics": "Unparsed: {malformed}; truncated/skipped: {truncated}",
+  "logs_partial_coverage": "Showing a bounded recent file range; older or oversized records may be omitted.",
+  "logs_resource_limit": "Too many log viewers or files are open. Close another viewer and retry.",
+  "logs_service_unsupported": "This service version does not support log queries. Update the service to view its logs.",
+  "logs_source_app": "App",
+  "logs_source_core": "Core",
+  "logs_source_label": "Log source",
+  "logs_source_service": "Service",
+  "logs_target_label": "Target (exact match)",
+  "logs_to_label": "Until (exclusive, local time)"
 }

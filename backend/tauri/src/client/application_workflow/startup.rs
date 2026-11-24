@@ -932,6 +932,7 @@ mod tests {
         owned: bool,
     ) -> ServiceEvidence {
         let server = detail.map(|detail| StatusResBody {
+            log_query_version: None,
             version: Cow::Borrowed("1.0.0"),
             core_infos: CoreInfos {
                 instance_id: Some("instance".into()),

@@ -1066,6 +1066,7 @@ dependencies = [
  "chimera-geodata",
  "chimera-ipc",
  "chimera-jobs",
+ "chimera-logging",
  "chimera-macro",
  "chimera-migration",
  "chimera-net",
@@ -1277,6 +1278,7 @@ dependencies = [
  "chimera-diagnose",
  "chimera-geodata",
  "chimera-ipc",
+ "chimera-logging",
  "chimera-observers",
  "chimera-owner-support",
  "chimera-persistence",
@@ -1387,6 +1389,7 @@ dependencies = [
  "axum",
  "backon",
  "bytes",
+ "chimera-logging",
  "chimera-service-core-metadata",
  "chimera_utils",
  "derive_builder",
@@ -1431,6 +1434,22 @@ dependencies = [
  "tokio-util",
  "tracing",
  "tracing-subscriber",
+ "uuid",
+]
+
+[[package]]
+name = "chimera-logging"
+version = "0.1.5"
+dependencies = [
+ "chrono",
+ "file-id",
+ "lasso",
+ "ractor",
+ "serde",
+ "serde_json",
+ "specta",
+ "thiserror 2.0.21",
+ "tokio",
  "uuid",
 ]
 
@@ -2194,7 +2213,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d045de693cb712d0b22c6a64be5b953f67b3ce00ab5ad3dd5d8b441886ab8e1a"
 dependencies = [
  "quote",
- "syn 2.0.119",
+ "syn 3.0.6",
 ]
 
 [[package]]
@@ -3773,6 +3792,10 @@ name = "hashbrown"
 version = "0.14.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e5274423e17b7c9fc20b6e7e208532f9b19825d82dfd615708b70edd83df41f1"
+dependencies = [
+ "ahash",
+ "allocator-api2",
+]
 
 [[package]]
 name = "hashbrown"
@@ -3996,7 +4019,7 @@ dependencies = [
  "tower-layer",
  "tower-service",
  "tracing",
- "windows-registry 0.5.3",
+ "windows-registry 0.6.1",
 ]
 
 [[package]]
@@ -4663,6 +4686,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d4345964bb142484797b161f473a503a434de77149dd8c7427788c6e13379388"
 dependencies = [
  "serde",
+]
+
+[[package]]
+name = "lasso"
+version = "0.7.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6e14eda50a3494b3bf7b9ce51c52434a761e383d7238ce1dd5dcec2fbc13e9fb"
+dependencies = [
+ "hashbrown 0.14.5",
 ]
 
 [[package]]

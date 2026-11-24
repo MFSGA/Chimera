@@ -436,6 +436,7 @@ mod tests {
                 version: Cow::Borrowed("1.11.1"),
                 status: *self.status.lock().unwrap(),
                 server: Some(StatusResBody {
+                    log_query_version: None,
                     version: Cow::Borrowed("1.11.1"),
                     core_infos: CoreInfos {
                         instance_id: None,

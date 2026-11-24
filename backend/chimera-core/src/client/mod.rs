@@ -23,3 +23,5 @@ pub mod core_lifecycle;
 pub mod ports;
 pub mod runtime;
 pub mod runtime_recovery;
+
+pub mod logs;
