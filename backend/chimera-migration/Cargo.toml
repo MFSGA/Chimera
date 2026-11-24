@@ -11,6 +11,7 @@ default = []
 test-support = []
 
 [dependencies]
+snafu = { workspace = true }
 anyhow = "1"
 chimera-persistence = { path = "../chimera-persistence" }
 chimera-utils = { workspace = true, default-features = false, features = ["serde"] }

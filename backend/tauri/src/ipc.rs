@@ -1657,6 +1657,16 @@ pub async fn close_log_session(
         .await
 }
 
+#[tauri::command]
+#[specta::specta]
+pub fn report_frontend_events(
+    window: tauri::WebviewWindow,
+    batch: chimera_core::client::frontend_events::FrontendEventBatch,
+) {
+    use chimera_core::client::frontend_events::{TracingFrontendLogSink, report};
+    report(&TracingFrontendLogSink, window.label(), batch);
+}
+
 fn core_log_reader(
     client: &ChimeraClient,
 ) -> chimera_core::logs::query::CoreLogResult<chimera_core::logs::query::CoreLogReader> {

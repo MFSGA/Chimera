@@ -526,6 +526,8 @@ export const commands = {
     typedError<null, string>(
       __TAURI_INVOKE('clear_clash_ws_history', { kind }),
     ),
+  reportFrontendEvents: (batch: FrontendEventBatch) =>
+    __TAURI_INVOKE<void>('report_frontend_events', { batch }),
   listLogFiles: (source: LogSource) =>
     typedError<LogFileInfo[], LogError>(
       __TAURI_INVOKE('list_log_files', { source }),
@@ -2662,6 +2664,51 @@ export type Filter = {
  *  never reused, so a folder keeps its identity across renames and reorders.
  */
 export type FolderId = string;
+
+export type FrontendErrorCause = {
+  name: string | null;
+  message: string;
+  stack: string | null;
+};
+
+export type FrontendEvent = {
+  kind: FrontendEventKind;
+  level: FrontendEventLevel;
+  message: string;
+  error_name: string | null;
+  stack: string | null;
+  /**  The `error.cause` chain, outermost first. */
+  causes: FrontendErrorCause[];
+  /**  React's component stack, for the `react_*` kinds. */
+  component_stack: string | null;
+  fingerprint: string;
+  /**  How often the fingerprint occurred within the frontend's dedupe window. */
+  count: number;
+  /**
+   *  Client clock, Unix milliseconds. The log line's own timestamp is when
+   *  the backend wrote it.
+   */
+  first_seen_ms: number | null;
+  last_seen_ms: number | null;
+  /**  The route path, without query parameters. */
+  route: string;
+};
+
+export type FrontendEventBatch = {
+  events: FrontendEvent[];
+  /**  Events the frontend dropped since its previous batch. */
+  dropped: number;
+};
+
+export type FrontendEventKind =
+  | 'console'
+  | 'uncaught_error'
+  | 'unhandled_rejection'
+  | 'react_uncaught'
+  | 'react_caught'
+  | 'react_recoverable';
+
+export type FrontendEventLevel = 'warning' | 'error';
 
 /**  What the address a destination was located by is to the outbound. */
 export type GeoBasis =

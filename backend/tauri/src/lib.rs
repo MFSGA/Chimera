@@ -1,8 +1,3 @@
-#[cfg(debug_assertions)]
-use std::{io::Write, time::SystemTime};
-
-#[cfg(debug_assertions)]
-use tauri::Listener;
 use tauri::{Emitter, Manager};
 #[cfg(any(target_os = "macos", target_os = "linux", windows))]
 use tauri_plugin_deep_link::DeepLinkExt;
@@ -92,34 +87,6 @@ fn deadlock_detection() {
 #[specta::specta]
 fn greet(name: &str) -> String {
     format!("Hello, {}! You've been greeted from Rust!", name)
-}
-
-#[cfg(debug_assertions)]
-fn setup_frontend_console_bridge(app: &mut tauri::App) {
-    app.listen("frontend-console", move |event| {
-        let Ok(current_dir) = std::env::current_dir() else {
-            return;
-        };
-        let log_dir = current_dir.join(".tmp");
-
-        if std::fs::create_dir_all(&log_dir).is_err() {
-            return;
-        }
-
-        let timestamp = SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .map(|duration| duration.as_secs())
-            .unwrap_or_default();
-        let line = format!("[{timestamp}] {}\n", event.payload());
-
-        if let Ok(mut file) = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(log_dir.join("frontend-console.log"))
-        {
-            let _ = file.write_all(line.as_bytes());
-        }
-    });
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -366,9 +333,6 @@ pub fn run() -> std::process::ExitCode {
                     app.manage(crate::window::WindowManager::new(app.handle().clone()));
                     app.manage(crate::utils::resolve::AppStartupStatus::default());
                     app.manage(crate::ipc::PendingDeepLink::default());
-
-                    #[cfg(debug_assertions)]
-                    setup_frontend_console_bridge(app);
 
                     resolve::resolve_setup(app);
 

@@ -120,6 +120,7 @@ macro_rules! build_builder {
                 crate::ipc::get_clash_ws_snapshot,
                 crate::ipc::set_clash_ws_recording,
                 crate::ipc::clear_clash_ws_history,
+                crate::ipc::report_frontend_events,
                 crate::ipc::list_log_files,
                 crate::ipc::open_log_session,
                 crate::ipc::query_logs,

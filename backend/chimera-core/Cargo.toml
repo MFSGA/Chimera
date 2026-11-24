@@ -9,6 +9,9 @@ authors.workspace = true
 test-support = ["dep:mockall", "chimera-observers/test-support"]
 
 [dependencies]
+chimera-migration = { path = "../chimera-migration" }
+chimera-state-engine = { path = "../chimera-state-engine" }
+struct-patch = "0.14"
 chimera-logging = { path = "../chimera-runtime/crates/chimera-logging", features = ["specta"] }
 chimera-diagnose = { path = "../chimera-diagnose" }
 chimera-owner-support = { path = "../chimera-owner-support" }
@@ -65,6 +68,7 @@ snafu = { workspace = true }
 strum = { version = "0.28", features = ["derive"] }
 
 [dev-dependencies]
+tracing-subscriber = "0.3"
 chimera-observers = { path = "../chimera-observers", features = ["test-support"] }
 mockall = "0.15"
 tokio = { workspace = true, features = ["full", "test-util"] }

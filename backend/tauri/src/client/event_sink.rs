@@ -17,16 +17,7 @@ use super::effects::{
 };
 use crate::core::handle::{Handle, Message};
 
-#[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum StateChanged {
-    NyanpasuConfig,
-    ClashConfig,
-    Profiles { files: Vec<ProfileId> },
-    Proxies,
-    // Chimera-only runtime transform inspector; ref does not expose it.
-    RuntimeTransformDiagnostics,
-}
+pub use chimera_core::client::event_sink::StateChanged;
 
 /// The backend's authoritative state-change event, delivered to every window.
 #[derive(Debug, Clone, Serialize, Deserialize, specta::Type, tauri_specta::Event)]

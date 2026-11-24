@@ -6,7 +6,7 @@ import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
 import React from 'react';
 import ReactDOM, { createRoot } from 'react-dom/client';
 import { routeTree } from './routeTree.gen';
-import { setupFrontendConsoleBridge } from './services/frontend-console-bridge';
+import { reactRootErrorOptions } from './services/error-reporting';
 // Register the Paraglide strategy before rendering the application.
 import '@/utils/language';
 
@@ -23,8 +23,6 @@ if (currentWindow.label === 'main') {
 
 const container = document.getElementById('root')!;
 
-void setupFrontendConsoleBridge();
-
 // Set up a Router instance
 const router = createRouter({
   routeTree,
@@ -38,7 +36,7 @@ declare module '@tanstack/react-router' {
   }
 }
 
-createRoot(container).render(
+createRoot(container, reactRootErrorOptions).render(
   <React.StrictMode>
     <RouterProvider router={router} />
   </React.StrictMode>,
