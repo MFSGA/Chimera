@@ -7,16 +7,12 @@ const OWNER = 'MFSGA';
 const REPO = 'Chimera_Client';
 
 export const CHIMERA_CLIENT_ALPHA_ARCH_MAPPING: ArchMapping = {
-  'windows-i386': 'clash_chimera-i686-pc-windows-msvc.exe',
   'windows-x86_64': 'clash_chimera-x86_64-pc-windows-msvc.exe',
   'windows-arm64': 'clash_chimera-aarch64-pc-windows-msvc.exe',
   'linux-aarch64': 'clash_chimera-aarch64-unknown-linux-gnu',
   'linux-amd64': 'clash_chimera-x86_64-unknown-linux-gnu',
-  'linux-i386': 'clash_chimera-i686-unknown-linux-musl',
   'darwin-arm64': 'chimera-client-{}-aarch64-apple-darwin.tar.gz',
   'darwin-x64': 'chimera-client-{}-x86_64-apple-darwin.tar.gz',
-  'linux-armv7': 'clash_chimera-armv7-unknown-linux-gnueabi',
-  'linux-armv7hf': 'clash_chimera-armv7-unknown-linux-gnueabihf',
 };
 
 export async function resolveChimeraClientAlphaFromGithub(

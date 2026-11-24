@@ -314,8 +314,6 @@ export async function resolveWintun(
 
   const wintunArchMap: Record<string, string> = {
     x64: 'amd64',
-    ia32: 'x86',
-    arm: 'arm',
     arm64: 'arm64',
   };
   const wintunArch = wintunArchMap[context.arch];

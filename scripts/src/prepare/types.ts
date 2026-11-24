@@ -1,12 +1,8 @@
 export type SupportedArch =
-  | 'windows-i386'
   | 'windows-x86_64'
   | 'windows-arm64'
   | 'linux-aarch64'
   | 'linux-amd64'
-  | 'linux-i386'
-  | 'linux-armv7'
-  | 'linux-armv7hf'
   | 'darwin-arm64'
   | 'darwin-x64';
 

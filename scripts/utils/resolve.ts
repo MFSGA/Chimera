@@ -124,12 +124,6 @@ export class Resolve {
       case 'x64':
         arch = 'amd64';
         break;
-      case 'ia32':
-        arch = 'x86';
-        break;
-      case 'arm':
-        arch = 'arm';
-        break;
       case 'arm64':
         arch = 'arm64';
         break;

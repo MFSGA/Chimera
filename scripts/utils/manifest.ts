@@ -6,7 +6,7 @@ import { applyProxy, octokit } from './octokit';
 
 export type ArchMapping = { [key in SupportedArch]: string };
 
-export type NodeArch = NodeJS.Architecture | 'armel';
+export type NodeArch = NodeJS.Architecture;
 
 // resolvers block
 export type LatestVersionResolver = Promise<{
@@ -26,16 +26,12 @@ export const resolveMihomo = async (): LatestVersionResolver => {
   consola.debug(`mihomo latest release: ${latestRelease.data.tag_name}`);
 
   const archMapping: ArchMapping = {
-    [SupportedArch.WindowsX86_32]: 'mihomo-windows-386-{}.zip',
     [SupportedArch.WindowsX86_64]: 'mihomo-windows-amd64-v1-{}.zip',
     [SupportedArch.WindowsArm64]: 'mihomo-windows-arm64-{}.zip',
     [SupportedArch.LinuxAarch64]: 'mihomo-linux-arm64-{}.gz',
     [SupportedArch.LinuxAmd64]: 'mihomo-linux-amd64-v1-{}.gz',
-    [SupportedArch.LinuxI386]: 'mihomo-linux-386-{}.gz',
     [SupportedArch.DarwinArm64]: 'mihomo-darwin-arm64-{}.gz',
     [SupportedArch.DarwinX64]: 'mihomo-darwin-amd64-v1-{}.gz',
-    [SupportedArch.LinuxArmv7]: 'mihomo-linux-armv5-{}.gz',
-    [SupportedArch.LinuxArmv7hf]: 'mihomo-linux-armv7-{}.gz',
   } satisfies ArchMapping;
 
   return {
@@ -56,16 +52,12 @@ export const resolveMihomoAlpha = async (): LatestVersionResolver => {
   consola.debug(`mihomo alpha release: ${alphaReleaseHash}`);
 
   const archMapping: ArchMapping = {
-    [SupportedArch.WindowsX86_32]: 'mihomo-windows-386-{}.zip',
     [SupportedArch.WindowsX86_64]: 'mihomo-windows-amd64-v1-{}.zip',
     [SupportedArch.WindowsArm64]: 'mihomo-windows-arm64-{}.zip',
     [SupportedArch.LinuxAarch64]: 'mihomo-linux-arm64-{}.gz',
     [SupportedArch.LinuxAmd64]: 'mihomo-linux-amd64-v1-{}.gz',
-    [SupportedArch.LinuxI386]: 'mihomo-linux-386-{}.gz',
     [SupportedArch.DarwinArm64]: 'mihomo-darwin-arm64-{}.gz',
     [SupportedArch.DarwinX64]: 'mihomo-darwin-amd64-v1-{}.gz',
-    [SupportedArch.LinuxArmv7]: 'mihomo-linux-armv5-{}.gz',
-    [SupportedArch.LinuxArmv7hf]: 'mihomo-linux-armv7-{}.gz',
   } satisfies ArchMapping;
 
   return {
@@ -86,17 +78,12 @@ export const resolveClashRs = async (): LatestVersionResolver => {
   consola.debug(`clash-rs latest release: ${latestRelease.data.tag_name}`);
 
   const archMapping: ArchMapping = {
-    [SupportedArch.WindowsX86_32]:
-      'clash-rs-i686-pc-windows-msvc-static-crt.exe',
     [SupportedArch.WindowsX86_64]: 'clash-rs-x86_64-pc-windows-msvc.exe',
     [SupportedArch.WindowsArm64]: 'clash-rs-aarch64-pc-windows-msvc.exe',
     [SupportedArch.LinuxAarch64]: 'clash-rs-aarch64-unknown-linux-gnu',
     [SupportedArch.LinuxAmd64]: 'clash-rs-x86_64-unknown-linux-gnu-static-crt',
-    [SupportedArch.LinuxI386]: 'clash-rs-i686-unknown-linux-gnu',
     [SupportedArch.DarwinArm64]: 'clash-rs-aarch64-apple-darwin',
     [SupportedArch.DarwinX64]: 'clash-rs-x86_64-apple-darwin',
-    [SupportedArch.LinuxArmv7]: 'clash-rs-armv7-unknown-linux-gnueabi',
-    [SupportedArch.LinuxArmv7hf]: 'clash-rs-armv7-unknown-linux-gnueabihf',
   } satisfies ArchMapping;
 
   return {
@@ -119,16 +106,12 @@ export const resolveChimeraClient = async (): LatestVersionResolver => {
   );
 
   const archMapping: ArchMapping = {
-    [SupportedArch.WindowsX86_32]: 'clash_chimera-i686-pc-windows-msvc.exe',
     [SupportedArch.WindowsX86_64]: 'clash_chimera-x86_64-pc-windows-msvc.exe',
     [SupportedArch.WindowsArm64]: 'clash_chimera-aarch64-pc-windows-msvc.exe',
     [SupportedArch.LinuxAarch64]: 'clash_chimera-aarch64-unknown-linux-gnu',
     [SupportedArch.LinuxAmd64]: 'clash_chimera-x86_64-unknown-linux-gnu',
-    [SupportedArch.LinuxI386]: 'clash_chimera-i686-unknown-linux-musl',
     [SupportedArch.DarwinArm64]: 'clash_chimera-aarch64-unknown-linux-gnu',
     [SupportedArch.DarwinX64]: 'clash_chimera-x86_64-unknown-linux-gnu',
-    [SupportedArch.LinuxArmv7]: 'clash_chimera-armv7-unknown-linux-gnueabi',
-    [SupportedArch.LinuxArmv7hf]: 'clash_chimera-armv7-unknown-linux-gnueabihf',
   } satisfies ArchMapping;
 
   return {
@@ -174,17 +157,12 @@ export const resolveClashRsAlpha = async (): LatestVersionResolver => {
   consola.debug(`clash-rs alpha latest release: ${alphaVersion}`);
 
   const archMapping: ArchMapping = {
-    [SupportedArch.WindowsX86_32]:
-      'clash-rs-i686-pc-windows-msvc-static-crt.exe',
     [SupportedArch.WindowsX86_64]: 'clash-rs-x86_64-pc-windows-msvc.exe',
     [SupportedArch.WindowsArm64]: 'clash-rs-aarch64-pc-windows-msvc.exe',
     [SupportedArch.LinuxAarch64]: 'clash-rs-aarch64-unknown-linux-gnu',
     [SupportedArch.LinuxAmd64]: 'clash-rs-x86_64-unknown-linux-gnu-static-crt',
-    [SupportedArch.LinuxI386]: 'clash-rs-i686-unknown-linux-gnu',
     [SupportedArch.DarwinArm64]: 'clash-rs-aarch64-apple-darwin',
     [SupportedArch.DarwinX64]: 'clash-rs-x86_64-apple-darwin',
-    [SupportedArch.LinuxArmv7]: 'clash-rs-armv7-unknown-linux-gnueabi',
-    [SupportedArch.LinuxArmv7hf]: 'clash-rs-armv7-unknown-linux-gnueabihf',
   } satisfies ArchMapping;
 
   return {
@@ -205,16 +183,12 @@ export const resolveClashPremium = async (): LatestVersionResolver => {
   consola.debug(`clash-premium latest release: ${latestRelease.data.tag_name}`);
 
   const archMapping: ArchMapping = {
-    [SupportedArch.WindowsX86_32]: 'clash-windows-386-n{}.zip',
     [SupportedArch.WindowsX86_64]: 'clash-windows-amd64-n{}.zip',
     [SupportedArch.WindowsArm64]: 'clash-windows-arm64-n{}.zip',
     [SupportedArch.LinuxAarch64]: 'clash-linux-arm64-n{}.gz',
     [SupportedArch.LinuxAmd64]: 'clash-linux-amd64-n{}.gz',
-    [SupportedArch.LinuxI386]: 'clash-linux-386-n{}.gz',
     [SupportedArch.DarwinArm64]: 'clash-darwin-arm64-n{}.gz',
     [SupportedArch.DarwinX64]: 'clash-darwin-amd64-n{}.gz',
-    [SupportedArch.LinuxArmv7]: 'clash-linux-armv5-n{}.gz',
-    [SupportedArch.LinuxArmv7hf]: 'clash-linux-armv7-n{}.gz',
   } satisfies ArchMapping;
 
   return {

@@ -33,7 +33,6 @@ on:
         default: 'x86_64'
         options:
           - x86_64
-          - i686
           - aarch64
 
   workflow_call:
@@ -113,12 +112,10 @@ jobs:
             'x86_64' {
               pnpm prepare:check
             }
-            'i686' {
-              pnpm prepare:check --arch ia32 --sidecar-host i686-pc-windows-msvc
-            }
             'aarch64' {
               pnpm prepare:check --arch arm64 --sidecar-host aarch64-pc-windows-msvc
             }
+            default { throw "Unsupported Windows architecture: $condition" }
           }
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -131,12 +128,10 @@ jobs:
             'x86_64' {
               $arch= 'x64'
             }
-            'i686' {
-              $arch = 'x86'
-            }
             'aarch64' {
               $arch = 'arm64'
             }
+            default { throw "Unsupported Windows architecture: $condition" }
           } 
 
           $version = '127.0.2651.105'
@@ -172,7 +167,6 @@ jobs:
         run: |
           $target = switch ('${{ inputs.arch }}') {
             'x86_64' { $null }
-            'i686' { 'i686-pc-windows-msvc' }
             'aarch64' { 'aarch64-pc-windows-msvc' }
             default { throw "Unsupported Windows architecture: ${{ inputs.arch }}" }
           }

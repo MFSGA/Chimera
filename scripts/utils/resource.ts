@@ -8,7 +8,7 @@ import {
 } from '../manifest/clash-rs';
 import { BinInfo, SupportedArch } from '../types';
 
-type NodeArch = NodeJS.Architecture | 'armel';
+type NodeArch = NodeJS.Architecture;
 
 function mappingArch(platform: NodeJS.Platform, arch: NodeArch): SupportedArch {
   const label = `${platform}-${arch}`;
@@ -19,20 +19,12 @@ function mappingArch(platform: NodeJS.Platform, arch: NodeArch): SupportedArch {
       return SupportedArch.DarwinArm64;
     case 'win32-x64':
       return SupportedArch.WindowsX86_64;
-    case 'win32-ia32':
-      return SupportedArch.WindowsX86_32;
     case 'win32-arm64':
       return SupportedArch.WindowsArm64;
     case 'linux-x64':
       return SupportedArch.LinuxAmd64;
-    case 'linux-ia32':
-      return SupportedArch.LinuxI386;
-    case 'linux-arm':
-      return SupportedArch.LinuxArmv7hf;
     case 'linux-arm64':
       return SupportedArch.LinuxAarch64;
-    case 'linux-armel':
-      return SupportedArch.LinuxArmv7;
     default:
       throw new Error('Unsupported platform/architecture: ' + label);
   }
