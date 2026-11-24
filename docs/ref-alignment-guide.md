@@ -729,3 +729,8 @@ cargo clippy --manifest-path backend/Cargo.toml --all-targets --all-features
 - 基线 e7e3818cd0b712371d381eefea06e19b53255799，ref d95b44c05516a3e2e4eb24e2285a7eeaa70e1769。将实际 committed target、retry budget、LiveAttempt 与 startup observation/report 迁入 chimera-core/client/reconciler/reestablish.rs；统一 StartupOutcome 为现有 ref 共享类型（保留本地 Unsettled），ConfigDomain 使用 contracts。启动重试实际调度使用共享 update_reestablish_target；保留 committed identity 变化重置预算、dependency wait、下层 owner 不确定时禁止清除 attempt。报告仍使用本地 operation sequence/evidence，尚未完全统一为 ref report。
 - 正式构建的 recover_after_reconcile 只清除已结算的 native lifecycle/reestablish attempt，拒绝旧 Profile source-decision/rollback evidence；旧 TCC replay、confirm、restore 与 source decision 恢复逻辑仅在 cfg(test) 编译，保留原有回归测试。生产恢复不再重放旧 Profile 事务。完整上游 Actor、宿主 lifecycle 命令、旧配置镜像与尚存的旧 Profile runtime 端口仍待迁移。
 - L2。Rustfmt、workspace Clippy all-targets/all-features offline、diff--check；未运行常规测试、真实 Core/Service/GUI E2E。未主动改变 wire schema。回滚撤销本轮代码，不改用户配置。
+
+### DIFF-REF-SHARED-STARTUP-POLICY：共享启动策略
+
+- 基线 05fcd9bfaebfe228dfe05363b3983eca98bc9b58，ref d95b44c05516a3e2e4eb24e2285a7eeaa70e1769。在独立 ref-alignment/runtime-convergence 分支迁移，不直接修改 master。将生产启动失败分类、Service fallback refusal、S2 owner plan/followup、RuntimeEvidence 与 readiness owner signal 迁入共享 Core startup_policy.rs，直接复用已有 ref planner、receipt host proof 及 startup outcome。原启动决策和 retry fixtures 随代码迁移；旧 StartupRetryTarget 仅为 test-support。保留单一 lifecycle owner，不增加前端兼容 DTO。
+- L2。Rustfmt、workspace Clippy all-targets/all-features offline、diff--check；未运行常规测试及真实 Core/Service/GUI E2E。完整 startup executor、Actor 与 legacy config mirror 尚未逐字替换。回滚撤销本轮提交，不改用户配置。
