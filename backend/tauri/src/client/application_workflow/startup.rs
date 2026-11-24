@@ -7,13 +7,12 @@
 use super::workflow::ApplicationWorkflow;
 use crate::client::{
     application_workflow::{
-        attempt::{AttemptOrigin, AttemptStage, LiveAttempt},
+        attempt::AttemptStage,
         mutation::{DeferredTarget, ReestablishCause, TargetOrigin},
     },
     convergence::ConvergenceHealth,
     core_lifecycle::{CoreLifecycleWorkflow, ServiceTransitionLease},
 };
-use chimera_core_manager::OperationId;
 
 #[cfg(test)]
 pub use chimera_core::client::reconciler::startup_policy::StartupRetryTarget;
@@ -39,27 +38,11 @@ impl ApplicationWorkflow {
     }
 
     fn begin_reestablish_attempt(&mut self, cause: ReestablishCause) {
-        if let Some(attempt) = &mut self.live {
-            if let Some(target) = attempt.target_mut() {
-                target.origin = TargetOrigin::Reestablish(cause);
-                attempt.stage = if cause == ReestablishCause::Recovery {
-                    AttemptStage::Recovering
-                } else {
-                    AttemptStage::Preparing
-                };
-                attempt.unresolved = None;
-                return;
-            }
-            debug_assert!(false, "an unresolved attempt is never replaced");
-            return;
-        }
-
-        let mut target = self.deferred.take().unwrap_or_else(|| {
-            DeferredTarget::reestablish(OperationId::generate(), String::new(), cause)
-        });
-        target.origin = TargetOrigin::Reestablish(cause);
-        let operation_id = target.operation_id;
-        self.live = Some(LiveAttempt::committed_target(operation_id, target));
+        chimera_core::client::reconciler::reestablish::begin_reestablish_attempt(
+            &mut self.live,
+            &mut self.deferred,
+            cause,
+        );
     }
 
     async fn update_reestablish_attempt(
@@ -69,38 +52,22 @@ impl ApplicationWorkflow {
         automatic: bool,
         cause: ReestablishCause,
     ) -> StartupReport {
-        let target = self
-            .live
-            .as_ref()
-            .and_then(|attempt| match &attempt.origin {
-                AttemptOrigin::CommittedTarget(target) => Some(target.as_ref().clone()),
-                AttemptOrigin::SourceDecision { .. } | AttemptOrigin::Lifecycle => None,
-            })
-            .expect("startup reestablishment runs on its committed target");
-        let mut deferred = Some(target);
-        let report =
-            update_reestablish_target(lifecycle, report, automatic, cause, &mut deferred).await;
-        if let Some(target) = deferred
-            && let Some(live_target) = self.live.as_mut().and_then(LiveAttempt::target_mut)
-        {
-            *live_target = target;
-        }
-
-        match &report.outcome {
-            StartupOutcome::Ready => {
-                self.live = None;
-                self.deferred = None;
-            }
-            StartupOutcome::RecoveryRequired { reason } | StartupOutcome::Unsettled { reason } => {
-                if let Some(attempt) = &mut self.live {
-                    attempt.unresolved = Some(reason.clone());
-                }
-                self.deferred = None;
-                self.publish_recovery_context().await;
-            }
-            StartupOutcome::ReadyDegraded { .. } => {
-                self.conclude_attempt(None);
-            }
+        let report = chimera_core::client::reconciler::reestablish::update_reestablish_attempt(
+            &mut self.live,
+            &mut self.deferred,
+            || lifecycle.startup_target_identity(),
+            || lifecycle.unresolved_startup_target_identity(),
+            || lifecycle.outcome_uncertain(),
+            report,
+            automatic,
+            cause,
+        )
+        .await;
+        if matches!(
+            &report.outcome,
+            StartupOutcome::RecoveryRequired { .. } | StartupOutcome::Unsettled { .. }
+        ) {
+            self.publish_recovery_context().await;
         }
         report
     }
@@ -292,39 +259,12 @@ impl ApplicationWorkflow {
         &mut self,
         lifecycle: &CoreLifecycleWorkflow,
     ) {
-        let Some(target) = self
-            .deferred
-            .as_ref()
-            .filter(|target| target.is_reestablish())
-        else {
-            return;
-        };
-        if target.health == ConvergenceHealth::RecoveryRequired {
-            return;
-        }
-        let cause = match target.origin {
-            TargetOrigin::Reestablish(cause) => cause,
-            TargetOrigin::Mutation => unreachable!("filtered reestablish target"),
-        };
-        let identity = match lifecycle.startup_target_identity().await {
-            Ok(identity) => identity,
-            Err(_) => match lifecycle.unresolved_startup_target_identity().await {
-                Some(identity) => identity,
-                None => return,
-            },
-        };
-        let target = self
-            .deferred
-            .as_mut()
-            .filter(|target| target.is_reestablish())
-            .expect("reestablish target remains attached to the workflow");
-        if target.identity != identity {
-            *target = DeferredTarget::reestablish(OperationId::generate(), identity, cause);
-        } else if target.attempts_remaining == 0 {
-            return;
-        }
-        target.health = ConvergenceHealth::RetryScheduled;
-        target.next_attempt = Some(tokio::time::Instant::now());
+        chimera_core::client::reconciler::reestablish::reschedule_after_source_commit(
+            &mut self.deferred,
+            || lifecycle.startup_target_identity(),
+            || lifecycle.unresolved_startup_target_identity(),
+        )
+        .await;
     }
 }
 

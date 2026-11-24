@@ -740,3 +740,9 @@ cargo clippy --manifest-path backend/Cargo.toml --all-targets --all-features
 - 分支 ref-alignment/runtime-convergence，基线 252068b684941c2fa50a79b3bd3d7df2f93fe79f，ref d95b44c05516a3e2e4eb24e2285a7eeaa70e1769。完整迁移已有 S2/S3 startup executor 与 readiness 双向复核至 chimera-core/client/reconciler/startup_executor.rs，单一生产 reconciler worker 通过 StartupHost 连接真实宿主操作。直接复用共享 ownership/proof 函数，移除旧桌面重复转发。保留原有 owner 证据、generation/target fence、Service fallback 正向拒绝条件、root shutdown 生命周期和报告语义。
 - 本轮迁移是 ref 执行边界对齐，不是逐字复制完整 ref Actor。宿主仍负责实际 Service lease、host selection、Core apply 与 startup retry attempt；StartupHost 是目前的临时宿主边界，后续完整 lifecycle composition 迁移时应收敛，不增加前端兼容协议。
 - L2。Rustfmt、workspace Clippy all-targets/all-features offline、diff--check 与正常签名提交钩子；未运行常规测试、真实 Core/Service 或 GUI E2E，未主动修改 IPC schema。仅推送迁移分支；回滚撤销本轮代码，不改用户配置。
+
+### DIFF-REF-SHARED-REESTABLISH-TRANSITIONS：共享启动尝试状态转换
+
+- 分支 ref-alignment/runtime-convergence，基线 fecfcbfda2e79e82ef26639dee4a95c3b0d34f10，ref d95b44c05516a3e2e4eb24e2285a7eeaa70e1769。将实际 begin/update/conclude attempt 与 committed source change retry re-arm 迁入已有 chimera-core/client/reconciler/reestablish.rs；沿用同一 live/deferred 状态，保持原有 retry identity、budget 与下层 owner 不确定性处理。宿主只提供当前源身份观察、下层状态和恢复信息发布，未增加第二 owner 或前端兼容协议。
+- 此为执行状态边界迁移，非完整 ref Actor 逐字替换。保留既有未结算尝试、旧测试事务以及原有 StartupOutcome 行为；完整 native actor 与宿主 lifecycle composition 仍待对齐。
+- L2。Rustfmt、workspace Clippy all-targets/all-features offline、diff--check 与签名提交钩子；未运行常规测试或真实 Core/Service/GUI E2E。未主动修改 IPC schema。仅推送迁移分支。
