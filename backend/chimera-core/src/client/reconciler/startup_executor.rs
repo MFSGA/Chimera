@@ -30,6 +30,13 @@ pub trait StartupHost: Send + Sync {
     fn startup_failed_generation(&self) -> u64;
     fn set_startup_failed_generation(&self, generation: u64);
     fn canonical_convergence_session(&self) -> bool;
+    fn progress(&self) -> &parking_lot::Mutex<super::state::RuntimeProgress>;
+    async fn fallback_after_service_refusal(
+        &self,
+        target: &str,
+        refusal: anyhow::Error,
+    ) -> anyhow::Result<()>;
+
     async fn startup_service_command_settled(&self) -> bool;
     async fn service_evidence(&self) -> (ServiceEvidence, u64);
     async fn startup_select_execution_host(&self, host: ExecutionHost) -> anyhow::Result<()>;

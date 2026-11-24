@@ -800,3 +800,8 @@ cargo clippy --manifest-path backend/Cargo.toml --all-targets --all-features
 - 基线 master 7c5a2599d7109a2ba33b06267e718dc1c183a3d7（v0.29.1）；迁移分支原 1dee373569098a6f032f165e266d9e7758c3d01f 的八个提交已签名 rebase 至该基线，无冲突，ref 仍为 375af2770f7928395c9db18998c17e3880d432ea。
 - Service 实例条件退役、结果不确定检查和释放后重新观察迁入 shared core_lifecycle::ownership::release_service_owner；Tauri 仅提供 Core port 和 Service evidence。Startup/Service fallback 不再允许生产环境回到 inline runtime 构建提交；缺少 canonical preparation/authority 时返回等待。Service fallback 跨 lease 再验证 stopped-owner 与原提交目标；首次启动和恢复均在释放前保留原失败目标、readiness generation，Local 接管前拒绝已过期目标。仍保留已有 leased host transition 与 test-only fixture 入口，尚未完全替换 StartupExecutor/Actor 调度。
 - L2。macOS workspace all-features/all-targets offline cargo check、Reconciler Actor 161/161（包含过期失败目标时零 Local 接管/零 Core 提交断言）、rustfmt、diff--check；未执行完整 workspace、真实 Service/Local 切换或 GUI E2E。
+
+### DIFF-REF-SHARED-COMMITTED-ROUND：共享 S2/S3/S4 执行模块
+
+- 基线 65a6c52003228ab3d86768f9a55a56abb0c4155e，master 7c5a2599，ref 375af277。将 Tauri startup.rs 中完整 planned_committed_round 及 S3 停止执行装配迁入 chimera-core/client/reconciler/committed_round.rs，复用已有 StartupHost、RuntimeProgress、CoreLifecyclePort、共享 decision/proof/ownership；原 Tauri 方法仅委托，不新增状态、revision session 或 actor。保持原 S2 Facts 样本、S3 bounded replan、S4 source fence 与 Service fallback 语义。本轮为既有 ref-shaped 执行器的归属迁移，并非逐字复制 ref 的整个 Actor。
+- L2。macOS workspace all-features/all-targets offline cargo check，Reconciler Actor 161/161，rustfmt、diff--check。初次编译缺少 CoreLifecyclePort trait import，补齐后通过。未运行完整 workspace、真实主机切换或 GUI E2E。剩余 Tauri startup adapter/fallback、prepared apply 和 Actor 调度继续迁移。

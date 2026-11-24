@@ -1,5 +1,5 @@
 //! Latest ref RuntimeReconciler decision engine.
-//! Only the new reconciler actor may own state; this module is pure.
+//! Shared policy and serialized execution; the sole reconciler owns state.
 
 pub mod adapters;
 pub mod plan;
@@ -36,3 +36,5 @@ pub mod reestablish;
 pub mod startup_policy;
 
 pub mod startup_executor;
+
+pub mod committed_round;

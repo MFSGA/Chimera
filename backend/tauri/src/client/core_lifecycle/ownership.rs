@@ -57,6 +57,18 @@ impl chimera_core::client::reconciler::startup_executor::StartupHost for CoreLif
     fn canonical_convergence_session(&self) -> bool {
         CoreLifecycleWorkflow::canonical_convergence_session(self)
     }
+    fn progress(
+        &self,
+    ) -> &parking_lot::Mutex<chimera_core::client::reconciler::state::RuntimeProgress> {
+        self.convergence_progress()
+    }
+    async fn fallback_after_service_refusal(
+        &self,
+        target: &str,
+        refusal: anyhow::Error,
+    ) -> anyhow::Result<()> {
+        CoreLifecycleWorkflow::fallback_after_service_refusal(self, target, refusal).await
+    }
     async fn startup_service_command_settled(&self) -> bool {
         CoreLifecycleWorkflow::startup_service_command_settled(self).await
     }
