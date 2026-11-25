@@ -77,6 +77,12 @@ pub(in crate::client) struct ApplicationWorkflow {
 }
 
 impl ApplicationWorkflow {
+    pub(in crate::client) fn progress_mut(
+        &mut self,
+    ) -> &mut chimera_core::client::reconciler::workflow_progress::WorkflowProgress {
+        &mut self.progress
+    }
+
     pub(in crate::client) fn has_unresolved_attempt(&self) -> bool {
         self.progress.has_unresolved_attempt()
     }

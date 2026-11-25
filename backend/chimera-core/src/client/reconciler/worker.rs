@@ -270,6 +270,82 @@ pub fn schedule_startup_recovery<M: ractor::Message, C: Send + 'static>(
     });
 }
 
+/// Lease acquisition must run outside the mailbox: an already queued
+/// lifecycle operation may still own the lease. Only the original mailbox
+/// can admit the command after acquisition.
+pub fn spawn_service_recovery_lease<P: Send + 'static, M: ractor::Message>(
+    actor: ActorRef<M>,
+    service: Arc<dyn ServiceLifecyclePort>,
+    operation_id: OperationId,
+    request_message: impl FnOnce(Request<crate::client::core_lifecycle::command::Command<P>>) -> M
+    + Send
+    + 'static,
+    failed: impl FnOnce() -> M + Send + 'static,
+) {
+    use crate::client::core_lifecycle::command::Command;
+    tokio::spawn(async move {
+        match service.begin_transition().await {
+            Ok(transition) => {
+                let request = Request {
+                    command: Command::ServiceEndpointDown(transition),
+                    response: Response {
+                        id: operation_id,
+                        reply: None,
+                    },
+                    deferred_retry: None,
+                };
+                if actor.cast(request_message(request)).is_err() {
+                    let _ = actor.cast(failed());
+                }
+            }
+            Err(error) => {
+                tracing::debug!(%error, "Service recovery retry deferred while acquiring its transition lease");
+                let _ = actor.cast(failed());
+            }
+        }
+    });
+}
+
+pub fn spawn_startup_retry_lease<P: Send + 'static, M: ractor::Message>(
+    actor: ActorRef<M>,
+    service: Arc<dyn ServiceLifecyclePort>,
+    operation_id: OperationId,
+    identity: String,
+    request_message: impl FnOnce(Request<crate::client::core_lifecycle::command::Command<P>>) -> M
+    + Send
+    + 'static,
+    failed: impl FnOnce(String, String) -> M + Send + 'static,
+) {
+    use crate::client::core_lifecycle::command::Command;
+    tokio::spawn(async move {
+        match service.begin_transition().await {
+            Ok(transition) => {
+                let request = Request {
+                    command: Command::RetryStartup {
+                        operation_id,
+                        identity,
+                        transition,
+                    },
+                    response: Response {
+                        id: operation_id,
+                        reply: None,
+                    },
+                    deferred_retry: None,
+                };
+                if actor.cast(request_message(request)).is_err() {
+                    tracing::warn!(operation_id, "failed to enqueue startup retry");
+                }
+            }
+            Err(error) => {
+                let _ = actor.cast(failed(
+                    identity,
+                    format!("could not acquire the Service transition lease: {error:#}"),
+                ));
+            }
+        }
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

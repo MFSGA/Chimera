@@ -899,3 +899,9 @@ cargo clippy --manifest-path backend/Cargo.toml --all-targets --all-features
 - 基线 master daeaea5aae777546d686b44bbdc617147eebaa3b，ref 3920f2aaa79a319fee874f142850ef279ac23555。ref 单独更新为 05af6cb5；上游只更新 Rust nightly，本地仍保留已验证的 nightly-2026-11-23。
 - 依照 ref reconciler request/execute/converge 的单一 owner 边界，将 ApplicationWorkflow 的完整生产命令分发迁入 application_command.rs，启动/恢复/重试/Service readiness follow-up、首次报告缓存及延迟目标结算迁入 startup_transaction.rs，实际 CandidateCheck builder/validator/session/inbox 装配及其回归测试迁入 shared reconciler/composition.rs。保留 Service transition lease 跨整个 await、已确认的下层结果、source-only 保存不覆盖未决事务、显式 Retry 与 SourceCommitted 的区别。桌面仅保留宿主端口和旧测试 TCC 的恢复入口；无新 Actor、状态镜像、IPC 改动。非完整逐字复制 ref。
 - L2：macOS workspace all-features/all-targets check、生产 e2e feature check、shared reconciler 136/136、Tauri client 480/480（装配测试迁至 shared）通过。首次 all-targets check 发现旧 Direct fixture 仍调用 3 个启动入口，保留仅 cfg(test) 的转发后通过。上一轮 daeaea5a 的 CI 45530655024 和 Windows E2E 45530654948 均成功。本轮未执行完整 workspace tests、跨平台构建、真实 GUI E2E 或独立审查。
+
+### DIFF-REF-RECONCILER-DISPATCH：共享 round dispatch 与 owner follow-up
+
+- 基线 master c4ad7b071129ce9e15be687ff85d55af40ca8318，已保留远端版本清单更新；ref 更新至 9be19c474448fb3a28b17d03b6f42b20d03a17de（依赖锁及 zh-tw 变动，未覆盖本地锁或翻译）。
+- 对应 ref reconciler request/round/owner maintenance，迁移实际 round plan、命令分类、Checked apply/background/deferred 入队、Service owner transition gate、release debt scheduling 及 follow-up 优先队列到共享 dispatch.rs；启动与 endpoint recovery 的 lease-before-mailbox worker 迁至共享 worker.rs。保持单一 owner、原队列顺序和状态证明，不引入平行 Actor。原异步 worker、宿主命令及测试适配仍保留，并非逐字复制 ref actor。
+- L2 macOS nightly-2026-11-23：workspace all-features/all-targets check、生产 e2e feature check、shared reconciler 140/140（新增 4 项）、Tauri client 480/480 通过。源码 rename-aware +606/-344，950 行；未为达到 1000 行填充无关代码。上一轮 0cd7e3d6 CI 45542087116 与 E2E 45542087108 均成功。本轮未执行全 workspace tests、真实 GUI E2E、跨平台构建、独立审查。
