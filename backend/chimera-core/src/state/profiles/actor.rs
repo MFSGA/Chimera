@@ -71,8 +71,22 @@ pub enum ProfilesError {
     ReorderListDuplicate { uid: ProfileId },
     #[error("profile is not a remote profile")]
     NotARemoteProfile,
-    #[error("file not writable: {reason}")]
-    FileNotWritable { reason: String },
+    #[error("the file of profile {uid} is not writable (only managed local profiles are)")]
+    ProfileFileNotWritable { uid: ProfileId },
+    #[error("profile id collision: {uid}")]
+    ProfileIdCollision { uid: ProfileId },
+    #[error("a refresh of {uid} is already in progress")]
+    RefreshInProgress { uid: ProfileId },
+    #[error("profile {uid} was deleted during the refresh")]
+    ProfileDeletedDuringRefresh { uid: ProfileId },
+    #[error("profile {uid} changed during the refresh")]
+    ProfileChangedDuringRefresh { uid: ProfileId },
+    #[error("could not fingerprint the definition of {uid}")]
+    FingerprintDefinition {
+        uid: ProfileId,
+        #[source]
+        source: serde_yaml::Error,
+    },
     #[error("refresh failed: {message}")]
     RefreshFailed { message: String },
     #[error("import failed: {message}")]
@@ -211,8 +225,25 @@ impl ProfilesError {
             Self::ReorderListDuplicate { uid } => {
                 Some(ProfileFailure::ReorderListDuplicate { uid: uid.clone() })
             }
-            Self::FileNotWritable { .. }
-            | Self::RefreshFailed { .. }
+            Self::ProfileFileNotWritable { uid } => {
+                Some(ProfileFailure::ProfileFileNotWritable { uid: uid.clone() })
+            }
+            Self::ProfileIdCollision { uid } => {
+                Some(ProfileFailure::ProfileIdCollision { uid: uid.clone() })
+            }
+            Self::RefreshInProgress { uid } => {
+                Some(ProfileFailure::RefreshInProgress { uid: uid.clone() })
+            }
+            Self::ProfileDeletedDuringRefresh { uid } => {
+                Some(ProfileFailure::ProfileDeletedDuringRefresh { uid: uid.clone() })
+            }
+            Self::ProfileChangedDuringRefresh { uid } => {
+                Some(ProfileFailure::ProfileChangedDuringRefresh { uid: uid.clone() })
+            }
+            Self::FingerprintDefinition { uid, .. } => {
+                Some(ProfileFailure::FingerprintDefinition { uid: uid.clone() })
+            }
+            Self::RefreshFailed { .. }
             | Self::ImportFailed { .. }
             | Self::Persist(_)
             | Self::RuntimeCheck(_)
@@ -248,7 +279,7 @@ pub struct CommitReport {
     /// Crate-internal detail for committed mutations that left maintenance work.
     pub degradations: Vec<ProfileDegradation>,
     pub receipt: crate::client::mutation_outcome::CommitReceipt,
-    pub runtime_degradations: Vec<crate::client::mutation_outcome::Degradation>,
+    pub runtime_degradations: Vec<chimera_contracts::runtime::Degradation>,
     /// Server-generated uid (D13); set by Add / import commit, consumed by
     /// facade auto-activation (design §9).
     pub created: Option<ProfileId>,
@@ -690,7 +721,7 @@ impl ProfilesActor {
     /// RuntimeRefused; every unavailable, skipped, untyped or unchecked
     /// result becomes RuntimeFailed. Neither can commit or replay a write.
     fn runtime_gate_failure(error: Arc<RuntimeError>) -> ProfilesError {
-        let unavailable = matches!(error.as_ref(), RuntimeError::CheckUnavailable { .. });
+        let unavailable = !matches!(error.as_ref(), RuntimeError::CoreRejectedConfig { .. });
         let source: chimera_contracts::BoxedCause = Box::new(error.clone());
         let errors = vec![error];
         let commit = if unavailable {
@@ -713,7 +744,7 @@ impl ProfilesActor {
             Arc<Profiles>,
             (
                 crate::client::mutation_outcome::CommitReceipt,
-                Vec<crate::client::mutation_outcome::Degradation>,
+                Vec<chimera_contracts::runtime::Degradation>,
             ),
         ),
         ProfilesError,
@@ -983,20 +1014,21 @@ impl ProfilesActor {
         let before = versioned.state.clone();
         drop(versioned);
         let changed = || {
-            RefreshConclusion::Superseded(ProfilesError::RefreshFailed {
-                message: "subscription definition changed during refresh".into(),
+            RefreshConclusion::Superseded(ProfilesError::ProfileChangedDuringRefresh {
+                uid: uid.clone(),
             })
         };
         let Some(current) = before.items.get(uid) else {
-            return RefreshConclusion::Superseded(ProfilesError::RefreshFailed {
-                message: "profile deleted during refresh".into(),
+            return RefreshConclusion::Superseded(ProfilesError::ProfileDeletedDuringRefresh {
+                uid: uid.clone(),
             });
         };
         let current_fingerprint = match serde_yaml::to_string(&current.definition) {
             Ok(fingerprint) => fingerprint,
             Err(error) => {
-                return RefreshConclusion::Failed(ProfilesError::RefreshFailed {
-                    message: format!("failed to fingerprint current definition: {error}"),
+                return RefreshConclusion::Failed(ProfilesError::FingerprintDefinition {
+                    uid: uid.clone(),
+                    source: error,
                 });
             }
         };
@@ -1221,7 +1253,7 @@ impl ProfilesActor {
             metadata: metadata.clone(),
             definition,
         }) {
-            return Err(ProfilesError::Persist("uid collision".into()));
+            return Err(ProfilesError::ProfileIdCollision { uid: uid.clone() });
         }
         Self::join_folder(&mut next, &uid, folder)?;
         next.validate().map_err(ProfilesError::ValidationFailed)?;
@@ -2010,9 +2042,7 @@ impl Actor for ProfilesActor {
                             binding: LocalBinding::Managed { materialized },
                         } => materialized.file.clone(),
                         _ => {
-                            return Err(ProfilesError::FileNotWritable {
-                                reason: "only managed local profiles are writable".into(),
-                            });
+                            return Err(ProfilesError::ProfileFileNotWritable { uid: uid.clone() });
                         }
                     };
                     Self::commit_file_first(
@@ -2129,7 +2159,7 @@ impl Actor for ProfilesActor {
                             };
                             let mut next = before.clone();
                             if !next.append_item(item) {
-                                Err(ProfilesError::Persist("uid collision".into()))
+                                Err(ProfilesError::ProfileIdCollision { uid: uid.clone() })
                             } else if let Err(error) =
                                 Self::join_folder(&mut next, &uid, folder.as_ref())
                             {
@@ -2376,9 +2406,8 @@ impl Actor for ProfilesActor {
                 }
                 if state.pending_refresh.contains_key(&uid) {
                     if let Some(reply) = reply {
-                        let _ = reply.send(Err(ProfilesError::RefreshFailed {
-                            message: "refresh already in progress".into(),
-                        }));
+                        let _ =
+                            reply.send(Err(ProfilesError::RefreshInProgress { uid: uid.clone() }));
                     }
                     return Ok(());
                 }
@@ -2438,10 +2467,9 @@ impl Actor for ProfilesActor {
                             },
                         );
                         if let Some(reply) = reply {
-                            let _ = reply.send(Err(ProfilesError::RefreshFailed {
-                                message: format!(
-                                    "failed to fingerprint subscription definition: {error}"
-                                ),
+                            let _ = reply.send(Err(ProfilesError::FingerprintDefinition {
+                                uid: uid.clone(),
+                                source: error,
                             }));
                         }
                         return Ok(());
@@ -2656,7 +2684,7 @@ impl Actor for ProfilesActor {
                                 metadata,
                                 definition,
                             }) {
-                                Err(ProfilesError::Persist("uid collision".into()))
+                                Err(ProfilesError::ProfileIdCollision { uid: uid.clone() })
                             } else if let Err(error) =
                                 Self::join_folder(&mut next, &uid, pending.folder.as_ref())
                             {
@@ -2991,6 +3019,29 @@ mod tests {
                 }
             }
         ));
+    }
+
+    #[test]
+    fn candidate_build_failure_preserves_the_real_cause_without_forging_rejection() {
+        let error = ProfilesActor::runtime_gate_failure(Arc::new(RuntimeError::BuildRuntime {
+            source: chimera_profile_transform::RuntimeBuildError::ConfigNotMapping,
+        }));
+        let ProfilesError::Commit {
+            source: CommitAborted::RuntimeFailed { errors, .. },
+        } = error
+        else {
+            panic!("a build failure is not a Core rejection");
+        };
+        assert!(matches!(
+            errors[0].as_ref(),
+            RuntimeError::BuildRuntime {
+                source: chimera_profile_transform::RuntimeBuildError::ConfigNotMapping,
+            }
+        ));
+        assert_eq!(
+            serde_json::to_value(&errors[0]).unwrap(),
+            serde_json::json!({"kind":"build_runtime","source":{"kind":"config_not_mapping"}})
+        );
     }
 
     #[test]

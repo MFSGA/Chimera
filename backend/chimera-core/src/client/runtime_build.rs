@@ -9,10 +9,12 @@ use chimera_config::runtime::executor::{
     BuiltinTransform, PortError, ProfileContentSource, RuntimeArtifact, ScriptRunner,
 };
 use chimera_contracts::publish::PublishRuntimeError;
+use chimera_profile_transform::StartScriptRunnerSnafu;
 pub use chimera_profile_transform::{
     RuntimeBuildError, RuntimeBuildInput, RuntimeBuildLog, RuntimeBuilder, builtin_transforms_for,
     derive_tun_flavor,
 };
+use snafu::ResultExt as _;
 #[cfg(test)]
 mod build_tests;
 
@@ -101,7 +103,7 @@ impl RuntimeBuildService {
     ) -> Result<Arc<runtime::RuntimeSnapshot>, RuntimeBuildError> {
         let core = input.app.core;
         let builtin_enabled = input.app.enable_builtin_enhanced;
-        let scripts = make_scripts().map_err(RuntimeBuildError::StartScriptRunner)?;
+        let scripts = make_scripts().context(StartScriptRunnerSnafu)?;
         let builtins = selected_builtins(&input);
         let artifact = build_artifact(
             &input,

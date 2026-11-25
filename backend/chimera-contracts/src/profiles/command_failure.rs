@@ -105,6 +105,24 @@ pub enum ProfileFailure {
     },
     ProfileHasNoFile,
     NotARemoteProfile,
+    ProfileFileNotWritable {
+        uid: ProfileId,
+    },
+    ProfileIdCollision {
+        uid: ProfileId,
+    },
+    RefreshInProgress {
+        uid: ProfileId,
+    },
+    ProfileDeletedDuringRefresh {
+        uid: ProfileId,
+    },
+    ProfileChangedDuringRefresh {
+        uid: ProfileId,
+    },
+    FingerprintDefinition {
+        uid: ProfileId,
+    },
 }
 
 #[cfg(test)]

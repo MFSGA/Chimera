@@ -13,35 +13,13 @@ use super::{attempt::LegacyApplyVerdict, mutation::RoundRecord};
 #[cfg(any(test, feature = "test-support"))]
 use super::attempt::observed_apply_verdict;
 use super::committed::{SourceDomain, SourceVersions};
-use crate::client::mutation_outcome::Degradation;
-use chimera_contracts::runtime::Degradation as SharedDegradation;
+use chimera_contracts::runtime::{
+    Degradation, DegradationPhase, DegradationReason, MutationOutcome, RuntimeCommitStatus,
+};
 
 /// Source-engine versions sampled by the real mailbox, with absent values
 /// distinguished from version zero.
 pub type EngineVersions = SourceVersions;
-
-/// Keep actual upstream typed reasons until the existing desktop IPC
-/// projection is requested. Publication debt has only an observed target,
-/// not a fabricated PublishRuntimeError.
-#[derive(Debug, Clone)]
-pub enum RoundDegradation {
-    Shared(SharedDegradation),
-    ProductPublicationPending { target: String },
-}
-
-impl RoundDegradation {
-    pub fn flat(&self) -> Degradation {
-        match self {
-            Self::Shared(degradation) => Degradation::from_shared(degradation.clone()),
-            Self::ProductPublicationPending { target } => Degradation {
-                phase: chimera_contracts::runtime::DegradationPhase::RuntimeBuild,
-                code: "runtime_product_publish_failed".into(),
-                message: format!("RuntimeProduct publication pending for target {target}"),
-                retryable: true,
-            },
-        }
-    }
-}
 
 const HISTORY_LEN: usize = 32;
 
@@ -51,7 +29,7 @@ pub struct ReconcilerStatus {
     pub active: Option<u64>,
     pub seen: EngineVersions,
     pub conclusion: Conclusion,
-    pub degradations: Vec<RoundDegradation>,
+    pub degradations: Vec<Degradation>,
     pub maintenance: Option<String>,
     /// Ref pending_product's status projection, read from the one accepted
     /// LocalRuntimeHost receipt at Actor completion (never a second writer).
@@ -117,8 +95,7 @@ impl ReconcilerStatus {
         degradation: chimera_contracts::runtime::Degradation,
     ) {
         self.seq = self.seq.saturating_add(1);
-        self.degradations
-            .push(RoundDegradation::Shared(degradation));
+        self.degradations.push(degradation);
     }
 
     pub fn product_publication_maintenance(&self) -> Option<String> {
@@ -146,15 +123,19 @@ impl ReconcilerStatus {
     /// CoreLifecycle port cannot yet return. Retrying it must not submit Core.
     pub fn record_product_publication_pending(&mut self, target: &str) {
         if self.degradations.iter().any(|degradation| {
-            matches!(degradation, RoundDegradation::ProductPublicationPending { target: recorded } if recorded == target)
+            matches!(&degradation.reason, DegradationReason::RuntimeProductPublicationPending { target: recorded } if recorded == target)
         }) {
             return;
         }
         self.seq = self.seq.saturating_add(1);
-        self.degradations
-            .push(RoundDegradation::ProductPublicationPending {
+        self.degradations.push(Degradation {
+            phase: DegradationPhase::RuntimeBuild,
+            reason: DegradationReason::RuntimeProductPublicationPending {
                 target: target.to_owned(),
-            });
+            },
+            message: format!("RuntimeProduct publication pending for target {target}"),
+            retryable: true,
+        });
     }
 
     /// A source-only commit is already durable, but no Core application was
@@ -297,31 +278,23 @@ impl ReconcilerStatus {
 pub fn outcome(
     mut receipt: chimera_contracts::runtime::CommitReceipt,
     settled: Option<ReconcilerStatus>,
-) -> crate::client::mutation_outcome::MutationOutcome<()> {
-    use crate::client::mutation_outcome::MutationOutcome;
-    use chimera_contracts::runtime::{
-        Degradation as SharedDegradation, DegradationPhase, DegradationReason, RuntimeCommitStatus,
-    };
+) -> MutationOutcome<()> {
     let mut degradations = Vec::new();
     let runtime = match settled {
         None => RuntimeCommitStatus::Unchanged,
         Some(status) => match status.conclusion {
             Conclusion::Converged => {
-                degradations = status
-                    .degradations
-                    .iter()
-                    .map(RoundDegradation::flat)
-                    .collect();
+                degradations = status.degradations;
                 RuntimeCommitStatus::Applied
             }
             Conclusion::Inactive => RuntimeCommitStatus::SavedInactive,
             Conclusion::Waiting { cause } | Conclusion::NotInEffect { cause } => {
-                degradations.push(Degradation::from_shared(SharedDegradation {
+                degradations.push(Degradation {
                     phase: DegradationPhase::RuntimeApply,
                     message: cause.to_string(),
                     retryable: true,
                     reason: DegradationReason::RuntimeDeferred { cause },
-                }));
+                });
                 RuntimeCommitStatus::Deferred
             }
             conclusion => {
@@ -332,12 +305,12 @@ pub fn outcome(
                     }
                     _ => unreachable!("only unknown and closed conclusions remain"),
                 };
-                degradations.push(Degradation::from_shared(SharedDegradation {
+                degradations.push(Degradation {
                     phase: DegradationPhase::RuntimeApply,
                     message: cause.to_string(),
                     retryable: false,
                     reason: DegradationReason::RuntimeDeferred { cause },
-                }));
+                });
                 RuntimeCommitStatus::Deferred
             }
         },
@@ -463,14 +436,11 @@ mod tests {
         assert!(matches!(status.conclusion, Conclusion::Converged));
         assert_eq!(status.degradations.len(), 1);
         assert_eq!(
-            status.degradations[0].flat().code,
+            status.degradations[0].reason.code(),
             "profile_interruption_failed"
         );
-        assert_eq!(
-            status.degradations[0].flat().phase,
-            DegradationPhase::SystemEffect
-        );
-        assert!(!status.degradations[0].flat().retryable);
+        assert_eq!(status.degradations[0].phase, DegradationPhase::SystemEffect);
+        assert!(!status.degradations[0].retryable);
         status.begin(2);
         assert!(
             status.degradations.is_empty(),
@@ -510,7 +480,7 @@ mod tests {
         );
         assert_eq!(status.degradations.len(), 1);
         assert_eq!(
-            status.degradations[0].flat().code,
+            status.degradations[0].reason.code(),
             "runtime_product_publish_failed"
         );
         assert!(matches!(status.conclusion, Conclusion::Converged));
@@ -765,6 +735,34 @@ mod ref_outcome_tests {
     }
 
     #[test]
+    fn converged_round_preserves_typed_interruption_and_pending_publication() {
+        let mut status = ReconcilerStatus {
+            conclusion: Conclusion::Converged,
+            ..Default::default()
+        };
+        status.record_system_degradation(Degradation {
+            phase: DegradationPhase::SystemEffect,
+            reason: DegradationReason::ModeInterruptionFailed {
+                cause: chimera_contracts::runtime::InterruptFailure::Timeout,
+            },
+            message: "connection interruption timed out".into(),
+            retryable: true,
+        });
+        status.observe_product_publication(Some("accepted-target"));
+        let wire = serde_json::to_value(outcome(receipt(), Some(status))).unwrap();
+        assert_eq!(wire["status"], "committed_degraded");
+        assert_eq!(wire["commits"][0]["runtime"], "applied");
+        assert_eq!(
+            wire["degradations"][0]["reason"],
+            serde_json::json!({"code":"mode_interruption_failed","cause":"timeout"})
+        );
+        assert_eq!(
+            wire["degradations"][1]["reason"],
+            serde_json::json!({"code":"runtime_product_publication_pending","target":"accepted-target"})
+        );
+    }
+
+    #[test]
     fn waiting_and_unknown_have_distinct_retryability_and_typed_cause() {
         for (conclusion, retryable) in [
             (
@@ -791,8 +789,12 @@ mod ref_outcome_tests {
             let wire = serde_json::to_value(result).unwrap();
             assert_eq!(wire["commits"][0]["runtime"], "deferred");
             assert_eq!(wire["status"], "committed_degraded");
-            assert_eq!(wire["degradations"][0]["code"], "runtime_deferred");
+            assert_eq!(
+                wire["degradations"][0]["reason"]["code"],
+                "runtime_deferred"
+            );
             assert_eq!(wire["degradations"][0]["retryable"], retryable);
+            assert!(wire["degradations"][0]["reason"]["cause"]["kind"].is_string());
         }
     }
 }

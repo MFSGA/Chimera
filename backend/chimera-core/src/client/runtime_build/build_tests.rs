@@ -322,7 +322,8 @@ where
 {
     chimera_owner_support::blocking::join(
         tokio::task::spawn_blocking(move || {
-            let scripts = make_scripts().map_err(RuntimeBuildError::StartScriptRunner)?;
+            let scripts =
+                make_scripts().map_err(|source| RuntimeBuildError::StartScriptRunner { source })?;
             let artifact = build_artifact(
                 &input,
                 &content,
@@ -335,7 +336,6 @@ where
                 .map(|builtin| builtin.name.clone())
                 .collect::<Vec<_>>();
             artifact_to_snapshot_data(artifact, &input.profiles, &names)
-                .map_err(RuntimeBuildError::ProjectArtifact)
         })
         .await,
     )

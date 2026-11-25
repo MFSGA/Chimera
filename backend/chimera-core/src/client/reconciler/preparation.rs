@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use chimera_config::{
     application::ChimeraAppConfig, clash::config::ClashConfig, profile::Profiles,
 };
@@ -13,7 +13,13 @@ use super::{
 use crate::actor_v2::intent::RuntimeIntentBuilder;
 use crate::client::core_lifecycle::ports::{PreparedRuntime, RuntimePreparationPort};
 use crate::client::core_spec::CoreSpecError;
-use chimera_contracts::publish::PublishRuntimeError;
+use chimera_contracts::{
+    publish::PublishRuntimeError,
+    runtime_error::{
+        AllocateRuntimeRevisionSnafu, BuildRuntimeSnafu, ResolvePortSnafu, RuntimeError,
+    },
+};
+use snafu::ResultExt as _;
 
 /// Builds runtime candidates from committed source config. It holds read-only
 /// state handles, never a domain client: build capture must not write the source
@@ -49,7 +55,7 @@ impl RuntimePreparation {
         app: ChimeraAppConfig,
     ) -> Result<PreparedRuntime> {
         let inputs = self.capture_inputs(app, clash, profiles).await;
-        self.prepare_inputs(inputs).await
+        Ok(self.prepare_inputs(inputs).await?)
     }
 
     pub async fn capture_inputs(
@@ -94,14 +100,14 @@ impl RuntimePreparation {
     pub async fn prepare_inputs(
         &self,
         inputs: super::inputs::RuntimeInputs,
-    ) -> Result<PreparedRuntime> {
+    ) -> Result<PreparedRuntime, RuntimeError> {
         self.prepare_inputs_with_policy(inputs, false).await
     }
 
     pub async fn prepare_candidate_inputs(
         &self,
         inputs: super::inputs::RuntimeInputs,
-    ) -> Result<PreparedRuntime> {
+    ) -> Result<PreparedRuntime, RuntimeError> {
         self.prepare_inputs_with_policy(inputs, true).await
     }
 
@@ -109,11 +115,11 @@ impl RuntimePreparation {
         &self,
         inputs: super::inputs::RuntimeInputs,
         strict_transforms: bool,
-    ) -> Result<PreparedRuntime> {
+    ) -> Result<PreparedRuntime, RuntimeError> {
         let revision = self
             .revisions
             .allocate()
-            .context("allocate runtime revision")?;
+            .context(AllocateRuntimeRevisionSnafu)?;
         let local_ipc = runtime_local_ipc(&inputs.clash);
         // A candidate resolution, not an active one: nothing here touches the
         // confirmed binding, so a build that is never applied leaves the
@@ -121,7 +127,7 @@ impl RuntimePreparation {
         let ports = self
             .ports
             .resolve_candidate(&inputs.clash)
-            .context("resolve candidate listener ports")?;
+            .context(ResolvePortSnafu)?;
         let target = inputs.target_key();
         let snapshot = self
             .builder
@@ -132,7 +138,7 @@ impl RuntimePreparation {
                 strict_transforms,
             )
             .await
-            .context("build runtime candidate")?;
+            .context(BuildRuntimeSnafu)?;
         prepared_runtime_from_snapshot(snapshot, ports, target, local_ipc)
     }
 }
@@ -154,7 +160,7 @@ pub fn prepared_runtime_from_snapshot(
     ports: crate::client::ports::CandidatePortBindings,
     target: Option<String>,
     local_ipc: LocalIpcSettings,
-) -> Result<PreparedRuntime> {
+) -> Result<PreparedRuntime, RuntimeError> {
     let intent = RuntimeIntentBuilder::build(
         (&snapshot.target_core).into(),
         snapshot.config_text(),

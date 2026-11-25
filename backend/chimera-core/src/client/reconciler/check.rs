@@ -159,13 +159,7 @@ impl CandidateCheck {
             .preparation
             .prepare_candidate_inputs(inputs)
             .await
-            .map_err(|error| {
-                Arc::new(RuntimeError::CheckUnavailable {
-                    reason: RuntimeCheckUnavailable::CandidateUnavailable {
-                        reason: error.to_string(),
-                    },
-                })
-            })?;
+            .map_err(Arc::new)?;
         #[cfg(feature = "e2e")]
         if domain == ConfigDomain::Profiles {
             tracing::warn!(target: "chimera::e2e_profile", stage = "candidate_prepared", "Profile RuntimeGate stage");

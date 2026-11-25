@@ -1,0 +1,28 @@
+[package]
+name = 'chimera-rpc-protocol'
+version = '0.1.0'
+repository.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[features]
+default = []
+nesting = ['chimera-config/nesting']
+frame-io = ['dep:tokio', 'chimera-rpc-wire/frame-io']
+
+[dependencies]
+chimera-config = { path = '../chimera-config', default-features = false }
+chimera-contracts = { path = '../chimera-contracts', default-features = false }
+chimera-rpc-wire = { path = '../chimera-rpc-wire' }
+snafu = { workspace = true }
+url = '2'
+tokio = { version = '1', optional = true, features = ['io-util'] }
+serde = { version = '1.0', features = ['derive', 'rc'] }
+serde_json = { version = '1.0', features = ['preserve_order'] }
+specta = { version = '^2.0.0-rc.25', features = ['derive'] }
+specta-typescript = { version = '0.0.12', features = ['serde'] }
+
+[dev-dependencies]
+tokio = { version = '1', features = ['macros', 'rt', 'test-util'] }
+chimera-config = { path = '../chimera-config', default-features = false, features = ['nesting'] }

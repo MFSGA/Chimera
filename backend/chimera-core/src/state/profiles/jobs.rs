@@ -120,9 +120,9 @@ impl ProfileJobs {
         if journal_unavailable {
             report
                 .runtime_degradations
-                .push(crate::client::mutation_outcome::Degradation {
-                    phase: crate::client::mutation_outcome::DegradationPhase::SystemEffect,
-                    code: "jobs_journal_unavailable".into(),
+                .push(chimera_contracts::runtime::Degradation {
+                    phase: chimera_contracts::runtime::DegradationPhase::SystemEffect,
+                    reason: chimera_contracts::runtime::DegradationReason::JobsJournalUnavailable,
                     message: "Profile committed, but the sync journal is unavailable".into(),
                     retryable: true,
                 });
@@ -247,21 +247,15 @@ fn sync_error(error: &ProfilesError) -> JobError {
                 "Downloaded profile failed validation",
             )
         }
-        Error::RefreshFailed { message } if message == "profile deleted during refresh" => {
-            JobError::new(
-                "profile_deleted",
-                "Profile was deleted before sync could commit",
-            )
-        }
-        Error::RefreshFailed { message }
-            if message.contains("subscription definition changed during refresh") =>
-        {
-            JobError::new(
-                "profile_changed",
-                "Profile changed before sync could commit",
-            )
-        }
-        Error::RefreshFailed { message } if message == "refresh already in progress" => {
+        Error::ProfileDeletedDuringRefresh { .. } => JobError::new(
+            "profile_deleted",
+            "Profile was deleted before sync could commit",
+        ),
+        Error::ProfileChangedDuringRefresh { .. } => JobError::new(
+            "profile_changed",
+            "Profile changed before sync could commit",
+        ),
+        Error::RefreshInProgress { .. } => {
             JobError::new("profile_sync_busy", "A profile sync is already in progress")
         }
         Error::ProfileNotFound(_) => JobError::new("profile_not_found", "Profile no longer exists"),
@@ -328,15 +322,15 @@ mod tests {
                 "Downloaded profile failed validation",
             ),
             (
-                ProfilesError::RefreshFailed {
-                    message: "profile deleted during refresh".into(),
+                ProfilesError::ProfileDeletedDuringRefresh {
+                    uid: ProfileId("p".into()),
                 },
                 "profile_deleted",
                 "Profile was deleted before sync could commit",
             ),
             (
-                ProfilesError::RefreshFailed {
-                    message: "subscription definition changed during refresh".into(),
+                ProfilesError::ProfileChangedDuringRefresh {
+                    uid: ProfileId("p".into()),
                 },
                 "profile_changed",
                 "Profile changed before sync could commit",

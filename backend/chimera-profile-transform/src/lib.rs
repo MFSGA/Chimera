@@ -5,8 +5,8 @@ mod utils;
 
 pub use chain::PostProcessingOutput;
 pub use runtime_builder::{
-    RuntimeBuildError, RuntimeBuildInput, RuntimeBuildLog, RuntimeBuilder, builtin_transforms_for,
-    derive_tun_flavor,
+    ConfigNotMappingSnafu, RuntimeBuildError, RuntimeBuildInput, RuntimeBuildLog, RuntimeBuilder,
+    SerializeFinalConfigSnafu, StartScriptRunnerSnafu, builtin_transforms_for, derive_tun_flavor,
 };
 pub use utils::{LogSpan, Logs};
 

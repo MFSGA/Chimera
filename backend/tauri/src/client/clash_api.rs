@@ -11,7 +11,7 @@ use anyhow::Result;
 use super::ChimeraClient;
 #[cfg(test)]
 use super::core_lifecycle::CoreLifecyclePort;
-use crate::client::runtime::{Degradation, MutationOutcome};
+use crate::client::runtime::MutationOutcome;
 use crate::core::{
     actor_v2::api::ApiClient,
     clash::{
@@ -42,11 +42,7 @@ pub(crate) fn proxy_core_client(core: Arc<dyn CoreLifecyclePort>) -> Arc<dyn Pro
 }
 
 fn into_mutation_outcome(outcome: ProxyMutationOutcome) -> MutationOutcome<()> {
-    // The shared core now returns ref's typed Committed/CommittedDegraded
-    // outcome. Only the existing Tauri legacy wire still needs a flat code.
-    let (_, typed) = outcome.into_parts();
-    let degradations = typed.into_iter().map(Degradation::from_shared).collect();
-    MutationOutcome::from_parts((), degradations)
+    outcome.into()
 }
 
 impl ChimeraClient {
@@ -241,9 +237,16 @@ mod shared_proxy_outcome_tests {
 
     #[test]
     fn shared_typed_proxy_reason_keeps_the_existing_desktop_wire() {
-        let typed = ProxyMutationOutcome::from_parts(
-            (),
-            vec![SharedDegradation {
+        let typed = ProxyMutationOutcome::CommittedDegraded {
+            value: (),
+            commits: vec![chimera_contracts::runtime::CommitReceipt {
+                operation_id: Some("proxy-operation".into()),
+                domain: "clash".into(),
+                source_version: 7,
+                runtime: chimera_contracts::runtime::RuntimeCommitStatus::Applied,
+            }],
+            notifications_pending: false,
+            degradations: vec![SharedDegradation {
                 phase: SharedPhase::SystemEffect,
                 reason: SharedReason::ProxyInterruptionFailed {
                     cause: InterruptFailure::Protocol,
@@ -251,10 +254,13 @@ mod shared_proxy_outcome_tests {
                 message: "delete rejected".into(),
                 retryable: false,
             }],
-        );
+        };
         let projected = into_mutation_outcome(typed);
         let json = serde_json::to_value(&projected).unwrap();
         assert_eq!(json["status"], "committed_degraded");
+        assert_eq!(json["commits"][0]["operation_id"], "proxy-operation");
+        assert_eq!(json["commits"][0]["source_version"], 7);
+        assert_eq!(json["notifications_pending"], false);
         assert_eq!(json["degradations"][0]["code"], "proxy_interruption_failed");
         assert_eq!(json["degradations"][0]["phase"], "system_effect");
         assert_eq!(json["degradations"][0]["retryable"], false);

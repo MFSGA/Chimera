@@ -92,7 +92,7 @@ pub async fn prepare_candidate(
                 .prepare_inputs(inputs)
                 .await
                 .map_err(|error| ApplyOutcome::Refused {
-                    cause: Arc::new(RuntimeError::new(error.to_string())),
+                    cause: Arc::new(error),
                 })?
         }
     };

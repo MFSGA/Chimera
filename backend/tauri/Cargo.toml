@@ -62,6 +62,7 @@ thiserror = { workspace = true }
 # 
 chimera-macro = { path = "../chimera-macro" }
 chimera-core = { path = "../chimera-core" }
+chimera-rpc-protocol = { path = "../chimera-rpc-protocol" }
 chimera-profile-io = { path = "../chimera-profile-io" }
 chimera-persistence = { path = "../chimera-persistence" }
 chimera-migration = { path = "../chimera-migration" }

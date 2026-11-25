@@ -14,6 +14,7 @@ chimera-config = { path = '../chimera-config', default-features = false, feature
   'nesting'
 ] }
 chimera-paths = { path = '../chimera-paths' }
+chimera-profile-transform = { path = '../chimera-profile-transform', default-features = false }
 chimera-core-metadata = { package = 'chimera-service-core-metadata', path = '../chimera-runtime/crates/chimera-core-metadata' }
 
 anyhow = '1'
@@ -24,6 +25,11 @@ async-trait = '0.1'
 mockall = { version = '0.15', optional = true }
 serde = { version = '1.0', features = ['derive'] }
 semver = '1.0'
+sha1 = '0.11'
+sha2 = '0.11'
+strum = '0.28'
+x509-parser = '0.18'
+zeroize = { version = '1.9', features = ['derive'] }
 snafu = { workspace = true }
 serde_yaml = '0.9'
 specta = { version = '^2.0.0-rc.25' }
@@ -36,3 +42,4 @@ whoami = '2.0.0'
 
 [dev-dependencies]
 mockall = '0.15'
+tokio = { workspace = true, features = ['macros', 'rt'] }

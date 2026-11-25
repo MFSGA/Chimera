@@ -760,7 +760,13 @@ impl ChimeraClient {
                 application_workflow::profiles::map_profile_degradation(degradation)
             })
             .collect::<Vec<_>>();
-        degradations.extend(report.runtime_degradations.clone());
+        degradations.extend(
+            report
+                .runtime_degradations
+                .iter()
+                .cloned()
+                .map(Degradation::from_shared),
+        );
         degradations
     }
 

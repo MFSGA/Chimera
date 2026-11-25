@@ -2,7 +2,6 @@
 //! The runtime artifact and shared inspection retain the reference
 //! keyframe/delta graph; legacy UI output stays a separate projection.
 
-use anyhow::{Context, Result};
 use chimera_config::{
     profile::{ConfigDefinition, ProfileDefinition, ProfileId, Profiles},
     runtime::{
@@ -10,6 +9,10 @@ use chimera_config::{
         snapshot::SnapshotNodeKey,
     },
 };
+use chimera_profile_transform::{
+    ConfigNotMappingSnafu, RuntimeBuildError, SerializeFinalConfigSnafu,
+};
+use snafu::{OptionExt as _, ResultExt as _, ensure};
 
 use super::runtime_inspection::RuntimeInspectionData;
 
@@ -104,7 +107,7 @@ pub fn artifact_to_snapshot_data(
     artifact: RuntimeArtifact,
     profiles: &Profiles,
     builtin_names: &[String],
-) -> Result<ArtifactSnapshotData> {
+) -> Result<ArtifactSnapshotData, RuntimeBuildError> {
     let RuntimeArtifact {
         final_config,
         graph,
@@ -113,33 +116,41 @@ pub fn artifact_to_snapshot_data(
         applied_fields,
         ..
     } = artifact;
-    let value = serde_yaml::to_value(final_config.to_json())
-        .context("failed to serialize final runtime config")?;
-    let mapping = value
-        .as_mapping()
-        .cloned()
-        .context("final runtime config is not a mapping")?;
-    anyhow::ensure!(
-        matches!(
-            graph.nodes.get(final_node as usize).map(|node| &node.tag),
-            Some(
-                chimera_config::runtime::snapshot::OperatorTag::BuiltinStep {
-                    step: chimera_config::runtime::snapshot::BuiltinStepKind::Finalizing,
-                    ..
-                }
-            )
-        ),
-        "runtime inspection graph has no finalizing step"
+    ensure!(
+        final_config.as_object_arc().is_some(),
+        ConfigNotMappingSnafu
     );
+    let value = serde_yaml::to_value(final_config.to_json()).context(SerializeFinalConfigSnafu)?;
+    let mapping = value.as_mapping().cloned().context(ConfigNotMappingSnafu)?;
+    if !matches!(
+        graph.nodes.get(final_node as usize).map(|node| &node.tag),
+        Some(
+            chimera_config::runtime::snapshot::OperatorTag::BuiltinStep {
+                step: chimera_config::runtime::snapshot::BuiltinStepKind::Finalizing,
+                ..
+            }
+        )
+    ) {
+        return Err(RuntimeBuildError::ProjectArtifact {
+            source: anyhow::anyhow!("runtime inspection graph has no finalizing step"),
+        });
+    }
     // Keep ref's compact graph in the shared inspection model.
     // Validate the promoted final node against the generated configuration.
-    let restored = graph
-        .restore(final_node)
-        .context("runtime inspection final config cannot be restored")?;
-    anyhow::ensure!(
-        restored == final_config.to_json(),
-        "runtime inspection final node differs from the generated config"
-    );
+    let restored =
+        graph
+            .restore(final_node)
+            .map_err(|source| RuntimeBuildError::ProjectArtifact {
+                source: anyhow::Error::new(source)
+                    .context("runtime inspection final config cannot be restored"),
+            })?;
+    if restored != final_config.to_json() {
+        return Err(RuntimeBuildError::ProjectArtifact {
+            source: anyhow::anyhow!(
+                "runtime inspection final node differs from the generated config"
+            ),
+        });
+    }
     let output = map_postprocessing(&step_logs, profiles, builtin_names);
     let exists_keys = applied_fields.into_iter().collect();
     Ok(ArtifactSnapshotData {
@@ -165,7 +176,7 @@ pub fn runtime_snapshot_data_from_artifact(
     super::runtime::RuntimeSnapshotData,
     chimera_profile_transform::RuntimeBuildError,
 > {
-    use chimera_profile_transform::{RuntimeBuildError, builtin_transforms_for};
+    use chimera_profile_transform::builtin_transforms_for;
     let builtin_names: Vec<String> = if builtin_enabled {
         builtin_transforms_for(core)
             .into_iter()
@@ -174,10 +185,9 @@ pub fn runtime_snapshot_data_from_artifact(
     } else {
         Vec::new()
     };
-    let data = artifact_to_snapshot_data(artifact, profiles, &builtin_names)
-        .map_err(RuntimeBuildError::ProjectArtifact)?;
-    let bytes = super::runtime::render_runtime_bytes(&data.config)
-        .map_err(RuntimeBuildError::SerializeFinalConfig)?;
+    let data = artifact_to_snapshot_data(artifact, profiles, &builtin_names)?;
+    let bytes =
+        super::runtime::render_runtime_bytes(&data.config).context(SerializeFinalConfigSnafu)?;
     // serde_yaml produces UTF-8; the header is also UTF-8. Reuse the
     // exact serialized product as the one canonical text allocation.
     let config_text = String::from_utf8(bytes).expect("serialized YAML is UTF-8");

@@ -1,5 +1,7 @@
 use super::ChimeraClient;
-pub use chimera_core::client::mutation_outcome::{Degradation, MutationOutcome};
+mod legacy_mutation_outcome;
+pub use chimera_core::client::mutation_outcome::Degradation;
+pub use legacy_mutation_outcome::MutationOutcome;
 
 // Upstream Runtime Values own these wire-stable values. The ref's four
 // runtime states and five phases are supplemented by Chimera's explicit

@@ -160,6 +160,11 @@ pub enum DegradationReason {
     RuntimeDeferred {
         cause: std::sync::Arc<crate::runtime_error::RuntimeError>,
     },
+    /// Chimera observes confirmed product publication debt by target.
+    /// A pending target alone is not evidence of a particular IO error.
+    RuntimeProductPublicationPending {
+        target: String,
+    },
     JournalInvalid,
     JobsJournalUnavailable,
     MaterializationDeferred,
@@ -185,6 +190,7 @@ impl DegradationReason {
             Self::ProxyInterruptionFailed { .. } => "proxy_interruption_failed",
             Self::ProxyCacheRefreshFailed => "proxy_cache_refresh_failed",
             Self::RuntimeDeferred { .. } => "runtime_deferred",
+            Self::RuntimeProductPublicationPending { .. } => "runtime_product_publish_failed",
             Self::JournalInvalid => "journal_invalid",
             Self::JobsJournalUnavailable => "jobs_journal_unavailable",
             Self::MaterializationDeferred => "materialization_deferred",

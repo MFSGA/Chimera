@@ -647,7 +647,7 @@ proxy-groups:
         };
         assert!(matches!(
             RuntimeBuilder::build(&input, &EmptyContent, &EchoRunner),
-            Err(RuntimeBuildError::Validation(_))
+            Err(RuntimeBuildError::ValidateProfiles { .. })
         ));
     }
 

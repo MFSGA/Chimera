@@ -6,6 +6,9 @@
 
 use std::sync::Arc;
 
+use serde::Serialize;
+use snafu::{ResultExt, Snafu, ensure};
+
 use chimera_config::{
     application::{ChimeraAppConfig, ClashCore},
     clash::{
@@ -16,48 +19,71 @@ use chimera_config::{
         },
         features::{DnsFeatures, FieldSupport, TunFeatures, UnsupportedConfigValue},
     },
-    profile::{Profiles, ScriptRuntime},
+    profile::{ProfileValidationError, Profiles, ScriptRuntime},
     runtime::executor::{
-        BuiltinTransform, DnsParams, ExecutionTarget, GuardInputs, ProfileContentSource,
+        BuiltinTransform, DnsParams, ExecutionTarget, GuardInputs, PortError, ProfileContentSource,
         ResolvedPortBindings, RuntimeArtifact, RuntimePipelineError, RuntimePipelineInputs,
-        ScriptRunner, TransformFailure, TunFlavor, TunParams, TunStackWrite, execute,
+        ScriptRunner, StepLogEntry, TransformFailure, TunFlavor, TunParams, TunStackWrite, execute,
     },
 };
 
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, Clone, Serialize, serde::Deserialize, specta::Type)]
+pub struct RuntimeBuildLog {
+    pub tag: chimera_config::runtime::snapshot::OperatorTag,
+    pub entries: Vec<StepLogEntry>,
+}
+
+/// A failure of building a runtime candidate from source config.
+#[derive(Debug, Snafu, Serialize, specta::Type)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+#[snafu(visibility(pub))]
 pub enum RuntimeBuildError {
-    // Pinned ref runtime_builder typed failures, mapped to Chimera's crate ownership.
-    #[error("could not start the script runner: {0}")]
-    StartScriptRunner(#[source] chimera_config::runtime::executor::PortError),
-    #[error("runtime build task did not complete: {0}")]
-    BuildWorker(#[source] tokio::task::JoinError),
-    #[error("could not project the runtime artifact: {0}")]
-    ProjectArtifact(#[source] anyhow::Error),
-    #[error("could not serialize the final runtime document: {0}")]
-    SerializeFinalConfig(#[source] serde_yaml::Error),
-    #[error("profiles snapshot failed validation: {0:?}")]
-    Validation(Vec<chimera_config::profile::ProfileValidationError>),
-    #[error("transparent proxy settings are invalid: {0}")]
-    ValidateTransparentProxy(#[from] TransparentProxyValidationError),
-    #[error("transparent capture requires service mode")]
+    #[snafu(display("could not start the script runner"))]
+    StartScriptRunner {
+        #[serde(skip)]
+        source: PortError,
+    },
+    #[snafu(display("profiles snapshot failed validation: {errors:?}"))]
+    ValidateProfiles { errors: Vec<ProfileValidationError> },
+    #[snafu(display("transparent proxy settings are invalid: {source}"))]
+    ValidateTransparentProxy {
+        source: TransparentProxyValidationError,
+    },
+    #[snafu(display("transparent capture requires service mode"))]
     TransparentProxyRequiresServiceMode,
-    #[error("the selected core does not support {values:?}")]
-    UnsupportedConfigValues { values: Vec<UnsupportedConfigValue> },
-    #[error("DNS/Hosts takeover is not yet supported for the selected core: {0:?}")]
-    UnsupportedDnsCore(chimera_config::application::ClashCore),
-    #[error(transparent)]
-    Pipeline(#[from] RuntimePipelineError),
-    #[error("runtime candidate contains failed transforms: {failures:?}")]
+    #[snafu(display("could not run the runtime pipeline: {source}"))]
+    RunPipeline { source: RuntimePipelineError },
+    #[snafu(display("runtime candidate contains failed transforms: {failures:?}"))]
     TransformsFailed {
         failures: Vec<TransformFailure>,
         logs: Vec<RuntimeBuildLog>,
     },
-}
-
-#[derive(Debug, Clone)]
-pub struct RuntimeBuildLog {
-    pub tag: chimera_config::runtime::snapshot::OperatorTag,
-    pub entries: Vec<chimera_config::runtime::executor::StepLogEntry>,
+    // Chimera retains failures owned by its blocking build and snapshot projection.
+    #[snafu(display("runtime build task did not complete: {source}"))]
+    BuildWorker {
+        #[serde(skip)]
+        source: tokio::task::JoinError,
+    },
+    #[snafu(display("could not project the runtime artifact: {source}"))]
+    ProjectArtifact {
+        #[serde(skip)]
+        source: anyhow::Error,
+    },
+    #[snafu(display("DNS/Hosts takeover is not yet supported for the selected core: {core:?}"))]
+    UnsupportedDnsCore {
+        #[specta(type = String)]
+        core: ClashCore,
+    },
+    #[snafu(display("could not serialize the final config"))]
+    SerializeFinalConfig {
+        #[serde(skip)]
+        source: serde_yaml::Error,
+    },
+    #[snafu(display("the final config is not a mapping"))]
+    ConfigNotMapping,
+    /// The profiles or transforms wrote values the selected core rejects.
+    #[snafu(display("the selected core does not support {values:?}"))]
+    UnsupportedConfigValues { values: Vec<UnsupportedConfigValue> },
 }
 
 pub struct RuntimeBuildInput {
@@ -228,24 +254,27 @@ impl RuntimeBuilder {
         content: &dyn ProfileContentSource,
         scripts: &dyn ScriptRunner,
     ) -> Result<RuntimeArtifact, RuntimeBuildError> {
-        input
-            .profiles
-            .validate()
-            .map_err(RuntimeBuildError::Validation)?;
+        if let Err(errors) = input.profiles.validate() {
+            return ValidateProfilesSnafu { errors }.fail();
+        }
         if input.clash.transparent_proxy.mode != TransparentProxyMode::Disabled
             && !input.app.enable_service_mode
         {
-            return Err(RuntimeBuildError::TransparentProxyRequiresServiceMode);
+            return TransparentProxyRequiresServiceModeSnafu.fail();
         }
         input
             .clash
-            .validate_transparent_proxy(input.app.core, cfg!(target_os = "linux"))?;
+            .validate_transparent_proxy(input.app.core, cfg!(target_os = "linux"))
+            .context(ValidateTransparentProxySnafu)?;
 
         let dns_features = input.app.core.dns_features();
         if dns_features.keys.is_ignored()
             && (input.clash.managed_dns().is_some() || input.clash.managed_hosts().is_some())
         {
-            return Err(RuntimeBuildError::UnsupportedDnsCore(input.app.core));
+            return UnsupportedDnsCoreSnafu {
+                core: input.app.core,
+            }
+            .fail();
         }
 
         let target = match &input.profiles.current {
@@ -278,14 +307,12 @@ impl RuntimeBuilder {
             expand_include_all: input.clash.expand_include_all,
             builtin_transforms,
         };
-        let artifact = execute(&inputs, content, scripts).map_err(RuntimeBuildError::Pipeline)?;
+        let artifact = execute(&inputs, content, scripts).context(RunPipelineSnafu)?;
 
         // The core parses these keys whether TUN is on or not, and rejects the
         // whole config on a value it does not know.
         let values = features.unsupported_values(&artifact.final_config);
-        if !values.is_empty() {
-            return Err(RuntimeBuildError::UnsupportedConfigValues { values });
-        }
+        ensure!(values.is_empty(), UnsupportedConfigValuesSnafu { values });
         Ok(artifact)
     }
 }
@@ -308,6 +335,42 @@ mod tests {
             value::ConfigValue,
         },
     };
+
+    #[test]
+    fn build_errors_preserve_upstream_wire_shape_and_do_not_serialize_host_causes() {
+        let error = RuntimeBuildError::StartScriptRunner {
+            source: "private script diagnostic".into(),
+        };
+        assert_eq!(
+            serde_json::to_value(&error).unwrap(),
+            serde_json::json!({"kind": "start_script_runner"})
+        );
+        assert!(std::error::Error::source(&error).is_some());
+        assert_eq!(
+            serde_json::to_value(RuntimeBuildError::ValidateProfiles { errors: vec![] }).unwrap(),
+            serde_json::json!({"kind": "validate_profiles", "errors": []})
+        );
+        assert_eq!(
+            serde_json::to_value(RuntimeBuildError::RunPipeline {
+                source: RuntimePipelineError::SelectedProfileNotFound {
+                    profile: ProfileId("missing".into())
+                },
+            })
+            .unwrap(),
+            serde_json::json!({"kind": "run_pipeline", "source": {"kind": "selected_profile_not_found", "profile": "missing"}})
+        );
+        assert_eq!(
+            serde_json::to_value(RuntimeBuildError::ProjectArtifact {
+                source: anyhow::anyhow!("private artifact diagnostic"),
+            })
+            .unwrap(),
+            serde_json::json!({"kind": "project_artifact"})
+        );
+        assert_eq!(
+            serde_json::to_value(RuntimeBuildError::ConfigNotMapping).unwrap(),
+            serde_json::json!({"kind": "config_not_mapping"})
+        );
+    }
 
     /// 极小 fakes(executor 的 support.rs 是 crate 内部,tauri 不可 import)
     struct EmptyContent;
@@ -608,7 +671,7 @@ mod tests {
         input.profiles = Arc::new(profiles);
         assert!(matches!(
             RuntimeBuilder::build(&input, &EmptyContent, &EchoRunner),
-            Err(RuntimeBuildError::Validation(_))
+            Err(RuntimeBuildError::ValidateProfiles { .. })
         ));
     }
 

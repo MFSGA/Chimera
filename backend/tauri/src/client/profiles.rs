@@ -890,7 +890,7 @@ mod tests {
         release.notify_one();
         let error = pending.await.unwrap().unwrap_err();
         assert!(
-            matches!(error, ProfilesError::RefreshFailed { message } if message.contains("changed"))
+            matches!(error, ProfilesError::ProfileChangedDuringRefresh { uid } if uid == ProfileId("r1".into()))
         );
         let ledger = client.sources();
         assert_eq!(ledger.entries.len(), 1);
@@ -994,7 +994,7 @@ mod tests {
 
         let err = pending.await.unwrap().unwrap_err();
         assert!(
-            matches!(err, ProfilesError::RefreshFailed { message } if message.contains("deleted"))
+            matches!(err, ProfilesError::ProfileDeletedDuringRefresh { uid } if uid == ProfileId("r1".into()))
         );
         assert!(
             client
@@ -1037,7 +1037,7 @@ mod tests {
 
         let err = pending.await.unwrap().unwrap_err();
         assert!(
-            matches!(err, ProfilesError::RefreshFailed { message } if message.contains("changed"))
+            matches!(err, ProfilesError::ProfileChangedDuringRefresh { uid } if uid == ProfileId("r1".into()))
         );
         let snapshot = client.snapshot();
         let item = snapshot.items.get(&ProfileId("r1".into())).unwrap();
@@ -1077,7 +1077,7 @@ mod tests {
 
         let err = pending.await.unwrap().unwrap_err();
         assert!(
-            matches!(err, ProfilesError::RefreshFailed { message } if message.contains("changed"))
+            matches!(err, ProfilesError::ProfileChangedDuringRefresh { uid } if uid == ProfileId("r1".into()))
         );
         assert!(
             client.snapshot().items[&ProfileId("r1".into())]

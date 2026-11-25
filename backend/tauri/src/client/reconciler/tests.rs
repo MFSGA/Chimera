@@ -8414,14 +8414,14 @@ async fn explicit_retry_republishes_confirmed_product_without_another_core_apply
     );
     assert_eq!(pending.degradations.len(), 1);
     assert_eq!(
-        pending.degradations[0].flat().code,
+        pending.degradations[0].reason.code(),
         "runtime_product_publish_failed"
     );
     assert_eq!(
-        pending.degradations[0].flat().phase,
+        pending.degradations[0].phase,
         chimera_contracts::runtime::DegradationPhase::RuntimeBuild
     );
-    assert!(pending.degradations[0].flat().retryable);
+    assert!(pending.degradations[0].retryable);
 
     client
         .reconcile()
@@ -12525,12 +12525,12 @@ async fn deferred_checked_mode_effect_remains_visible_when_exact_owner_is_unavai
     assert!(submits.lock().unwrap().is_empty());
     let reported = client.reconciler_status().degradations;
     assert_eq!(reported.len(), 1);
-    assert_eq!(reported[0].flat().code, "mode_interruption_failed");
+    assert_eq!(reported[0].reason.code(), "mode_interruption_failed");
     assert_eq!(
-        reported[0].flat().phase,
+        reported[0].phase,
         chimera_contracts::runtime::DegradationPhase::SystemEffect
     );
-    assert!(!reported[0].flat().retryable);
+    assert!(!reported[0].retryable);
     // Duplicate delivery cannot create another effect or clear the debt.
     client.checked_source_committed_for_request(
         SourceDomain::Clash,

@@ -1,9 +1,8 @@
 //! Typed Core and runtime workflow errors, migrated from the pinned upstream
 //! `nyanpasu-runtime-values/src/runtime_error.rs`.
 //!
-//! The full upstream enum also owns profile-transform, package-install,
-//! publish, and port-resolve error types. Those variants must migrate with
-//! their actual domain errors; placeholders would destroy the cause chain.
+//! Source-bearing variants retain the actual domain errors. Chimera retains
+//! its fallible runtime revision allocation and additional check outcomes.
 
 use chimera_core_metadata::CoreErrorKind;
 use serde::{Deserialize, Serialize};
@@ -59,9 +58,7 @@ pub enum RuntimeCheckUnavailable {
     },
 }
 
-/// Ref runtime errors whose real causes are already available in the shared
-/// Core metadata layer. Other source-carrying variants are added only when
-/// their domain owner has migrated and can supply the exact error type.
+/// A failure of an operation on the running core or the runtime workflow.
 #[derive(Debug, Snafu, Serialize, specta::Type)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 #[snafu(visibility(pub))]
@@ -161,6 +158,17 @@ pub enum RuntimeError {
         source: crate::core_version::CoreVersionError,
     },
 
+    #[snafu(display("could not build the runtime configuration: {source}"))]
+    BuildRuntime {
+        source: chimera_profile_transform::RuntimeBuildError,
+    },
+    // Unlike upstream's allocator, Chimera refuses revision overflow.
+    #[snafu(display("could not allocate a runtime revision: {source}"))]
+    AllocateRuntimeRevision {
+        #[serde(skip)]
+        source: anyhow::Error,
+    },
+
     #[snafu(display("could not publish the runtime configuration: {source}"))]
     PublishRuntime {
         source: crate::publish::PublishRuntimeError,
@@ -233,6 +241,8 @@ impl RuntimeError {
             Self::ShuttingDown
             | Self::OwnerUnresponsive { .. }
             | Self::ConfigurationNotInEffect { .. }
+            | Self::BuildRuntime { .. }
+            | Self::AllocateRuntimeRevision { .. }
             | Self::PublishRuntime { .. }
             | Self::ResolveCoreBinary { .. }
             | Self::InstallCoreBinary { .. }
