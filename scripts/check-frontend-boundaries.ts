@@ -17,6 +17,10 @@ const nativeConnectionChannel = path.normalize(
     'frontend/interface/src/ipc/connection-details-channel.ts',
   ),
 );
+// This transport may build custom-protocol image URLs, but may not invoke IPC.
+const iconTransport = path.normalize(
+  path.join(workspaceRoot, 'frontend/interface/src/ipc/icon-transport.ts'),
+);
 const legacyUiRoots = [
   path.normalize(
     path.join(workspaceRoot, 'frontend/chimera/src/pages/(legacy)'),
@@ -64,10 +68,17 @@ const visit = async (entryPath: string): Promise<void> => {
   const source = await fs.readFile(entryPath, 'utf8');
   const relativePath = path.relative(workspaceRoot, entryPath);
 
+  const coreImports =
+    path.normalize(entryPath) === iconTransport
+      ? source.replace(
+          /^import\s*\{\s*convertFileSrc\s*,\s*isTauri\s*\}\s*from\s*['"]@tauri-apps\/api\/core['"];?$/m,
+          '',
+        )
+      : source;
   if (
     path.normalize(entryPath) !== nativeConnectionChannel &&
-    (/from\s+['"]@tauri-apps\/api\/core['"]/.test(source) ||
-      /import\s*\(\s*['"]@tauri-apps\/api\/core['"]\s*\)/.test(source))
+    (/from\s+['"]@tauri-apps\/api\/core['"]/.test(coreImports) ||
+      /import\s*\(\s*['"]@tauri-apps\/api\/core['"]\s*\)/.test(coreImports))
   ) {
     violations.push(
       `${relativePath}: import Tauri core commands through @chimera/interface instead of @tauri-apps/api/core`,
