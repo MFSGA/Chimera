@@ -3,7 +3,6 @@ use crate::client::application_workflow::startup::ServiceEvidence;
 use crate::client::core_lifecycle::CoreLifecycleWorkflow;
 use crate::client::core_lifecycle::ports::ServiceTransitionLease;
 use chimera_core::actor_v2::endpoint::ExecutionHost;
-use chimera_core::actor_v2::service_status::ServiceHostStatus;
 use std::sync::atomic::Ordering;
 
 impl CoreLifecycleWorkflow {
@@ -18,31 +17,27 @@ impl CoreLifecycleWorkflow {
     }
 
     pub(in crate::client) async fn refresh_service_recovery_host(&self) {
-        let Ok(status) = self.core.status().await else {
-            return;
-        };
-        let host = if status.run_type == crate::core::RunType::Service {
-            ExecutionHost::Service
-        } else {
-            ExecutionHost::Local
-        };
-        self.follow_service_recovery_host(host);
+        chimera_core::client::core_lifecycle::service::refresh_service_recovery_host(
+            self.core.as_ref(),
+            &self.service_recovery,
+        )
+        .await
     }
 
     pub(in crate::client) async fn service_endpoint_recovery_due(&self) -> bool {
-        if !self.service_recovery_due_now() || !self.settle_service_recovery_action().await {
-            return false;
-        }
-        self.service_recovery_due_now()
+        chimera_core::client::core_lifecycle::service::service_endpoint_recovery_due(
+            self.core.as_ref(),
+            &self.service_recovery,
+            &self.shutdown,
+        )
+        .await
     }
 
     pub(in crate::client) fn service_recovery_due_now(&self) -> bool {
-        if !self.core.service_endpoint_recovery_supported() {
-            return false;
-        }
-        self.service_recovery.lock().due(
-            self.core.service_endpoint_degraded(),
-            self.shutdown.is_cancelled(),
+        chimera_core::client::core_lifecycle::service::service_recovery_due_now(
+            self.core.as_ref(),
+            &self.service_recovery,
+            &self.shutdown,
         )
     }
 
@@ -106,48 +101,10 @@ impl CoreLifecycleWorkflow {
     }
 
     pub(in crate::client) async fn service_evidence(&self) -> (ServiceEvidence, u64) {
-        let probe = self.service.probe().await;
-        if let Some(status) = self.service.actor_status() {
-            // Production uses ref ServiceActor for both the ownership evidence
-            // and the readiness generation. Do NOT derive another generation
-            // from CoreLifecycle's independent probe cache; it can disagree
-            // across a daemon handoff or failed startup attempt.
-            let generation = status.ready_generation;
-            let evidence = if probe.is_ok() {
-                ServiceEvidence::from_status(&status)
-            } else {
-                // An unanswered ref Actor probe is not a stop or Ready proof,
-                // even if a previous watch snapshot was healthy.
-                ServiceEvidence::Unreadable {
-                    phase: chimera_core::actor_v2::service_policy::ServicePhase::Unknown,
-                }
-            };
-            return (evidence, generation);
-        }
-        let Ok(info) = probe else {
-            let generation = self
-                .service_status
-                .as_ref()
-                .map(|status| status.borrow().ready_generation)
-                .unwrap_or_default();
-            return (
-                ServiceEvidence::Unreadable {
-                    phase: chimera_core::actor_v2::service_policy::ServicePhase::Unknown,
-                },
-                generation,
-            );
-        };
-        // Legacy-only tests keep their injected probe/watch and restart-policy
-        // semantics. No second read is performed against a production host.
-        let runtime_owned = self.service.runtime_owned(&info);
-        let previous = self
-            .service_status
-            .as_ref()
-            .map(|status| status.borrow().clone())
-            .unwrap_or_else(ServiceHostStatus::probing);
-        let status =
-            previous.observe_probe(info, runtime_owned, Some(self.service.restart_policy()));
-        let generation = status.ready_generation;
-        (ServiceEvidence::from_status(&status), generation)
+        chimera_core::client::core_lifecycle::service::service_evidence(
+            self.service.as_ref(),
+            self.service_status.as_ref(),
+        )
+        .await
     }
 }

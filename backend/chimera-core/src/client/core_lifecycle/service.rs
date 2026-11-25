@@ -139,3 +139,92 @@ pub async fn stop_service(
     );
     Ok(())
 }
+
+use super::ports::ServiceLifecyclePort;
+use crate::{
+    actor_v2::{endpoint::ExecutionHost, service_status::ServiceHostStatus},
+    client::reconciler::service_evidence::ServiceEvidence,
+};
+
+pub async fn service_evidence(
+    service: &dyn ServiceLifecyclePort,
+    legacy_status: Option<&tokio::sync::watch::Receiver<ServiceHostStatus>>,
+) -> (ServiceEvidence, u64) {
+    let probe = service.probe().await;
+    if let Some(status) = service.actor_status() {
+        // Production uses ref ServiceActor for both the ownership evidence
+        // and the readiness generation. Do NOT derive another generation
+        // from CoreLifecycle's independent probe cache; it can disagree
+        // across a daemon handoff or failed startup attempt.
+        let generation = status.ready_generation;
+        let evidence = if probe.is_ok() {
+            ServiceEvidence::from_status(&status)
+        } else {
+            // An unanswered ref Actor probe is not a stop or Ready proof,
+            // even if a previous watch snapshot was healthy.
+            ServiceEvidence::Unreadable {
+                phase: crate::actor_v2::service_policy::ServicePhase::Unknown,
+            }
+        };
+        return (evidence, generation);
+    }
+    let Ok(info) = probe else {
+        let generation = legacy_status
+            .map(|status| status.borrow().ready_generation)
+            .unwrap_or_default();
+        return (
+            ServiceEvidence::Unreadable {
+                phase: crate::actor_v2::service_policy::ServicePhase::Unknown,
+            },
+            generation,
+        );
+    };
+    // Legacy-only tests keep their injected probe/watch and restart-policy
+    // semantics. No second read is performed against a production host.
+    let runtime_owned = service.runtime_owned(&info);
+    let previous = legacy_status
+        .map(|status| status.borrow().clone())
+        .unwrap_or_else(ServiceHostStatus::probing);
+    let status = previous.observe_probe(info, runtime_owned, Some(service.restart_policy()));
+    let generation = status.ready_generation;
+    (ServiceEvidence::from_status(&status), generation)
+}
+pub async fn refresh_service_recovery_host(
+    core: &(impl CoreLifecyclePort + ?Sized),
+    recovery: &parking_lot::Mutex<ServiceRecovery>,
+) {
+    let Ok(status) = core.status().await else {
+        return;
+    };
+    recovery
+        .lock()
+        .follow_host(if status.run_type == RunType::Service {
+            ExecutionHost::Service
+        } else {
+            ExecutionHost::Local
+        });
+}
+
+pub fn service_recovery_due_now(
+    core: &(impl CoreLifecyclePort + ?Sized),
+    recovery: &parking_lot::Mutex<ServiceRecovery>,
+    shutdown: &tokio_util::sync::CancellationToken,
+) -> bool {
+    core.service_endpoint_recovery_supported()
+        && recovery
+            .lock()
+            .due(core.service_endpoint_degraded(), shutdown.is_cancelled())
+}
+
+pub async fn service_endpoint_recovery_due(
+    core: &(impl CoreLifecyclePort + ?Sized),
+    recovery: &parking_lot::Mutex<ServiceRecovery>,
+    shutdown: &tokio_util::sync::CancellationToken,
+) -> bool {
+    if !service_recovery_due_now(core, recovery, shutdown)
+        || !settle_service_recovery_action(core).await
+    {
+        return false;
+    }
+    service_recovery_due_now(core, recovery, shutdown)
+}

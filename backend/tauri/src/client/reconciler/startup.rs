@@ -32,7 +32,6 @@ impl CoreLifecycleWorkflow {
     }
 }
 
-use crate::client::reconciler::attempt::ServiceFallbackDeferred;
 use chimera_config::application::ChimeraAppConfig;
 
 impl CoreLifecycleWorkflow {
@@ -205,88 +204,10 @@ impl CoreLifecycleWorkflow {
         target: &str,
         refusal: anyhow::Error,
     ) -> anyhow::Result<()> {
-        // A Service-to-Local fallback is authorized only by a *refused*
-        // Service submission. Unknown and Waiting outcomes cannot prove
-        // the Service owner stopped safely and must retain the original
-        // reason for the single Actor to retry or recover.
-        if !matches!(
-            crate::client::reconciler::attempt::legacy_error_verdict(
-                &refusal,
-                self.core.outcome_uncertain(),
-                false,
-            ),
-            crate::client::reconciler::attempt::LegacyApplyVerdict::Refused(_)
-        ) {
-            return Err(refusal);
-        }
-        if !self.startup_service_refusal_stopped().await {
-            return Err(refusal);
-        }
-
-        // Keep the nonblocking Service transition lease across both release
-        // and the Local apply. Dropping it between those operations would let
-        // another owner start Service after the release proof but before Local
-        // finished, violating ref's single-owner handoff ordering.
-        let _transition =
-            self.try_begin_service_transition()
-                .await
-                .map_err(|error| ServiceFallbackDeferred {
-                    reason: format!(
-                        "{refusal}; cannot acquire Service transition lease: {error:#}"
-                    ),
-                })?;
-        if self.startup_target_identity().await? != target {
-            return Err(CommittedTargetAdvanced.into());
-        }
-        if !self.startup_service_refusal_stopped().await {
-            return Err(ServiceFallbackDeferred {
-                reason: format!("{refusal}; Service stopped-owner proof changed while acquiring the transition lease"),
-            }.into());
-        }
-        let (_, generation) = self.service_evidence().await;
-        let released =
-            self.release_service_owner()
-                .await
-                .map_err(|reason| ServiceFallbackDeferred {
-                    reason: format!("{refusal}; {reason}"),
-                })?;
-        if !released.proves_no_owned_core() {
-            return Err(ServiceFallbackDeferred {
-                reason: format!(
-                    "{refusal}; no fresh evidence that Service released its owned Core"
-                ),
-            }
-            .into());
-        }
-        // Only suppress Service for this readiness generation after its Core
-        // release has been proved. A failed or unknown release MUST NOT make
-        // an ordinary Local start eligible.
-        if generation != 0 {
-            self.set_startup_failed_generation(generation);
-        }
-        if !self
-            .startup_target_identity()
-            .await
-            .is_ok_and(|current| current == target)
-        {
-            return Err(CommittedTargetAdvanced.into());
-        }
-
-        // This fallback has proved the old Service Core is released. Its
-        // Local submission supersedes the staged Service attempt; Completed
-        // alone may record the observed Local terminal.
-        let local = self
-            .reconcile_application_after_service_release(self.application.get_typed(), Some(target))
-            .await;
-        self.refresh_service_recovery_host().await;
-        if !self
-            .startup_target_identity()
-            .await
-            .is_ok_and(|current| current == target)
-        {
-            return Err(CommittedTargetAdvanced.into());
-        }
-        local
+        chimera_core::client::reconciler::convergence_executor::fallback_after_service_refusal(
+            self, target, refusal,
+        )
+        .await
     }
 }
 

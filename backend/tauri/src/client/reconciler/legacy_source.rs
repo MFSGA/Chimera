@@ -647,68 +647,28 @@ impl CoreLifecycleWorkflow {
         &self,
         expected_digest: &str,
     ) -> anyhow::Result<()> {
-        let inputs = self
-            .capture_committed_profile_inputs_for(self.application.get_typed(), self.clash.get()?)
-            .await?;
-        if inputs.checked_target_key()? != expected_digest {
-            return Ok(());
-        }
-        if self.canonical_convergence_session() {
-            use crate::client::reconciler::{
-                attempt::OwnershipTransitionPending, proof::host_for, startup::CommittedRound,
-            };
-            use chimera_core::client::reconciler::plan::Trigger;
+        chimera_core::client::reconciler::convergence_executor::retry_deferred_profiles(
+            self,
+            expected_digest,
+        )
+        .await
+    }
 
-            // Deferred retries never revive an intentionally stopped owner.
-            // The mailbox has already admitted Running intent; re-observe the
-            // actual host here before planning a retry.
-            let status = self.core.status().await?;
-            if !matches!(status.state, chimera_ipc::api::status::CoreState::Running) {
-                return Err(OwnershipTransitionPending::waiting(
-                    "deferred Profile retry awaits a running Core",
-                )
-                .into());
-            }
-            let host = host_for(status.run_type);
-            match self
-                .planned_committed_round(expected_digest, host, Trigger::Retry)
-                .await?
-            {
-                CommittedRound::Settled(result) => result,
-                CommittedRound::Apply => {
-                    self.progress
-                        .lock()
-                        .allow(expected_digest, host, Trigger::Retry)?;
-                    self.progress.lock().stage(expected_digest.to_owned(), host);
-                    self.try_reconcile_deferred_prepared(
-                        expected_digest,
-                        &inputs.app,
-                        &inputs.clash,
-                        status.run_type,
-                    )
-                    .await
-                    .unwrap_or_else(|| {
-                        Err(OwnershipTransitionPending::waiting(
-                            "deferred Profile retry lost its selected owner or source proof",
-                        )
-                        .into())
-                    })
-                }
-                CommittedRound::LegacyRecovery => Err(OwnershipTransitionPending::waiting(
-                    "deferred Profile retry requires a canonical S4 plan",
-                )
-                .into()),
-            }?;
-            return Ok(());
-        }
+    pub(in crate::client) async fn legacy_retry_deferred_profiles(
+        &self,
+        inputs: RuntimeInputs,
+        expected_digest: &str,
+    ) -> anyhow::Result<()> {
         #[cfg(not(test))]
-        return Err(
-            crate::client::reconciler::attempt::OwnershipTransitionPending::waiting(
-                "deferred Profile retry requires the installed CandidateCheck",
+        {
+            let _ = (inputs, expected_digest);
+            Err(
+                crate::client::reconciler::attempt::OwnershipTransitionPending::waiting(
+                    "deferred Profile retry requires the installed CandidateCheck",
+                )
+                .into(),
             )
-            .into(),
-        );
-
+        }
         #[cfg(test)]
         {
             let (app, clash, profiles, profile_content) =

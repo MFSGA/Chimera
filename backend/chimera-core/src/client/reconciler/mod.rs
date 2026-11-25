@@ -52,3 +52,5 @@ pub mod workflow_progress;
 pub mod mailbox;
 
 pub mod worker;
+
+pub mod convergence_executor;
