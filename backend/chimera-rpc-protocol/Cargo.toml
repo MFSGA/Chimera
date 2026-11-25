@@ -10,13 +10,22 @@ authors.workspace = true
 default = []
 nesting = ['chimera-config/nesting']
 frame-io = ['dep:tokio', 'chimera-rpc-wire/frame-io']
+local-client = ['frame-io', 'chimera-rpc-wire/local-client']
 
 [dependencies]
 chimera-config = { path = '../chimera-config', default-features = false }
 chimera-contracts = { path = '../chimera-contracts', default-features = false }
 chimera-rpc-wire = { path = '../chimera-rpc-wire' }
+chimera-runtime-values = { path = '../chimera-runtime-values', default-features = false }
+chimera-profile-transform = { path = '../chimera-profile-transform', default-features = false }
+chimera-core-metadata = { package = 'chimera-service-core-metadata', path = '../chimera-runtime/crates/chimera-core-metadata' }
+chimera-logging = { path = '../chimera-runtime/crates/chimera-logging', default-features = false }
+clash-api = { workspace = true }
+chrono = { version = '0.4', features = ['serde'] }
+indexmap = { version = '2', features = ['serde'] }
+uuid = { version = '1', features = ['serde'] }
 snafu = { workspace = true }
-url = '2'
+url = { version = '2', features = ['serde'] }
 tokio = { version = '1', optional = true, features = ['io-util'] }
 serde = { version = '1.0', features = ['derive', 'rc'] }
 serde_json = { version = '1.0', features = ['preserve_order'] }

@@ -15,25 +15,16 @@ pub const REQUIRED_SERVICE_MAJOR: u64 = 1;
 /// by this app. Version 1.10.0 lacks `/core/check` and cannot host a runtime.
 pub const REQUIRED_SERVICE_MIN: &str = "1.10.1";
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
-#[serde(rename_all = "snake_case", tag = "kind")]
-pub enum ServiceCompat {
-    Unknown,
-    Compatible {
-        server_version: String,
-    },
-    Incompatible {
-        server_version: String,
-        required_major: u64,
-        required_min: String,
-    },
-    Unparsable {
-        server_version: String,
-    },
+pub use chimera_runtime_values::core_status::ServiceCompat;
+
+/// The Core owner keeps the version policy; the shared value is only a DTO.
+pub trait ServiceCompatibilityPolicy {
+    fn classify(info: &StatusInfo<'_>) -> Self;
+    fn allows_service_backend(&self) -> bool;
 }
 
-impl ServiceCompat {
-    pub fn classify(info: &StatusInfo<'_>) -> Self {
+impl ServiceCompatibilityPolicy for ServiceCompat {
+    fn classify(info: &StatusInfo<'_>) -> Self {
         if info.status != ServiceStatus::Running {
             return Self::Unknown;
         }
@@ -57,7 +48,7 @@ impl ServiceCompat {
         Self::Compatible { server_version }
     }
 
-    pub fn allows_service_backend(&self) -> bool {
+    fn allows_service_backend(&self) -> bool {
         matches!(self, Self::Compatible { .. })
     }
 }
@@ -81,8 +72,8 @@ mod tests {
     };
 
     use super::{
-        REQUIRED_SERVICE_MAJOR, REQUIRED_SERVICE_MIN, ServiceCompat, parse_service_version,
-        required_service_min,
+        REQUIRED_SERVICE_MAJOR, REQUIRED_SERVICE_MIN, ServiceCompat, ServiceCompatibilityPolicy,
+        parse_service_version, required_service_min,
     };
 
     fn status(status: ServiceStatus, server_version: Option<&str>) -> StatusInfo<'static> {

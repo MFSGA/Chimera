@@ -192,34 +192,7 @@ pub struct CoreStatusProjection {
     pub snapshot: Option<CoreStatusSnapshot>,
 }
 
-#[derive(Debug, Clone, PartialEq, serde::Serialize, specta::Type)]
-#[serde(rename_all = "snake_case", tag = "kind")]
-pub enum EndpointConnectivity {
-    Connected,
-    ShutDown,
-    HandingOff {
-        from: ExecutionHost,
-        to: ExecutionHost,
-    },
-    /// The endpoint is unreachable. `desired` names the committed host; the
-    /// router never falls back on its own.
-    Degraded {
-        desired: ExecutionHost,
-        reason: String,
-    },
-}
-
-#[derive(Debug, Clone, PartialEq, serde::Serialize, specta::Type)]
-pub struct CoreStatusInfo {
-    pub controller: Option<chimera_ipc::api::status::CoreControllerInfo>,
-    pub host: ExecutionHost,
-    pub connectivity: EndpointConnectivity,
-    pub generation: u64,
-    pub state: Option<chimera_ipc::api::status::CoreStateDetail>,
-    pub state_changed_at: i64,
-    pub revision: Option<chimera_ipc::api::status::RevisionIdInfo>,
-    pub healthy: Option<bool>,
-}
+pub use chimera_runtime_values::core_status::{CoreStatusInfo, EndpointConnectivity};
 
 impl From<CoreStatusProjection> for CoreStatusInfo {
     fn from(status: CoreStatusProjection) -> Self {

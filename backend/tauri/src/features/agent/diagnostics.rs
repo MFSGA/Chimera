@@ -1,3 +1,4 @@
+use chimera_core::service::compat::ServiceCompatibilityPolicy;
 use chimera_core::{
     actor_v2::{
         endpoint::ExecutionHost,

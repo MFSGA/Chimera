@@ -12,6 +12,8 @@ chimera-contracts = { path = '../chimera-contracts', default-features = false }
 serde = { version = '1.0', features = ['derive', 'rc'] }
 specta = { version = '^2.0.0-rc.25', features = ['derive'] }
 snafu = { workspace = true }
+chimera-ipc = { path = '../chimera-runtime/chimera_ipc', default-features = false, features = ['specta'] }
+serde_json = { version = '1.0', features = ['preserve_order'] }
 
 [dev-dependencies]
 serde_json = { version = '1.0', features = ['preserve_order'] }

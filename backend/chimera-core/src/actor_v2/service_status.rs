@@ -6,6 +6,7 @@ use super::service_policy::{
     ServicePhase, ServiceRestartPolicySnapshot, phase_for_probe, settled_readiness,
 };
 use crate::service::compat::ServiceCompat;
+use crate::service::compat::ServiceCompatibilityPolicy;
 use tokio::sync::watch;
 
 /// Single publisher for the ServiceActor status projection.

@@ -1,3 +1,4 @@
+use chimera_core::service::compat::ServiceCompatibilityPolicy;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use atomic_enum::atomic_enum;
@@ -594,6 +595,7 @@ async fn health_check(warned: bool, client: &ChimeraClient, round: u64) -> (bool
 
 #[cfg(test)]
 mod tests {
+    use chimera_core::service::compat::ServiceCompatibilityPolicy;
     use std::{
         borrow::Cow,
         path::PathBuf,

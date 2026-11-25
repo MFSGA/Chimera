@@ -191,35 +191,7 @@ impl ApplicationEffectInputs {
     }
 }
 
-/// Execution order of a plan. The ordering is load-bearing: the tray menu is
-/// rendered with the process-wide locale, and the proxy guard re-applies the
-/// system proxy value that the `SystemProxy` effect just installed.
-#[derive(
-    Debug,
-    Clone,
-    Copy,
-    PartialEq,
-    Eq,
-    Hash,
-    PartialOrd,
-    Ord,
-    serde::Serialize,
-    serde::Deserialize,
-    specta::Type,
-)]
-#[serde(rename_all = "snake_case")]
-pub enum EffectKind {
-    Locale,
-    Logger,
-    CoreLogStorage,
-    AutoLaunch,
-    SystemProxy,
-    ProxyGuard,
-    TransparentProxy,
-    Hotkeys,
-    Widget,
-    Tray,
-}
+pub use chimera_runtime_values::configuration::EffectKind;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TrayRefresh {

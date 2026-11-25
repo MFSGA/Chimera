@@ -16,6 +16,7 @@
 //! stopping it inside this mailbox turn is the point after which its control
 //! plane cannot admit another reconcile.
 
+use crate::service::compat::ServiceCompatibilityPolicy;
 use std::sync::Arc;
 
 use chimera_contracts::service::{ParseServiceStatusSnafu, ServiceProcessControl};
@@ -45,70 +46,7 @@ pub trait ServiceEndpointFactory: Send + Sync + 'static {
     fn endpoint(&self) -> EndpointHandle;
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, specta::Type)]
-#[serde(rename_all = "snake_case")]
-pub enum ServicePhase {
-    Probing,
-    NotInstalled,
-    DaemonStopped,
-    Installing,
-    StartingDaemon,
-    Ready,
-    /// Version gate failed closed: upgrade required, never downgraded to.
-    Incompatible,
-    Restarting,
-    /// Auto-restart budget spent; waits for `EnsureReady` or a successful explicit start.
-    Exhausted,
-    Uninstalling,
-    /// The probe itself failed or timed out (F5): what the daemon actually
-    /// is cannot be determined. Never treated as `DaemonStopped` -- an
-    /// unreachable daemon might still be holding a core open, so callers
-    /// that gate on "no core held" (the uninstall guard, `RecoverEndpoint`'s
-    /// restart) must refuse rather than proceed.
-    Unknown,
-}
-
-impl ServicePhase {
-    /// Whether this phase settles if the daemon can serve: `None` for a
-    /// transition still under way and for a probe that could not tell.
-    pub fn readiness(self) -> Option<bool> {
-        match self {
-            Self::Ready => Some(true),
-            Self::NotInstalled | Self::DaemonStopped | Self::Incompatible | Self::Exhausted => {
-                Some(false)
-            }
-            Self::Probing
-            | Self::Installing
-            | Self::StartingDaemon
-            | Self::Restarting
-            | Self::Uninstalling
-            | Self::Unknown => None,
-        }
-    }
-}
-
-/// The watch projection (UI settings page + facade). Daemon state, never a
-/// second copy of core state.
-#[derive(Debug, Clone, serde::Serialize, specta::Type)]
-pub struct ServiceHostStatus {
-    pub name: std::borrow::Cow<'static, str>,
-    pub version: std::borrow::Cow<'static, str>,
-    pub status: ServiceStatus,
-    pub server: Option<chimera_ipc::api::status::StatusResBody<'static>>,
-    pub phase: ServicePhase,
-    pub compat: ServiceCompat,
-    pub restart_attempts: u8,
-    /// The last settled [`ServicePhase::readiness`]: a transition or an
-    /// unreadable probe leaves it as it was. Internal, like the generation.
-    #[serde(skip)]
-    pub settled_ready: bool,
-    /// How many times `settled_ready` has turned true. A daemon that
-    /// restarted between two reads is a new daemon even when both say
-    /// `Ready`; this is what tells them apart. Internal: not part of the UI
-    /// projection.
-    #[serde(skip)]
-    pub ready_generation: u64,
-}
+pub use chimera_runtime_values::core_status::{ServiceHostStatus, ServicePhase};
 
 /// Which mutating command an elevated call belongs to. It names the helper
 /// the actor still owns when that call outlives its bound.

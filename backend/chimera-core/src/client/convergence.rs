@@ -1,16 +1,7 @@
 //! Shared vocabulary and bounded retry policy; no infrastructure or mutable globals.
 use std::time::Duration;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, specta::Type)]
-#[serde(rename_all = "snake_case")]
-pub enum ConvergenceHealth {
-    Healthy,
-    Pending,
-    RetryScheduled,
-    WaitingDependency,
-    Blocked,
-    RecoveryRequired,
-}
+pub use chimera_runtime_values::configuration::ConvergenceHealth;
 
 pub const RETRY_DELAYS: [Duration; 3] = [
     Duration::from_secs(1),

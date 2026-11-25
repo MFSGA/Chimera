@@ -1262,6 +1262,7 @@ dependencies = [
  "enumflags2",
  "fancy-regex",
  "indexmap 2.14.2",
+ "ipnet",
  "json-patch",
  "language-tags",
  "port_scanner",
@@ -1734,7 +1735,14 @@ version = "0.1.0"
 dependencies = [
  "chimera-config",
  "chimera-contracts",
+ "chimera-logging",
+ "chimera-profile-transform",
  "chimera-rpc-wire",
+ "chimera-runtime-values",
+ "chimera-service-core-metadata",
+ "chrono",
+ "clash-api",
+ "indexmap 2.14.2",
  "serde",
  "serde_json",
  "snafu",
@@ -1742,6 +1750,7 @@ dependencies = [
  "specta-typescript",
  "tokio",
  "url",
+ "uuid",
 ]
 
 [[package]]
@@ -1762,6 +1771,7 @@ version = "0.1.0"
 dependencies = [
  "chimera-config",
  "chimera-contracts",
+ "chimera-ipc",
  "serde",
  "serde_json",
  "snafu",
