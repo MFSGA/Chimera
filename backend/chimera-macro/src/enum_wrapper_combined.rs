@@ -38,10 +38,7 @@ pub fn enum_combined_wrapper(input: DeriveInput) -> syn::Result<TokenStream> {
 
                         ty_assert_and_as.extend(quote! {
                             pub fn #is_ty(&self) -> bool {
-                                match self {
-                                    Self::#variant_name(_) => true,
-                                    _ => false,
-                                }
+                                matches!(self, Self::#variant_name(_))
                             }
 
                             pub fn #as_ty(&self) -> Option<&#field_ty> {

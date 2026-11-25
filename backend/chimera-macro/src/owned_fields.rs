@@ -5,7 +5,7 @@ use syn::{
     meta::ParseNestedMeta, spanned::Spanned,
 };
 
-/// The serde rename_all cases the owned keys can follow.
+/// The serde `rename_all` cases the owned keys can follow.
 enum RenameAll {
     Unchanged,
     KebabCase,
@@ -20,9 +20,9 @@ impl RenameAll {
     }
 }
 
-/// Implements OwnedFields and OwnedField for a struct with named fields.
-/// Each field decides the key of its serde name: its own rename, else the
-/// container's rename_all. cfg on a field carries over to its entry.
+/// Implements `OwnedFields` and `OwnedField` for a struct with named fields.
+/// Each field decides the key of its serde name: its own `rename`, else the
+/// container's `rename_all`. `#[cfg]` on a field carries over to its entry.
 pub fn owned_fields(input: DeriveInput) -> Result<TokenStream> {
     let name = &input.ident;
     let Data::Struct(data) = &input.data else {
@@ -117,7 +117,7 @@ fn serde_rename(attrs: &[Attribute]) -> Result<Option<String>> {
             return skip_meta(meta);
         }
         if !meta.input.peek(Token![=]) {
-            return Err(meta.error("OwnedFields needs a single rename = \"...\""));
+            return Err(meta.error("OwnedFields needs a single `rename = \"...\"`"));
         }
         let key: LitStr = meta.value()?.parse()?;
         rename = Some(key.value());
@@ -136,8 +136,8 @@ fn for_each_serde_meta(
     Ok(())
 }
 
-/// Consumes a serde argument this derive does not read, such as default,
-/// with = "..." or bound(...).
+/// Consumes a serde argument this derive does not read, such as `default`,
+/// `with = "..."` or `bound(...)`.
 fn skip_meta(meta: &ParseNestedMeta) -> Result<()> {
     if meta.input.peek(Token![=]) {
         meta.value()?.parse::<syn::Expr>()?;
