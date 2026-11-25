@@ -1,0 +1,19 @@
+[package]
+name = 'chimera-rpc'
+version = '0.1.0'
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+chimera-rpc-protocol = { path = '../chimera-rpc-protocol', default-features = false }
+chimera-runtime-values = { path = '../chimera-runtime-values', default-features = false }
+chimera-contracts = { path = '../chimera-contracts', default-features = false }
+chimera-core = { path = '../chimera-core', default-features = false }
+anyhow = '1'
+serde = { version = '1', features = ['derive', 'rc'] }
+serde_json = { version = '1', features = ['preserve_order'] }
+snafu = { workspace = true }
+specta = { version = '^2.0.0-rc.25', features = ['function'] }
+tokio = { workspace = true }
+tracing = { workspace = true }

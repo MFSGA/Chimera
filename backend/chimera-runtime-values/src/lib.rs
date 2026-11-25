@@ -9,6 +9,7 @@ pub mod configuration;
 pub mod core_status;
 pub mod effects;
 pub mod hotkey;
+pub mod observation;
 pub mod profiles;
 pub mod sync;
 pub use chimera_contracts::{

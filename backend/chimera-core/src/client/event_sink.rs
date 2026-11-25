@@ -12,3 +12,8 @@ pub enum StateChanged {
     // Chimera-only runtime transform inspector; ref does not expose it.
     RuntimeTransformDiagnostics,
 }
+
+/// Transport-neutral notification of committed state. Presentation effects remain shell-owned.
+pub trait UiEventSink: Send + Sync + 'static {
+    fn state_changed(&self, state: StateChanged);
+}

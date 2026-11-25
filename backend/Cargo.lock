@@ -1730,6 +1730,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "chimera-rpc"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chimera-contracts",
+ "chimera-core",
+ "chimera-rpc-protocol",
+ "chimera-runtime-values",
+ "serde",
+ "serde_json",
+ "snafu",
+ "specta",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "chimera-rpc-macro"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 3.0.6",
+]
+
+[[package]]
 name = "chimera-rpc-protocol"
 version = "0.1.0"
 dependencies = [
