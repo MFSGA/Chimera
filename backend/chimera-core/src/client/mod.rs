@@ -45,6 +45,9 @@ pub mod effects;
 pub mod system_proxy;
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
+pub mod hotkey;
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub mod network_automation;
 
 pub mod configuration;
@@ -54,3 +57,12 @@ pub mod configuration_status;
 
 pub mod app_lifecycle;
 pub mod composition;
+
+pub mod direct_egress;
+pub mod geo_mode;
+pub mod traffic;
+
+pub mod host_adapters;
+
+mod facade;
+pub use facade::{ChimeraClient, ClientParts, WeakChimeraClient};

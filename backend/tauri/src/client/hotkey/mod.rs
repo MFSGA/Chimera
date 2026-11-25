@@ -1,28 +1,11 @@
-//! Global shortcuts, owned by one actor behind the application client.
-//!
-//! The registrar only handles OS registration. Pressed actions return through
-//! a channel and are applied by the shared Chimera client, outside the OS
-//! callback.
-
-mod actor;
+//! Desktop hotkey transaction and presentation adapters.
 pub mod adapters;
 pub(crate) mod main_thread;
 pub mod ports;
-
 #[cfg(test)]
 mod tests;
 
-use std::{collections::BTreeMap, time::Duration};
-
-use anyhow::Result;
-use chimera_config::clash::config::overrides::Mode;
-use chimera_config::{application::ChimeraAppConfigPatch, clash::config::ClashConfigPatch};
-use ractor::{Actor, ActorRef, rpc::CallResult};
-
-use self::{
-    actor::{HotkeyActor, Message},
-    ports::{HotkeyAction, HotkeyBindings},
-};
+use self::ports::{HotkeyAction, HotkeyBindings, HotkeyParseError};
 use super::{
     ChimeraClient,
     effects::{
@@ -30,104 +13,31 @@ use super::{
         status::{EffectHealth, EffectRevision, EffectStatus},
     },
 };
+use anyhow::Result;
+use chimera_config::clash::config::overrides::Mode;
+use chimera_config::{application::ChimeraAppConfigPatch, clash::config::ClashConfigPatch};
+pub use chimera_core::client::hotkey::{HotkeyArgs, HotkeyClient};
 
-pub use self::actor::Args as HotkeyArgs;
-
-const HOTKEY_RPC_TIMEOUT: Duration = Duration::from_secs(5);
-
-#[derive(Debug, Clone)]
-pub struct HotkeyStatus {
-    pub applied_revision: EffectRevision,
-    pub health: EffectHealth,
-    pub registered: BTreeMap<String, HotkeyAction>,
-}
-
-#[derive(Clone)]
-pub struct HotkeyClient {
-    actor: ActorRef<Message>,
-}
-
-impl HotkeyClient {
-    pub async fn spawn(args: HotkeyArgs) -> anyhow::Result<Self> {
-        let (actor, _handle) = Actor::spawn(None, HotkeyActor, args).await?;
-        Ok(Self { actor })
-    }
-
-    pub async fn reconcile(
-        &self,
-        revision: EffectRevision,
-        desired: HotkeyBindings,
-    ) -> EffectStatus {
-        match self
-            .actor
-            .call(
-                |reply| Message::Reconcile {
-                    revision,
-                    desired,
-                    reply,
-                },
-                Some(HOTKEY_RPC_TIMEOUT),
-            )
-            .await
-        {
-            Ok(CallResult::Success(status)) => status,
-            other => {
-                tracing::warn!(
-                    revision = revision.get(),
-                    "the hotkey actor did not answer within its bound: {other:?}"
-                );
-                timed_out(revision)
-            }
+/// Keep the existing translated desktop message at the transport boundary.
+pub(crate) fn localized_parse_error(error: &HotkeyParseError) -> String {
+    use rust_i18n::t;
+    match error {
+        HotkeyParseError::MalformedEntry { entry } => {
+            t!("hotkey_error.malformed_entry", entry = entry).into_owned()
         }
-    }
-
-    pub async fn status(&self) -> HotkeyStatus {
-        match self
-            .actor
-            .call(Message::Status, Some(HOTKEY_RPC_TIMEOUT))
-            .await
-        {
-            Ok(CallResult::Success(status)) => status,
-            other => {
-                tracing::warn!("the hotkey actor did not report its status: {other:?}");
-                HotkeyStatus {
-                    applied_revision: EffectRevision::default(),
-                    health: timeout_health(),
-                    registered: BTreeMap::new(),
-                }
-            }
+        HotkeyParseError::UnknownFunction { function } => {
+            t!("hotkey_error.unknown_function", function = function).into_owned()
         }
-    }
-
-    pub async fn unregister_all(&self) -> EffectStatus {
-        match self
-            .actor
-            .call(Message::UnregisterAll, Some(HOTKEY_RPC_TIMEOUT))
-            .await
-        {
-            Ok(CallResult::Success(status)) => status,
-            other => {
-                tracing::warn!("the hotkey actor did not release its shortcuts in time: {other:?}");
-                timed_out(EffectRevision::default())
-            }
+        HotkeyParseError::EmptyKeySegment { accelerator }
+        | HotkeyParseError::UnsupportedAccelerator { accelerator, .. } => {
+            t!("hotkey_error.invalid_hotkey", hotkey = accelerator).into_owned()
         }
-    }
-}
-
-fn timed_out(revision: EffectRevision) -> EffectStatus {
-    EffectStatus {
-        kind: EffectKind::Hotkeys,
-        desired_revision: revision,
-        applied_revision: EffectRevision::default(),
-        health: timeout_health(),
-    }
-}
-
-fn timeout_health() -> EffectHealth {
-    EffectHealth::Degraded {
-        code: "hotkey_timeout",
-        message: "the hotkey actor did not answer within its bound".to_owned(),
-        retryable: true,
+        HotkeyParseError::MissingSuperKey { .. } => {
+            t!("hotkey_error.missing_super_key").into_owned()
+        }
+        HotkeyParseError::DuplicateAccelerator { accelerator, .. } => {
+            t!("hotkey_error.duplicate_accelerator", hotkey = accelerator).into_owned()
+        }
     }
 }
 
@@ -135,7 +45,8 @@ pub(crate) fn validate_bindings(
     raw: &[String],
     accelerators: &dyn ports::AcceleratorValidator,
 ) -> Result<HotkeyBindings> {
-    Ok(HotkeyBindings::parse(raw, accelerators)?)
+    HotkeyBindings::parse(raw, accelerators)
+        .map_err(|error| anyhow::anyhow!(localized_parse_error(&error)))
 }
 
 impl ChimeraClient {
@@ -147,7 +58,8 @@ impl ChimeraClient {
         validate_bindings(&hotkeys, self.inner.accelerators.as_ref())?;
         let snapshot = self
             .inner
-            .application
+            .shared
+            .application()
             .patch_typed(chimera_config::application::ChimeraAppConfigPatch {
                 hotkeys: Some(hotkeys),
                 ..Default::default()
@@ -223,6 +135,11 @@ impl ChimeraClient {
             }
             HotkeyAction::EnableTunMode => self.set_tun_mode(true).await,
             HotkeyAction::DisableTunMode => self.set_tun_mode(false).await,
+            HotkeyAction::ToggleTransparentProxy
+            | HotkeyAction::EnableTransparentProxy
+            | HotkeyAction::DisableTransparentProxy => {
+                anyhow::bail!("transparent proxy shortcut dispatch is unavailable")
+            }
         }
     }
 

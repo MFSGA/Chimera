@@ -7,27 +7,34 @@ impl super::ChimeraClient {
         geometry: WindowState,
     ) -> anyhow::Result<()> {
         self.inner
-            .session_state
+            .shared
+            .session_state()
             .queue_window_save(crate::consts::MAIN_WINDOW_LABEL, geometry)
     }
 
     /// Fence all previously queued geometry saves during graceful shutdown,
     /// then persist the legacy mirror for older consumers of verge.yaml.
     pub(crate) async fn flush_main_window_geometry_saves(&self) -> anyhow::Result<()> {
-        self.inner.session_state.wait_for_pending_writes().await?;
+        self.inner
+            .shared
+            .session_state()
+            .wait_for_pending_writes()
+            .await?;
         crate::config::core::Config::verge().data().save_file()?;
         Ok(())
     }
 
     pub(crate) fn main_window_geometry(&self) -> Option<WindowState> {
         self.inner
-            .session_state
+            .shared
+            .session_state()
             .window_geometry(crate::consts::MAIN_WINDOW_LABEL)
     }
 
     pub(crate) async fn save_main_window_state(&self, state: WindowState) -> anyhow::Result<()> {
         self.inner
-            .session_state
+            .shared
+            .session_state()
             .save_window(crate::consts::MAIN_WINDOW_LABEL, state)
             .await?;
         crate::config::core::Config::verge().data().save_file()?;

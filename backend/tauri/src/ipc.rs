@@ -444,6 +444,7 @@ pub fn get_hotkey_functions() -> Vec<&'static str> {
     {
         crate::client::hotkey::ports::HotkeyAction::all()
             .iter()
+            .filter(|action| crate::client::hotkey::ports::action_available(**action))
             .map(|action| action.as_str())
             .collect()
     }
@@ -1890,21 +1891,7 @@ pub async fn clash_api_get_proxy_delay(
     expected: Option<String>,
     client: State<'_, ChimeraClient>,
 ) -> Result<clash::api::DelayRes> {
-    let query = chimera_core::client::clash_api::delay_query(
-        url.as_deref(),
-        expected.as_deref(),
-        &client.get_app_config()?.default_latency_test,
-        std::time::Duration::from_secs(10),
-    )?;
-    let provider = provider
-        .filter(|value| !value.is_empty())
-        .map(clash_api::ProviderName::new);
-    let delay = client
-        .clash_api_client()
-        .await?
-        .proxy_delay(&clash_api::ProxyName::new(name), provider.as_ref(), &query)
-        .await
-        .map_err(anyhow::Error::from)?;
+    let delay = client.proxy_delay(name, provider, url, expected).await?;
     Ok(clash::api::DelayRes {
         delay: u64::from(delay.delay),
     })
@@ -1918,18 +1905,7 @@ pub async fn clash_api_get_group_delay(
     expected: Option<String>,
     client: State<'_, ChimeraClient>,
 ) -> Result<HashMap<String, u32>> {
-    let query = chimera_core::client::clash_api::delay_query(
-        url.as_deref(),
-        expected.as_deref(),
-        &client.get_app_config()?.default_latency_test,
-        std::time::Duration::from_secs(10),
-    )?;
-    let delays = client
-        .clash_api_client()
-        .await?
-        .group_delay(&clash_api::ProxyName::new(group), &query)
-        .await
-        .map_err(anyhow::Error::from)?;
+    let delays = client.group_delay(group, url, expected).await?;
     Ok(delays
         .into_iter()
         .map(|(name, delay)| (name.to_string(), u32::from(delay)))
@@ -1945,20 +1921,7 @@ pub async fn test_native_proxy_node_delay(
     name: String,
     client: State<'_, ChimeraClient>,
 ) -> Result<u16> {
-    let default_url = client.get_app_config()?.default_latency_test;
-    let api = client.clash_api_client().await?;
-    let result = chimera_core::proxies::test_group_node_delay(
-        &api,
-        &group,
-        &name,
-        &default_url,
-        std::time::Duration::from_secs(10),
-    )
-    .await;
-    // A timed-out IPC reply may still have recorded a sample. Queue a real
-    // snapshot refresh before either outcome reaches the frontend.
-    client.request_proxy_refresh();
-    Ok(result?)
+    Ok(client.test_native_proxy_node_delay(group, name).await?)
 }
 
 /// One instance-bound group delay operation. All member requests share the
@@ -1969,15 +1932,7 @@ pub async fn test_native_proxy_group_delay(
     group: String,
     client: State<'_, ChimeraClient>,
 ) -> Result<HashMap<String, u32>> {
-    let default_url = client.get_app_config()?.default_latency_test;
-    let api = client.clash_api_client().await?;
-    let delays = chimera_core::proxies::test_group_delay(
-        &api,
-        &clash_api::ProxyName::new(group),
-        &default_url,
-        std::time::Duration::from_secs(10),
-    )
-    .await?;
+    let delays = client.test_native_proxy_group_delay(group).await?;
     Ok(delays
         .into_iter()
         .map(|(name, delay)| (name.to_string(), u32::from(delay)))
@@ -1990,12 +1945,7 @@ pub async fn clash_api_delete_connections(
     id: Option<String>,
     client: State<'_, ChimeraClient>,
 ) -> Result<()> {
-    Ok(client
-        .clash_api_client()
-        .await?
-        .delete_connections(id.as_deref())
-        .await
-        .map_err(anyhow::Error::from)?)
+    Ok(client.close_clash_connections(id).await?)
 }
 
 #[tauri::command]

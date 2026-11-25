@@ -140,3 +140,157 @@ pub async fn spawn_application_observers(
         file_logs,
     })
 }
+
+use super::{
+    application::ApplicationClient, clash_config::ClashConfigClient,
+    session_state::SessionStateClient,
+};
+use crate::state::{
+    mirror::{ClashLegacyBridge, VergeLegacyBridge, WindowLegacyBridge},
+    mutation::MutationCoordinator,
+};
+use chimera_config::application::ReleaseChannel;
+use chimera_paths::PathResolver;
+
+#[derive(Clone)]
+pub struct LegacyBridgeSet {
+    pub verge: Arc<dyn VergeLegacyBridge>,
+    pub window: Arc<dyn WindowLegacyBridge>,
+    pub clash: Arc<dyn ClashLegacyBridge>,
+}
+
+pub struct TypedConfigClients {
+    pub application: ApplicationClient,
+    pub session_state: SessionStateClient,
+    pub clash_config: ClashConfigClient,
+}
+
+pub async fn new_typed_config_clients(
+    paths: &PathResolver,
+    bridges: &LegacyBridgeSet,
+    build_channel: ReleaseChannel,
+    mutations: MutationCoordinator,
+    shutdown: tokio_util::sync::CancellationToken,
+) -> anyhow::Result<TypedConfigClients> {
+    let application = ApplicationClient::new_with_mutations(
+        paths.application_config_path(),
+        bridges.verge.snapshot_legacy()?,
+        bridges.verge.clone(),
+        build_channel,
+        mutations.clone(),
+        shutdown.clone(),
+    )
+    .await?;
+    let session_state = SessionStateClient::new(
+        paths.session_state_path(),
+        bridges.window.snapshot_legacy()?,
+        bridges.window.clone(),
+    )
+    .await?;
+    let clash_config = ClashConfigClient::new_with_mutations(
+        paths.clash_config_path(),
+        bridges.clash.snapshot_legacy()?,
+        bridges.clash.clone(),
+        mutations,
+        shutdown,
+    )
+    .await?;
+
+    Ok(TypedConfigClients {
+        application,
+        session_state,
+        clash_config,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::state::mirror::{NoopPreparedLegacyMirror, PreparedLegacyMirror};
+    use chimera_config::state::PersistentState;
+    use std::sync::Mutex;
+
+    #[derive(Default)]
+    struct RecordingBridges(Mutex<Vec<&'static str>>);
+
+    impl VergeLegacyBridge for RecordingBridges {
+        fn prepare(
+            &self,
+            snap: &ChimeraAppConfig,
+        ) -> anyhow::Result<Box<dyn PreparedLegacyMirror>> {
+            assert!(snap.enable_local_ip_probe);
+            self.0.lock().unwrap().push("application");
+            Ok(Box::new(NoopPreparedLegacyMirror))
+        }
+        fn snapshot_legacy(&self) -> anyhow::Result<ChimeraAppConfig> {
+            Ok(ChimeraAppConfig::default())
+        }
+    }
+    impl WindowLegacyBridge for RecordingBridges {
+        fn prepare(&self, _: &PersistentState) -> anyhow::Result<Box<dyn PreparedLegacyMirror>> {
+            self.0.lock().unwrap().push("session");
+            Ok(Box::new(NoopPreparedLegacyMirror))
+        }
+        fn snapshot_legacy(&self) -> anyhow::Result<PersistentState> {
+            Ok(PersistentState::default())
+        }
+    }
+    impl ClashLegacyBridge for RecordingBridges {
+        fn prepare(&self, snap: &ClashConfig) -> anyhow::Result<Box<dyn PreparedLegacyMirror>> {
+            assert!(snap.enable_tun_mode);
+            self.0.lock().unwrap().push("clash");
+            Ok(Box::new(NoopPreparedLegacyMirror))
+        }
+        fn snapshot_legacy(&self) -> anyhow::Result<ClashConfig> {
+            Ok(ClashConfig::default())
+        }
+    }
+
+    #[tokio::test]
+    async fn typed_owner_composition_reads_persisted_state_and_projects_in_order() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = camino::Utf8PathBuf::from_path_buf(temp.path().to_path_buf()).unwrap();
+        let paths = PathResolver::with_base_dirs(root.join("config"), root.join("data"));
+        paths.create_base_dirs().unwrap();
+        let app = ChimeraAppConfig {
+            enable_local_ip_probe: true,
+            ..Default::default()
+        };
+        let clash = ClashConfig {
+            enable_tun_mode: true,
+            ..Default::default()
+        };
+        std::fs::write(
+            paths.application_config_path(),
+            serde_yaml_ng::to_string(&app).unwrap(),
+        )
+        .unwrap();
+        std::fs::write(
+            paths.clash_config_path(),
+            serde_yaml_ng::to_string(&clash).unwrap(),
+        )
+        .unwrap();
+        let bridge = Arc::new(RecordingBridges::default());
+        let shutdown = CancellationToken::new();
+        let clients = new_typed_config_clients(
+            &paths,
+            &LegacyBridgeSet {
+                verge: bridge.clone(),
+                window: bridge.clone(),
+                clash: bridge.clone(),
+            },
+            ReleaseChannel::Stable,
+            MutationCoordinator::pending(),
+            shutdown.clone(),
+        )
+        .await
+        .unwrap();
+        assert!(clients.application.get_typed().enable_local_ip_probe);
+        assert!(clients.clash_config.get_typed().enable_tun_mode);
+        assert_eq!(
+            *bridge.0.lock().unwrap(),
+            ["application", "session", "clash"]
+        );
+        shutdown.cancel();
+    }
+}

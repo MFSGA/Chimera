@@ -80,6 +80,64 @@ pub struct ClashApiConfig {
     pub secret: Option<String>,
 }
 
+#[derive(Debug, Clone, Default, Serialize, Type)]
+pub struct ClashApiSettings {
+    pub port: Option<u16>,
+    pub mode: Option<String>,
+    pub ipv6: Option<bool>,
+    #[serde(rename = "socket-port")]
+    pub socket_port: Option<u16>,
+    #[serde(rename = "allow-lan")]
+    pub allow_lan: Option<bool>,
+    #[serde(rename = "log-level")]
+    pub log_level: Option<String>,
+    #[serde(rename = "mixed-port")]
+    pub mixed_port: Option<u16>,
+    #[serde(rename = "redir-port")]
+    pub redir_port: Option<u16>,
+    #[serde(rename = "socks-port")]
+    pub socks_port: Option<u16>,
+    #[serde(rename = "tproxy-port")]
+    pub tproxy_port: Option<u16>,
+    #[serde(rename = "external-controller")]
+    #[specta(type = Option<String>)]
+    pub external_controller: Option<std::net::SocketAddr>,
+}
+
+impl From<ClashApiConfig> for ClashApiSettings {
+    fn from(config: ClashApiConfig) -> Self {
+        let ClashApiConfig {
+            port,
+            mode,
+            ipv6,
+            socket_port,
+            allow_lan,
+            log_level,
+            mixed_port,
+            redir_port,
+            socks_port,
+            tproxy_port,
+            external_controller,
+            // The controller secret is only in the full config.
+            secret: _,
+        } = config;
+        Self {
+            port,
+            mode,
+            ipv6,
+            socket_port,
+            allow_lan,
+            log_level,
+            mixed_port,
+            redir_port,
+            socks_port,
+            tproxy_port,
+            external_controller: external_controller
+                .and_then(|address| address.parse::<std::net::SocketAddr>().ok()),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, Type)]
 pub struct ClashVersion {
     pub version: String,

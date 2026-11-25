@@ -146,6 +146,8 @@ pub(in crate::client) fn prepare_production_gate(
     paths: RuntimePaths,
     core: &chimera_core::actor_v2::CoreClient,
     owner: &crate::client::reconciler::RuntimeReconcilerClient,
+    core_specs: Arc<CoreSpecResolver>,
+    scripts: Arc<ScriptRunnerFactory>,
 ) -> anyhow::Result<CandidateCheck> {
     let session = owner.runtime_preparation_session().ok_or_else(|| {
         anyhow::anyhow!("ref CandidateCheck requires the active Core-owned runtime session")
@@ -158,22 +160,17 @@ pub(in crate::client) fn prepare_production_gate(
         session,
         paths,
     };
-    Ok(assemble_host_gate(
+    Ok(production_candidate_gate(
         sources,
         core,
+        core_specs,
+        scripts,
         Arc::new(ReconcilerCheckedInbox::new(owner.clone())),
     ))
 }
 
-/// The actual production builder/validator, with a checked inbox supplied by
-/// the single Runtime owner. No independent port resolver, revision allocator,
-/// filesystem publication, or Core mutation actor is created here.
-fn assemble_host_gate(
-    sources: CandidateGateSources,
-    core: &chimera_core::actor_v2::CoreClient,
-    workflow: Arc<dyn CheckedCandidatePort>,
-) -> CandidateCheck {
-    let core_specs: Arc<CoreSpecResolver> = Arc::new(|core| {
+pub(crate) fn host_core_spec_resolver() -> Arc<CoreSpecResolver> {
+    Arc::new(|core| {
         chimera_core::client::core_spec::resolve_with(core, |choice, core_type| {
             if *choice == chimera_config::application::ClashCore::ChimeraClientAlpha {
                 let name = format!("chimera-client-alpha{}", std::env::consts::EXE_SUFFIX);
@@ -182,8 +179,9 @@ fn assemble_host_gate(
                 crate::core::clash::core::find_binary_path(core_type)
             }
         })
-    });
-    let scripts: Arc<ScriptRunnerFactory> =
-        Arc::new(|| Ok(Box::new(crate::enhance::EnhanceScriptRunner::new()?)));
-    production_candidate_gate(sources, core, core_specs, scripts, workflow)
+    })
+}
+
+pub(crate) fn host_script_runner_factory() -> Arc<ScriptRunnerFactory> {
+    Arc::new(|| Ok(Box::new(crate::enhance::EnhanceScriptRunner::new()?)))
 }

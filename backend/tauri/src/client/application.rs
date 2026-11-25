@@ -36,101 +36,6 @@ pub(crate) struct SystemProxyMutation<'a> {
 }
 
 impl ChimeraClient {
-    pub(crate) fn get_app_config(&self) -> anyhow::Result<ChimeraAppConfig> {
-        Ok(self.inner.application.get_typed())
-    }
-
-    /// Which runtime keys the committed core selection actually supports.
-    /// The same matrix is used by the config builder and the settings UI.
-    pub(crate) fn config_features(&self) -> chimera_config::clash::features::ConfigFeatures {
-        self.inner.application.get_typed().core.config_features()
-    }
-
-    fn app_updater(&self) -> anyhow::Result<&chimera_core::client::app_update::AppUpdateClient> {
-        self.inner
-            .app_updater
-            .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("application updater is unavailable"))
-    }
-
-    pub(crate) async fn get_app_update_state(
-        &self,
-    ) -> anyhow::Result<chimera_core::client::app_update::AppUpdateSnapshot> {
-        Ok(self.app_updater()?.state().await?)
-    }
-
-    pub(crate) async fn check_app_update(
-        &self,
-    ) -> anyhow::Result<chimera_core::client::app_update::AppUpdateSnapshot> {
-        Ok(self.app_updater()?.check().await?)
-    }
-
-    pub(crate) async fn download_app_update(
-        &self,
-    ) -> anyhow::Result<chimera_core::client::app_update::AppUpdateSnapshot> {
-        Ok(self.app_updater()?.download().await?)
-    }
-
-    pub(crate) async fn cancel_app_update_download(
-        &self,
-    ) -> anyhow::Result<chimera_core::client::app_update::AppUpdateSnapshot> {
-        Ok(self.app_updater()?.cancel_download().await?)
-    }
-
-    pub(crate) async fn install_app_update(
-        &self,
-    ) -> anyhow::Result<chimera_core::client::app_update::AppUpdateSnapshot> {
-        Ok(self.app_updater()?.install().await?)
-    }
-
-    pub(crate) async fn discard_app_update_package(
-        &self,
-    ) -> anyhow::Result<chimera_core::client::app_update::AppUpdateSnapshot> {
-        Ok(self.app_updater()?.discard().await?)
-    }
-
-    pub(crate) async fn get_app_update_changelog(
-        &self,
-        from: &str,
-        to: &str,
-    ) -> anyhow::Result<chimera_core::client::app_update::changelog::AppUpdateChangelog> {
-        let http = self
-            .inner
-            .changelog_http
-            .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("application update changelog is unavailable"))?;
-        let sources = self.inner.application.get_typed().update_sources;
-        Ok(
-            chimera_core::client::app_update::changelog::resolve_changelog(
-                http.as_ref(),
-                &sources,
-                from,
-                to,
-            )
-            .await?,
-        )
-    }
-
-    pub(crate) fn installed_release_channel(
-        &self,
-    ) -> Option<chimera_config::application::ReleaseChannel> {
-        self.inner
-            .bundle_metadata
-            .map(|metadata| metadata.release_channel)
-    }
-
-    pub(crate) fn release_channel(
-        &self,
-    ) -> anyhow::Result<chimera_config::application::ReleaseChannel> {
-        let metadata = self
-            .inner
-            .bundle_metadata
-            .ok_or_else(|| anyhow::anyhow!("application bundle metadata is unavailable"))?;
-        Ok(metadata
-            .release_channel
-            .resolve(self.inner.application.get_typed().release_channel))
-    }
-
     pub(crate) async fn set_release_channel(
         &self,
         channel: chimera_config::application::ReleaseChannel,
@@ -142,31 +47,18 @@ impl ChimeraClient {
         .await
     }
 
-    pub(crate) fn configure_app_update(&self, config: &ChimeraAppConfig) {
-        let (Some(updater), Some(metadata)) = (&self.inner.app_updater, self.inner.bundle_metadata)
-        else {
-            return;
-        };
-        updater.configure(chimera_core::client::app_update::AppUpdateSettings {
-            channel: config.release_channel.unwrap_or(metadata.release_channel),
-            sources: config.update_sources.clone(),
-            auto_check: config.enable_auto_check_update,
-            auto_download: config.enable_auto_download_update,
-        });
-    }
-
     pub(crate) fn application_config(&self) -> IVerge {
         Config::verge().latest().clone()
     }
 
     pub(crate) async fn expected_system_proxy_port(&self) -> anyhow::Result<Option<u16>> {
         let clash = self.inner.clash_config.get()?;
-        let receipt = match self.inner.core.observe_runtime_baseline().await? {
+        let receipt = match self.inner.shared.core().observe_runtime_baseline().await? {
             super::application_workflow::mutation::KnownRuntimeState::Applied(receipt) => {
                 Some(receipt)
             }
             super::application_workflow::mutation::KnownRuntimeState::Stopped => {
-                self.inner.core.last_confirmed_runtime_receipt()
+                self.inner.shared.core().last_confirmed_runtime_receipt()
             }
             super::application_workflow::mutation::KnownRuntimeState::NeverApplied => None,
         };
@@ -178,7 +70,7 @@ impl ChimeraClient {
 
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     pub(crate) async fn active_system_proxy_port(&self) -> anyhow::Result<Option<u16>> {
-        let receipt = match self.inner.core.observe_runtime_baseline().await? {
+        let receipt = match self.inner.shared.core().observe_runtime_baseline().await? {
             super::application_workflow::mutation::KnownRuntimeState::Applied(receipt) => receipt,
             super::application_workflow::mutation::KnownRuntimeState::Stopped
             | super::application_workflow::mutation::KnownRuntimeState::NeverApplied => {
@@ -288,7 +180,7 @@ impl ChimeraClient {
         &self,
         patch: ChimeraAppConfigPatch,
     ) -> anyhow::Result<super::MutationOutcome<()>> {
-        let before = self.inner.application.snapshot();
+        let before = self.inner.shared.application().snapshot();
         let mut candidate = before.state.clone();
         candidate.apply(patch.clone());
         crate::state::application::validate_network_automation_policy(&candidate)?;
@@ -344,7 +236,8 @@ impl ChimeraClient {
             let requested = super::effects::plan::requested_owners(&patch);
             let snapshot = self
                 .inner
-                .application
+                .shared
+                .application()
                 .commit_native(before.version, candidate, native_checked, false, requested)
                 .await?;
             (Vec::new(), Some(snapshot.version), snapshot)
@@ -357,10 +250,10 @@ impl ChimeraClient {
             (
                 report.degradations,
                 report.notified_version,
-                self.inner.application.get().await?,
+                self.inner.shared.application().get().await?,
             )
         } else {
-            let snapshot = self.inner.application.patch_typed(patch).await?;
+            let snapshot = self.inner.shared.application().patch_typed(patch).await?;
             (Vec::new(), None, snapshot)
         };
         if notified_version.is_none() {
@@ -544,11 +437,11 @@ impl ChimeraClient {
 
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     pub(crate) async fn publish_runtime_port_binding(&self) {
-        if self.inner.shutdown.is_cancelled() {
+        if self.inner.shared.shutdown().is_cancelled() {
             return;
         }
         let ports = self.confirmed_effect_port_binding().await;
-        if self.inner.shutdown.is_cancelled() {
+        if self.inner.shared.shutdown().is_cancelled() {
             return;
         }
         super::effects::ports::CommitNotifications::runtime_bound(
@@ -560,11 +453,11 @@ impl ChimeraClient {
 
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     pub(crate) async fn publish_full_effects(&self) {
-        if self.inner.shutdown.is_cancelled() {
+        if self.inner.shared.shutdown().is_cancelled() {
             return;
         }
         let ports = self.confirmed_effect_port_binding().await;
-        if self.inner.shutdown.is_cancelled() {
+        if self.inner.shared.shutdown().is_cancelled() {
             return;
         }
         super::effects::ports::CommitNotifications::publish_full(&self.inner.effects, ports);
@@ -574,7 +467,7 @@ impl ChimeraClient {
     async fn confirmed_effect_port_binding(
         &self,
     ) -> Option<chimera_config::runtime::executor::ResolvedPortBindings> {
-        let receipt = match self.inner.core.active_runtime_receipt().await {
+        let receipt = match self.inner.shared.core().active_runtime_receipt().await {
             Ok(receipt) => receipt,
             Err(error) => {
                 tracing::debug!(%error, "no active runtime receipt is available for application effects");
@@ -584,7 +477,7 @@ impl ChimeraClient {
         // The legacy runtime receipt records a successful prior apply; it
         // alone cannot prove that the ref CoreActor still owns that instance.
         // Fence the port publication against both sides of this async read.
-        if let (Some(core), Some(receipt)) = (&self.inner.core_api, receipt.as_deref()) {
+        if let (Some(core), Some(receipt)) = (self.inner.shared.core_api(), receipt.as_deref()) {
             let before = match core.refresh_status().await {
                 Ok(status) => status,
                 Err(error) => {
@@ -791,8 +684,7 @@ async fn rollback_legacy_domains(
                 committed_version,
                 rollback,
             } => match client
-                .inner
-                .application
+                .inner.shared.application()
                 .replace_prepared_if_version(committed_version, rollback)
                 .await
             {
@@ -808,8 +700,7 @@ async fn rollback_legacy_domains(
                 committed_version,
                 rollback,
             } => match client
-                .inner
-                .session_state
+                .inner.shared.session_state()
                 .replace_prepared_if_version(committed_version, rollback)
                 .await
             {
@@ -924,7 +815,7 @@ async fn patch_legacy_uncoordinated(client: &ChimeraClient, patch: IVerge) -> Re
     }
 
     let application_pair = if let Some(app_patch) = split.application.as_ref() {
-        let snapshot = client.inner.application.get().await?;
+        let snapshot = client.inner.shared.application().get().await?;
         let mut projected = base.clone();
         projected.patch_config(app_patch.clone());
         let next = application_from_legacy(&projected)?;
@@ -934,7 +825,7 @@ async fn patch_legacy_uncoordinated(client: &ChimeraClient, patch: IVerge) -> Re
     };
 
     let session_pair = if let Some(session_patch) = split.session_state.take() {
-        let snapshot = client.inner.session_state.get().await?;
+        let snapshot = client.inner.shared.session_state().get().await?;
         let mut next = snapshot.state.clone();
         next.apply(session_patch);
         Some((snapshot, next))
@@ -955,10 +846,16 @@ async fn patch_legacy_uncoordinated(client: &ChimeraClient, patch: IVerge) -> Re
     if let Some((snapshot, next)) = application_pair {
         prepared.push(PreparedLegacyDomain::Application {
             expected_version: snapshot.version,
-            forward: client.inner.application.prepare_replace(next).await?,
+            forward: client
+                .inner
+                .shared
+                .application()
+                .prepare_replace(next)
+                .await?,
             rollback: client
                 .inner
-                .application
+                .shared
+                .application()
                 .prepare_replace(snapshot.state.clone())
                 .await?,
         });
@@ -966,10 +863,16 @@ async fn patch_legacy_uncoordinated(client: &ChimeraClient, patch: IVerge) -> Re
     if let Some((snapshot, next)) = session_pair {
         prepared.push(PreparedLegacyDomain::Session {
             expected_version: snapshot.version,
-            forward: client.inner.session_state.prepare_replace(next).await?,
+            forward: client
+                .inner
+                .shared
+                .session_state()
+                .prepare_replace(next)
+                .await?,
             rollback: client
                 .inner
-                .session_state
+                .shared
+                .session_state()
                 .prepare_replace(snapshot.state.clone())
                 .await?,
         });
@@ -995,7 +898,8 @@ async fn patch_legacy_uncoordinated(client: &ChimeraClient, patch: IVerge) -> Re
                 rollback,
             } => match client
                 .inner
-                .application
+                .shared
+                .application()
                 .replace_prepared_if_version(expected_version, forward)
                 .await
             {
@@ -1017,7 +921,8 @@ async fn patch_legacy_uncoordinated(client: &ChimeraClient, patch: IVerge) -> Re
                 rollback,
             } => match client
                 .inner
-                .session_state
+                .shared
+                .session_state()
                 .replace_prepared_if_version(expected_version, forward)
                 .await
             {

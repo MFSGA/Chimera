@@ -43,7 +43,7 @@ impl ChimeraClient {
     /// whereas ref's ProfilesClient accepts the command synchronously.
     pub(crate) async fn start_background_sources(&self) -> anyhow::Result<()> {
         chimera_core::client::app_lifecycle::start_background_sources(
-            self.inner.typed_profiles.as_ref(),
+            self.inner.shared.typed_profiles().as_ref(),
         )
         .await
     }
@@ -51,8 +51,8 @@ impl ChimeraClient {
     /// Stops admission to all client-owned tasks. Repeated requests are safe.
     pub(crate) fn request_shutdown(&self) {
         chimera_core::client::app_lifecycle::request_shutdown(
-            &self.inner.shutdown,
-            &self.inner.tasks,
+            self.inner.shared.shutdown(),
+            self.inner.shared.tasks(),
         );
     }
 
@@ -61,8 +61,8 @@ impl ChimeraClient {
     /// not install a new binary if core shutdown is unconfirmed.
     pub(crate) async fn wait_shutdown(&self) -> anyhow::Result<()> {
         chimera_core::client::app_lifecycle::wait_shutdown(
-            &self.inner.tasks,
-            self.inner.core.as_ref(),
+            self.inner.shared.tasks(),
+            self.inner.shared.core().as_ref(),
             self.shutdown_core(),
             || self.routed_core_status(),
         )

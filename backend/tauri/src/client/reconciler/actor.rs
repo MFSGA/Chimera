@@ -3398,11 +3398,11 @@ impl ChimeraClient {
         // Starting/Switching/Degraded projections into a fake Stopped result;
         // keep this compatibility endpoint until the UI consumes the typed
         // CoreActor projection directly.
-        self.inner.core.status().await
+        self.inner.shared.core().status().await
     }
 
     pub(crate) fn service_status(&self) -> ServiceHostStatus {
-        if let Some(service) = &self.inner.service_actor {
+        if let Some(service) = self.inner.shared.service_actor() {
             return crate::client::service_status::project_actor_service_status(&service.status());
         }
         // Injected legacy lifecycle fixtures deliberately omit ServiceActor.
@@ -3446,13 +3446,13 @@ impl ChimeraClient {
     pub(crate) fn runtime_transform_diagnostics(
         &self,
     ) -> anyhow::Result<Option<RuntimeTransformDiagnostics>> {
-        self.inner.core.runtime_transform_diagnostics()
+        self.inner.shared.core().runtime_transform_diagnostics()
     }
 
     pub(crate) fn promoted_runtime_snapshot(
         &self,
     ) -> Option<Arc<crate::client::runtime::RuntimeSnapshot>> {
-        self.inner.core.promoted_runtime_snapshot()
+        self.inner.shared.core().promoted_runtime_snapshot()
     }
 
     /// Ref: selecting a core is an Application source transaction, not a

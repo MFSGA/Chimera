@@ -18,11 +18,11 @@ use super::{
     Clock, LocalSourceIps, LocalSourceLocation, ProfileSelection, RetentionPolicy, TrafficArgs,
     TrafficClient,
 };
-use crate::core::geo::{
+use crate::clash::ws::ClashConnectionsFrame;
+use crate::geo::{
     CoreGeodataBinding, CoreGeodataModeSource, CountryIndexSnapshot, GeoIndexArgs, GeoIndexClient,
     GeodataMode, IndexKey, Loaded, MockCountryIndexSource,
 };
-use chimera_core::clash::ws::ClashConnectionsFrame;
 
 struct WaitingCore;
 
@@ -90,7 +90,7 @@ fn country_index() -> Arc<IpIndex> {
 
 fn country_index_for(country: &str) -> Arc<IpIndex> {
     Arc::new(
-        IpIndex::from_geoip_dat(&crate::core::geo::fixtures::geoip_dat(&[(
+        IpIndex::from_geoip_dat(&crate::geo::fixtures::geoip_dat(&[(
             country,
             &["8.0.0.0/8"],
         )]))
@@ -177,9 +177,9 @@ impl Clock for SystemClock {
 #[tokio::test]
 async fn connection_frames_become_active_and_then_persist_as_closed() {
     let dir = tempfile::tempdir().unwrap();
-    let store = Arc::new(chimera_core::traffic::TrafficFileStorage::new(
+    let store = Arc::new(crate::traffic::TrafficFileStorage::new(
         dir.path().join("traffic.tsdb"),
-        chimera_core::traffic::Profile::desktop().backend_cache,
+        crate::traffic::Profile::desktop().backend_cache,
     ));
     let (frames, receiver) = tokio::sync::watch::channel(None);
     let (_, geo) = tokio::sync::watch::channel(None::<Arc<CountryIndexSnapshot>>);
@@ -354,9 +354,9 @@ async fn a_new_core_frame_is_recorded_only_after_its_country_mode_is_loaded() {
     .unwrap();
     let frame_modes = Arc::new(FrameModeSource(AtomicUsize::new(0)));
     let dir = tempfile::tempdir().unwrap();
-    let store = Arc::new(chimera_core::traffic::TrafficFileStorage::new(
+    let store = Arc::new(crate::traffic::TrafficFileStorage::new(
         dir.path().join("traffic.tsdb"),
-        chimera_core::traffic::Profile::desktop().backend_cache,
+        crate::traffic::Profile::desktop().backend_cache,
     ));
     let (frames, receiver) = tokio::sync::watch::channel(None);
     let traffic = super::spawn(
@@ -461,9 +461,9 @@ async fn failed_new_core_mode_read_never_uses_old_geo_index_and_recovers_on_retr
     .unwrap();
     let frame_modes = Arc::new(RetryingFrameModeSource(AtomicUsize::new(0)));
     let dir = tempfile::tempdir().unwrap();
-    let store = Arc::new(chimera_core::traffic::TrafficFileStorage::new(
+    let store = Arc::new(crate::traffic::TrafficFileStorage::new(
         dir.path().join("traffic.tsdb"),
-        chimera_core::traffic::Profile::desktop().backend_cache,
+        crate::traffic::Profile::desktop().backend_cache,
     ));
     let (frames, receiver) = tokio::sync::watch::channel(None);
     let traffic = super::spawn(

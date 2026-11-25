@@ -35,10 +35,9 @@ pub(crate) mod traffic;
 use std::sync::Arc;
 
 use anyhow::{Context as _, anyhow};
-use chimera_config::application::ReleaseChannel;
 use chimera_config::profile::{
     FolderId, NewProfileRequest, ProfileDefinition, ProfileId, ProfileLayout, ProfileMetadata,
-    ProfileMetadataPatch, ProfileSource, Profiles, RemoteProfileOptions, RemoteProfileOptionsPatch,
+    ProfileMetadataPatch, ProfileSource, RemoteProfileOptions, RemoteProfileOptionsPatch,
     TransformKind,
 };
 use chimera_contracts::{
@@ -47,10 +46,7 @@ use chimera_contracts::{
     system_dns::SystemDnsCache,
 };
 use chimera_core::{
-    actor_v2::{
-        CoreClient as CoreClientV2, router::CoreStatusProjection, service_actor::ServiceClient,
-        service_router::ServiceHostStatus,
-    },
+    actor_v2::{CoreClient as CoreClientV2, service_actor::ServiceClient},
     client::app_update::{self, AppUpdateClient},
     profile_import::url_derived_name,
 };
@@ -74,21 +70,16 @@ pub(crate) use self::{
     runtime_inspection::{RuntimeInspection, RuntimeInspectionContent},
 };
 
+#[cfg(test)]
+use crate::service::profile_file::ProfileFileService;
 use crate::{
-    service::profile_file::ProfileFileService,
-    state::mirror::{ClashLegacyBridge, VergeLegacyBridge, WindowLegacyBridge},
     state::profiles::{CommitReport, ProfilesError, ReorderOp},
     utils::path::PathResolver,
 };
 
 pub use runtime::RuntimePaths;
 
-#[derive(Clone)]
-pub(crate) struct LegacyBridgeSet {
-    pub(crate) verge: Arc<dyn VergeLegacyBridge>,
-    pub(crate) window: Arc<dyn WindowLegacyBridge>,
-    pub(crate) clash: Arc<dyn ClashLegacyBridge>,
-}
+pub(crate) use chimera_core::client::composition::LegacyBridgeSet;
 
 pub(crate) struct ClientSetupArgs {
     pub(crate) paths: PathResolver,
@@ -96,9 +87,9 @@ pub(crate) struct ClientSetupArgs {
     pub(crate) bundle_metadata: BundleMetadata,
     pub(crate) app_update_backend: Arc<dyn app_update::AppUpdateBackend>,
     pub(crate) app_update_events: Arc<dyn app_update::AppUpdateEventSink>,
-    pub(crate) changelog_http: Arc<dyn ChangelogHttp>,
-    pub(crate) network_diagnostics: Arc<dyn NetworkDiagnostics>,
-    pub(crate) icons: chimera_core::service::icon::IconService,
+    pub(crate) host_adapters: chimera_core::client::host_adapters::ClientHostAdapters,
+    pub(crate) resolved_paths: chimera_paths::PathResolver,
+    pub(crate) self_proxy_port: Arc<dyn chimera_contracts::net::SelfProxyPortSource>,
     pub(crate) bridges: LegacyBridgeSet,
     /// The ref Core/Service Actor handles from the composition root.
     /// Legacy lifecycle ports remain compatibility adapters, not owners.
@@ -106,8 +97,6 @@ pub(crate) struct ClientSetupArgs {
     pub(crate) service_v2: ServiceClient,
     pub(crate) core: Arc<dyn CoreLifecyclePort>,
     pub(crate) service: Arc<dyn core_lifecycle::ServiceLifecyclePort>,
-
-    pub(crate) profile_service: Arc<ProfileFileService>,
 
     pub(crate) system_dns: Arc<dyn SystemDnsCache>,
     pub(crate) traffic_store: Option<Arc<chimera_core::traffic::TrafficFileStorage>>,
@@ -141,79 +130,15 @@ fn utf8_path(path: std::path::PathBuf) -> anyhow::Result<camino::Utf8PathBuf> {
         .map_err(|path| anyhow::anyhow!("config path is not UTF-8: {}", path.display()))
 }
 
-async fn new_typed_config_clients(
-    paths: &PathResolver,
-    bridges: &LegacyBridgeSet,
-    build_channel: ReleaseChannel,
-    mutations: chimera_core::state::mutation::MutationCoordinator,
-    shutdown: tokio_util::sync::CancellationToken,
-) -> anyhow::Result<TypedConfigClients> {
-    let application = ApplicationClient::new_with_mutations(
-        utf8_path(paths.application_config_path())?,
-        bridges.verge.snapshot_legacy()?,
-        bridges.verge.clone(),
-        build_channel,
-        mutations.clone(),
-        shutdown.clone(),
-    )
-    .await?;
-    let session_state = SessionStateClient::new(
-        utf8_path(paths.session_state_path())?,
-        bridges.window.snapshot_legacy()?,
-        bridges.window.clone(),
-    )
-    .await?;
-    let clash_config = ClashConfigClient::new_with_mutations(
-        utf8_path(paths.clash_config_path())?,
-        bridges.clash.snapshot_legacy()?,
-        bridges.clash.clone(),
-        mutations,
-        shutdown,
-    )
-    .await?;
-
-    Ok(TypedConfigClients {
-        application,
-        session_state,
-        clash_config,
-    })
-}
-
 struct ChimeraClientInner {
-    application: ApplicationClient,
-    session_state: SessionStateClient,
+    shared: chimera_core::client::ChimeraClient,
     clash_config: ClashConfigClient,
-    app_updater: Option<AppUpdateClient>,
-    changelog_http: Option<Arc<dyn ChangelogHttp>>,
-    network_diagnostics: Arc<dyn NetworkDiagnostics>,
-    icons: chimera_core::service::icon::IconService,
-    bundle_metadata: Option<BundleMetadata>,
     core_lifecycle: RuntimeReconcilerClient,
-    core_api: Option<CoreClientV2>,
-    service_actor: Option<ServiceClient>,
-    /// Ref CoreFacade is the read-only host/API authority for the production
-    /// Client. Lifecycle mutations remain with the legacy bridge until the
-    /// workflow and facade are moved as one stateful owner.
-    ref_facade: Option<chimera_core::actor_v2::facade::CoreFacade>,
-    core: Arc<dyn CoreLifecyclePort>,
-    shutdown: tokio_util::sync::CancellationToken,
-    tasks: tokio_util::task::TaskTracker,
-    file_logs: Option<chimera_core::client::logs::FileLogsClient>,
-    streams: chimera_core::clash::ws::StreamsClient,
-    streams_shutdown: tokio_util::sync::CancellationToken,
-    proxies: chimera_core::proxies::ProxiesClient,
-    typed_profiles: Option<profiles::ProfilesClient>,
     /// The one candidate checker shared by the Profiles gate and legacy
     /// Clash read-only preflight during the staged ref source cutover.
     checked_gate: Option<Arc<reconciler::check::CandidateCheck>>,
-    profile_service: Arc<ProfileFileService>,
-    system_dns: Arc<dyn SystemDnsCache>,
-    traffic_store: parking_lot::Mutex<Option<Arc<chimera_core::traffic::TrafficFileStorage>>>,
-    traffic: parking_lot::RwLock<Option<crate::core::traffic::TrafficClient>>,
-    /// The same opt-in source-address cache serves the traffic recorder and
-    /// the explicit public-egress probe, without spawning a second probe.
-    local_source: Arc<traffic::LocalSourceCache>,
-    geo_index: parking_lot::RwLock<Option<crate::core::geo::GeoIndexClient>>,
+    profile_fs: Arc<dyn chimera_core::state::profiles::ports::ProfileFsPort>,
+    profile_paths: chimera_profile_io::fs_service::ProfileFileService,
     ui_sink: Arc<dyn UiEventSink>,
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     effects: effects::actor::EffectsClient,
@@ -233,9 +158,10 @@ struct ChimeraClientInner {
     _test_profile_dir: Option<Arc<tempfile::TempDir>>,
 }
 
-impl Drop for ChimeraClientInner {
-    fn drop(&mut self) {
-        self.streams_shutdown.cancel();
+impl std::ops::Deref for ChimeraClient {
+    type Target = chimera_core::client::ChimeraClient;
+    fn deref(&self) -> &Self::Target {
+        &self.inner.shared
     }
 }
 
@@ -250,27 +176,6 @@ impl chimera_contracts::net::SelfProxyPortSource for NoSelfProxyPort {
 }
 
 impl ChimeraClient {
-    pub async fn url_delay_test(&self, url: &str, expected_status: u16) -> Option<u64> {
-        self.inner
-            .network_diagnostics
-            .url_delay_test(url, expected_status, self.clash_info().port)
-            .await
-    }
-
-    pub async fn get_ipsb_asn(&self) -> anyhow::Result<serde_json::Value> {
-        self.inner
-            .network_diagnostics
-            .get_ipsb_asn(self.clash_info().port)
-            .await
-    }
-
-    pub async fn get_cached_icon(&self, url: &str) -> anyhow::Result<(String, bytes::Bytes)> {
-        self.inner
-            .icons
-            .get_cached_icon(url, self.clash_info().port)
-            .await
-    }
-
     pub(crate) fn try_new_with_args(args: ClientSetupArgs) -> anyhow::Result<Self> {
         let ClientSetupArgs {
             paths,
@@ -278,15 +183,14 @@ impl ChimeraClient {
             bundle_metadata,
             app_update_backend,
             app_update_events,
-            changelog_http,
-            network_diagnostics,
-            icons,
+            host_adapters,
+            resolved_paths,
+            self_proxy_port,
             bridges,
             core_v2,
             service_v2,
             core,
             service,
-            profile_service,
             system_dns,
             traffic_store,
             jobs,
@@ -303,13 +207,21 @@ impl ChimeraClient {
             window,
         } = args;
         let mutations = chimera_core::state::mutation::MutationCoordinator::pending();
-        let typed = tauri::async_runtime::block_on(new_typed_config_clients(
-            &paths,
-            &bridges,
-            bundle_metadata.release_channel,
-            mutations.clone(),
-            shutdown.clone(),
-        ))?;
+        let typed = tauri::async_runtime::block_on(
+            chimera_core::client::composition::new_typed_config_clients(
+                &resolved_paths,
+                &bridges,
+                bundle_metadata.release_channel,
+                mutations.clone(),
+                shutdown.clone(),
+            ),
+        )?;
+        let typed = TypedConfigClients {
+            application: typed.application,
+            session_state: typed.session_state,
+            clash_config: ClashConfigClient::from_shared(typed.clash_config),
+        };
+        let file_ports = (host_adapters.profile_files)(self_proxy_port.clone());
         let observers = tauri::async_runtime::block_on(
             chimera_core::client::composition::spawn_runtime_observers(
                 paths.app_logs_dir().join("core"),
@@ -339,9 +251,9 @@ impl ChimeraClient {
                 Arc::new(mutations.clone()),
                 utf8_path(paths.profiles_path())?,
                 jobs,
-                profile_service.clone(),
-                profile_service.clone(),
-                profile_service.clone(),
+                file_ports.fs.clone(),
+                file_ports.fetcher,
+                file_ports.materialization,
                 shutdown.clone(),
                 &tasks,
             ))?;
@@ -373,6 +285,8 @@ impl ChimeraClient {
             runtime_paths,
             &core_v2,
             &core_lifecycle,
+            host_adapters.core_specs,
+            host_adapters.scripts,
         )?);
         // Both Application and Clash legacy postcommit paths validate via
         // the exact Profiles production checker. Install it in the sole
@@ -396,6 +310,11 @@ impl ChimeraClient {
         let proxies = owners.proxies;
         let app_updater = owners.app_updater;
         let file_logs = owners.file_logs;
+        let changelog_http = (host_adapters.changelog_http)(self_proxy_port);
+        let icons = chimera_core::service::icon::IconService::new(
+            resolved_paths,
+            host_adapters.icon_fetcher,
+        );
         let client = Self::with_parts_and_typed_config(
             typed,
             core_lifecycle,
@@ -406,14 +325,17 @@ impl ChimeraClient {
             streams,
             streams_shutdown,
             proxies,
-            profile_service,
+            file_ports.fs,
+            chimera_profile_io::fs_service::ProfileFileService::from_profiles_dir(
+                paths.app_profiles_dir(),
+            ),
             Some(typed_profiles),
             Some(profile_gate),
             system_dns,
             ui_sink,
             Some(app_updater),
             Some(changelog_http),
-            network_diagnostics,
+            host_adapters.network_diagnostics,
             icons,
             Some(bundle_metadata),
             shutdown.clone(),
@@ -427,33 +349,11 @@ impl ChimeraClient {
             accelerators,
             window,
         );
-        *client.inner.traffic_store.lock() = traffic_store;
-        let has_traffic_store = client.inner.traffic_store.lock().is_some();
-        if has_traffic_store {
-            let geo_index =
-                tauri::async_runtime::block_on(crate::core::geo::GeoIndexClient::spawn(
-                    crate::core::geo::GeoIndexArgs {
-                        source: Arc::new(crate::core::geo::FsCountryIndexSource::new(
-                            paths.app_data_dir().to_path_buf(),
-                            paths.cache_dir().join("geodata-index"),
-                        )),
-                        mode_source: Arc::new(crate::client::traffic::ActiveCoreGeodataMode(
-                            client
-                                .inner
-                                .core_api
-                                .as_ref()
-                                .context("production geodata needs the ref CoreActor")?
-                                .clone(),
-                        )),
-                    },
-                    shutdown,
-                    &tasks,
-                ));
-            match geo_index {
-                Ok(geo_index) => *client.inner.geo_index.write() = Some(geo_index),
-                Err(error) => tracing::warn!(%error, "traffic geography index is unavailable"),
-            }
-        }
+        tauri::async_runtime::block_on(client.inner.shared.initialize_traffic(
+            traffic_store,
+            paths.app_data_dir().to_path_buf(),
+            paths.cache_dir(),
+        ))?;
         // ref's CoreActor publishes host/instance changes independently of
         // application configuration commits. Subscribe once from the Tauri
         // reactor after the complete Client exists; a sync setup-thread spawn
@@ -561,6 +461,9 @@ impl ChimeraClient {
             streams_shutdown,
             proxies,
             profile_service,
+            chimera_profile_io::fs_service::ProfileFileService::from_profiles_dir(
+                paths.app_profiles_dir(),
+            ),
             None,
             None,
             system_dns,
@@ -600,7 +503,8 @@ impl ChimeraClient {
         streams: chimera_core::clash::ws::StreamsClient,
         streams_shutdown: tokio_util::sync::CancellationToken,
         proxies: chimera_core::proxies::ProxiesClient,
-        profile_service: Arc<ProfileFileService>,
+        profile_fs: Arc<dyn chimera_core::state::profiles::ports::ProfileFsPort>,
+        profile_paths: chimera_profile_io::fs_service::ProfileFileService,
         typed_profiles: Option<profiles::ProfilesClient>,
         checked_gate: Option<Arc<reconciler::check::CandidateCheck>>,
         system_dns: Arc<dyn SystemDnsCache>,
@@ -625,44 +529,38 @@ impl ChimeraClient {
             dyn hotkey::ports::WindowControl,
         >,
     ) -> Self {
-        let ref_facade = core_api
-            .as_ref()
-            .zip(service_actor.as_ref())
-            .map(|(core, service)| {
-                chimera_core::actor_v2::facade::CoreFacade::new(core.clone(), service.clone())
+        let shared =
+            chimera_core::client::ChimeraClient::with_parts(chimera_core::client::ClientParts {
+                application: typed.application,
+                session_state: typed.session_state,
+                clash_config: (*typed.clash_config).clone(),
+                direct_egress: Arc::new(
+                    chimera_net::direct_egress::NetworkDirectEgressProbe::default(),
+                ),
+                app_updater,
+                changelog_http,
+                network_diagnostics,
+                icons,
+                bundle_metadata,
+                core_api,
+                service_actor,
+                core,
+                shutdown,
+                tasks,
+                file_logs,
+                streams,
+                streams_shutdown,
+                proxies,
+                typed_profiles,
+                system_dns,
             });
-        let local_source = Arc::new(traffic::LocalSourceCache::new(
-            typed.application.clone(),
-            typed.clash_config.clone(),
-        ));
         let inner = ChimeraClientInner {
-            application: typed.application,
-            session_state: typed.session_state,
+            shared,
             clash_config: typed.clash_config,
-            app_updater,
-            changelog_http,
-            network_diagnostics,
-            icons,
-            bundle_metadata,
             core_lifecycle,
-            core_api,
-            service_actor,
-            ref_facade,
-            core,
-            shutdown,
-            tasks,
-            file_logs,
-            streams,
-            streams_shutdown,
-            proxies,
-            typed_profiles,
             checked_gate,
-            profile_service,
-            system_dns,
-            traffic_store: parking_lot::Mutex::new(None),
-            traffic: parking_lot::RwLock::new(None),
-            local_source,
-            geo_index: parking_lot::RwLock::new(None),
+            profile_fs,
+            profile_paths,
             ui_sink,
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
             effects,
@@ -686,62 +584,8 @@ impl ChimeraClient {
 }
 
 impl ChimeraClient {
-    /// Read the ref Core Actor's authoritative host and generation projection.
-    /// The legacy CoreLifecyclePort remains a Chimera runtime-config adapter,
-    /// not the owner of Core routing state.
-    pub(crate) fn routed_core_status(&self) -> Option<CoreStatusProjection> {
-        if let Some(facade) = &self.inner.ref_facade {
-            return Some(facade.core_status());
-        }
-        self.inner.core_api.as_ref().map(CoreClientV2::status)
-    }
-
-    /// Read the ref Service Actor directly, without asking the old Facade to
-    /// reconstruct its own Service phase from a separate IPC status cache.
-    pub(crate) fn service_actor_status(&self) -> Option<ServiceHostStatus> {
-        if let Some(facade) = &self.inner.ref_facade {
-            return Some(facade.service_status());
-        }
-        self.inner.service_actor.as_ref().map(ServiceClient::status)
-    }
-
-    pub(crate) fn shutdown_child_token(&self) -> tokio_util::sync::CancellationToken {
-        chimera_core::client::app_lifecycle::shutdown_child_token(&self.inner.shutdown)
-    }
-
-    pub(crate) fn spawn_tracked(
-        &self,
-        task: impl std::future::Future<Output = ()> + Send + 'static,
-    ) -> bool {
-        chimera_core::client::app_lifecycle::spawn_tracked(
-            &self.inner.shutdown,
-            &self.inner.tasks,
-            task,
-        )
-    }
-
-    pub(crate) fn file_logs(
-        &self,
-    ) -> chimera_logging::LogResult<&chimera_core::client::logs::FileLogsClient> {
-        self.inner
-            .file_logs
-            .as_ref()
-            .ok_or(chimera_logging::LogError::Unavailable)
-    }
-
-    pub(crate) fn streams(&self) -> &chimera_core::clash::ws::StreamsClient {
-        &self.inner.streams
-    }
-
-    fn profiles_client(&self) -> anyhow::Result<&profiles::ProfilesClient> {
-        self.inner
-            .typed_profiles
-            .as_ref()
-            .ok_or_else(|| anyhow!("typed ProfilesClient is not configured"))
-    }
-
     fn refresh_profiles(&self) {
-        self.inner.proxies.invalidate();
+        self.inner.shared.proxies().invalidate();
         self.inner.ui_sink.refresh_profiles();
     }
 
@@ -840,59 +684,6 @@ impl ChimeraClient {
                 MutationOutcome::from_parts((), vec![degradation])
             }
         }
-    }
-
-    pub(crate) fn get_profiles(&self) -> anyhow::Result<Arc<Profiles>> {
-        Ok(self.profiles_client()?.snapshot())
-    }
-
-    /// The secret-free profile listing for read-only consumers. The full
-    /// source document remains available through `get_profiles` for editors.
-    pub(crate) fn get_profiles_listing(
-        &self,
-    ) -> anyhow::Result<chimera_config::profile::ProfilesListing> {
-        Ok((&*self.profiles_client()?.snapshot()).into())
-    }
-
-    pub(crate) async fn get_transparent_proxy_status(
-        &self,
-    ) -> anyhow::Result<chimera_ipc::api::network::transparent_proxy::NetworkTransparentProxyStatus>
-    {
-        if let Some(core) = &self.inner.core_api {
-            return Ok(core.transparent_proxy_status().await?);
-        }
-        // Test-only legacy lifecycle injection.
-        self.inner.core.transparent_proxy_status().await
-    }
-
-    pub(crate) async fn profile_sync_status(
-        &self,
-        uid: ProfileId,
-    ) -> anyhow::Result<crate::client::jobs::ProfileSyncStatus> {
-        Ok(self.profiles_client()?.profile_sync_status(uid).await?)
-    }
-
-    pub(crate) async fn profile_sync_runs(
-        &self,
-        uid: ProfileId,
-        after: Option<chimera_jobs::dto::RunCursorDto>,
-    ) -> anyhow::Result<chimera_jobs::dto::RunPageDto> {
-        Ok(self
-            .profiles_client()?
-            .profile_sync_runs(uid, after)
-            .await?)
-    }
-
-    pub(crate) async fn profile_sync_logs(
-        &self,
-        uid: ProfileId,
-        run: String,
-        after: Option<String>,
-    ) -> anyhow::Result<chimera_jobs::dto::LogPageDto> {
-        Ok(self
-            .profiles_client()?
-            .profile_sync_logs(uid, run, after)
-            .await?)
     }
 
     pub(crate) async fn add_profile(
@@ -1226,7 +1017,7 @@ impl ChimeraClient {
             .source()
             .ok_or(ProfilesError::ProfileHasNoFile)?;
         let raw = crate::state::profiles::ports::ProfileFsPort::read(
-            self.inner.profile_service.as_ref(),
+            self.inner.profile_fs.as_ref(),
             &source.materialized().file,
         )?;
         profile_file_text_for_editor(raw, item.definition.is_config())
@@ -1246,7 +1037,7 @@ impl ChimeraClient {
             .source()
             .ok_or(ProfilesError::ProfileHasNoFile)?;
         self.inner
-            .profile_service
+            .profile_paths
             .resolve_path(&source.materialized().file)
             .map_err(Into::into)
     }
@@ -1433,9 +1224,9 @@ mod tests {
         }));
 
         started_rx.await.unwrap();
-        client.inner.shutdown.cancel();
-        client.inner.tasks.close();
-        client.inner.tasks.wait().await;
+        client.inner.shared.shutdown().cancel();
+        client.inner.shared.tasks().close();
+        client.inner.shared.tasks().wait().await;
         finished_rx.await.unwrap();
     }
 
@@ -1588,7 +1379,8 @@ mod tests {
             .unwrap();
         Arc::get_mut(&mut client.inner)
             .expect("the fixture has one Client owner")
-            .core_api = Some(core_api.clone());
+            .shared
+            .test_set_core_api(Some(core_api.clone()));
 
         let routed = client
             .routed_core_status()
@@ -1671,7 +1463,8 @@ mod tests {
         );
         Arc::get_mut(&mut client.inner)
             .expect("test fixture has one owner")
-            .service_actor = Some(actor.clone());
+            .shared
+            .test_set_service_actor(Some(actor.clone()));
 
         assert_eq!(client.service_status().phase, ServicePhase::NotInstalled);
         assert_eq!(
@@ -1719,10 +1512,12 @@ mod tests {
             ServicePhase::NotInstalled
         );
         let inner = Arc::get_mut(&mut client.inner).expect("one test Client owner");
-        inner.ref_facade = Some(chimera_core::actor_v2::facade::CoreFacade::new(
-            core.clone(),
-            service.clone(),
-        ));
+        inner
+            .shared
+            .test_set_ref_facade(Some(chimera_core::actor_v2::facade::CoreFacade::new(
+                core.clone(),
+                service.clone(),
+            )));
 
         assert_eq!(
             client
@@ -1806,7 +1601,8 @@ mod tests {
             .unwrap();
         Arc::get_mut(&mut client.inner)
             .expect("the fixture has one Client owner")
-            .core_api = Some(core.clone());
+            .shared
+            .test_set_core_api(Some(core.clone()));
 
         // A bare TaskTracker::spawn here would panic without a reactor. The
         // composition root must enter Tauri's runtime for registration.
@@ -1816,9 +1612,12 @@ mod tests {
 
         client.request_shutdown();
         tauri::async_runtime::block_on(async {
-            tokio::time::timeout(std::time::Duration::from_secs(5), client.inner.tasks.wait())
-                .await
-                .expect("CoreActor observer must drain from synchronous setup");
+            tokio::time::timeout(
+                std::time::Duration::from_secs(5),
+                client.inner.shared.tasks().wait(),
+            )
+            .await
+            .expect("CoreActor observer must drain from synchronous setup");
             core.finish_shutdown().await;
         });
     }
@@ -1831,7 +1630,8 @@ mod tests {
             .unwrap();
         Arc::get_mut(&mut client.inner)
             .expect("the fixture has one Client owner")
-            .core_api = Some(core.clone());
+            .shared
+            .test_set_core_api(Some(core.clone()));
 
         assert!(client.start_core_status_observer());
         // The ref router publishes an observable terminal transition. The
@@ -1850,9 +1650,12 @@ mod tests {
         .expect("the ref projection must notify the UI");
 
         client.request_shutdown();
-        tokio::time::timeout(std::time::Duration::from_secs(5), client.inner.tasks.wait())
-            .await
-            .expect("the tracked observer must exit after root cancellation");
+        tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            client.inner.shared.tasks().wait(),
+        )
+        .await
+        .expect("the tracked observer must exit after root cancellation");
         core.finish_shutdown().await;
     }
 
@@ -1894,9 +1697,9 @@ mod tests {
         .await
         .unwrap();
         let inner = Arc::get_mut(&mut client.inner).expect("unique test client");
-        inner.application = application.clone();
+        inner.shared.test_set_application(application.clone());
         inner.core_lifecycle = RuntimeReconcilerClient::direct(
-            inner.core.clone(),
+            inner.shared.core().clone(),
             application,
             inner.clash_config.clone(),
             RuntimePaths::from_config_root(

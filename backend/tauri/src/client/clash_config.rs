@@ -19,7 +19,7 @@ use serde_yaml::{Mapping, Value};
 use struct_patch::Patch;
 
 use crate::{
-    config::{clash::ClashInfo, core::Config, runtime::ClashConfigOverrides},
+    config::{core::Config, runtime::ClashConfigOverrides},
     core::{clash::transaction::TransactionOutcome, handle},
     log_err,
     state::{
@@ -63,6 +63,11 @@ struct ClashPatchPlan {
 }
 
 impl ClashConfigClient {
+    pub(super) fn from_shared(
+        client: chimera_core::client::clash_config::ClashConfigClient,
+    ) -> Self {
+        Self(client)
+    }
     pub(super) async fn new(
         path: Utf8PathBuf,
         seed: ClashConfig,
@@ -70,20 +75,6 @@ impl ClashConfigClient {
     ) -> Result<Self> {
         Ok(Self(
             chimera_core::client::clash_config::ClashConfigClient::new(path, seed, bridge).await?,
-        ))
-    }
-    pub(super) async fn new_with_mutations(
-        path: Utf8PathBuf,
-        seed: ClashConfig,
-        bridge: Arc<dyn ClashLegacyBridge>,
-        mutations: chimera_core::state::mutation::MutationCoordinator,
-        shutdown: tokio_util::sync::CancellationToken,
-    ) -> Result<Self> {
-        Ok(Self(
-            chimera_core::client::clash_config::ClashConfigClient::new_with_mutations(
-                path, seed, bridge, mutations, shutdown,
-            )
-            .await?,
         ))
     }
     #[cfg(test)]
@@ -475,10 +466,11 @@ impl ChimeraClient {
     /// owner, port session or source snapshot store is created.
     fn committed_runtime_source_versions(&self) -> super::reconciler::committed::SourceVersions {
         super::reconciler::committed::SourceVersions::from_committed(
-            &self.inner.application,
+            self.inner.shared.application(),
             &self.inner.clash_config,
             self.inner
-                .typed_profiles
+                .shared
+                .typed_profiles()
                 .as_ref()
                 .map(|p| *p.snapshot_handle().load().version),
         )
@@ -489,7 +481,7 @@ impl ChimeraClient {
     /// independently. The lower Core validator is read-only and does not
     /// acquire the workflow's mutating Core/Service ownership.
     pub(super) async fn check_clash_runtime_candidate(&self, candidate: ClashConfig) -> Result<()> {
-        if self.inner.typed_profiles.is_none() {
+        if self.inner.shared.typed_profiles().is_none() {
             // Compatibility-only fixtures instantiate no Profiles source.
             #[cfg(test)]
             return Ok(());
@@ -526,10 +518,15 @@ impl ChimeraClient {
         {
             use crate::state::mutation::RuntimeGate as _;
 
-            let profiles = self.inner.typed_profiles.as_ref().expect("checked above");
+            let profiles = self
+                .inner
+                .shared
+                .typed_profiles()
+                .as_ref()
+                .expect("checked above");
             let checker = super::reconciler::legacy_check::CandidateCheck::new(
-                self.inner.core.clone(),
-                self.inner.application.clone(),
+                self.inner.shared.core().clone(),
+                self.inner.shared.application().clone(),
                 self.inner.clash_config.clone(),
                 profiles.content_reader(),
                 profiles.snapshot_handle(),
@@ -537,14 +534,6 @@ impl ChimeraClient {
             );
             checker.check(proposed).await.map_err(anyhow::Error::new)
         }
-    }
-
-    pub(crate) fn get_clash_config(&self) -> Result<ClashConfig> {
-        self.inner.clash_config.get()
-    }
-
-    pub(crate) fn clash_info(&self) -> ClashInfo {
-        self.inner.core.effective_clash_info()
     }
 
     pub(crate) async fn patch_clash(&self, patch: Mapping) -> Result<()> {
@@ -604,7 +593,8 @@ impl ChimeraClient {
             Ok(config) => {
                 if let Err(error) = self
                     .inner
-                    .streams
+                    .shared
+                    .streams()
                     .set_log_level(config.overrides.log_level())
                     .await
                 {

@@ -1,6 +1,6 @@
 //! Preserve the existing Core-instance mode proof while using ref TrafficFeed.
-use crate::core::geo::{CoreGeodataModeSource, CountryIndexSnapshot, GeoIndexClient};
-use chimera_core::{
+use crate::geo::{CoreGeodataModeSource, CountryIndexSnapshot, GeoIndexClient};
+use crate::{
     clash::ws::ClashConnectionsFrame,
     client::traffic_frames::{frame_from_snapshot, geo::CountryLookup},
     traffic::{FrameNormalizer, LocalSourceIps},

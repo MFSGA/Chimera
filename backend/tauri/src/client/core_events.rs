@@ -12,7 +12,7 @@ impl ChimeraClient {
     /// The observer never owns or re-selects an endpoint and exits when the
     /// parent Client's shutdown token is canceled.
     pub(crate) fn start_core_status_observer(&self) -> bool {
-        let Some(core) = &self.inner.core_api else {
+        let Some(core) = self.inner.shared.core_api() else {
             // Test-only legacy clients do not synthesize an extra actor.
             return true;
         };

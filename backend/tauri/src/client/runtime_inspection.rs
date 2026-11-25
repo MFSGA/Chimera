@@ -7,7 +7,10 @@ pub use chimera_core::client::runtime_inspection::{
 
 impl ChimeraClient {
     fn inspection_reader(&self) -> RuntimeInspectionReader<'_> {
-        RuntimeInspectionReader::new(self.inner.core.as_ref(), self.inner.core_api.as_ref())
+        RuntimeInspectionReader::new(
+            self.inner.shared.core().as_ref(),
+            self.inner.shared.core_api().as_ref(),
+        )
     }
 
     pub(crate) async fn runtime_exists(&self) -> Vec<String> {

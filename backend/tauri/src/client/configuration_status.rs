@@ -14,17 +14,19 @@ impl ChimeraClient {
         let effects = EffectsSnapshot::default();
         let sources = self
             .inner
-            .typed_profiles
+            .shared
+            .typed_profiles()
             .as_ref()
             .map(|profiles| profiles.sources())
             .unwrap_or_default();
         let source_versions = SourceVersions {
-            application: self.inner.application.snapshot().version,
+            application: self.inner.shared.application().snapshot().version,
             clash: self.inner.clash_config.snapshot().version,
-            session: self.inner.session_state.snapshot().version,
+            session: self.inner.shared.session_state().snapshot().version,
             profiles: self
                 .inner
-                .typed_profiles
+                .shared
+                .typed_profiles()
                 .as_ref()
                 .map(|profiles| profiles.snapshot().revision())
                 .unwrap_or_default(),
@@ -34,7 +36,7 @@ impl ChimeraClient {
 
     pub(crate) async fn retry_configuration_runtime(&self) -> anyhow::Result<()> {
         anyhow::ensure!(
-            !self.inner.shutdown.is_cancelled(),
+            !self.inner.shared.shutdown().is_cancelled(),
             "client is shutting down"
         );
         self.inner.core_lifecycle.reconcile().await
@@ -59,7 +61,7 @@ impl ChimeraClient {
         let Some(reconciler) = self.inner.core_lifecycle.subscribe_reconciler() else {
             return true;
         };
-        let Some(profiles) = self.inner.typed_profiles.as_ref() else {
+        let Some(profiles) = self.inner.shared.typed_profiles().as_ref() else {
             return true;
         };
         let sources = profiles.subscribe_sources();

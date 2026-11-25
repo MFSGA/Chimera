@@ -13,7 +13,7 @@ pub(in crate::client) mod authority;
 pub(in crate::client) mod check;
 pub(in crate::client) mod checked;
 pub(crate) mod committed;
-pub(in crate::client) mod composition;
+pub(crate) mod composition;
 pub(crate) mod decision;
 pub(in crate::client) mod inputs;
 // Only isolated test fixtures still need the old CoreLifecycle validator.

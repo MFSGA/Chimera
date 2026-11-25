@@ -1,9 +1,8 @@
 //! Direct-route egress probe, isolated from system and self proxies: STUN
 //! servers first, then the accepted HTTP lookup services. The STUN codec is pure.
-mod contracts;
 mod stun;
 
-pub use contracts::{
+pub use chimera_contracts::net::{
     DirectEgressProbe, EgressAnswer, EgressSource, ProbePermission, ProbeSources, StunAttempt,
     StunServerTest, StunTransport,
 };

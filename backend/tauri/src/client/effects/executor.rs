@@ -68,7 +68,7 @@ impl ApplicationEffectExecutor {
                 EffectKind::Hotkeys,
                 revision,
                 "hotkey_invalid_bindings",
-                error.to_string(),
+                crate::client::hotkey::localized_parse_error(&error),
                 false,
             ),
         }

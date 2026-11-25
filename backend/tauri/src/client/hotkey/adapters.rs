@@ -43,13 +43,19 @@ impl AcceleratorValidator for PlatformAcceleratorValidator {
             .join("+");
         // The plugin's own parse panics inside `register`, so an accelerator it
         // cannot read has to be rejected before it gets there (issue #287).
-        let shortcut = Shortcut::from_str(&normalized)
-            .map_err(|_| HotkeyParseError::InvalidAccelerator(accelerator.to_owned()))?;
+        let shortcut = Shortcut::from_str(&normalized).map_err(|source| {
+            HotkeyParseError::UnsupportedAccelerator {
+                accelerator: accelerator.to_owned(),
+                source: Box::new(source),
+            }
+        })?;
         // Asked of what the user wrote, not of the canonical form: the
         // canonical spelling of a modifier-less accelerator would still have to
         // be rejected, and the message has to name what they typed.
         if !has_super_key(accelerator) {
-            return Err(HotkeyParseError::MissingSuperKey(accelerator.to_owned()));
+            return Err(HotkeyParseError::MissingSuperKey {
+                accelerator: accelerator.to_owned(),
+            });
         }
         // Round-trips: the plugin's parser reads its own output back to the
         // same shortcut, so this is what gets handed to the OS.

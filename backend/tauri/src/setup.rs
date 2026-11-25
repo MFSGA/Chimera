@@ -3,7 +3,6 @@
 use std::sync::Arc;
 
 use anyhow::Context as _;
-use chimera_contracts::net::SelfProxyPortSource as _;
 use chimera_core::traffic::{Profile as TrafficProfile, TrafficFileStorage};
 use chimera_os::system_dns::OsSystemDnsCache;
 use chimera_utils::process::{AtomicStopStrategy, StopStrategy};
@@ -121,16 +120,6 @@ pub fn setup(
     let tasks = startup_owners.tasks.clone();
     let system_proxy_source: Arc<dyn chimera_contracts::net::SystemProxySource> =
         Arc::new(chimera_os::system_proxy_source::OsSystemProxySource);
-    let profile_service = Arc::new(
-        crate::service::profile_file::ProfileFileService::new_with_system_proxy(
-            paths.clone(),
-            Arc::new(LegacySelfProxyPort),
-            system_proxy_source.clone(),
-            bundle_metadata,
-            crate::service::profile_file::subscription_device_headers(),
-        ),
-    );
-
     let runtime_paths = RuntimePaths::from_config_dir(paths.app_config_dir())?;
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     let migrated = crate::migration_child::run_subprocess(&paths, startup_failure_capture);
@@ -360,13 +349,6 @@ pub fn setup(
     let app_update_events: Arc<dyn chimera_core::client::app_update::AppUpdateEventSink> = Arc::new(
         crate::adapters::app_update::TauriAppUpdateEventSink::new(app.handle().clone()),
     );
-    let changelog_http: Arc<dyn chimera_contracts::net::ChangelogHttp> =
-        Arc::new(chimera_net::changelog_http::ReqwestChangelogHttp::new(
-            update_proxy_port.clone(),
-            bundle_metadata,
-            system_proxy_source.clone(),
-        ));
-
     crate::startup_failure::report_boundary_with_backup_and_capture(
         crate::core::storage::setup(app, &paths),
         crate::startup_failure::StartupStage::Storage,
@@ -379,6 +361,39 @@ pub fn setup(
         bundle_metadata,
         system_proxy_source.clone(),
     ));
+    let host_adapters = chimera_core::client::host_adapters::ClientHostAdapters {
+        icon_fetcher: network.clone(),
+        network_diagnostics: network,
+        core_specs: crate::client::reconciler::composition::host_core_spec_resolver(),
+        scripts: crate::client::reconciler::composition::host_script_runner_factory(),
+        profile_files: {
+            let paths = paths.clone();
+            let system_proxy_source = system_proxy_source.clone();
+            Arc::new(move |proxy_port| {
+                let service = Arc::new(
+                    crate::service::profile_file::ProfileFileService::new_with_system_proxy(
+                        paths.clone(),
+                        proxy_port,
+                        system_proxy_source.clone(),
+                        bundle_metadata,
+                        crate::service::profile_file::subscription_device_headers(),
+                    ),
+                );
+                chimera_core::client::host_adapters::ProfileFilePorts {
+                    fs: service.clone(),
+                    fetcher: service.clone(),
+                    materialization: service,
+                }
+            })
+        },
+        changelog_http: Arc::new(move |proxy_port| {
+            Arc::new(chimera_net::changelog_http::ReqwestChangelogHttp::new(
+                proxy_port,
+                bundle_metadata,
+                system_proxy_source.clone(),
+            ))
+        }),
+    };
     let client = crate::startup_failure::report_boundary_with_backup_and_capture(
         ChimeraClient::try_new_with_args(ClientSetupArgs {
             paths: paths.clone(),
@@ -386,12 +401,9 @@ pub fn setup(
             bundle_metadata,
             app_update_backend,
             app_update_events,
-            changelog_http,
-            icons: chimera_core::service::icon::IconService::new(
-                resolved_paths.clone(),
-                network.clone(),
-            ),
-            network_diagnostics: network,
+            host_adapters,
+            resolved_paths: resolved_paths.clone(),
+            self_proxy_port: update_proxy_port,
             bridges,
             core_v2: core_router,
             service_v2: service_actor.clone(),
@@ -402,7 +414,6 @@ pub fn setup(
                     service_actor,
                 ),
             ),
-            profile_service,
             system_dns: Arc::new(OsSystemDnsCache::new(Arc::new(
                 crate::adapters::elevation::InteractiveElevationConsent,
             ))),
