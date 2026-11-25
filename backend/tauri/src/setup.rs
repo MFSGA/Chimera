@@ -203,7 +203,7 @@ pub fn setup(
         chimera_os::service::service_binary(resolved_paths.app_install_dir()?.as_std_path());
     let os_service_process = Arc::new(chimera_os::service::OsServiceProcessControl::new(
         service_binary,
-        resolved_paths,
+        resolved_paths.clone(),
         Arc::new(crate::adapters::elevation::InteractiveElevationConsent),
     ));
     // Only the legacy IPC health-check notification remains a Tauri adapter.
@@ -375,6 +375,10 @@ pub fn setup(
         Some(startup_failure_capture),
     )?;
 
+    let network = Arc::new(chimera_net::net_adapters::ReqwestNetworkAdapter::new(
+        bundle_metadata,
+        system_proxy_source.clone(),
+    ));
     let client = crate::startup_failure::report_boundary_with_backup_and_capture(
         ChimeraClient::try_new_with_args(ClientSetupArgs {
             paths: paths.clone(),
@@ -383,6 +387,8 @@ pub fn setup(
             app_update_backend,
             app_update_events,
             changelog_http,
+            icons: chimera_core::service::icon::IconService::new(resolved_paths, network.clone()),
+            network_diagnostics: network,
             bridges,
             core_v2: core_router,
             service_v2: service_actor.clone(),

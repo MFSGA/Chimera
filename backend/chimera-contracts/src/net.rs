@@ -20,3 +20,27 @@ pub trait ChangelogHttp: Send + Sync + 'static {
 pub trait SystemProxySource: Send + Sync + 'static {
     fn system_proxy(&self) -> Result<Option<String>>;
 }
+
+/// Downloads an icon's media type and bytes using the caller's current self-proxy port.
+#[cfg_attr(any(test, feature = "test-support"), mockall::automock)]
+#[async_trait::async_trait]
+pub trait IconFetcher: Send + Sync + 'static {
+    /// Returns the content type and response bytes, preserving request/body failures.
+    async fn fetch(&self, url: &url::Url, self_proxy_port: u16) -> Result<(String, bytes::Bytes)>;
+}
+
+/// Probes network endpoints using the self-proxy port supplied for each operation.
+#[cfg_attr(any(test, feature = "test-support"), mockall::automock)]
+#[async_trait::async_trait]
+pub trait NetworkDiagnostics: Send + Sync + 'static {
+    /// Measures milliseconds after a warm-up request; no matching response is `None`.
+    async fn url_delay_test(
+        &self,
+        url: &str,
+        expected_status: u16,
+        self_proxy_port: u16,
+    ) -> Option<u64>;
+
+    /// Returns the ASN service's JSON document without reshaping it.
+    async fn get_ipsb_asn(&self, self_proxy_port: u16) -> Result<serde_json::Value>;
+}

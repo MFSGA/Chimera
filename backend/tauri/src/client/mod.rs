@@ -42,7 +42,9 @@ use chimera_config::profile::{
     TransformKind,
 };
 use chimera_contracts::{
-    bundle_metadata::BundleMetadata, net::ChangelogHttp, system_dns::SystemDnsCache,
+    bundle_metadata::BundleMetadata,
+    net::{ChangelogHttp, NetworkDiagnostics},
+    system_dns::SystemDnsCache,
 };
 use chimera_core::{
     actor_v2::{
@@ -95,6 +97,8 @@ pub(crate) struct ClientSetupArgs {
     pub(crate) app_update_backend: Arc<dyn app_update::AppUpdateBackend>,
     pub(crate) app_update_events: Arc<dyn app_update::AppUpdateEventSink>,
     pub(crate) changelog_http: Arc<dyn ChangelogHttp>,
+    pub(crate) network_diagnostics: Arc<dyn NetworkDiagnostics>,
+    pub(crate) icons: chimera_core::service::icon::IconService,
     pub(crate) bridges: LegacyBridgeSet,
     /// The ref Core/Service Actor handles from the composition root.
     /// Legacy lifecycle ports remain compatibility adapters, not owners.
@@ -181,6 +185,8 @@ struct ChimeraClientInner {
     clash_config: ClashConfigClient,
     app_updater: Option<AppUpdateClient>,
     changelog_http: Option<Arc<dyn ChangelogHttp>>,
+    network_diagnostics: Arc<dyn NetworkDiagnostics>,
+    icons: chimera_core::service::icon::IconService,
     bundle_metadata: Option<BundleMetadata>,
     core_lifecycle: RuntimeReconcilerClient,
     core_api: Option<CoreClientV2>,
@@ -244,6 +250,27 @@ impl chimera_contracts::net::SelfProxyPortSource for NoSelfProxyPort {
 }
 
 impl ChimeraClient {
+    pub async fn url_delay_test(&self, url: &str, expected_status: u16) -> Option<u64> {
+        self.inner
+            .network_diagnostics
+            .url_delay_test(url, expected_status, self.clash_info().port)
+            .await
+    }
+
+    pub async fn get_ipsb_asn(&self) -> anyhow::Result<serde_json::Value> {
+        self.inner
+            .network_diagnostics
+            .get_ipsb_asn(self.clash_info().port)
+            .await
+    }
+
+    pub async fn get_cached_icon(&self, url: &str) -> anyhow::Result<(String, bytes::Bytes)> {
+        self.inner
+            .icons
+            .get_cached_icon(url, self.clash_info().port)
+            .await
+    }
+
     pub(crate) fn try_new_with_args(args: ClientSetupArgs) -> anyhow::Result<Self> {
         let ClientSetupArgs {
             paths,
@@ -252,6 +279,8 @@ impl ChimeraClient {
             app_update_backend,
             app_update_events,
             changelog_http,
+            network_diagnostics,
+            icons,
             bridges,
             core_v2,
             service_v2,
@@ -384,6 +413,8 @@ impl ChimeraClient {
             ui_sink,
             Some(app_updater),
             Some(changelog_http),
+            network_diagnostics,
+            icons,
             Some(bundle_metadata),
             shutdown.clone(),
             tasks.clone(),
@@ -536,6 +567,14 @@ impl ChimeraClient {
             ui_sink,
             None,
             None,
+            Arc::new(chimera_contracts::net::MockNetworkDiagnostics::new()),
+            chimera_core::service::icon::IconService::new(
+                chimera_paths::PathResolver::with_base_dirs(
+                    utf8_path(paths.app_config_dir().to_path_buf()).unwrap(),
+                    utf8_path(paths.app_data_dir().to_path_buf()).unwrap(),
+                ),
+                Arc::new(chimera_contracts::net::MockIconFetcher::new()),
+            ),
             None,
             tokio_util::sync::CancellationToken::new(),
             tokio_util::task::TaskTracker::new(),
@@ -568,6 +607,8 @@ impl ChimeraClient {
         ui_sink: Arc<dyn UiEventSink>,
         app_updater: Option<AppUpdateClient>,
         changelog_http: Option<Arc<dyn ChangelogHttp>>,
+        network_diagnostics: Arc<dyn NetworkDiagnostics>,
+        icons: chimera_core::service::icon::IconService,
         bundle_metadata: Option<BundleMetadata>,
         shutdown: tokio_util::sync::CancellationToken,
         tasks: tokio_util::task::TaskTracker,
@@ -600,6 +641,8 @@ impl ChimeraClient {
             clash_config: typed.clash_config,
             app_updater,
             changelog_http,
+            network_diagnostics,
+            icons,
             bundle_metadata,
             core_lifecycle,
             core_api,

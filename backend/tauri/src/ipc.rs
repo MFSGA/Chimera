@@ -1143,14 +1143,18 @@ pub fn get_core_lifecycle_status(
 
 #[tauri::command]
 #[specta::specta]
-pub async fn url_delay_test(url: &str, expected_status: u16) -> Result<Option<u64>> {
-    Ok(crate::utils::net::url_delay_test(url, expected_status).await)
+pub async fn url_delay_test(
+    client: State<'_, ChimeraClient>,
+    url: &str,
+    expected_status: u16,
+) -> Result<Option<u64>> {
+    Ok(client.url_delay_test(url, expected_status).await)
 }
 
 #[tauri::command]
 #[specta::specta]
-pub async fn get_ipsb_asn() -> Result<IpsbResponse> {
-    let value = crate::utils::net::get_ipsb_asn().await?;
+pub async fn get_ipsb_asn(client: State<'_, ChimeraClient>) -> Result<IpsbResponse> {
+    let value = client.get_ipsb_asn().await?;
     Ok(serde_json::from_value(value).map_err(anyhow::Error::from)?)
 }
 

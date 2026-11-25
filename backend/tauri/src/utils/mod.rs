@@ -13,7 +13,6 @@ pub mod help;
 pub mod hwid;
 /// 5
 pub mod init;
-pub mod net;
 /// 4
 pub mod open;
 pub mod path;

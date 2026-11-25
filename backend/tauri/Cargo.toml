@@ -72,6 +72,7 @@ chimera-geodata = { path = "../chimera-geodata" }
 chimera-traffic = { path = "../chimera-traffic", features = ["specta"] }
 chimera-jobs = { path = "../chimera-jobs", features = ["specta"] }
 chimera-paths = { path = '../chimera-paths' }
+bytes = '1'
 
 clash-api = { workspace = true }
 
