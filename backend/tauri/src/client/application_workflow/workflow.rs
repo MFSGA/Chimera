@@ -460,150 +460,24 @@ impl ApplicationWorkflow {
         &mut self,
         command: CoreCommand,
     ) -> anyhow::Result<bool> {
-        match command {
-            CoreCommand::StartupReconcile {
-                operation_id,
-                transition,
-            } => {
-                let report = self.startup_reconcile(operation_id, transition).await;
-                startup_report_result(&report)?;
-                Ok(false)
-            }
-            CoreCommand::RecoverStartup {
-                operation_id,
-                transition,
-            } => {
-                let report = self.recover_startup(operation_id, transition).await;
-                startup_report_result(&report)?;
-                Ok(false)
-            }
-            CoreCommand::RetryStartup {
-                operation_id,
-                identity,
-                transition,
-            } => {
-                let report = self.retry_startup(operation_id, identity, transition).await;
-                startup_report_result(&report)?;
-                Ok(false)
-            }
-            CoreCommand::FollowService {
-                operation_id,
-                transition,
-            } => {
-                self.follow_service(operation_id, transition).await?;
-                Ok(false)
-            }
-            CoreCommand::RecoverCore => {
-                let lifecycle = self.lifecycle_handle();
-                #[cfg(test)]
-                {
-                    let mut no_startup_retry_target = None;
-                    lifecycle
-                        .execute(CoreCommand::RecoverCore, &mut no_startup_retry_target)
-                        .await?;
-                }
-                #[cfg(not(test))]
-                lifecycle.execute(CoreCommand::RecoverCore).await?;
+        use chimera_core::client::reconciler::application_command::{
+            ApplicationCommandOutcome, execute_application_command,
+        };
+        let lifecycle = self.lifecycle_handle();
+        match execute_application_command(
+            &mut self.progress,
+            lifecycle.as_ref(),
+            self.notifications.as_deref(),
+            command,
+        )
+        .await?
+        {
+            ApplicationCommandOutcome::Settled {
+                service_reconnected,
+            } => Ok(service_reconnected),
+            ApplicationCommandOutcome::RecoverPrevious => {
                 self.recover_after_reconcile(lifecycle.as_ref()).await?;
                 Ok(false)
-            }
-            command @ (CoreCommand::Reconcile | CoreCommand::ReconcileSource)
-                if self.progress.has_unresolved_attempt() =>
-            {
-                // Preserve the original ref trigger when recovering a legacy
-                // committed target: explicit Retry is forced, whereas a
-                // SourceCommitted notice must not replay a known refusal.
-                let lifecycle = self.lifecycle_handle();
-                #[cfg(test)]
-                {
-                    let mut no_startup_retry_target = None;
-                    lifecycle
-                        .execute(command, &mut no_startup_retry_target)
-                        .await?;
-                }
-                #[cfg(not(test))]
-                lifecycle.execute(command).await?;
-                self.recover_after_reconcile(lifecycle.as_ref()).await?;
-                Ok(false)
-            }
-            CoreCommand::CacheStartupUnsettled {
-                operation_id,
-                reason,
-            } => {
-                if self
-                    .progress
-                    .cache_startup_unsettled(operation_id, reason.clone())
-                {
-                    if let Some(notifications) = &self.notifications {
-                        let ports = self.lifecycle().effect_port_binding().await;
-                        notifications.publish_full(ports);
-                    }
-                }
-                anyhow::bail!(reason)
-            }
-            command => {
-                let lifecycle = self.lifecycle_handle();
-                let source_only_patch = matches!(
-                    &command,
-                    CoreCommand::PatchApplicationConfig {
-                        patch,
-                        service_connected,
-                        ..
-                    } if !chimera_core::state::mutation::impact::
-                        application_patch_requires_reconcile(patch, *service_connected)
-                );
-                let preserve_unresolved_attempt = self.progress.begin_lifecycle_attempt(
-                    source_only_patch || matches!(&command, CoreCommand::Shutdown),
-                );
-                let refresh_startup_retry_identity =
-                    matches!(&command, CoreCommand::PatchApplicationConfig { .. });
-                let service_endpoint_recovery =
-                    matches!(&command, CoreCommand::ServiceEndpointDown(_));
-                let refresh_startup_target = match &command {
-                    CoreCommand::Reconcile
-                    | CoreCommand::ReconcileSource
-                    | CoreCommand::RecoverCore
-                    | CoreCommand::RetryDeferredProfiles { .. }
-                    | CoreCommand::ReconcileProfiles { .. } => true,
-                    #[cfg(test)]
-                    CoreCommand::SelectCore(_) => true,
-                    CoreCommand::PatchApplicationConfig {
-                        patch,
-                        service_connected,
-                        ..
-                    } => {
-                        chimera_core::state::mutation::impact::application_patch_requires_reconcile(
-                            patch,
-                            *service_connected,
-                        )
-                    }
-                    _ => false,
-                };
-                #[cfg(test)]
-                let result = {
-                    let mut no_startup_retry_target = None;
-                    lifecycle
-                        .execute(command, &mut no_startup_retry_target)
-                        .await
-                };
-                #[cfg(not(test))]
-                let result = lifecycle.execute(command).await;
-                if refresh_startup_target {
-                    self.refresh_startup_retry_target_after_reconcile(&lifecycle, &result)
-                        .await;
-                } else if refresh_startup_retry_identity && result.is_ok() {
-                    self.reschedule_startup_retry_after_committed_config_patch(&lifecycle)
-                        .await;
-                }
-                self.progress.finish_lifecycle_attempt(
-                    preserve_unresolved_attempt,
-                    lifecycle.outcome_uncertain(),
-                    &result,
-                );
-                let recovered = service_endpoint_recovery
-                    && result.is_ok()
-                    && lifecycle.take_service_recovery_reconnected();
-                result.map(|()| recovered)
             }
         }
     }
@@ -669,9 +543,31 @@ impl ApplicationWorkflow {
     }
 }
 
-pub(super) fn startup_report_result(report: &StartupReport) -> anyhow::Result<()> {
-    match report.outcome.failure_reason() {
-        Some(reason) => Err(anyhow::anyhow!(reason.to_owned())),
-        None => Ok(()),
+#[async_trait::async_trait]
+impl chimera_core::client::reconciler::application_command::ApplicationCommandHost
+    for CoreLifecycleWorkflow
+{
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    type SystemProxy = crate::client::system_proxy::SystemProxyClient;
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    type SystemProxy = ();
+
+    async fn execute_lower(&self, command: CoreCommand) -> anyhow::Result<()> {
+        #[cfg(test)]
+        {
+            self.execute(command, &mut None).await
+        }
+        #[cfg(not(test))]
+        {
+            self.execute(command).await
+        }
+    }
+    async fn effect_port_binding(
+        &self,
+    ) -> Option<chimera_config::runtime::executor::ResolvedPortBindings> {
+        ProfileRuntime::effect_port_binding(self).await
+    }
+    fn take_service_recovery_reconnected(&self) -> bool {
+        self.take_service_recovery_reconnected()
     }
 }

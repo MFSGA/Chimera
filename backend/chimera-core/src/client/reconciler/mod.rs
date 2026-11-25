@@ -56,3 +56,9 @@ pub mod worker;
 pub mod convergence_executor;
 
 pub mod source_capture;
+
+pub mod startup_transaction;
+
+pub mod composition;
+
+pub mod application_command;
