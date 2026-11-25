@@ -26,6 +26,12 @@ use crate::client::effects::{
 
 pub use self::actor::Args as SystemProxyArgs;
 
+#[derive(Debug, snafu::Snafu)]
+pub enum Error {
+    #[snafu(display("failed to spawn actor"))]
+    SpawnActor { source: ractor::SpawnErr },
+}
+
 /// Why an agent-requested, compare-and-set system proxy operation could not
 /// be completed by the shared proxy owner.
 #[derive(Debug, Clone, thiserror::Error)]
@@ -66,9 +72,11 @@ pub struct SystemProxyClient {
 impl SystemProxyClient {
     /// The actor puts back the proxy settings it found once `args.shutdown`
     /// is cancelled, and `tasks` waits for that.
-    pub async fn spawn(args: SystemProxyArgs, tasks: &TaskTracker) -> anyhow::Result<Self> {
+    pub async fn spawn(args: SystemProxyArgs, tasks: &TaskTracker) -> Result<Self, Error> {
         let shutdown = args.shutdown.clone();
-        let (actor, _handle) = Actor::spawn(None, SystemProxyActor, args).await?;
+        let (actor, _handle) = Actor::spawn(None, SystemProxyActor, args)
+            .await
+            .map_err(|source| Error::SpawnActor { source })?;
         chimera_owner_support::shutdown::drain_on_shutdown(
             tasks,
             shutdown.clone(),

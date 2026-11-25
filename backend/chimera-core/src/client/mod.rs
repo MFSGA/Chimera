@@ -41,6 +41,12 @@ pub mod profiles;
 
 pub mod effects;
 
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+pub mod system_proxy;
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+pub mod network_automation;
+
 pub mod configuration;
 
 pub mod configuration_observation;

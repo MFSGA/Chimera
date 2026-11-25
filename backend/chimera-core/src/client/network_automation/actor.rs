@@ -8,10 +8,10 @@
 use std::{sync::Arc, time::Duration};
 
 use chimera_config::application::{NetworkAutomation, NetworkEvaluation, NetworkState};
-use chimera_contracts::network_automation::{
+use chimera_contracts::network_environment::{NetworkEnvironmentPort, WifiNameRead};
+use chimera_runtime_values::network_automation::{
     NetworkAutomationApplication, NetworkAutomationStatus,
 };
-use chimera_contracts::network_environment::{NetworkEnvironmentPort, WifiNameRead};
 use ractor::{Actor, ActorProcessingErr, ActorRef, RpcReplyPort, concurrency::JoinHandle};
 use tokio_util::sync::CancellationToken;
 
@@ -248,7 +248,7 @@ impl State {
     /// mailbox turn's worker.
     async fn read(&self, wifi_name: WifiNameRead) -> NetworkState {
         let environment = self.environment.clone();
-        crate::utils::blocking::join(
+        chimera_owner_support::blocking::join(
             tokio::task::spawn_blocking(move || environment.current(wifi_name)).await,
         )
     }
