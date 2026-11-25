@@ -49,7 +49,7 @@ use chimera_core::{
         CoreClient as CoreClientV2, router::CoreStatusProjection, service_actor::ServiceClient,
         service_router::ServiceHostStatus,
     },
-    client::app_update::{self, AppUpdateArgs, AppUpdateClient, AppUpdateSettings},
+    client::app_update::{self, AppUpdateClient},
     profile_import::url_derived_name,
 };
 use struct_patch::Patch as _;
@@ -281,68 +281,22 @@ impl ChimeraClient {
             mutations.clone(),
             shutdown.clone(),
         ))?;
-        let streams_shutdown = shutdown.child_token();
-        // Keep Core log shards in a dedicated subdirectory, never in the
-        // app/service text-log rotation namespace. Optional storage failure
-        // must not prevent the desktop or core from starting.
-        let core_log_dir = paths.app_logs_dir().join("core");
-        let core_log_store = tauri::async_runtime::block_on(async {
-            tokio::task::spawn_blocking(move || {
-                chimera_core::logs::RedbCoreLogStore::open(core_log_dir)
-            })
-            .await
-        });
-        let core_log_store: Box<dyn chimera_core::logs::CoreLogStore> = match core_log_store {
-            Ok(Ok(store)) => Box::new(store),
-            Ok(Err(error)) => Box::new(chimera_core::logs::UnavailableCoreLogStore(
-                error.to_string(),
-            )),
-            Err(error) => Box::new(chimera_core::logs::UnavailableCoreLogStore(
-                error.to_string(),
-            )),
-        };
-        let core_logs = tauri::async_runtime::block_on(chimera_core::logs::CoreLogsClient::spawn(
-            core_log_store,
-            typed.application.get_typed().core_logs,
-            shutdown.child_token(),
-            &tasks,
-        ))?;
-        let streams =
-            tauri::async_runtime::block_on(chimera_core::clash::ws::StreamsClient::spawn(
-                core_v2.clone(),
-                core_logs,
-                typed.clash_config.get()?.overrides.log_level(),
-                streams_shutdown.clone(),
-                &tasks,
-            ))?;
-        #[cfg(not(any(target_os = "android", target_os = "ios")))]
-        let effects_port = Arc::new(
-            chimera_core::client::effects::executor::CoreRuntimeEffects::new(
-                effects_port,
-                streams.clone(),
-                core_v2.clone(),
-            ),
-        );
-        #[cfg(not(any(target_os = "android", target_os = "ios")))]
-        let effects = tauri::async_runtime::block_on(async {
-            let initial = effects::plan::ApplicationEffectInputs::project(
+        let observers = tauri::async_runtime::block_on(
+            chimera_core::client::composition::spawn_runtime_observers(
+                paths.app_logs_dir().join("core"),
                 &typed.application.get_typed(),
-                &typed
-                    .clash_config
-                    .get()
-                    .expect("test clash config should be readable"),
-                None,
-            );
-            effects::actor::EffectsClient::spawn_tracked(
-                effects::actor::EffectsArgs {
-                    port: effects_port,
-                    initial,
-                },
-                shutdown.child_token(),
+                &typed.clash_config.get()?,
+                core_v2.clone(),
+                shutdown.clone(),
                 &tasks,
-            )
-            .await
-        })?;
+                #[cfg(not(any(target_os = "android", target_os = "ios")))]
+                effects_port,
+            ),
+        )?;
+        let streams_shutdown = observers.streams_shutdown;
+        let streams = observers.streams;
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        let effects = observers.effects;
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
         let commit_notifications: Arc<dyn effects::ports::CommitNotifications> = Arc::new((
             effects.clone(),
@@ -398,52 +352,21 @@ impl ChimeraClient {
             core_lifecycle.install_candidate_gate(profile_gate.clone()),
         )?;
         mutations.connect(commit_notifications, profile_gate.clone());
-        let proxies = tauri::async_runtime::block_on(chimera_core::proxies::ProxiesClient::spawn(
-            core_v2.clone(),
-            shutdown.clone(),
-            &tasks,
-        ))?;
-        let app_config = typed.application.get_typed();
-        let channel = bundle_metadata
-            .release_channel
-            .resolve(app_config.release_channel);
-        let app_updater = tauri::async_runtime::block_on(AppUpdateClient::spawn(
-            AppUpdateArgs {
-                backend: app_update_backend,
-                events: app_update_events,
-                settings: AppUpdateSettings {
-                    channel,
-                    sources: app_config.update_sources,
-                    auto_check: app_config.enable_auto_check_update,
-                    auto_download: app_config.enable_auto_download_update,
-                },
-                supported: !bundle_metadata.is_portable
-                    && (cfg!(any(target_os = "windows", target_os = "macos"))
-                        || (cfg!(target_os = "linux") && bundle_metadata.is_appimage)),
-                endpoints: app_update::endpoints::update_endpoints_for_target(
-                    channel,
-                    bundle_metadata.sourceforge_project,
-                    bundle_metadata.is_fixed_webview,
-                ),
-                bundle_metadata,
-                shutdown: shutdown.child_token(),
-            },
-            &tasks,
-        ))?;
-        let file_logs = tauri::async_runtime::block_on(
-            chimera_core::client::logs::FileLogsClient::start(paths.app_logs_dir()),
-        )
-        .ok();
-        if let Some(logs) = file_logs.clone() {
-            let token = shutdown.clone();
-            tasks.spawn_on(
-                async move {
-                    token.cancelled().await;
-                    let _ = logs.shutdown().await;
-                },
-                tauri::async_runtime::handle().inner(),
-            );
-        }
+        let owners = tauri::async_runtime::block_on(
+            chimera_core::client::composition::spawn_application_observers(
+                core_v2.clone(),
+                &typed.application.get_typed(),
+                bundle_metadata.clone(),
+                app_update_backend,
+                app_update_events,
+                paths.app_logs_dir(),
+                shutdown.clone(),
+                &tasks,
+            ),
+        )?;
+        let proxies = owners.proxies;
+        let app_updater = owners.app_updater;
+        let file_logs = owners.file_logs;
         let client = Self::with_parts_and_typed_config(
             typed,
             core_lifecycle,
@@ -740,18 +663,18 @@ impl ChimeraClient {
     }
 
     pub(crate) fn shutdown_child_token(&self) -> tokio_util::sync::CancellationToken {
-        self.inner.shutdown.child_token()
+        chimera_core::client::app_lifecycle::shutdown_child_token(&self.inner.shutdown)
     }
 
     pub(crate) fn spawn_tracked(
         &self,
         task: impl std::future::Future<Output = ()> + Send + 'static,
     ) -> bool {
-        if self.inner.shutdown.is_cancelled() {
-            return false;
-        }
-        self.inner.tasks.spawn(task);
-        true
+        chimera_core::client::app_lifecycle::spawn_tracked(
+            &self.inner.shutdown,
+            &self.inner.tasks,
+            task,
+        )
     }
 
     pub(crate) fn file_logs(

@@ -13,6 +13,7 @@ use chimera_contracts::{
     mutation::ConfigDomain,
     runtime_error::{RuntimeCheckUnavailable, RuntimeError},
 };
+use chimera_core::client::reconciler::source_capture::SourceCapture;
 use chimera_core::state::{StateSnapshot, Version};
 
 use crate::{
@@ -22,7 +23,7 @@ use crate::{
             ports::{RuntimeCheckOutcome, RuntimeCheckUnavailable as GateUnavailable},
         },
         core_lifecycle::{CoreLifecycleClient, ports::CoreLifecyclePort},
-        reconciler::{inputs::RuntimeInputs, legacy_preparation::RuntimePreparation},
+        reconciler::inputs::RuntimeInputs,
     },
     state::mutation::{DomainChange, ProfileContentReader, RuntimeCandidate},
 };
@@ -204,7 +205,7 @@ pub(crate) async fn check_domain_candidate(
     let profiles_dir =
         crate::utils::dirs::app_profiles_dir().map_err(|error| typed_gate_error(domain, error))?;
     let source = crate::enhance::FsProfileContentSource::new(profiles_dir);
-    let preparation = RuntimePreparation::new(profile_content, Some(profiles), &source);
+    let preparation = SourceCapture::new(profile_content, Some(profiles), &source);
     let inputs = match &candidate.change {
         DomainChange::Profiles {
             candidate: proposed,

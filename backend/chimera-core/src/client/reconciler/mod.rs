@@ -54,3 +54,5 @@ pub mod mailbox;
 pub mod worker;
 
 pub mod convergence_executor;
+
+pub mod source_capture;

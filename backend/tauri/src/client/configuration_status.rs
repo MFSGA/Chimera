@@ -2,7 +2,6 @@
 use super::ChimeraClient;
 use chimera_core::client::{
     configuration::{ConfigurationStatus, SourceVersions},
-    configuration_observation::ConfigurationStatusSummary,
     configuration_status::configuration_status,
 };
 
@@ -57,52 +56,34 @@ impl ChimeraClient {
     }
 
     pub(crate) fn start_configuration_status_observer(&self) -> bool {
-        let Some(mut reconciler) = self.inner.core_lifecycle.subscribe_reconciler() else {
+        let Some(reconciler) = self.inner.core_lifecycle.subscribe_reconciler() else {
             return true;
         };
         let Some(profiles) = self.inner.typed_profiles.as_ref() else {
             return true;
         };
-        let mut sources = profiles.subscribe_sources();
+        let sources = profiles.subscribe_sources();
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
-        let mut effects = Some(self.inner.effects.subscribe());
+        let effects = Some(self.inner.effects.subscribe());
         #[cfg(any(target_os = "android", target_os = "ios"))]
-        let mut effects: Option<tokio::sync::watch::Receiver<EffectsSnapshot>> = None;
+        let effects: Option<tokio::sync::watch::Receiver<EffectsSnapshot>> = None;
         let shutdown = self.shutdown_child_token();
         let client = self.clone();
         self.spawn_tracked(async move {
-            // Consume initial values before listening; the first emitted
-            // frame is a complete snapshot, not a partially populated delta.
-            reconciler.borrow_and_update();
-            sources.borrow_and_update();
-            if let Some(effects) = effects.as_mut() {
-                effects.borrow_and_update();
-            }
-            client.inner.ui_sink.configuration_status_summary_changed(
-                ConfigurationStatusSummary::from(&client.configuration_status()),
-            );
-            loop {
-                let changed = tokio::select! {
-                    biased;
-                    () = shutdown.cancelled() => break,
-                    result = reconciler.changed() => result,
-                    result = sources.changed() => result,
-                    result = async {
-                        match effects.as_mut() {
-                            Some(effects) => effects.changed().await,
-                            None => std::future::pending().await,
-                        }
-                    } => result,
-                };
-                if changed.is_err() || shutdown.is_cancelled() {
-                    break;
-                }
-                let status = client.configuration_status();
-                // Ordinary windows get only the closed, diagnostic-free summary.
-                client.inner.ui_sink.configuration_status_summary_changed(
-                    ConfigurationStatusSummary::from(&status),
-                );
-            }
+            chimera_core::client::configuration_status::observe_configuration_status(
+                reconciler,
+                sources,
+                effects,
+                shutdown,
+                || client.configuration_status(),
+                |summary| {
+                    client
+                        .inner
+                        .ui_sink
+                        .configuration_status_summary_changed(summary)
+                },
+            )
+            .await;
         })
     }
 }

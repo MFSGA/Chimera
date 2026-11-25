@@ -1,28 +1,26 @@
-//! Compatibility source-capture bridge for Chimera's existing CoreLifecycle.
+//! Source capture with staged managed-file contents.
 //!
-//! The copied upstream `reconciler::preparation` owns the complete typed
-//! runtime build. This old module remains only for existing call sites that
-//! capture candidate/committed managed files, including staged file bytes.
+//! Shares the authoritative Profile content fence with the runtime builder.
 use std::{collections::BTreeMap, sync::Arc};
 
+use crate::state::StateSnapshot;
 use chimera_config::{
     application::ChimeraAppConfig, clash::config::ClashConfig, profile::Profiles,
     runtime::executor::ProfileContentSource,
 };
-use chimera_core::state::StateSnapshot;
 
 use super::inputs::{FrozenProfileContent, RuntimeInputs};
 use crate::state::mutation::ProfileContentReader;
 
 /// The read-only runtime candidate preparation boundary. All managed file
 /// reads are fenced against source publication and file promotion.
-pub(in crate::client) struct RuntimePreparation<'a> {
+pub struct SourceCapture<'a> {
     profile_content: Option<&'a ProfileContentReader>,
     committed_profiles: Option<&'a StateSnapshot<Profiles>>,
     content_source: &'a (dyn ProfileContentSource + Send + Sync),
 }
 
-impl<'a> RuntimePreparation<'a> {
+impl<'a> SourceCapture<'a> {
     pub fn new(
         profile_content: Option<&'a ProfileContentReader>,
         committed_profiles: Option<&'a StateSnapshot<Profiles>>,
@@ -114,6 +112,7 @@ impl<'a> RuntimePreparation<'a> {
 mod tests {
     use super::*;
 
+    use crate::state::PersistentStateManagerSetup;
     use chimera_config::{
         profile::{
             ConfigDefinition, FileConfig, LocalBinding, ManagedProfilePath, MaterializedFile,
@@ -121,7 +120,6 @@ mod tests {
         },
         runtime::executor::{PortError, ProfileContentSource},
     };
-    use chimera_core::state::PersistentStateManagerSetup;
 
     use crate::state::mutation::ProfileContentLock;
 
@@ -174,7 +172,7 @@ mod tests {
             "selected.yaml".into(),
             "committed".into(),
         )]));
-        let prep = RuntimePreparation::new(None, None, &content);
+        let prep = SourceCapture::new(None, None, &content);
         let inputs = prep
             .capture_inputs(
                 ChimeraAppConfig::default(),
@@ -214,7 +212,7 @@ mod tests {
             "selected.yaml".into(),
             "committed".into(),
         )]));
-        let prep = RuntimePreparation::new(Some(&reader), None, &content);
+        let prep = SourceCapture::new(Some(&reader), None, &content);
         let promotion_guard = lock.write().await;
         let mut capture = Box::pin(
             prep.capture_committed_inputs(ChimeraAppConfig::default(), ClashConfig::default()),
@@ -242,7 +240,7 @@ mod tests {
     #[tokio::test]
     async fn missing_committed_snapshot_remains_an_error() {
         let content = MemoryContent(BTreeMap::new());
-        let prep = RuntimePreparation::new(None, None, &content);
+        let prep = SourceCapture::new(None, None, &content);
         let err = prep
             .capture_committed_inputs(ChimeraAppConfig::default(), ClashConfig::default())
             .await

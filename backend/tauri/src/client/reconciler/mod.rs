@@ -19,7 +19,6 @@ pub(in crate::client) mod inputs;
 // Only isolated test fixtures still need the old CoreLifecycle validator.
 #[cfg(test)]
 pub(crate) mod legacy_check;
-pub(in crate::client) mod legacy_preparation;
 pub(in crate::client) mod legacy_source;
 pub(crate) mod mutation;
 pub(in crate::client) mod ports;

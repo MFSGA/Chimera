@@ -90,6 +90,46 @@ pub fn configuration_status(
     }
 }
 
+/// Read owner snapshots after watch changes, and publish only the closed summary.
+pub async fn observe_configuration_status(
+    mut reconciler: tokio::sync::watch::Receiver<ReconcilerStatus>,
+    mut sources: tokio::sync::watch::Receiver<SourcesSnapshot>,
+    mut effects: Option<tokio::sync::watch::Receiver<EffectsSnapshot>>,
+    shutdown: tokio_util::sync::CancellationToken,
+    mut snapshot: impl FnMut() -> ConfigurationStatus,
+    mut publish: impl FnMut(super::configuration_observation::ConfigurationStatusSummary),
+) {
+    use super::configuration_observation::ConfigurationStatusSummary;
+    // Consume initial values before listening; the first emitted
+    // frame is a complete snapshot, not a partially populated delta.
+    reconciler.borrow_and_update();
+    sources.borrow_and_update();
+    if let Some(effects) = effects.as_mut() {
+        effects.borrow_and_update();
+    }
+    publish(ConfigurationStatusSummary::from(&snapshot()));
+    loop {
+        let changed = tokio::select! {
+            biased;
+            () = shutdown.cancelled() => break,
+            result = reconciler.changed() => result,
+            result = sources.changed() => result,
+            result = async {
+                match effects.as_mut() {
+                    Some(effects) => effects.changed().await,
+                    None => std::future::pending().await,
+                }
+            } => result,
+        };
+        if changed.is_err() || shutdown.is_cancelled() {
+            break;
+        }
+        let status = snapshot();
+        // Ordinary windows get only the closed, diagnostic-free summary.
+        publish(ConfigurationStatusSummary::from(&status));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -35,6 +35,41 @@ pub fn runtime_binding_changed(old: &CoreStatusProjection, new: &CoreStatusProje
     changed(old.snapshot.as_ref(), new.snapshot.as_ref())
 }
 
+/// The sole CoreActor watch; periodic samples are not OS mutations.
+pub async fn observe_core_status<F: std::future::Future<Output = ()>>(
+    mut updates: tokio::sync::watch::Receiver<CoreStatusProjection>,
+    shutdown: tokio_util::sync::CancellationToken,
+    mut publish: impl FnMut(CoreStatusProjection),
+    mut binding: impl FnMut() -> F,
+) {
+    let mut previous = updates.borrow_and_update().clone();
+    loop {
+        tokio::select! {
+            biased;
+            () = shutdown.cancelled() => break,
+            changed = updates.changed() => {
+                if changed.is_err() { break; }
+                let current = updates.borrow_and_update().clone();
+                let ui_changed = runtime_materially_changed(&previous, &current);
+                let binding_changed = runtime_binding_changed(&previous, &current);
+                previous = current.clone();
+                if shutdown.is_cancelled() {
+                    break;
+                }
+                if ui_changed {
+                    // UI state is a notification, not an independent
+                    // poll or a cached authority. The typed Actor
+                    // projection remains the authoritative state.
+                    publish(current.clone());
+                }
+                if binding_changed {
+                    binding().await;
+                }
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

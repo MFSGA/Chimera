@@ -68,10 +68,7 @@ use chimera_core::client::reconciler::mailbox::{
     OperationId, RequestKind, Response, ShutdownAdmission, replay_shutdown,
 };
 
-pub(in crate::client) struct CompletedLifecycleOperation {
-    pub(in crate::client) result: anyhow::Result<()>,
-    pub(in crate::client) report: StartupReport,
-}
+pub use chimera_core::client::app_lifecycle::CompletedLifecycleOperation;
 
 fn completed_from_startup_report(report: StartupReport) -> CompletedLifecycleOperation {
     let result = report

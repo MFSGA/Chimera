@@ -45,3 +45,6 @@ pub mod configuration;
 
 pub mod configuration_observation;
 pub mod configuration_status;
+
+pub mod app_lifecycle;
+pub mod composition;

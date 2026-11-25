@@ -1,12 +1,13 @@
 //! Compatibility source transaction and frozen input capture.
 //! The canonical source actors still own CAS; this bridge uses their clients.
 use crate::client::core_lifecycle::CoreLifecycleWorkflow;
-use crate::client::reconciler::{inputs::RuntimeInputs, legacy_preparation::RuntimePreparation};
+use crate::client::reconciler::inputs::RuntimeInputs;
 #[cfg(test)]
 use crate::config::chimera::ClashCore;
 use crate::enhance::FsProfileContentSource;
 use chimera_config::application::{ChimeraAppConfig, ChimeraAppConfigPatch};
 use chimera_core::actor_v2::endpoint::ExecutionHost;
+use chimera_core::client::reconciler::source_capture::SourceCapture;
 use std::sync::Arc;
 use struct_patch::Patch;
 
@@ -128,7 +129,7 @@ impl CoreLifecycleWorkflow {
         staged_content: std::collections::BTreeMap<String, String>,
     ) -> anyhow::Result<RuntimeInputs> {
         let source = FsProfileContentSource::new(crate::utils::dirs::app_profiles_dir()?);
-        RuntimePreparation::new(
+        SourceCapture::new(
             self.content_reader.as_ref(),
             self.profiles.as_ref(),
             &source,
@@ -149,7 +150,7 @@ impl CoreLifecycleWorkflow {
             anyhow::bail!("Profile state is unavailable for committed runtime capture");
         }
         let source = FsProfileContentSource::new(crate::utils::dirs::app_profiles_dir()?);
-        RuntimePreparation::new(
+        SourceCapture::new(
             self.content_reader.as_ref(),
             self.profiles.as_ref(),
             &source,
