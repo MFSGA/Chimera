@@ -105,13 +105,11 @@ pub enum ServiceCompat {
     Unknown,
     /// 主版本匹配，允许进入 Service backend。
     Compatible { server_version: String },
-    /// 主版本不匹配（典型：v1.4.5），或主版本对但低于最低版本（典型：
-    /// v2.0.0-rc.1）。fail-closed。
+    /// 主版本不匹配，或主版本匹配但低于最低版本。fail-closed。
     Incompatible {
         server_version: String,
         required_major: u64,
-        /// 供 UI 展示：只说"需要 v2.x"无法解释一台 major 正确却被拒的
-        /// daemon，它装的**就是** v2.x。
+        /// 供 UI 展示：主版本匹配但低于最低版本时，显示具体的最低版本要求。
         required_min: String,
     },
     /// server 上报的版本不是合法 semver。fail-closed。

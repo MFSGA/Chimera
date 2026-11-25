@@ -4358,14 +4358,19 @@ export type ScriptRuntime = 'javascript' | 'lua';
 export type ScriptType = 'javascript' | 'lua';
 
 export type ServiceCompat =
+  /**  daemon 未安装 / 未运行 / 未上报 server 信息，没有可判定的版本。 */
   | { kind: 'unknown' }
+  /**  主版本匹配，允许进入 Service backend。 */
   | { kind: 'compatible'; server_version: string }
+  /**  主版本不匹配，或主版本匹配但低于最低版本。fail-closed。 */
   | {
       kind: 'incompatible';
       server_version: string;
       required_major: number;
+      /**  供 UI 展示：主版本匹配但低于最低版本时，显示具体的最低版本要求。 */
       required_min: string;
     }
+  /**  server 上报的版本不是合法 semver。fail-closed。 */
   | { kind: 'unparsable'; server_version: string };
 
 export type ServicePhase =
