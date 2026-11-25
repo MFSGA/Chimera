@@ -1,3 +1,5 @@
+pub(crate) mod icon;
+
 use std::borrow::Cow;
 
 use anyhow::Result;

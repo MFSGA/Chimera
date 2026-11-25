@@ -1,9 +1,5 @@
-import {
-  useClashProxies,
-  useProxyGroupIcons,
-  useServerPort,
-} from '@chimera/interface';
-import { alpha, LazyImage } from '@chimera/ui';
+import { useClashProxies, useProxyGroupIcons } from '@chimera/interface';
+import { alpha } from '@chimera/ui';
 import {
   ListItem,
   ListItemButton,
@@ -14,30 +10,17 @@ import {
 import { useAtom, useAtomValue } from 'jotai';
 import { memo, RefObject, useDeferredValue, useMemo } from 'react';
 import { Virtualizer } from 'virtua';
+import { CacheImage } from '@/components/ui/image';
 import { proxyGroupAtom } from '@/store';
 import { proxiesFilterAtom } from '@/store/proxies';
 
 const IconRender = memo(function IconRender({ icon }: { icon: string }) {
-  const { data: serverPort, isLoading, error } = useServerPort();
-  const src = icon.trim().startsWith('<svg')
-    ? `data:image/svg+xml;base64,${btoa(icon)}`
-    : icon;
-  const cachedUrl = useMemo(() => {
-    if (!src.startsWith('http')) {
-      return src;
-    }
-    // todo: use 127.0.0.1
-    return `http://localhost:${serverPort}/cache/icon?url=${btoa(src)}`;
-  }, [src, serverPort]);
-  if (isLoading || error) {
-    return null;
-  }
   return (
     <ListItemIcon>
-      <LazyImage
+      <CacheImage
         className="h-11 w-11"
         loadingClassName="rounded-full"
-        src={cachedUrl}
+        icon={icon}
       />
     </ListItemIcon>
   );

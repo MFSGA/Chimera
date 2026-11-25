@@ -387,7 +387,10 @@ pub fn setup(
             app_update_backend,
             app_update_events,
             changelog_http,
-            icons: chimera_core::service::icon::IconService::new(resolved_paths, network.clone()),
+            icons: chimera_core::service::icon::IconService::new(
+                resolved_paths.clone(),
+                network.clone(),
+            ),
             network_diagnostics: network,
             bridges,
             core_v2: core_router,
@@ -431,6 +434,7 @@ pub fn setup(
         &tasks,
         hotkey_action_pump(hotkey_rx, client.clone(), shutdown.child_token()),
     );
+    app.manage(resolved_paths);
     app.manage(client);
     startup_owners.core = None;
     startup_owners.core_executor = None;

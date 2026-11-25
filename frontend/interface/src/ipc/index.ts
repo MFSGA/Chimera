@@ -59,6 +59,7 @@ export * from './use-system-service';
 export * from './use-system-proxy';
 export * from './use-platform';
 export * from './use-server-port';
+export * from './icon-transport';
 export * from './use-core-dir';
 export * from './use-service-prompt';
 

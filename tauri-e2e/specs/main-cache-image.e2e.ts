@@ -114,15 +114,12 @@ describe('main cached proxy icons', () => {
 
   // Contract: after IPC setup creates and activates this run's local Profile,
   // the real proxy API exposes its remote icon URL and the main UI renders the
-  // proxy group artwork via the local cache route. API data and image loading
-  // are independent evidence; a stale create-profile wire fails fixture setup.
+  // proxy group artwork via the desktop cache URI. The sensitive API data and
+  // rendered image URI are independent evidence. The remote fixture does not
+  // establish successful image downloads.
   it('routes remote group artwork through the local icon cache', async () => {
-    const proxies = await invoke<{
-      groups: Array<{ name: string; icon?: string | null }>;
-    }>('get_proxies');
-    const apiGroup = proxies.groups.find((group) => group.name === groupName);
-
-    assert.equal(apiGroup?.icon, iconUrl, JSON.stringify(proxies, null, 2));
+    const icons = await invoke<Record<string, string>>('get_proxy_group_icons');
+    assert.equal(icons[groupName], iconUrl);
 
     await browser.waitUntil(
       async () =>
@@ -136,54 +133,35 @@ describe('main cached proxy icons', () => {
       },
     );
 
-    const serverPort = await invoke<number>('get_server_port');
-    assert.ok(serverPort > 0, `Invalid local server port: ${serverPort}`);
+    // Tauri maps the custom scheme to a localhost HTTPS/HTTP origin on Windows.
+    // Compare the decoded URL, not the platform-specific wire spelling.
+    const readState = () =>
+      browser.execute((expectedIconUrl) => {
+        const images = Array.from(document.images);
+        const image = images.find((item) => {
+          const url = new URL(item.src, document.baseURI);
+          return (
+            (url.protocol === 'chimera-icons:' ||
+              (['http:', 'https:'].includes(url.protocol) &&
+                url.hostname === 'chimera-icons.localhost')) &&
+            url.pathname === '/cached' &&
+            url.searchParams.get('url') === expectedIconUrl
+          );
+        });
+        return {
+          imageSrc: image?.src ?? null,
+          viewport: { width: innerWidth, height: innerHeight },
+        };
+      }, iconUrl);
 
-    await browser.waitUntil(
-      async () =>
-        browser.execute(
-          (expectedIconUrl) =>
-            Array.from(document.images).some(
-              (item) =>
-                item.src === expectedIconUrl ||
-                item.src.includes('/cache/icon?url='),
-            ),
-          iconUrl,
-        ),
-      {
-        timeout: 15_000,
-        timeoutMsg: 'The proxy group artwork did not render an image element.',
-      },
-    );
-
-    const state = await browser.execute((expectedIconUrl) => {
-      const images = Array.from(document.images);
-      const image = images.find((item) =>
-        item.src.includes('/cache/icon?url='),
-      );
-
-      const navigate = document.querySelector<HTMLElement>(
-        '[data-slot="proxies-navigate"]',
-      );
-
-      return {
-        imageSrc: image?.src ?? null,
-        allImageSrcs: Array.from(document.images).map((item) => item.src),
-        navigateText: navigate?.innerText ?? null,
-        expectedEncoded: btoa(expectedIconUrl),
-        viewport: { width: innerWidth, height: innerHeight },
-      };
-    }, iconUrl);
-
+    await browser.waitUntil(async () => Boolean((await readState()).imageSrc), {
+      timeout: 15_000,
+      timeoutMsg: 'The proxy group did not render the cached icon URI.',
+    });
+    const state = await readState();
     assert.ok(state.viewport.width >= 1200, JSON.stringify(state, null, 2));
     assert.ok(state.viewport.height >= 600, JSON.stringify(state, null, 2));
     assert.ok(state.imageSrc, JSON.stringify(state, null, 2));
-    assert.match(state.imageSrc, /^http:\/\/localhost:\d+\/cache\/icon\?url=/);
-    assert.equal(
-      state.imageSrc?.includes(state.expectedEncoded),
-      true,
-      JSON.stringify(state, null, 2),
-    );
 
     const evidencePath = process.env.CHIMERA_E2E_EVIDENCE_PATH;
     if (evidencePath) {

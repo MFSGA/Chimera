@@ -30,6 +30,7 @@ pub mod traffic;
 pub mod tray;
 /// 9
 pub mod updater;
+pub(crate) mod widget_logo;
 
 pub use self::clash::core::*;
 

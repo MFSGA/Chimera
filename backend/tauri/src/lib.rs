@@ -244,6 +244,7 @@ pub fn run() -> std::process::ExitCode {
     };
 
     builder = builder
+        .register_asynchronous_uri_scheme_protocol("chimera-icons", adapters::icons::handle)
         .invoke_handler(invoke_handler)
         .plugin(tauri_plugin_os::init())
         .plugin(tauri_plugin_shell::init())
