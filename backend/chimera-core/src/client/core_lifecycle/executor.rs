@@ -8,7 +8,7 @@ use super::{
 };
 use crate::client::reconciler::{
     authority::RuntimeSourceAuthority, committed::SourceDomain, plan::Trigger,
-    startup_policy::StartupRetryTarget, state::RuntimeProgress,
+    state::RuntimeProgress,
 };
 use chimera_config::{
     application::{ChimeraAppConfig, ChimeraAppConfigPatch},
@@ -23,6 +23,9 @@ use std::{
 #[async_trait::async_trait]
 pub trait LifecycleHost: Send + Sync {
     type SystemProxy: Send + 'static;
+    // Only the host's extension can own fixture-specific state. Production
+    // execution must not require the test-only StartupRetryTarget.
+    type ExtensionState: Send;
     fn application_config(&self) -> ChimeraAppConfig;
     fn core(&self) -> &dyn CoreLifecyclePort;
     fn installer(&self) -> &dyn BinaryInstaller;
@@ -61,14 +64,14 @@ pub trait LifecycleHost: Send + Sync {
     async fn execute_extension(
         &self,
         command: Command<Self::SystemProxy>,
-        startup_retry_target: &mut Option<StartupRetryTarget>,
+        extension_state: &mut Self::ExtensionState,
     ) -> anyhow::Result<()>;
 }
 
 pub async fn execute<H: LifecycleHost + ?Sized>(
     host: &H,
     command: Command<H::SystemProxy>,
-    startup_retry_target: &mut Option<StartupRetryTarget>,
+    extension_state: &mut H::ExtensionState,
 ) -> anyhow::Result<()> {
     host.clear_round_effects();
     host.progress().lock().clear_pending();
@@ -160,7 +163,7 @@ pub async fn execute<H: LifecycleHost + ?Sized>(
                 Err(error) => Err(error),
             }
         }
-        command => host.execute_extension(command, startup_retry_target).await,
+        command => host.execute_extension(command, extension_state).await,
     };
 
     if prepared_selection_candidate && result.is_err() {

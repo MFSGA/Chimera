@@ -512,7 +512,7 @@ impl CoreLifecycleWorkflow {
             _ => false,
         };
         #[cfg(not(test))]
-        let mut startup_retry_target = None;
+        let mut startup_retry_target = ();
         #[cfg(not(test))]
         let startup_retry_target = &mut startup_retry_target;
         let result = chimera_core::client::core_lifecycle::executor::execute(
@@ -1034,6 +1034,10 @@ impl chimera_core::client::core_lifecycle::executor::LifecycleHost for CoreLifec
     type SystemProxy = crate::client::system_proxy::SystemProxyClient;
     #[cfg(any(target_os = "android", target_os = "ios"))]
     type SystemProxy = ();
+    #[cfg(test)]
+    type ExtensionState = Option<StartupRetryTarget>;
+    #[cfg(not(test))]
+    type ExtensionState = ();
     fn application_config(&self) -> ChimeraAppConfig {
         self.application.get_typed()
     }
@@ -1115,9 +1119,7 @@ impl chimera_core::client::core_lifecycle::executor::LifecycleHost for CoreLifec
     async fn execute_extension(
         &self,
         command: Command,
-        #[allow(unused_variables)] startup_retry_target: &mut Option<
-            chimera_core::client::reconciler::startup_policy::StartupRetryTarget,
-        >,
+        #[allow(unused_variables)] startup_retry_target: &mut Self::ExtensionState,
     ) -> anyhow::Result<()> {
         match command {
             #[cfg(test)]
