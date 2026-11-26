@@ -72,6 +72,162 @@ impl CompletionFence {
     }
 }
 
+/// The observed terminal of the same worker that owned the mailbox round.
+pub struct CompletedRound {
+    pub active: super::mailbox::ActiveOperation,
+    pub result: anyhow::Result<()>,
+    pub source_advanced: bool,
+    pub round: Round,
+    /// Outer None means do not publish a new binding, inner None means no
+    /// verified runtime binding exists.
+    pub runtime_binding: Option<Option<chimera_config::runtime::executor::ResolvedPortBindings>>,
+}
+
+/// Revoke superseded selections, join the original worker, and observe the
+/// current Core before reporting a terminal. Host adapters supply only the
+/// existing staged receipt and effect ports, not a second runtime owner.
+#[allow(clippy::too_many_arguments)]
+pub async fn observe_completed<P, H, F>(
+    mailbox: &mut super::mailbox::Mailbox<P>,
+    runtime: &RuntimeReconcilerState,
+    host: &H,
+    id: u64,
+    result: anyhow::Result<()>,
+    workflow_panicked: bool,
+    lower_outcome_uncertain: bool,
+    reconciled: bool,
+    service_observed: bool,
+    shutdown: bool,
+    take_prepared_outcome: impl FnOnce() -> Option<super::mutation::ApplyOutcome>,
+    take_effect: impl FnOnce() -> Option<super::apply::CheckedConnectionEffect>,
+    effect_port_binding: impl FnOnce() -> F,
+) -> Option<CompletedRound>
+where
+    H: super::apply_executor::ApplyHost + ?Sized,
+    F: std::future::Future<
+            Output = Option<chimera_config::runtime::executor::ResolvedPortBindings>,
+        >,
+{
+    let active = mailbox
+        .active
+        .as_ref()
+        .filter(|active| active.response.id == id)?;
+    let CompletionFence {
+        result,
+        source_advanced,
+        final_uncertain,
+    } = CompletionFence::observe(
+        result,
+        active.trigger,
+        &active.observed_sources,
+        &runtime.seen_sources,
+        mailbox.uncertain,
+        workflow_panicked,
+        lower_outcome_uncertain,
+    );
+    let prepared_outcome = take_prepared_outcome();
+    if source_advanced && active.checked_apply {
+        host.progress().lock().invalidate_selection();
+    }
+    let runtime_binding =
+        if refresh_effect_ports(reconciled, service_observed, shutdown, source_advanced) {
+            Some(effect_port_binding().await)
+        } else {
+            None
+        };
+    #[cfg(feature = "e2e")]
+    tracing::warn!(target: "chimera::e2e_core_mailbox", stage = "completed_binding_observed", "CoreLifecycle completion stage");
+    let active = mailbox.join_completed(id, shutdown).await;
+    #[cfg(feature = "e2e")]
+    tracing::warn!(target: "chimera::e2e_core_mailbox", stage = "completed_worker_joined", "CoreLifecycle completion stage");
+    let round = Round::observe(
+        host.core(),
+        || host.startup_target_identity(),
+        host.progress(),
+        host.convergence_authority(),
+        take_effect,
+        &result,
+        active.trigger,
+        reconciled,
+        active.checked_apply,
+        source_advanced,
+        final_uncertain,
+        prepared_outcome.as_ref(),
+    )
+    .await;
+    Some(CompletedRound {
+        active,
+        result,
+        source_advanced,
+        round,
+        runtime_binding,
+    })
+}
+
+/// Publish terminal evidence and settle the original response before handling
+/// its retry. This preserves the observable ordering of the existing actor.
+#[allow(clippy::too_many_arguments)]
+pub fn settle_completed<P>(
+    mailbox: &mut super::mailbox::Mailbox<P>,
+    runtime: &mut RuntimeReconcilerState,
+    progress: &parking_lot::Mutex<super::state::RuntimeProgress>,
+    reconciler: &tokio::sync::watch::Sender<super::status::ReconcilerStatus>,
+    round: Round,
+    response: super::mailbox::Response,
+    trigger: &str,
+    observed_sources: &SourceVersions,
+    reconciled: bool,
+    shutdown: bool,
+    result: anyhow::Result<()>,
+) -> (bool, DeferredRetryEvidence) {
+    let failed = result.is_err();
+    if runtime.observe_completion_maintenance(trigger, reconciled, &result) {
+        super::dispatch::publish_maintenance(runtime, reconciler);
+    }
+    round.settle(
+        progress,
+        reconciler,
+        response.id,
+        trigger,
+        observed_sources,
+        runtime.run_intent,
+        reconciled,
+    );
+    let retry = DeferredRetryEvidence::from_result(&result);
+    mailbox.finish_operation(response, shutdown, result);
+    (failed, retry)
+}
+
+/// Reuse the workflow's existing deferred target after its command reply.
+pub async fn settle_deferred_retry(
+    progress: Option<&mut super::workflow_progress::WorkflowProgress>,
+    deferred_retry: Option<String>,
+    reconciled: bool,
+    failed: bool,
+    uncertain: bool,
+    retry: DeferredRetryEvidence,
+) -> Option<(String, tokio::time::Instant)> {
+    let progress = progress?;
+    if let Some(digest) = deferred_retry {
+        let deadline = progress
+            .finish_deferred_retry(
+                &digest,
+                !failed,
+                retry.retryable,
+                retry.waiting_dependency,
+                uncertain,
+                retry.error,
+            )
+            .await?;
+        Some((digest, deadline))
+    } else {
+        if reconciled && !failed {
+            progress.runtime_reconciled();
+        }
+        None
+    }
+}
+
 /// Classify the actual terminal error before the RPC result is consumed.
 pub struct DeferredRetryEvidence {
     pub error: Option<String>,

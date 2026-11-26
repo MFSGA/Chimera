@@ -22,11 +22,13 @@ use crate::client::reconciler::{
     workflow::RuntimeReconcilerState,
 };
 #[cfg(test)]
-use chimera_core::client::reconciler::worker::{WorkerResult, run_lifecycle};
+use chimera_core::client::reconciler::{
+    completion::refresh_effect_ports,
+    worker::{WorkerResult, run_lifecycle},
+};
 use chimera_core::client::reconciler::{
     completion::{
-        CompletionFence, HandoffContinuation, RebuildAction, checked_clash_notice,
-        rebuild_after_completion, refresh_effect_ports,
+        HandoffContinuation, RebuildAction, checked_clash_notice, rebuild_after_completion,
     },
     dispatch::{RequestAdmission, RoundAdmission, is_source_only_application_patch, request_kind},
     plan::RunIntent,
@@ -960,74 +962,32 @@ impl Actor for RuntimeReconcilerActor {
                     .mailbox
                     .active
                     .as_ref()
-                    .map(|operation| operation.response.id)
-                    == Some(id)
+                    .is_some_and(|active| active.response.id == id)
                 {
-                    let active = state
-                        .mailbox
-                        .active
-                        .as_ref()
-                        .expect("matched active lifecycle operation");
-                    let CompletionFence {
+                    let lifecycle = workflow.lifecycle();
+                    let chimera_core::client::reconciler::completion::CompletedRound {
+                        active,
                         result,
                         source_advanced,
-                        final_uncertain,
-                    } = CompletionFence::observe(
+                        round,
+                        runtime_binding,
+                    } = chimera_core::client::reconciler::completion::observe_completed(
+                        &mut state.mailbox,
+                        &state.runtime,
+                        lifecycle,
+                        id,
                         result,
-                        active.trigger,
-                        &active.observed_sources,
-                        &state.runtime.seen_sources,
-                        state.mailbox.uncertain,
                         workflow_panicked,
                         lower_outcome_uncertain,
-                    );
-                    let prepared_outcome = workflow.lifecycle().take_prepared_outcome();
-                    // A Checked worker may have promoted applied_selection
-                    // after its second authoritative read, while the Actor
-                    // already accepted a newer source notice. Completed is
-                    // the final source-version fence: revoke that selection
-                    // before subsequent mode changes inspect the baseline.
-                    if source_advanced
-                        && state
-                            .mailbox
-                            .active
-                            .as_ref()
-                            .is_some_and(|active| active.checked_apply)
-                    {
-                        workflow.lifecycle().invalidate_applied_selection();
-                    }
-                    let refresh_runtime_binding = refresh_effect_ports(
                         reconciled,
                         service_probe.is_some(),
                         shutdown,
-                        source_advanced,
-                    );
-                    let runtime_binding = if refresh_runtime_binding {
-                        Some(workflow.lifecycle().effect_port_binding().await)
-                    } else {
-                        None
-                    };
-                    #[cfg(feature = "e2e")]
-                    tracing::warn!(target: "chimera::e2e_core_mailbox", stage = "completed_binding_observed", "CoreLifecycle completion stage");
-                    let active = state.mailbox.join_completed(id, shutdown).await;
-                    #[cfg(feature = "e2e")]
-                    tracing::warn!(target: "chimera::e2e_core_mailbox", stage = "completed_worker_joined", "CoreLifecycle completion stage");
-                    let lifecycle = workflow.lifecycle();
-                    let round = chimera_core::client::reconciler::round::Round::observe(
-                        lifecycle.convergence_core(),
-                        || lifecycle.startup_target_identity(),
-                        lifecycle.convergence_progress(),
-                        lifecycle.source_authority.as_deref(),
+                        || lifecycle.take_prepared_outcome(),
                         || lifecycle.take_checked_connection_effect(),
-                        &result,
-                        active.trigger,
-                        reconciled,
-                        active.checked_apply,
-                        source_advanced,
-                        final_uncertain,
-                        prepared_outcome.as_ref(),
+                        || lifecycle.effect_port_binding(),
                     )
-                    .await;
+                    .await
+                    .expect("matched active lifecycle operation");
                     let verified_running = round.verified_running;
                     state.runtime.observe_round_connection(&round);
                     // Legacy SetConfig UI messages describe the outcome of
@@ -1125,53 +1085,40 @@ impl Actor for RuntimeReconcilerActor {
                         None => {}
                     }
 
-                    let failed = result.is_err();
-                    if state.runtime.observe_completion_maintenance(
-                        active.trigger,
-                        reconciled,
-                        &result,
-                    ) {
-                        state.publish_maintenance();
-                    }
-                    round.settle(
-                        state
-                            .workflow
-                            .as_ref()
-                            .expect("completed workflow was restored")
-                            .lifecycle()
-                            .convergence_progress(),
-                        &state.reconciler,
-                        active.response.id,
-                        active.trigger,
-                        &active.observed_sources,
-                        state.runtime.run_intent,
-                        reconciled,
-                    );
-                    let retry = chimera_core::client::reconciler::completion::DeferredRetryEvidence::from_result(&result);
-                    state
-                        .mailbox
-                        .finish_operation(active.response, shutdown, result);
-
-                    if let Some(digest) = deferred_retry {
-                        if let Some(application_workflow) = state.workflow.as_mut() {
-                            if let Some(next_attempt) = application_workflow
-                                .finish_deferred_retry(
-                                    &digest,
-                                    !failed,
-                                    retry.retryable,
-                                    retry.waiting_dependency,
-                                    state.mailbox.uncertain,
-                                    retry.error,
-                                )
-                                .await
-                            {
-                                state.schedule_deferred_retry(&myself, digest, next_attempt);
-                            }
-                        }
-                    } else if reconciled && !failed {
-                        if let Some(application_workflow) = state.workflow.as_mut() {
-                            application_workflow.runtime_reconciled();
-                        }
+                    let (failed, retry) =
+                        chimera_core::client::reconciler::completion::settle_completed(
+                            &mut state.mailbox,
+                            &mut state.runtime,
+                            state
+                                .workflow
+                                .as_ref()
+                                .expect("completed workflow was restored")
+                                .lifecycle()
+                                .convergence_progress(),
+                            &state.reconciler,
+                            round,
+                            active.response,
+                            active.trigger,
+                            &active.observed_sources,
+                            reconciled,
+                            shutdown,
+                            result,
+                        );
+                    if let Some((digest, next_attempt)) =
+                        chimera_core::client::reconciler::completion::settle_deferred_retry(
+                            state
+                                .workflow
+                                .as_mut()
+                                .map(ApplicationWorkflow::progress_mut),
+                            deferred_retry,
+                            reconciled,
+                            failed,
+                            state.mailbox.uncertain,
+                            retry,
+                        )
+                        .await
+                    {
+                        state.schedule_deferred_retry(&myself, digest, next_attempt);
                     }
 
                     #[cfg(feature = "e2e")]
