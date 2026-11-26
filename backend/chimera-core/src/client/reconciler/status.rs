@@ -54,6 +54,23 @@ impl Default for ReconcilerStatus {
     }
 }
 
+/// Wait on observed source settlement without entering the actor mailbox.
+pub async fn settled(
+    mut watch: tokio::sync::watch::Receiver<ReconcilerStatus>,
+    domain: SourceDomain,
+    version: u64,
+) -> ReconcilerStatus {
+    loop {
+        let current = watch.borrow_and_update().clone();
+        if current.settled_for(domain, version) {
+            return current;
+        }
+        if watch.changed().await.is_err() {
+            return watch.borrow().clone();
+        }
+    }
+}
+
 impl ReconcilerStatus {
     /// A response waiter sees only an actually completed source version.
     /// An unobserved version (including zero) cannot settle a commit.

@@ -1,11 +1,14 @@
 //! Round admission and dispatch for the single runtime mailbox.
 use super::{
     committed::SourceDomain,
-    mailbox::{Mailbox, Request, RequestKind, Response},
+    mailbox::{
+        ActiveOperation, AdmissionFailure, Mailbox, Request, RequestKind, Response,
+        ShutdownAdmission, replay_shutdown,
+    },
     plan::{Conclusion, RunIntent},
     release::ReleaseObservation,
-    worker::WorkerPlan,
-    workflow::RuntimeReconcilerState,
+    worker::{WorkerCompletion, WorkerPlan, WorkerWorkflow, spawn_worker},
+    workflow::{RuntimeAdmission, RuntimeReconcilerState},
 };
 use crate::{
     actor_v2::service_policy::ServicePhase,
@@ -49,6 +52,131 @@ pub fn request_kind<P>(command: &Command<P>) -> RequestKind {
         RequestKind::StartupOwner
     } else {
         RequestKind::Other
+    }
+}
+
+/// Ref's sole request admission, retaining the staged Chimera shutdown waiters
+/// and actual host connectivity sampled in the same mailbox turn.
+pub enum RequestAdmission<P> {
+    Accepted,
+    Close,
+    Reject(Request<Command<P>>, AdmissionFailure),
+}
+
+impl<P> Mailbox<Command<P>> {
+    pub fn receive_request(
+        &mut self,
+        mut request: Request<Command<P>>,
+        service_connected: bool,
+    ) -> RequestAdmission<P> {
+        if let Command::PatchApplicationConfig {
+            service_connected: patch_service_connected,
+            ..
+        } = &mut request.command
+        {
+            *patch_service_connected = service_connected;
+        }
+        if matches!(&request.command, Command::Shutdown) {
+            match self.shutdown_admission() {
+                ShutdownAdmission::Replay(error) => {
+                    self.settle(request.response, replay_shutdown(&error));
+                }
+                ShutdownAdmission::Full => {
+                    return RequestAdmission::Reject(
+                        request,
+                        AdmissionFailure::TooManyShutdownWaiters,
+                    );
+                }
+                ShutdownAdmission::Wait { first } => {
+                    self.enqueue_shutdown_waiter(request.response);
+                    if first {
+                        return RequestAdmission::Close;
+                    }
+                }
+            }
+        } else if let Err(reason) = self.admit_request(request_kind(&request.command)) {
+            return RequestAdmission::Reject(request, reason);
+        } else {
+            self.pending.push_back(request);
+        }
+        RequestAdmission::Accepted
+    }
+}
+
+/// Check run intent and the current committed version when a queued request
+/// reaches execution, not merely when the original caller enqueues it.
+pub enum RoundAdmission<P> {
+    Run(Request<Command<P>>),
+    Skipped,
+    Rejected(Request<Command<P>>, anyhow::Error),
+}
+
+impl<P> Mailbox<Command<P>> {
+    pub fn admit_round(
+        &self,
+        runtime: &mut RuntimeReconcilerState,
+        request: Request<Command<P>>,
+    ) -> RoundAdmission<P> {
+        use crate::client::core_lifecycle::command::admission_command;
+        match runtime.admit(admission_command(&request.command)) {
+            RuntimeAdmission::Run => RoundAdmission::Run(request),
+            RuntimeAdmission::SkipInactive => {
+                self.settle(request.response, Ok(()));
+                RoundAdmission::Skipped
+            }
+            RuntimeAdmission::RejectStoppedChecked => RoundAdmission::Rejected(
+                request,
+                anyhow::anyhow!("checked runtime cannot apply while stopped"),
+            ),
+            RuntimeAdmission::RejectStaleChecked => RoundAdmission::Rejected(
+                request,
+                anyhow::anyhow!("checked runtime source is no longer the latest committed version"),
+            ),
+        }
+    }
+
+    /// Start a round on the existing worker and retain its JoinHandle in the
+    /// same mailbox. A host phase observer is the only side effect supplied
+    /// by the composition root; no separate command execution path exists.
+    pub fn launch_round<W, M>(
+        &mut self,
+        actor: &ractor::ActorRef<M>,
+        workflow: W,
+        request: Request<Command<P>>,
+        runtime: &RuntimeReconcilerState,
+        reconciler: &tokio::sync::watch::Sender<super::status::ReconcilerStatus>,
+        publish_legacy_service: bool,
+        publish_phase: impl FnOnce(ServicePhase),
+        completed: impl FnOnce(WorkerCompletion<W>) -> M + Send + 'static,
+    ) where
+        P: Send + 'static,
+        W: WorkerWorkflow<Command<P>>,
+        M: ractor::Message,
+    {
+        let observed_sources = runtime.seen_sources.clone();
+        reconciler.send_modify(|status| status.begin(request.response.id));
+        let RoundDispatch {
+            plan,
+            trigger,
+            checked_apply,
+            checked_clash,
+            service_phase,
+        } = prepare_round(&request, publish_legacy_service);
+        let shutdown = plan.shutdown;
+        if let Some(phase) = service_phase {
+            publish_phase(phase);
+        }
+        let task = spawn_worker(actor, workflow, request.command, plan, completed);
+        self.active = Some(ActiveOperation {
+            response: request.response,
+            task,
+            shutdown,
+            trigger,
+            checked_clash,
+            checked_apply,
+            observed_sources,
+        });
+        self.publish();
     }
 }
 
@@ -362,6 +490,62 @@ mod tests {
             },
             deferred_retry: None,
         }
+    }
+
+    #[test]
+    fn received_request_and_shutdown_use_same_admission_and_terminal_history() {
+        let mut mailbox = mailbox();
+        assert!(matches!(
+            mailbox.receive_request(request(Command::Reconcile), false),
+            RequestAdmission::Accepted
+        ));
+        assert_eq!(mailbox.pending.len(), 1);
+        assert!(matches!(
+            mailbox.receive_request(request(Command::Shutdown), false),
+            RequestAdmission::Close
+        ));
+        assert_eq!(mailbox.close().len(), 1);
+        assert!(matches!(
+            mailbox.receive_request(request(Command::Reconcile), false),
+            RequestAdmission::Reject(_, AdmissionFailure::Closing)
+        ));
+        let next = mailbox.take_next(|| Command::Shutdown).unwrap();
+        mailbox.finish_operation(
+            next.response,
+            true,
+            Err(anyhow::anyhow!("unconfirmed shutdown")),
+        );
+        assert!(matches!(
+            mailbox.receive_request(request(Command::Shutdown), false),
+            RequestAdmission::Accepted
+        ));
+        let status = mailbox.status.lock();
+        assert_eq!(status.completed.len(), 2);
+        assert!(
+            status
+                .completed
+                .iter()
+                .all(|result| result.error.as_deref() == Some("unconfirmed shutdown"))
+        );
+    }
+
+    #[test]
+    fn queued_reconcile_rechecks_stopped_intent_and_settles_without_worker() {
+        let mut mailbox = mailbox();
+        let mut runtime = RuntimeReconcilerState::default();
+        assert!(matches!(
+            mailbox.receive_request(request(Command::Reconcile), false),
+            RequestAdmission::Accepted
+        ));
+        runtime.run_intent = RunIntent::Stopped;
+        let next = mailbox.take_next(|| Command::Shutdown).unwrap();
+        assert!(matches!(
+            mailbox.admit_round(&mut runtime, next),
+            RoundAdmission::Skipped
+        ));
+        assert!(mailbox.active.is_none());
+        assert_eq!(mailbox.status.lock().completed.len(), 1);
+        assert!(mailbox.status.lock().completed[0].error.is_none());
     }
 
     #[test]

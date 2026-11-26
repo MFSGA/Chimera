@@ -258,6 +258,49 @@ impl<C> Mailbox<C> {
         }
     }
 
+    /// Completed arrives before the task returns. Retain ownership until its
+    /// JoinHandle settles, and propagate an unexpected worker panic.
+    pub async fn join_completed(&mut self, id: OperationId, shutdown: bool) -> ActiveOperation {
+        let mut active = self
+            .active
+            .take()
+            .expect("matched active lifecycle operation");
+        assert_eq!(active.response.id, id);
+        debug_assert_eq!(active.shutdown, shutdown);
+        if let Err(error) = (&mut active.task).await
+            && let Ok(panic) = error.try_into_panic()
+        {
+            std::panic::resume_unwind(panic);
+        }
+        active
+    }
+
+    pub fn finish_operation(
+        &mut self,
+        response: Response,
+        shutdown: bool,
+        result: anyhow::Result<()>,
+    ) {
+        if shutdown {
+            self.complete_shutdown(response, result);
+        } else {
+            self.settle(response, result);
+        }
+    }
+
+    /// Unexpected owner loss must never detach the mutating worker.
+    pub async fn join_lost_worker(&mut self) {
+        if let Some(active) = self.active.take() {
+            self.mark_worker_lost();
+            if let Err(error) = active.task.await {
+                match error.try_into_panic() {
+                    Ok(panic) => std::panic::resume_unwind(panic),
+                    Err(error) => tracing::warn!(%error, "core lifecycle owner task cancelled"),
+                }
+            }
+        }
+    }
+
     pub fn mark_worker_lost(&mut self) {
         self.uncertain = true;
         self.startup_owner_unproven_shared

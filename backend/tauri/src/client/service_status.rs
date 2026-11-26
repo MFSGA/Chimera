@@ -27,29 +27,7 @@ pub(super) fn project_actor_service_status(actor: &ActorServiceStatus) -> Servic
     project_actor_service_status_with_ownership(actor, runtime_owned)
 }
 
-fn project_actor_service_status_with_ownership(
-    actor: &ActorServiceStatus,
-    runtime_owned: bool,
-) -> ServiceHostStatus {
-    let phase = match (actor.phase, runtime_owned) {
-        // ref ServiceActor gates on daemon compatibility. Chimera additionally
-        // requires that the daemon's runtime directories match this instance.
-        (ServicePhase::Ready, false) => ServicePhase::Incompatible,
-        (phase, _) => phase,
-    };
-    ServiceHostStatus {
-        name: actor.name.clone(),
-        version: actor.version.clone(),
-        status: actor.status,
-        server: actor.server.clone(),
-        phase,
-        compat: actor.compat.clone(),
-        runtime_owned,
-        restart_attempts: actor.restart_attempts,
-        settled_ready: actor.settled_ready && runtime_owned,
-        ready_generation: actor.ready_generation,
-    }
-}
+use chimera_core::client::reconciler::service_observer::project_actor_service_status_with_ownership;
 
 #[cfg(test)]
 mod tests {

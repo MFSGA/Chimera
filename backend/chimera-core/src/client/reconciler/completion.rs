@@ -72,6 +72,25 @@ impl CompletionFence {
     }
 }
 
+/// Classify the actual terminal error before the RPC result is consumed.
+pub struct DeferredRetryEvidence {
+    pub error: Option<String>,
+    pub retryable: bool,
+    pub waiting_dependency: bool,
+}
+
+impl DeferredRetryEvidence {
+    pub fn from_result(result: &anyhow::Result<()>) -> Self {
+        let error = result.as_ref().err();
+        Self {
+            error: error.map(ToString::to_string),
+            retryable: error.is_some_and(super::check_record::safe_to_retry_deferred_runtime),
+            waiting_dependency: error
+                .is_some_and(super::check_record::deferred_runtime_waiting_dependency),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RebuildAction {
     None,

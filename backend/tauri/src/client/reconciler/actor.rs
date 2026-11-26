@@ -19,7 +19,7 @@ use crate::client::reconciler::{
     checked::CheckedRuntimeCandidate,
     committed::{SourceDomain, SourceVersions},
     status::ReconcilerStatus,
-    workflow::{RuntimeAdmission, RuntimeReconcilerState},
+    workflow::RuntimeReconcilerState,
 };
 #[cfg(test)]
 use chimera_core::client::reconciler::worker::{WorkerResult, run_lifecycle};
@@ -28,13 +28,12 @@ use chimera_core::client::reconciler::{
         CompletionFence, HandoffContinuation, RebuildAction, checked_clash_notice,
         rebuild_after_completion, refresh_effect_ports,
     },
-    dispatch::{RoundDispatch, is_source_only_application_patch, prepare_round, request_kind},
+    dispatch::{RequestAdmission, RoundAdmission, is_source_only_application_patch, request_kind},
     plan::RunIntent,
-    service_evidence::{service_followup_evidence_changed, startup_recovery_evidence_changed},
     source_dispatch::{SourceAction, SourceDispatch, SourceDispatchFacts},
     worker::{
         WorkerCompletion, WorkerEvidence, WorkerWorkflow, schedule_startup_recovery,
-        spawn_service_recovery_lease, spawn_startup_retry_lease, spawn_worker,
+        spawn_service_recovery_lease, spawn_startup_retry_lease,
     },
 };
 use ractor::{Actor, ActorProcessingErr, ActorRef, RpcReplyPort, rpc::CallResult};
@@ -58,14 +57,16 @@ use crate::client::{
 };
 
 #[cfg(test)]
-use chimera_core::client::reconciler::mailbox::MAX_PENDING;
+use chimera_core::client::reconciler::{
+    mailbox::MAX_PENDING,
+    service_evidence::{service_followup_evidence_changed, startup_recovery_evidence_changed},
+};
 
 use chimera_core::client::core_lifecycle::RECOVERY_INTERVAL;
 use chimera_core::client::reconciler::worker::CALL_WAIT;
 
 use chimera_core::client::reconciler::mailbox::{
-    ActiveOperation, AdmissionFailure, DIRTY_WINDOW, DirtyTick, Mailbox, MailboxTimers,
-    OperationId, Response, ShutdownAdmission, replay_shutdown,
+    AdmissionFailure, DIRTY_WINDOW, DirtyTick, Mailbox, MailboxTimers, OperationId, Response,
 };
 
 pub use chimera_core::client::app_lifecycle::CompletedLifecycleOperation;
@@ -445,12 +446,6 @@ impl RuntimeReconcilerMailbox {
         }
     }
 
-    fn publish_service_phase(&self, phase: ServicePhase) {
-        if self.publishes_legacy_service_status() {
-            self.service_status.publish_phase(phase);
-        }
-    }
-
     fn publish_service_probe_failure(&self) {
         if self.publishes_legacy_service_status() {
             self.service_status.probe_failed();
@@ -732,35 +727,18 @@ impl RuntimeReconcilerMailbox {
             return;
         };
 
-        match self
-            .runtime
-            .admit(super::workflow::admission_command(&request.command))
-        {
-            RuntimeAdmission::Run => {}
-            RuntimeAdmission::RejectStoppedChecked => {
-                self.reject(
-                    request,
-                    anyhow::anyhow!("checked runtime cannot apply while stopped"),
-                );
+        let request = match self.mailbox.admit_round(&mut self.runtime, request) {
+            RoundAdmission::Run(request) => request,
+            RoundAdmission::Rejected(request, error) => {
+                self.reject(request, error);
                 self.drive(myself);
                 return;
             }
-            RuntimeAdmission::SkipInactive => {
-                self.mailbox.settle(request.response, Ok(()));
+            RoundAdmission::Skipped => {
                 self.drive(myself);
                 return;
             }
-            RuntimeAdmission::RejectStaleChecked => {
-                self.reject(
-                    request,
-                    anyhow::anyhow!(
-                        "checked runtime source is no longer the latest committed version"
-                    ),
-                );
-                self.drive(myself);
-                return;
-            }
-        }
+        };
 
         let Some(mut workflow) = self.workflow.take() else {
             tracing::error!("core lifecycle workflow missing without an active operation");
@@ -785,34 +763,22 @@ impl RuntimeReconcilerMailbox {
             return;
         }
 
-        let id = request.response.id;
-        let observed_sources = self.runtime.seen_sources.clone();
-        self.reconciler.send_modify(|status| status.begin(id));
-        let RoundDispatch {
-            plan,
-            trigger,
-            checked_apply,
-            checked_clash,
-            service_phase,
-        } = prepare_round(&request, self.publishes_legacy_service_status());
-        let shutdown = plan.shutdown;
-        if let Some(phase) = service_phase {
-            self.publish_service_phase(phase);
-        }
-        let task = spawn_worker(myself, workflow, request.command, plan, |completion| {
-            Message::Completed { completion }
-        });
-
-        self.mailbox.active = Some(ActiveOperation {
-            response: request.response,
-            task,
-            shutdown,
-            trigger,
-            checked_clash,
-            checked_apply,
-            observed_sources,
-        });
-        self.mailbox.publish();
+        let publish_legacy_service = self.publishes_legacy_service_status();
+        let service_status = &self.service_status;
+        self.mailbox.launch_round(
+            myself,
+            workflow,
+            request,
+            &self.runtime,
+            &self.reconciler,
+            publish_legacy_service,
+            |phase| {
+                if publish_legacy_service {
+                    service_status.publish_phase(phase);
+                }
+            },
+            |completion| Message::Completed { completion },
+        );
     }
 }
 
@@ -978,40 +944,17 @@ impl Actor for RuntimeReconcilerActor {
                     }
                 }
             }
-            Message::Request(mut request) => {
+            Message::Request(request) => {
                 if matches!(&request.command, Command::ServiceEndpointDown(_)) {
                     state.service_recovery_inflight = true;
                 }
                 let service_connected = crate::core::service::ipc::get_ipc_state().is_connected();
-                if let Command::PatchApplicationConfig {
-                    service_connected: patch_service_connected,
-                    ..
-                } = &mut request.command
-                {
-                    *patch_service_connected = service_connected;
-                }
-                if matches!(&request.command, Command::Shutdown) {
-                    match state.mailbox.shutdown_admission() {
-                        ShutdownAdmission::Replay(error) => state
-                            .mailbox
-                            .settle(request.response, replay_shutdown(&error)),
-                        ShutdownAdmission::Full => state.reject(
-                            request,
-                            anyhow::anyhow!(AdmissionFailure::TooManyShutdownWaiters.message()),
-                        ),
-                        ShutdownAdmission::Wait { first } => {
-                            state.mailbox.enqueue_shutdown_waiter(request.response);
-                            if first {
-                                state.close();
-                            }
-                        }
+                match state.mailbox.receive_request(request, service_connected) {
+                    RequestAdmission::Accepted => {}
+                    RequestAdmission::Close => state.close(),
+                    RequestAdmission::Reject(request, reason) => {
+                        state.reject(request, anyhow::anyhow!(reason.message()));
                     }
-                } else if let Err(reason) =
-                    state.mailbox.admit_request(request_kind(&request.command))
-                {
-                    state.reject(request, anyhow::anyhow!(reason.message()));
-                } else {
-                    state.mailbox.pending.push_back(request);
                 }
             }
 
@@ -1086,20 +1029,7 @@ impl Actor for RuntimeReconcilerActor {
                     };
                     #[cfg(feature = "e2e")]
                     tracing::warn!(target: "chimera::e2e_core_mailbox", stage = "completed_binding_observed", "CoreLifecycle completion stage");
-                    let active = state
-                        .mailbox
-                        .active
-                        .take()
-                        .expect("matched active lifecycle operation");
-                    debug_assert_eq!(active.shutdown, shutdown);
-                    // A Completed message precedes the task's return. Keep
-                    // the workflow task owned until its JoinHandle settles;
-                    // unexpected task panics must reach Actor supervision.
-                    if let Err(error) = active.task.await
-                        && let Ok(panic) = error.try_into_panic()
-                    {
-                        std::panic::resume_unwind(panic);
-                    }
+                    let active = state.mailbox.join_completed(id, shutdown).await;
                     #[cfg(feature = "e2e")]
                     tracing::warn!(target: "chimera::e2e_core_mailbox", stage = "completed_worker_joined", "CoreLifecycle completion stage");
                     let lifecycle = workflow.lifecycle();
@@ -1237,19 +1167,10 @@ impl Actor for RuntimeReconcilerActor {
                         state.runtime.run_intent,
                         reconciled,
                     );
-                    let deferred_retry_error = result.as_ref().err().map(ToString::to_string);
-                    let deferred_retry_retryable = result.as_ref().err().is_some_and(
-                        crate::client::application_workflow::tcc::safe_to_retry_deferred_runtime,
-                    );
-                    let deferred_retry_waiting = result.as_ref().err().is_some_and(
-                        crate::client::application_workflow::tcc::
-                            deferred_runtime_waiting_dependency,
-                    );
-                    if shutdown {
-                        state.mailbox.complete_shutdown(active.response, result);
-                    } else {
-                        state.mailbox.settle(active.response, result);
-                    }
+                    let retry = chimera_core::client::reconciler::completion::DeferredRetryEvidence::from_result(&result);
+                    state
+                        .mailbox
+                        .finish_operation(active.response, shutdown, result);
 
                     if let Some(digest) = deferred_retry {
                         if let Some(application_workflow) = state.workflow.as_mut() {
@@ -1257,10 +1178,10 @@ impl Actor for RuntimeReconcilerActor {
                                 .finish_deferred_retry(
                                     &digest,
                                     !failed,
-                                    deferred_retry_retryable,
-                                    deferred_retry_waiting,
+                                    retry.retryable,
+                                    retry.waiting_dependency,
                                     state.mailbox.uncertain,
-                                    deferred_retry_error,
+                                    retry.error,
                                 )
                                 .await
                             {
@@ -1760,15 +1681,7 @@ impl Actor for RuntimeReconcilerActor {
         // it might still be mutating Core or committing a profile decision.
         // The outcome is unproven because its Completed message was not
         // handled; do not publish a successful runtime conclusion.
-        if let Some(active) = state.mailbox.active.take() {
-            state.mailbox.mark_worker_lost();
-            if let Err(error) = active.task.await {
-                match error.try_into_panic() {
-                    Ok(panic) => std::panic::resume_unwind(panic),
-                    Err(error) => tracing::warn!(%error, "core lifecycle owner task cancelled"),
-                }
-            }
-        }
+        state.mailbox.join_lost_worker().await;
         state.runtime.checked.clear();
         state.reconciler.send_modify(ReconcilerStatus::close);
         Ok(())
@@ -2037,80 +1950,26 @@ impl RuntimeReconcilerClient {
         #[cfg(not(test))]
         {
             let recovery_client = client.clone();
-            let mut status_updates = service_status_rx.clone();
             let recovery_shutdown = shutdown.child_token();
-            tasks.spawn(async move {
-                if let Some(mut ref_updates) = service_actor_updates {
-                    // Production startup recovery observes the *same* ref
-                    // ServiceActor watch that owns readiness generation and
-                    // probe phase. CoreLifecycle's legacy watch remains only
-                    // for its not-yet-migrated workflow commands.
-                    let mut previous = crate::client::service_status::project_actor_service_status(
-                        &ref_updates.borrow_and_update(),
-                    );
-                    loop {
-                        tokio::select! {
-                            biased;
-                            _ = recovery_shutdown.cancelled() => break,
-                            changed = ref_updates.changed() => {
-                                if changed.is_err() {
-                                    break;
-                                }
-                                let current = crate::client::service_status::project_actor_service_status(
-                                    &ref_updates.borrow_and_update(),
-                                );
-                                let evidence_changed = startup_recovery_evidence_changed(
-                                    &previous,
-                                    &current,
-                                    startup_owner_unproven_signal.load(Ordering::Acquire),
-                                );
-                                let followup_changed =
-                                    service_followup_evidence_changed(&previous, &current);
-                                previous = current;
-                                if followup_changed
-                                    && service_followup_actor.cast(Message::ServiceReadiness).is_err()
-                                {
-                                    break;
-                                }
-                                if evidence_changed && recovery_client.startup_recovery_needed() {
-                                    recovery_client.request_startup_recovery();
-                                }
-                            }
+            tasks.spawn(
+                chimera_core::client::reconciler::service_observer::observe_service(
+                    service_actor_updates,
+                    service_status_rx,
+                    startup_owner_unproven_signal,
+                    recovery_shutdown,
+                    crate::client::service_status::project_actor_service_status,
+                    move || {
+                        service_followup_actor
+                            .cast(Message::ServiceReadiness)
+                            .is_ok()
+                    },
+                    move || {
+                        if recovery_client.startup_recovery_needed() {
+                            recovery_client.request_startup_recovery();
                         }
-                    }
-                } else {
-                    // Injected compatibility port without a ref ServiceActor.
-                    let mut previous = status_updates.borrow_and_update().clone();
-                    loop {
-                        tokio::select! {
-                            biased;
-                            _ = recovery_shutdown.cancelled() => break,
-                            changed = status_updates.changed() => {
-                                if changed.is_err() {
-                                    break;
-                                }
-                                let current = status_updates.borrow_and_update().clone();
-                                let evidence_changed = startup_recovery_evidence_changed(
-                                    &previous,
-                                    &current,
-                                    startup_owner_unproven_signal.load(Ordering::Acquire),
-                                );
-                                let followup_changed =
-                                    service_followup_evidence_changed(&previous, &current);
-                                previous = current;
-                                if followup_changed
-                                    && service_followup_actor.cast(Message::ServiceReadiness).is_err()
-                                {
-                                    break;
-                                }
-                                if evidence_changed && recovery_client.startup_recovery_needed() {
-                                    recovery_client.request_startup_recovery();
-                                }
-                            }
-                        }
-                    }
-                }
-            });
+                    },
+                ),
+            );
         }
         // Ref ServiceActor already published its initial daemon probe during
         // startup. No second CoreLifecycle probe/cache refresh is needed.
@@ -2707,22 +2566,13 @@ impl RuntimeReconcilerClient {
                 service,
                 core,
                 ..
-            } => {
-                !core.outcome_uncertain()
-                    && (startup_owner_unproven.load(Ordering::Acquire) || {
-                        let failed_generation = service_failed_generation.load(Ordering::Acquire);
-                        // The failed generation was recorded from the ref
-                        // ServiceActor during startup. Compare only with that
-                        // same Actor's generation, not CoreLifecycle's
-                        // independently incremented compatibility watch.
-                        let current = service
-                            .actor_status()
-                            .unwrap_or_else(|| service_status.borrow().clone());
-                        failed_generation != 0
-                            && current.ready_generation != failed_generation
-                            && current.phase.readiness() == Some(true)
-                    })
-            }
+            } => chimera_core::client::reconciler::service_observer::startup_recovery_needed(
+                core.as_ref(),
+                service.as_ref(),
+                startup_owner_unproven,
+                service_failed_generation,
+                service_status,
+            ),
             #[cfg(test)]
             ClientInner::Direct { .. } => false,
         }
@@ -2948,16 +2798,7 @@ impl RuntimeReconcilerClient {
         let ClientInner::Actor { reconciler, .. } = self.0.as_ref() else {
             return ReconcilerStatus::default();
         };
-        let mut watch = reconciler.clone();
-        loop {
-            let current = watch.borrow_and_update().clone();
-            if current.settled_for(domain, version) {
-                return current;
-            }
-            if watch.changed().await.is_err() {
-                return watch.borrow().clone();
-            }
-        }
+        chimera_core::client::reconciler::status::settled(reconciler.clone(), domain, version).await
     }
 
     /// Conservative rollback for a failed source CAS after the Core owner
@@ -3138,33 +2979,15 @@ impl RuntimeReconcilerClient {
             ClientInner::Direct { .. } => return,
         };
 
-        if !still_current() {
-            return;
-        }
-
-        // Preserve the existing host-lock-before-mailbox ordering used by
-        // service transitions and TUN preflight.
-        let transition = match service.begin_transition().await {
-            Ok(transition) => transition,
-            Err(error) => {
-                tracing::warn!(%error, "failed to acquire Service transition for endpoint recovery");
-                return;
-            }
-        };
-        if !still_current() {
-            // The Service host lock is now ours. A retired health observation
-            // must drop its lease without submitting recovery after stop/restart.
-            return;
-        }
-        let id = next_id.fetch_add(1, Ordering::Relaxed);
-        let request = Request {
-            command: Command::ServiceEndpointDown(transition),
-            response: Response { id, reply: None },
-            deferred_retry: None,
-        };
-        if actor_ref.cast(Message::Request(request)).is_err() {
-            tracing::warn!("failed to enqueue service endpoint-down recovery");
-        }
+        chimera_core::client::reconciler::worker::request_service_endpoint_down_if(
+            actor_ref,
+            next_id,
+            service,
+            still_current,
+            Command::ServiceEndpointDown,
+            Message::Request,
+        )
+        .await;
     }
 
     pub(in crate::client) fn service_status(&self) -> ServiceHostStatus {

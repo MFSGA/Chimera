@@ -270,6 +270,45 @@ pub fn schedule_startup_recovery<M: ractor::Message, C: Send + 'static>(
     });
 }
 
+/// A stale health observation cannot enqueue recovery after another owner
+/// took the host lease. Reuse the existing operation counter and mailbox.
+pub async fn request_service_endpoint_down_if<M: ractor::Message, C: Send + 'static>(
+    actor_ref: ActorRef<M>,
+    next_id: Arc<AtomicU64>,
+    service: Arc<dyn ServiceLifecyclePort>,
+    still_current: impl Fn() -> bool + Send + 'static,
+    command: impl FnOnce(Box<dyn ServiceTransitionLease>) -> C + Send,
+    message: impl FnOnce(Request<C>) -> M + Send,
+) {
+    if !still_current() {
+        return;
+    }
+
+    // Preserve the existing host-lock-before-mailbox ordering used by
+    // service transitions and TUN preflight.
+    let transition = match service.begin_transition().await {
+        Ok(transition) => transition,
+        Err(error) => {
+            tracing::warn!(%error, "failed to acquire Service transition for endpoint recovery");
+            return;
+        }
+    };
+    if !still_current() {
+        // The Service host lock is now ours. A retired health observation
+        // must drop its lease without submitting recovery after stop/restart.
+        return;
+    }
+    let id = next_id.fetch_add(1, Ordering::Relaxed);
+    let request = Request {
+        command: command(transition),
+        response: Response { id, reply: None },
+        deferred_retry: None,
+    };
+    if actor_ref.cast(message(request)).is_err() {
+        tracing::warn!("failed to enqueue service endpoint-down recovery");
+    }
+}
+
 /// Lease acquisition must run outside the mailbox: an already queued
 /// lifecycle operation may still own the lease. Only the original mailbox
 /// can admit the command after acquisition.
