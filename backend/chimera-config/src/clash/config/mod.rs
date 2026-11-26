@@ -631,3 +631,6 @@ mod patch_tests {
 
 mod settings_view;
 pub use settings_view::ClashSettings;
+
+mod requests;
+pub use requests::{ClashSettingsPatch, ClashSystemPatch};

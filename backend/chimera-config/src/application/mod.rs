@@ -460,3 +460,8 @@ mod tests {
 
 mod settings_view;
 pub use settings_view::ApplicationSettings;
+
+mod preferences;
+mod system_settings;
+pub use preferences::ApplicationPreferencesPatch;
+pub use system_settings::SystemSettingsPatch;
