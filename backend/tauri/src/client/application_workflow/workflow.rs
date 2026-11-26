@@ -403,6 +403,6 @@ impl chimera_core::client::reconciler::application_command::ApplicationCommandHo
         ProfileRuntime::effect_port_binding(self).await
     }
     fn take_service_recovery_reconnected(&self) -> bool {
-        self.take_service_recovery_reconnected()
+        self.shared_state().take_service_recovery_reconnected()
     }
 }

@@ -30,7 +30,7 @@ impl chimera_core::client::reconciler::convergence_executor::ConvergenceHost
         self.convergence_clash()
     }
     fn convergence_profiles_version(&self) -> Option<u64> {
-        self.convergence_profiles_version()
+        self.shared_state().convergence_profiles_version()
     }
     fn legacy_service_connected(&self) -> bool {
         crate::core::service::ipc::get_ipc_state().is_connected()
@@ -82,9 +82,9 @@ impl chimera_core::client::reconciler::convergence_executor::ConvergenceHost
     async fn try_begin_service_transition(
         &self,
     ) -> anyhow::Result<Box<dyn crate::client::core_lifecycle::ports::ServiceTransitionLease>> {
-        self.try_begin_service_transition().await
+        self.shared_state().try_begin_service_transition().await
     }
     async fn refresh_service_recovery_host(&self) {
-        self.refresh_service_recovery_host().await
+        self.shared_state().refresh_service_recovery_host().await
     }
 }

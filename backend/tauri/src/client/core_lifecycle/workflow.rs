@@ -58,45 +58,31 @@ pub(in crate::client) use crate::client::reconciler::apply::CheckedConnectionEff
 pub(in crate::client) struct CoreLifecycleWorkflow {
     pub(in crate::client) application: ApplicationClient,
     pub(in crate::client) clash: ClashConfigClient,
-    pub(in crate::client) profiles:
-        Option<chimera_core::state::StateSnapshot<chimera_config::profile::Profiles>>,
-    pub(in crate::client) content_reader: Option<crate::state::mutation::ProfileContentReader>,
-    /// Installed once by the production Client after the canonical Core
-    /// session and Profiles gate have been assembled. Shared by clones of
-    /// the sole lifecycle workflow, not an independent runtime owner.
-    pub(in crate::client) checked_gate:
-        Arc<std::sync::OnceLock<Arc<crate::client::reconciler::check::CandidateCheck>>>,
-    /// Ref's applied selection and last target/host attempt share a single
-    /// runtime-progress owner. Only the current Core worker may record them,
-    /// and the Actor retains final Conclusion/source-version authority.
-    pub(in crate::client) progress: Arc<parking_lot::Mutex<RuntimeProgress>>,
-    /// A checked source's post-apply Mode effect is held by the same
-    /// workflow until its sole Actor has fenced the Completed message.
-    checked_connection_effect: Arc<parking_lot::Mutex<Option<CheckedConnectionEffect>>>,
-    /// A one-round observed Core terminal, shared only with the existing
-    /// Reconciler policy and Actor Completed. Never records a source commit
-    /// or replaces the independent Running/source convergence fence.
-    pub(in crate::client) prepared_outcome:
-        Arc<parking_lot::Mutex<Option<crate::client::reconciler::mutation::ApplyOutcome>>>,
-    /// The exact read-only source authority already used by Checked Apply.
-    /// Ordinary startup/reconcile may adopt selection only when an active
-    /// Core receipt and this authority agree on the full committed target.
-    pub(in crate::client) source_authority:
-        Option<Arc<dyn crate::client::reconciler::authority::RuntimeSourceAuthority>>,
-    pub(in crate::client) core: Arc<dyn CoreLifecyclePort>,
-    pub(in crate::client) installer: Arc<dyn BinaryInstaller>,
-    pub(in crate::client) service: Arc<dyn ServiceLifecyclePort>,
-    startup_owner_unproven: Arc<AtomicBool>,
+    shared: chimera_core::client::core_lifecycle::state::CoreLifecycleState,
     #[cfg(test)]
     startup_report: Arc<parking_lot::Mutex<Option<StartupReport>>>,
-    pub(in crate::client) service_failed_generation_shared: Arc<AtomicU64>,
-    pub(in crate::client) service_status: Option<watch::Receiver<ServiceHostStatus>>,
-    pub(in crate::client) service_recovery: Arc<parking_lot::Mutex<ServiceRecovery>>,
-    pub(in crate::client) service_recovery_reconnected: Arc<AtomicBool>,
-    pub(in crate::client) shutdown: CancellationToken,
+}
+
+impl std::ops::Deref for CoreLifecycleWorkflow {
+    type Target = chimera_core::client::core_lifecycle::state::CoreLifecycleState;
+    fn deref(&self) -> &Self::Target {
+        &self.shared
+    }
+}
+
+impl std::ops::DerefMut for CoreLifecycleWorkflow {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.shared
+    }
 }
 
 impl CoreLifecycleWorkflow {
+    pub(in crate::client) fn shared_state(
+        &self,
+    ) -> &chimera_core::client::core_lifecycle::state::CoreLifecycleState {
+        &self.shared
+    }
+
     pub(in crate::client) fn new(
         application: ApplicationClient,
         clash: ClashConfigClient,
@@ -109,34 +95,12 @@ impl CoreLifecycleWorkflow {
         Self {
             application,
             clash,
-            profiles,
-            content_reader: None,
-            checked_gate: Arc::new(std::sync::OnceLock::new()),
-            progress: Arc::new(parking_lot::Mutex::new(RuntimeProgress::default())),
-            checked_connection_effect: Arc::new(parking_lot::Mutex::new(None)),
-            prepared_outcome: Arc::new(parking_lot::Mutex::new(None)),
-            source_authority: None,
-            core,
-            installer,
-            service,
-            startup_owner_unproven: Arc::new(AtomicBool::new(false)),
+            shared: chimera_core::client::core_lifecycle::state::CoreLifecycleState::new(
+                profiles, core, installer, service,
+            ),
             #[cfg(test)]
             startup_report: Arc::new(parking_lot::Mutex::new(None)),
-            service_failed_generation_shared: Arc::new(AtomicU64::new(0)),
-            service_status: None,
-            service_recovery: Arc::new(parking_lot::Mutex::new(ServiceRecovery::default())),
-            service_recovery_reconnected: Arc::new(AtomicBool::new(false)),
-            shutdown: CancellationToken::new(),
         }
-    }
-
-    pub(in crate::client) fn install_checked_gate(
-        &self,
-        gate: Arc<crate::client::reconciler::check::CandidateCheck>,
-    ) -> anyhow::Result<()> {
-        self.checked_gate
-            .set(gate)
-            .map_err(|_| anyhow::anyhow!("production candidate gate already installed"))
     }
 
     pub(in crate::client) fn with_shutdown(mut self, shutdown: CancellationToken) -> Self {
@@ -168,23 +132,9 @@ impl CoreLifecycleWorkflow {
         self
     }
 
-    pub(in crate::client) fn invalidate_applied_selection(&self) {
-        self.progress.lock().invalidate_selection();
-    }
-
-    pub(in crate::client) fn take_checked_connection_effect(
-        &self,
-    ) -> Option<CheckedConnectionEffect> {
-        self.checked_connection_effect.lock().take()
-    }
-
     /// Consume the observed Prepared terminal only in the owner Actor's
     /// Completed message; source commits and old Core ports have none.
-    pub(in crate::client) fn take_prepared_outcome(
-        &self,
-    ) -> Option<crate::client::reconciler::mutation::ApplyOutcome> {
-        self.prepared_outcome.lock().take()
-    }
+
     /// Recover selection from a *proven* live Core receipt and two bounded
     /// committed source reads. RuntimeProgress, not the legacy workflow,
     /// owns the selected Mode/Profile and last attempted target/host.
@@ -207,15 +157,7 @@ impl CoreLifecycleWorkflow {
     }
 
     pub(in crate::client) fn startup_owner_unproven_handle(&self) -> Arc<AtomicBool> {
-        self.startup_owner_unproven.clone()
-    }
-
-    pub(in crate::client) fn service_failed_generation_handle(&self) -> Arc<AtomicU64> {
-        self.service_failed_generation_shared.clone()
-    }
-
-    pub(in crate::client) fn startup_owner_unproven(&self) -> bool {
-        self.startup_owner_unproven.load(Ordering::Acquire)
+        self.shared.startup_owner_unproven_handle()
     }
 
     #[cfg(test)]
@@ -231,23 +173,10 @@ impl CoreLifecycleWorkflow {
         }
     }
 
-    pub(in crate::client) async fn probe_service(
-        &self,
-    ) -> anyhow::Result<chimera_ipc::types::StatusInfo<'static>> {
-        self.service.probe().await
-    }
-
     pub(in crate::client) async fn effect_port_binding(
         &self,
     ) -> Option<chimera_config::runtime::executor::ResolvedPortBindings> {
-        let receipt = match self.core.active_runtime_receipt().await {
-            Ok(receipt) => receipt,
-            Err(error) => {
-                tracing::debug!(%error, "no active runtime receipt is available after lifecycle work");
-                return None;
-            }
-        };
-        crate::client::application::resolved_effect_port_binding(receipt.as_deref())
+        self.shared.effect_port_binding().await
     }
 
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -435,49 +364,35 @@ impl CoreLifecycleWorkflow {
         self.clash.get()
     }
 
-    pub(in crate::client) fn convergence_profiles_version(&self) -> Option<u64> {
-        self.profiles
-            .as_ref()
-            .map(|profiles| *profiles.load().version.as_ref())
-    }
-
     pub(in crate::client) fn convergence_authority(
         &self,
     ) -> Option<&dyn crate::client::reconciler::authority::RuntimeSourceAuthority> {
-        self.source_authority.as_deref()
+        self.shared.convergence_authority()
     }
 
     pub(in crate::client) fn convergence_candidate_check(
         &self,
     ) -> Option<&crate::client::reconciler::check::CandidateCheck> {
-        self.checked_gate.get().map(Arc::as_ref)
+        self.shared.convergence_candidate_check()
     }
 
     pub(in crate::client) fn stage_prepared_outcome(
         &self,
         outcome: Option<crate::client::reconciler::mutation::ApplyOutcome>,
     ) {
-        *self.prepared_outcome.lock() = outcome;
+        self.shared.stage_prepared_outcome(outcome)
     }
 
     pub(in crate::client) fn stage_connection_effect(&self, effect: CheckedConnectionEffect) {
-        *self.checked_connection_effect.lock() = Some(effect);
-    }
-
-    pub(in crate::client) fn convergence_core(&self) -> &dyn CoreLifecyclePort {
-        self.core.as_ref()
-    }
-
-    pub(in crate::client) fn convergence_progress(&self) -> &parking_lot::Mutex<RuntimeProgress> {
-        self.progress.as_ref()
+        self.shared.stage_connection_effect(effect)
     }
 
     pub(in crate::client) fn canonical_convergence_session(&self) -> bool {
-        self.profiles.is_some() && self.checked_gate.get().is_some()
+        self.shared.canonical_convergence_session()
     }
 
     pub(in crate::client) fn outcome_uncertain(&self) -> bool {
-        self.core.outcome_uncertain()
+        self.shared.outcome_uncertain()
     }
 
     pub(in crate::client) fn startup_application_config(&self) -> ChimeraAppConfig {
@@ -648,10 +563,6 @@ impl CoreLifecycleWorkflow {
             startup_retry_target,
         )
         .await;
-    }
-
-    pub(in crate::client) fn pending_runtime_product_target(&self) -> Option<String> {
-        self.core.pending_runtime_product_target()
     }
 
     pub(in crate::client) async fn reconcile(&self) -> anyhow::Result<()> {
@@ -1054,8 +965,7 @@ impl chimera_core::client::core_lifecycle::executor::LifecycleHost for CoreLifec
         &self.progress
     }
     fn clear_round_effects(&self) {
-        self.checked_connection_effect.lock().take();
-        self.prepared_outcome.lock().take();
+        self.shared.clear_round_effects();
     }
     fn canonical_convergence_session(&self) -> bool {
         self.canonical_convergence_session()
@@ -1107,14 +1017,16 @@ impl chimera_core::client::core_lifecycle::executor::LifecycleHost for CoreLifec
         &self,
         transition: &mut dyn ServiceTransitionLease,
     ) -> anyhow::Result<bool> {
-        self.report_service_endpoint_down(transition).await
+        self.shared_state()
+            .report_service_endpoint_down(transition)
+            .await
     }
     fn record_service_reconnected(&self) {
         self.service_recovery_reconnected
             .store(true, Ordering::Release);
     }
     async fn refresh_service_recovery_host(&self) {
-        self.refresh_service_recovery_host().await
+        self.shared_state().refresh_service_recovery_host().await
     }
     async fn execute_extension(
         &self,

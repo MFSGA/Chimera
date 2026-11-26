@@ -432,7 +432,7 @@ impl CoreLifecycleWorkflow {
     ) -> anyhow::Result<()> {
         // The earlier rejected Service candidate is not the Local fallback's
         // terminal; a second admitted Core command must supersede its verdict.
-        self.prepared_outcome.lock().take();
+        self.take_prepared_outcome();
         use crate::client::reconciler::attempt::{
             CommittedTargetAdvanced, OwnershipTransitionPending,
         };

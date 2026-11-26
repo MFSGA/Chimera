@@ -4,41 +4,6 @@ use crate::client::core_lifecycle::ports::CoreStatusSnapshot;
 use chimera_core::client::reconciler::service_evidence::ServiceEvidence;
 use std::sync::atomic::Ordering;
 
-impl CoreLifecycleWorkflow {
-    /// A refused Service submission may have already applied its Core but
-    /// failed *afterwards* while promoting RuntimeProduct. The startup owner
-    /// may release Service only after a stable, non-synthetic Stopped state
-    /// with no accepted Core receipt. This independent proof also protects
-    /// other errors that arrived after a concurrent owner transition.
-    pub(in crate::client) async fn startup_service_refusal_stopped(&self) -> bool {
-        chimera_core::client::reconciler::proof::startup_service_refusal_stopped(self.core.as_ref())
-            .await
-    }
-
-    pub(in crate::client) async fn startup_service_command_settled(&self) -> bool {
-        self.service.command_settled().await
-    }
-
-    pub(in crate::client) fn startup_failed_generation(&self) -> u64 {
-        self.service_failed_generation_shared
-            .load(Ordering::Acquire)
-    }
-
-    pub(in crate::client) fn set_startup_failed_generation(&self, generation: u64) {
-        self.service_failed_generation_shared
-            .store(generation, Ordering::Release);
-    }
-
-    pub(in crate::client) async fn startup_select_execution_host(
-        &self,
-        host: chimera_core::actor_v2::endpoint::ExecutionHost,
-    ) -> anyhow::Result<()> {
-        self.core.select_execution_host(host).await?;
-        self.follow_service_recovery_host(host);
-        Ok(())
-    }
-}
-
 #[async_trait::async_trait]
 impl chimera_core::client::reconciler::startup_executor::StartupHost for CoreLifecycleWorkflow {
     type Core = dyn crate::client::core_lifecycle::ports::CoreLifecyclePort;
@@ -49,10 +14,11 @@ impl chimera_core::client::reconciler::startup_executor::StartupHost for CoreLif
         CoreLifecycleWorkflow::startup_application_config(self)
     }
     fn startup_failed_generation(&self) -> u64 {
-        CoreLifecycleWorkflow::startup_failed_generation(self)
+        self.shared_state().startup_failed_generation()
     }
     fn set_startup_failed_generation(&self, generation: u64) {
-        CoreLifecycleWorkflow::set_startup_failed_generation(self, generation);
+        self.shared_state()
+            .set_startup_failed_generation(generation);
     }
     fn canonical_convergence_session(&self) -> bool {
         CoreLifecycleWorkflow::canonical_convergence_session(self)
@@ -70,7 +36,7 @@ impl chimera_core::client::reconciler::startup_executor::StartupHost for CoreLif
         CoreLifecycleWorkflow::fallback_after_service_refusal(self, target, refusal).await
     }
     async fn startup_service_command_settled(&self) -> bool {
-        CoreLifecycleWorkflow::startup_service_command_settled(self).await
+        self.shared_state().startup_service_command_settled().await
     }
     async fn service_evidence(&self) -> (ServiceEvidence, u64) {
         CoreLifecycleWorkflow::service_evidence(self).await
@@ -79,7 +45,9 @@ impl chimera_core::client::reconciler::startup_executor::StartupHost for CoreLif
         &self,
         host: chimera_core::actor_v2::endpoint::ExecutionHost,
     ) -> anyhow::Result<()> {
-        CoreLifecycleWorkflow::startup_select_execution_host(self, host).await
+        self.shared_state()
+            .startup_select_execution_host(host)
+            .await
     }
     async fn startup_target_identity(&self) -> anyhow::Result<String> {
         CoreLifecycleWorkflow::startup_target_identity(self).await
