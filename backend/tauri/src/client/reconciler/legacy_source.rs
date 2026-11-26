@@ -4,18 +4,23 @@ use crate::client::core_lifecycle::CoreLifecycleWorkflow;
 use crate::client::reconciler::inputs::RuntimeInputs;
 #[cfg(test)]
 use crate::config::chimera::ClashCore;
-use crate::enhance::FsProfileContentSource;
 use chimera_config::application::{ChimeraAppConfig, ChimeraAppConfigPatch};
 use chimera_core::actor_v2::endpoint::ExecutionHost;
-use chimera_core::client::reconciler::source_capture::SourceCapture;
 use std::sync::Arc;
-use struct_patch::Patch;
 
 pub use chimera_core::client::core_lifecycle::command::ApplicationPatchResult;
 
-use chimera_core::client::application_operations::checked_application_patch_eligible;
-
 impl CoreLifecycleWorkflow {
+    fn source_transaction(
+        &self,
+    ) -> chimera_core::client::reconciler::source_transaction::SourceTransaction<'_> {
+        chimera_core::client::reconciler::source_transaction::SourceTransaction {
+            state: self.shared_state(),
+            application: &self.application,
+            clash: &self.clash,
+        }
+    }
+
     pub(in crate::client) async fn capture_reconcile_target(
         &self,
         app: ChimeraAppConfig,
@@ -29,17 +34,15 @@ impl CoreLifecycleWorkflow {
         Arc<chimera_config::profile::Profiles>,
         std::collections::BTreeMap<String, String>,
     )> {
-        let inputs = self
-            .capture_profile_inputs_for(app, clash, profiles, staged_content)
-            .await?;
-        let target = inputs.checked_target_key()?;
-        let (app, clash, profiles, staged_content) = inputs.into_parts().map_err(|error| {
-            anyhow::Error::new(
-                crate::client::application_workflow::mutation::RuntimeCheckFailure::
-                    candidate_unavailable(error.to_string()),
+        self.source_transaction()
+            .capture_reconcile_target(
+                crate::utils::dirs::app_profiles_dir,
+                app,
+                clash,
+                profiles,
+                staged_content,
             )
-        })?;
-        Ok((target, app, clash, profiles, staged_content))
+            .await
     }
 
     pub(in crate::client) async fn capture_profile_inputs_for(
@@ -49,14 +52,15 @@ impl CoreLifecycleWorkflow {
         profiles: Arc<chimera_config::profile::Profiles>,
         staged_content: std::collections::BTreeMap<String, String>,
     ) -> anyhow::Result<RuntimeInputs> {
-        let source = FsProfileContentSource::new(crate::utils::dirs::app_profiles_dir()?);
-        SourceCapture::new(
-            self.content_reader.as_ref(),
-            self.profiles.as_ref(),
-            &source,
-        )
-        .capture_inputs(app, clash, profiles, staged_content)
-        .await
+        self.source_transaction()
+            .capture_profile_inputs_for(
+                crate::utils::dirs::app_profiles_dir,
+                app,
+                clash,
+                profiles,
+                staged_content,
+            )
+            .await
     }
 
     /// Ref: sample committed Profiles and capture all managed file inputs
@@ -67,17 +71,9 @@ impl CoreLifecycleWorkflow {
         app: ChimeraAppConfig,
         clash: chimera_config::clash::config::ClashConfig,
     ) -> anyhow::Result<RuntimeInputs> {
-        if self.content_reader.is_none() && self.profiles.is_none() {
-            anyhow::bail!("Profile state is unavailable for committed runtime capture");
-        }
-        let source = FsProfileContentSource::new(crate::utils::dirs::app_profiles_dir()?);
-        SourceCapture::new(
-            self.content_reader.as_ref(),
-            self.profiles.as_ref(),
-            &source,
-        )
-        .capture_committed_inputs(app, clash)
-        .await
+        self.source_transaction()
+            .capture_committed_profile_inputs_for(crate::utils::dirs::app_profiles_dir, app, clash)
+            .await
     }
 
     pub(in crate::client) async fn capture_reconcile_committed_target(
@@ -96,49 +92,22 @@ impl CoreLifecycleWorkflow {
     }
 
     pub(in crate::client) async fn startup_target_identity(&self) -> anyhow::Result<String> {
-        if self.profiles.is_some() {
-            return self
-                .capture_committed_profile_inputs_for(
-                    self.application.get_typed(),
-                    self.clash.get()?,
-                )
-                .await?
-                .checked_target_key();
-        }
-        self.startup_source_identity(None)
+        self.source_transaction()
+            .startup_target_identity(crate::utils::dirs::app_profiles_dir)
+            .await
     }
 
     pub(in crate::client) async fn unresolved_startup_target_identity(&self) -> Option<String> {
-        let profiles = self
-            .profiles
-            .as_ref()
-            .map(|profiles| Arc::new(profiles.load().state.clone()));
-        let identity = self.startup_source_identity(profiles.as_ref()).ok()?;
-        Some(format!("profile-content-unavailable:{identity}"))
+        self.source_transaction()
+            .unresolved_startup_target_identity()
+            .await
     }
 
     pub(in crate::client) fn startup_source_identity(
         &self,
         profiles: Option<&Arc<chimera_config::profile::Profiles>>,
     ) -> anyhow::Result<String> {
-        let app = self.application.get_typed();
-        let clash = self.clash.get()?;
-        let app_target = chimera_core::state::mutation::impact::application_target(&app)
-            .ok_or_else(|| anyhow::anyhow!("application runtime identity cannot be serialized"))?;
-        let clash_target = chimera_core::state::mutation::impact::clash_target(&clash)
-            .ok_or_else(|| anyhow::anyhow!("clash runtime identity cannot be serialized"))?;
-        let profile_target = match profiles {
-            Some(profiles) => chimera_core::state::mutation::impact::profiles_target(profiles)
-                .ok_or_else(|| anyhow::anyhow!("profiles runtime identity cannot be serialized"))?,
-            None => "no-profile-runtime".into(),
-        };
-        let projection = serde_json::to_vec(&(
-            app_target,
-            clash_target,
-            profile_target,
-            "profile-content-unavailable",
-        ))?;
-        Ok(crate::state::profiles::payload_digest(&projection))
+        self.source_transaction().startup_source_identity(profiles)
     }
 
     /// The ref source transition: a checked target is persisted before any
@@ -162,11 +131,8 @@ impl CoreLifecycleWorkflow {
     pub(in crate::client) fn committed_runtime_source_versions(
         &self,
     ) -> crate::client::reconciler::committed::SourceVersions {
-        crate::client::reconciler::committed::SourceVersions::from_committed(
-            &self.application,
-            &self.clash,
-            self.profiles.as_ref().map(|p| *p.load().version),
-        )
+        self.source_transaction()
+            .committed_runtime_source_versions()
     }
 
     pub(in crate::client) async fn patch_application_config_with_result(
@@ -174,157 +140,69 @@ impl CoreLifecycleWorkflow {
         patch: ChimeraAppConfigPatch,
         service_connected: bool,
     ) -> anyhow::Result<ApplicationPatchResult> {
-        let canonical = self.canonical_convergence_session();
-        if !chimera_core::state::mutation::impact::application_patch_requires_reconcile(
-            &patch,
-            service_connected,
-        ) && !(canonical && patch.enable_service_mode.is_some())
-        {
-            self.application.patch_typed(patch).await?;
-            return Ok(ApplicationPatchResult {
-                degradations: Vec::new(),
-                notified_version: None,
-            });
-        }
-
-        #[cfg(not(test))]
-        anyhow::ensure!(
-            canonical,
-            "Application runtime commit requires the canonical Reconciler"
-        );
-
-        let previous = self.application.get().await?;
-        // Unlike the old single-domain fence, ref reconciles the complete
-        // committed runtime target. Track Clash and Profiles as well so an
-        // overlapping domain commit cannot be claimed as a successful Apply.
-        #[cfg(test)]
-        let expected_sources = self.committed_runtime_source_versions();
-        let use_checked = self.checked_gate.get().is_some()
-            && checked_application_patch_eligible(&patch, &previous.state, service_connected);
-        let mut candidate = previous.state.clone();
-        candidate.apply(patch);
-        let prepared = self.application.prepare_replace(candidate.clone()).await?;
-
-        // The ref check ACKs *exact* prepared bytes with the one Core owner.
-        // For an eligible local-host update we will notify CheckedSourceCommitted
-        // after durable CAS; host changes request a fresh ownership plan.
-        let checked_request = self
-            .check_application_candidate(candidate.clone(), service_connected, use_checked)
-            .await?;
-
-        let committed = self
-            .application
-            .replace_prepared_if_version(previous.version, prepared)
-            .await;
-        let committed_version = match committed {
-            Ok(crate::state::ConditionalReplaceResult::Replaced(snapshot)) => snapshot.version,
-            Ok(crate::state::ConditionalReplaceResult::Conflict { actual_version }) => {
-                if let Some(request) = checked_request.as_ref() {
-                    self.checked_gate
-                        .get()
-                        .expect("checked Application gate admitted this proposal")
-                        .abort_with_receipt(
-                            chimera_contracts::mutation::ConfigDomain::Application,
-                            request.clone(),
-                        );
-                }
-                anyhow::bail!(
-                    "application config version conflict: expected {}, actual {actual_version}",
-                    previous.version
-                );
-            }
-            Err(error) => {
-                if let Some(request) = checked_request.as_ref() {
-                    self.checked_gate
-                        .get()
-                        .expect("checked Application gate admitted this proposal")
-                        .abort_with_receipt(
-                            chimera_contracts::mutation::ConfigDomain::Application,
-                            request.clone(),
-                        );
-                }
-                return Err(error.context("failed to commit checked application config"));
-            }
-        };
-
-        if use_checked {
-            // Like the upstream source owner, publish the exact durable CAS
-            // version immediately. The one CoreLifecycle Actor receives the
-            // checked notice while this command is active, and dispatches
-            // ApplyChecked only after this source command finishes. No UI
-            // callback is needed to make a successful source commit observable.
-            let gate = self
-                .checked_gate
-                .get()
-                .expect("checked gate admitted this commit");
-            gate.committed_with_receipt(
-                chimera_contracts::mutation::ConfigDomain::Application,
-                chimera_core::state::Version::new(committed_version),
-                checked_request.expect("admitted checked Application has a receipt"),
-            );
-            // Do not run the legacy inline reconcile on this same version.
-            return Ok(ApplicationPatchResult {
-                degradations: Vec::new(),
-                notified_version: Some(committed_version),
-            });
-        }
-
-        if canonical {
-            // Host changes cannot authorize an ApplyChecked on the old
-            // selected owner. Publish the durable version to ref S2/S3/S4;
-            // that actor will re-observe the actual owner and latest source.
-            self.checked_gate
-                .get()
-                .expect("canonical session has CandidateCheck")
-                .committed_for_reconcile(
-                    chimera_contracts::mutation::ConfigDomain::Application,
-                    chimera_core::state::Version::new(committed_version),
-                );
-            return Ok(ApplicationPatchResult {
-                degradations: Vec::new(),
-                notified_version: Some(committed_version),
-            });
-        }
-
-        #[cfg(not(test))]
-        return Err(anyhow::anyhow!(
-            "Application runtime commit requires the canonical Reconciler"
-        ));
-        #[cfg(test)]
-        {
-            // Source publication is complete. Ref's committed-target reconciler
-            // always consumes the latest version; until the full actor is ported,
-            // fence this compatibility apply before and after CoreLifecycle work.
-            // Failure to read the source after commit is deferred, not rolled back.
-            let degradation = crate::client::reconciler::committed::apply_committed(
-                "application",
-                committed_version,
-                || async { self.application.get().await.map(|latest| latest.version) },
-                || {
-                    crate::client::reconciler::committed::apply_with_dependency_fence(
-                        crate::client::reconciler::committed::SourceDomain::Application,
-                        expected_sources,
-                        || async { self.committed_runtime_source_versions() },
-                        || self.reconcile_application(candidate, service_connected),
-                    )
+        use chimera_core::client::reconciler::source_transaction::ApplicationPatchCommit;
+        match self
+            .source_transaction()
+            .commit_application_patch(
+                patch,
+                service_connected,
+                async |candidate, connected, checked| {
+                    self.check_application_candidate(candidate, connected, checked)
+                        .await
                 },
+                cfg!(test),
             )
-            .await;
-            if let Some(degradation) = degradation {
-                tracing::warn!(
-                    code = %degradation.code,
-                    message = %degradation.message,
-                    "application source committed; runtime reconcile deferred"
-                );
-                Ok(ApplicationPatchResult {
-                    degradations: vec![degradation],
-                    notified_version: None,
-                })
-            } else {
-                Ok(ApplicationPatchResult {
-                    degradations: Vec::new(),
-                    notified_version: None,
-                })
+            .await?
+        {
+            ApplicationPatchCommit::Settled(result) => Ok(result),
+            ApplicationPatchCommit::LegacyFixture {
+                committed_version,
+                expected_sources,
+                candidate,
+            } => {
+                #[cfg(not(test))]
+                {
+                    let _ = (committed_version, expected_sources, candidate);
+                    anyhow::bail!("Application runtime commit requires the canonical Reconciler");
+                }
+
+                #[cfg(test)]
+                {
+                    // Source publication is complete. Ref's committed-target reconciler
+                    // always consumes the latest version; until the full actor is ported,
+                    // fence this compatibility apply before and after CoreLifecycle work.
+                    // Failure to read the source after commit is deferred, not rolled back.
+                    let degradation = crate::client::reconciler::committed::apply_committed(
+                        "application",
+                        committed_version,
+                        || async { self.application.get().await.map(|latest| latest.version) },
+                        || {
+                            crate::client::reconciler::committed::apply_with_dependency_fence(
+                                crate::client::reconciler::committed::SourceDomain::Application,
+                                expected_sources,
+                                || async { self.committed_runtime_source_versions() },
+                                || self.reconcile_application(candidate, service_connected),
+                            )
+                        },
+                    )
+                    .await;
+                    if let Some(degradation) = degradation {
+                        tracing::warn!(
+                            code = %degradation.code,
+                            message = %degradation.message,
+                            "application source committed; runtime reconcile deferred"
+                        );
+                        Ok(ApplicationPatchResult {
+                            degradations: vec![degradation],
+                            notified_version: None,
+                        })
+                    } else {
+                        Ok(ApplicationPatchResult {
+                            degradations: Vec::new(),
+                            notified_version: None,
+                        })
+                    }
+                }
             }
         }
     }
@@ -354,23 +232,12 @@ impl CoreLifecycleWorkflow {
             },
             staged: Default::default(),
         };
-        if let Some(gate) = self.checked_gate.get() {
-            if use_checked {
-                // The ACK proves that one Core owner retained the exact
-                // validated candidate before the source is made durable.
-                return gate
-                    .check_with_receipt(candidate)
-                    .await
-                    .map(Some)
-                    .map_err(anyhow::Error::new);
-            }
-            // Core selection and Service mode require a fresh ownership
-            // plan; avoid an orphaned direct Checked inbox entry.
-            return gate
-                .validate_only(candidate)
+        if self.checked_gate.get().is_some() {
+            return self
+                .source_transaction()
+                .check_candidate(candidate, use_checked)
                 .await
-                .map(|()| None)
-                .map_err(anyhow::Error::new);
+                .expect("installed candidate gate is retained");
         }
         #[cfg(not(test))]
         {
@@ -538,25 +405,12 @@ impl CoreLifecycleWorkflow {
         profiles: Arc<chimera_config::profile::Profiles>,
         staged_content: std::collections::BTreeMap<String, String>,
     ) -> anyhow::Result<()> {
-        let clash = self.clash.get()?;
-        let app = self.application.get_typed();
-        let (target, app, clash, profiles, staged_content) = self
-            .capture_reconcile_target(app, clash, profiles, staged_content)
-            .await?;
-        let target_core = app.core;
-        let run_type = crate::core::RunType::classify(
-            app.enable_service_mode,
-            crate::core::service::ipc::get_ipc_state().is_connected(),
-        );
-        self.core
+        self.source_transaction()
             .reconcile_profiles(
-                clash,
-                target_core,
-                run_type,
+                crate::utils::dirs::app_profiles_dir,
+                || crate::core::service::ipc::get_ipc_state().is_connected(),
                 profiles,
-                app,
                 staged_content,
-                Some(target),
             )
             .await
     }
