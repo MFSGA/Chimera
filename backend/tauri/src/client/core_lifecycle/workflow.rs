@@ -56,8 +56,6 @@ pub(in crate::client) use crate::client::reconciler::apply::CheckedConnectionEff
 
 #[derive(Clone)]
 pub(in crate::client) struct CoreLifecycleWorkflow {
-    pub(in crate::client) application: ApplicationClient,
-    pub(in crate::client) clash: ClashConfigClient,
     shared: chimera_core::client::core_lifecycle::state::CoreLifecycleState,
     #[cfg(test)]
     startup_report: Arc<parking_lot::Mutex<Option<StartupReport>>>,
@@ -93,10 +91,13 @@ impl CoreLifecycleWorkflow {
         service: Arc<dyn ServiceLifecyclePort>,
     ) -> Self {
         Self {
-            application,
-            clash,
             shared: chimera_core::client::core_lifecycle::state::CoreLifecycleState::new(
-                profiles, core, installer, service,
+                application,
+                (*clash).clone(),
+                profiles,
+                core,
+                installer,
+                service,
             ),
             #[cfg(test)]
             startup_report: Arc::new(parking_lot::Mutex::new(None)),

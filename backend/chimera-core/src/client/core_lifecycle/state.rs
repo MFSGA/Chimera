@@ -18,6 +18,8 @@ use tokio_util::sync::CancellationToken;
 
 #[derive(Clone)]
 pub struct CoreLifecycleState {
+    pub application: crate::client::application::ApplicationClient,
+    pub clash: crate::client::clash_config::ClashConfigClient,
     pub profiles: Option<crate::state::StateSnapshot<chimera_config::profile::Profiles>>,
     pub content_reader: Option<crate::state::mutation::ProfileContentReader>,
     /// Installed once by the production Client after the canonical Core
@@ -55,12 +57,16 @@ pub struct CoreLifecycleState {
 
 impl CoreLifecycleState {
     pub fn new(
+        application: crate::client::application::ApplicationClient,
+        clash: crate::client::clash_config::ClashConfigClient,
         profiles: Option<crate::state::StateSnapshot<chimera_config::profile::Profiles>>,
         core: Arc<dyn CoreLifecyclePort>,
         installer: Arc<dyn BinaryInstaller>,
         service: Arc<dyn ServiceLifecyclePort>,
     ) -> Self {
         Self {
+            application,
+            clash,
             profiles,
             content_reader: None,
             checked_gate: Arc::new(std::sync::OnceLock::new()),

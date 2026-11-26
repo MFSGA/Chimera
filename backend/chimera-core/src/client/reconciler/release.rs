@@ -308,3 +308,50 @@ where
 
     Ok(())
 }
+
+use super::startup_executor::StartupHost;
+use crate::client::core_lifecycle::{state::CoreLifecycleState, status::RunType};
+
+/// Independent ref release-owed maintenance: only a verified Local
+/// runtime may retire a daemon whose *stopped* Core is still owned by this
+/// instance. Running, foreign, quarantined and unreadable Service owners
+/// are never grounds for stopping the daemon.
+pub async fn service_release_observation(
+    state: &CoreLifecycleState,
+    host: &(impl StartupHost + ?Sized),
+) -> crate::client::reconciler::release::ReleaseObservation {
+    if state.application.get_typed().enable_service_mode {
+        return ReleaseObservation::Cleared;
+    }
+    let Ok(core) = state.core.status().await else {
+        return ReleaseObservation::Unproven;
+    };
+    let verified_local = core.run_type == RunType::Normal
+        && super::proof::verified_applied_runtime(
+            state.core.as_ref(),
+            || host.startup_target_identity(),
+            &core,
+        )
+        .await;
+    if !verified_local {
+        return ReleaseObservation::Unproven;
+    }
+    let (service, _) = state.service_evidence().await;
+    observation(false, verified_local, &service)
+}
+
+pub async fn maintain_release_for_host(
+    state: &CoreLifecycleState,
+    host: &(impl StartupHost + ?Sized),
+) -> anyhow::Result<()> {
+    maintain_service_release(
+        state.core.as_ref(),
+        &state.service_recovery,
+        || service_release_observation(state, host),
+        || state.service_evidence(),
+        || state.try_begin_service_transition(),
+    )
+    .await?;
+    state.refresh_service_recovery_host().await;
+    Ok(())
+}

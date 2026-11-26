@@ -5,7 +5,6 @@ use crate::client::reconciler::inputs::RuntimeInputs;
 #[cfg(test)]
 use crate::config::chimera::ClashCore;
 use chimera_config::application::{ChimeraAppConfig, ChimeraAppConfigPatch};
-use chimera_core::actor_v2::endpoint::ExecutionHost;
 use std::sync::Arc;
 
 pub use chimera_core::client::core_lifecycle::command::ApplicationPatchResult;
@@ -297,107 +296,9 @@ impl CoreLifecycleWorkflow {
         app: ChimeraAppConfig,
         expected_target: Option<&str>,
     ) -> anyhow::Result<()> {
-        // The earlier rejected Service candidate is not the Local fallback's
-        // terminal; a second admitted Core command must supersede its verdict.
-        self.take_prepared_outcome();
-        use crate::client::reconciler::attempt::{
-            CommittedTargetAdvanced, OwnershipTransitionPending,
-        };
-        if let Some(expected) = expected_target
-            && self.startup_target_identity().await? != expected
-        {
-            return Err(CommittedTargetAdvanced.into());
-        }
-        let clash = self.clash.get()?;
-        #[cfg(test)]
-        if self.profiles.is_none() {
-            if let Some(target) = expected_target {
-                self.progress
-                    .lock()
-                    .stage(target.to_owned(), ExecutionHost::Local);
-            }
-            return self
-                .core
-                .reconcile_after_service_release(clash, app.core)
-                .await;
-        }
-        #[cfg(not(test))]
-        anyhow::ensure!(
-            self.canonical_convergence_session(),
-            "Service release requires the canonical Reconciler"
-        );
-        let (target, app, clash, profiles, staged_content) =
-            self.capture_reconcile_committed_target(app, clash).await?;
-
-        if expected_target.is_some_and(|expected| expected != target) {
-            return Err(CommittedTargetAdvanced.into());
-        }
-
-        if self.checked_gate.get().is_some()
-            && let Some(authority) = self.source_authority.as_ref()
-            && self.core.runtime_preparation_session().is_some()
-        {
-            anyhow::ensure!(
-                !self.core.outcome_uncertain(),
-                "Service-to-Local handback cannot begin while the Core outcome is uncertain"
-            );
-            // A newer committed source may have reversed the preferred host
-            // while the Service release was being proved. Do not change the
-            // host at all for a target that has already been superseded.
-            anyhow::ensure!(
-                authority
-                    .verify_committed_prepared_target(&target, None)
-                    .await?
-                    .is_some(),
-                "authoritative source cannot prove the released Service fallback target"
-            );
-            // The caller holds the transition lease and has *already* proved
-            // that the rejected Service Core was released. Preserve this
-            // evidence when selecting Local; do not submit via the router's
-            // old combined host-handoff + inline-build path.
-            self.core
-                .select_local_after_confirmed_service_release()
-                .await?;
-            self.progress
-                .lock()
-                .stage(target.clone(), ExecutionHost::Local);
-            // Once S2 has moved the owner, missing Core/source proof must be
-            // Waiting, not a license for a second legacy submit or handoff.
-            return self
-                .try_reconcile_prepared_local(&target, &app, &clash, crate::core::RunType::Normal)
-                .await
-                .unwrap_or_else(|| {
-                    Err(crate::client::reconciler::attempt::OwnershipTransitionPending::waiting(
-                        "Local Core ownership was not proven after the Service release handback",
-                    )
-                    .into())
-                });
-        }
-
-        if self.canonical_convergence_session() {
-            return Err(OwnershipTransitionPending::waiting(
-                "Service release lost the canonical preparation or source authority",
-            )
-            .into());
-        }
-
-        #[cfg(not(test))]
-        return Err(OwnershipTransitionPending::waiting(
-            "Service release requires prepared runtime admission",
-        )
-        .into());
-
-        #[cfg(test)]
-        self.core
-            .reconcile_profiles_after_service_release(
-                clash,
-                app.core,
-                profiles,
-                app,
-                staged_content,
-                Some(target),
-            )
-            .await
+        chimera_core::client::reconciler::startup_convergence::reconcile_application_after_service_release(
+            self.shared_state(), self, cfg!(test), app, expected_target,
+        ).await
     }
 
     pub(in crate::client) async fn reconcile_profiles(
