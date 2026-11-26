@@ -91,6 +91,16 @@ pub enum PublicProfilesError {
     WorkflowNotReady,
     ServiceStopped,
     ShuttingDown,
+    RefreshFailed,
+    ImportFailed,
+    Persist,
+    RuntimeCheck,
+    SourceTransaction,
+    MaterializationFailed,
+    FetchSubscriptionFailed,
+    ContentRejectedWithoutDetails,
+    Rpc,
+    ProfileSyncJobs,
 }
 
 /// Public commit abort phase discriminant.
@@ -101,6 +111,10 @@ pub enum PublicCommitAbortedKind {
     RecoverAfterWriteFailure,
     RuntimeRefused,
     RuntimeFailed,
+    LocalWrite,
+    PrepareAck,
+    StateValidation,
+    StateRecovery,
 }
 
 /// Safe public commit-aborted decision metadata.
@@ -165,6 +179,9 @@ pub enum PublicRuntimeBuildKind {
     SerializeFinalConfig,
     ConfigNotMapping,
     UnsupportedConfigValues,
+    BuildWorker,
+    ProjectArtifact,
+    UnsupportedDnsCore,
 }
 
 /// Safe public port resolution discriminant.
@@ -207,6 +224,11 @@ pub enum PublicInstallCoreBinaryKind {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum PublicRuntimeCheckUnavailableKind {
     Backend { core_kind: Option<CoreErrorKind> },
+    CandidateUnavailable,
+    NoEndpoint,
+    HostUnsupported,
+    NotChecked,
+    Other,
 }
 
 /// Safe public runtime error for callers without `SensitiveRead`.
@@ -283,6 +305,8 @@ pub enum PublicRuntimeError {
     ConvertRuntimeConfig,
     RuntimeSnapshotChanged,
     RuntimeNodeNotFound,
+    AllocateRuntimeRevision,
+    InvalidCorePath,
 }
 
 /// Safe public remote-access config rejection discriminant.
@@ -466,6 +490,7 @@ pub enum PublicDegradationReason {
     ProfileAutoActivationFailed { cause: PublicProfilesError },
     HttpServerUnavailable,
     LocalSocketUnavailable,
+    RuntimeProductPublicationPending,
 }
 
 /// Safe public outcome for committed mutations when the response is redacted.
