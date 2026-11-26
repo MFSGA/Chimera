@@ -184,18 +184,29 @@ impl ChimeraClient {
             .map_err(|error| anyhow::anyhow!(error.to_string()))
     }
 
-    pub(crate) async fn retry_configuration_runtime_rpc(&self, window: &str) -> anyhow::Result<()> {
+    pub(crate) async fn call_shared_rpc<T: serde::de::DeserializeOwned>(
+        &self,
+        window: &str,
+        method: &str,
+        params: serde_json::Value,
+    ) -> anyhow::Result<T> {
         use chimera_rpc::{audit::RpcTransport, registry::RpcCaller};
-        self.rpc()?
+        let value = self
+            .rpc()?
             .call(
                 RpcTransport::TauriIpc,
-                "retry_configuration_runtime",
+                method,
                 RpcCaller::desktop(window),
-                serde_json::json!({}),
+                params,
             )
             .await
             .map_err(|error| anyhow::anyhow!(error.message))?;
-        Ok(())
+        Ok(serde_json::from_value(value)?)
+    }
+
+    pub(crate) async fn retry_configuration_runtime_rpc(&self, window: &str) -> anyhow::Result<()> {
+        self.call_shared_rpc(window, "retry_configuration_runtime", serde_json::json!({}))
+            .await
     }
 }
 

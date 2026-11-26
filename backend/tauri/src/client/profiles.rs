@@ -3399,6 +3399,119 @@ mod tests {
     /// The activation is a second conditional commit, which can independently
     /// fail; a later selection must never replace the first successful current.
     #[tokio::test]
+    async fn shared_rpc_create_profile_retains_durable_receipts() {
+        for refuse_activation in [false, true] {
+            let config_dir = tempdir().unwrap();
+            let data_dir = tempdir().unwrap();
+            let paths = PathResolver::with_base_dirs(
+                config_dir.path().to_path_buf(),
+                data_dir.path().to_path_buf(),
+            );
+            let fs = Arc::new(ProfileFileService::new(paths, Arc::new(NoProxyPort)));
+            let mutations = MutationCoordinator::isolated();
+            let mut fetcher = MockSubscriptionFetcher::new();
+            fetcher.expect_fetch().never().returning(|_, _| {
+                Ok(FetchedSubscription {
+                    content: "proxies: []\n".into(),
+                    filename: Some("server-title".into()),
+                    subscription: SubscriptionInfo::default(),
+                    suggested_update_interval_minutes: None,
+                    content_type: None,
+                    file_name: None,
+                })
+            });
+            let profiles = test_client_new(
+                mutations.clone(),
+                temp_profiles_path(&config_dir),
+                fs.clone(),
+                Arc::new(fetcher),
+                fs,
+            )
+            .await
+            .unwrap();
+            if refuse_activation {
+                mutations.install_test_runtime_gate(Arc::new(UnavailableRuntimeGate));
+            }
+            let (mut client, events) = super::super::tests::recording_client(false).await;
+            Arc::get_mut(&mut client.inner)
+                .unwrap()
+                .shared
+                .test_set_typed_profiles(profiles.clone());
+
+            use chimera_contracts::auth::{AuthContext, Grant, Principal, Role};
+            use chimera_rpc::{audit::RpcTransport, registry::RpcCaller};
+            let rpc = client.rpc().unwrap();
+            let params = serde_json::json!({
+                "request": add_placeholder_request(),
+                "fileData": "proxies: []\n",
+            });
+            let viewer = RpcCaller::new(
+                AuthContext::new(
+                    Principal::Token {
+                        id: "viewer".into(),
+                        name: "viewer".into(),
+                    },
+                    Grant::Role(Role::Viewer),
+                ),
+                chimera_rpc_protocol::RpcOwner::new("viewer".into()),
+            );
+            let before = profiles.snapshot().revision();
+            assert_eq!(
+                rpc.call(
+                    RpcTransport::Local,
+                    "create_profile",
+                    viewer,
+                    params.clone()
+                )
+                .await
+                .unwrap_err()
+                .kind,
+                "forbidden"
+            );
+            assert_eq!(profiles.snapshot().revision(), before);
+            let wire = rpc
+                .call(
+                    RpcTransport::TauriIpc,
+                    "create_profile",
+                    RpcCaller::desktop("test-window"),
+                    params,
+                )
+                .await
+                .unwrap();
+            let id = ProfileId(wire["value"].as_str().unwrap().to_owned());
+            let durable = profiles.snapshot();
+            assert!(durable.items.contains_key(&id));
+            assert_eq!(
+                wire["commits"].as_array().unwrap().len(),
+                if refuse_activation { 1 } else { 2 }
+            );
+            if refuse_activation {
+                assert_eq!(wire["status"], "committed_degraded");
+                assert!(durable.current.is_none());
+            } else {
+                assert_eq!(durable.current.as_ref(), Some(&id));
+            }
+            let listed = rpc
+                .call(
+                    RpcTransport::TauriIpc,
+                    "get_profiles_listing",
+                    RpcCaller::desktop("test-window"),
+                    serde_json::json!({}),
+                )
+                .await
+                .unwrap();
+            assert!(
+                listed["items"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|item| item["uid"] == id.0)
+            );
+            assert!(!events.lock().unwrap().is_empty());
+        }
+    }
+
+    #[tokio::test]
     async fn shared_profile_facade_retains_created_id_and_commit_on_activation_failure() {
         for refuse_activation in [false, true] {
             let config_dir = tempdir().unwrap();

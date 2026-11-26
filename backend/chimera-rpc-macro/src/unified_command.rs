@@ -375,8 +375,14 @@ pub fn expand_with_options(item: ItemFn, options: Options) -> syn::Result<TokenS
         let response_type =
             operation.map(|operation| quote!(: <#operation as #operation_trait>::Response));
         let finish_output = finish_output_expr(options.privacy);
+        let visibility_guard = options.privacy.then(|| {
+            quote! {
+                ::chimera_rpc::privacy::require_full_visibility(visibility)?;
+            }
+        });
         quote! {
             let visibility = meta.visibility();
+            #visibility_guard
             #(#dependency_bindings)*
             #neutral_parse
             Ok(::std::boxed::Box::pin(async move {

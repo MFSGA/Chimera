@@ -10,3 +10,5 @@ pub mod events;
 pub mod permission;
 pub mod redaction;
 pub mod registry;
+
+pub mod privacy;

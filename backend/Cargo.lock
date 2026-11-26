@@ -1742,6 +1742,8 @@ dependencies = [
  "chimera-rpc-macro",
  "chimera-rpc-protocol",
  "chimera-runtime-values",
+ "clash-api",
+ "indexmap 2.14.2",
  "inventory",
  "serde",
  "serde_json",
@@ -1749,6 +1751,7 @@ dependencies = [
  "specta",
  "tokio",
  "tracing",
+ "url",
 ]
 
 [[package]]

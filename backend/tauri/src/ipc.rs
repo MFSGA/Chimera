@@ -1815,8 +1815,15 @@ pub async fn clash_api_get_configs(
 #[specta::specta]
 pub async fn clash_api_get_version(
     client: State<'_, ChimeraClient>,
+    window: tauri::Window,
 ) -> Result<clash::api::ClashVersion> {
-    Ok(client.clash_version().await?)
+    Ok(client
+        .call_shared_rpc(
+            window.label(),
+            "clash_api_get_version",
+            serde_json::json!({}),
+        )
+        .await?)
 }
 
 #[tauri::command]
@@ -1825,34 +1832,71 @@ pub async fn clash_api_query_dns(
     name: String,
     record_type: String,
     client: State<'_, ChimeraClient>,
+    window: tauri::Window,
 ) -> Result<clash_api::DnsResponse> {
-    Ok(client.clash_api_query_dns(name, record_type).await?)
+    Ok(client
+        .call_shared_rpc(
+            window.label(),
+            "clash_api_query_dns",
+            serde_json::json!({"name": name, "recordType": record_type}),
+        )
+        .await?)
 }
 
 #[tauri::command]
 #[specta::specta]
-pub async fn clash_api_flush_dns_cache(client: State<'_, ChimeraClient>) -> Result {
-    Ok(client.clash_api_flush_dns_cache().await?)
+pub async fn clash_api_flush_dns_cache(
+    client: State<'_, ChimeraClient>,
+    window: tauri::Window,
+) -> Result {
+    Ok(client
+        .call_shared_rpc(
+            window.label(),
+            "clash_api_flush_dns_cache",
+            serde_json::json!({}),
+        )
+        .await?)
 }
 
 #[tauri::command]
 #[specta::specta]
-pub async fn clash_api_flush_fake_ip_cache(client: State<'_, ChimeraClient>) -> Result {
-    Ok(client.clash_api_flush_fake_ip_cache().await?)
+pub async fn clash_api_flush_fake_ip_cache(
+    client: State<'_, ChimeraClient>,
+    window: tauri::Window,
+) -> Result {
+    Ok(client
+        .call_shared_rpc(
+            window.label(),
+            "clash_api_flush_fake_ip_cache",
+            serde_json::json!({}),
+        )
+        .await?)
 }
 
 #[tauri::command]
 #[specta::specta]
-pub async fn clash_api_get_rules(client: State<'_, ChimeraClient>) -> Result<clash::api::RulesRes> {
-    Ok(client.clash_rules().await?)
+pub async fn clash_api_get_rules(
+    client: State<'_, ChimeraClient>,
+    window: tauri::Window,
+) -> Result<clash::api::RulesRes> {
+    Ok(client
+        .call_shared_rpc(window.label(), "clash_api_get_rules", serde_json::json!({}))
+        .await?)
 }
 
 #[tauri::command]
 #[specta::specta]
 pub async fn clash_api_get_providers_rules(
     client: State<'_, ChimeraClient>,
+    window: tauri::Window,
 ) -> Result<clash::api::ProvidersRulesRes> {
-    Ok(client.clash_rule_providers().await?)
+    Ok(client
+        .call_shared_rpc(
+            window.label(),
+            "clash_api_get_providers_rules",
+            serde_json::json!({}),
+        )
+        .await?)
 }
 
 #[tauri::command]
@@ -1860,8 +1904,15 @@ pub async fn clash_api_get_providers_rules(
 pub async fn clash_api_update_providers_rules(
     client: State<'_, ChimeraClient>,
     name: String,
+    window: tauri::Window,
 ) -> Result<()> {
-    Ok(client.update_clash_rule_provider(name).await?)
+    Ok(client
+        .call_shared_rpc(
+            window.label(),
+            "clash_api_update_providers_rules",
+            serde_json::json!({"name": name}),
+        )
+        .await?)
 }
 
 #[tauri::command]
@@ -1874,8 +1925,18 @@ pub async fn clash_api_get_providers_proxies(
 
 #[tauri::command]
 #[specta::specta]
-pub async fn update_proxy_provider(client: State<'_, ChimeraClient>, name: String) -> Result<()> {
-    Ok(client.update_proxy_provider(name).await?)
+pub async fn update_proxy_provider(
+    client: State<'_, ChimeraClient>,
+    name: String,
+    window: tauri::Window,
+) -> Result<()> {
+    Ok(client
+        .call_shared_rpc(
+            window.label(),
+            "update_proxy_provider",
+            serde_json::json!({"name": name}),
+        )
+        .await?)
 }
 
 #[tauri::command]
@@ -1949,8 +2010,15 @@ pub async fn test_native_proxy_group_delay(
 pub async fn clash_api_delete_connections(
     id: Option<String>,
     client: State<'_, ChimeraClient>,
+    window: tauri::Window,
 ) -> Result<()> {
-    Ok(client.close_clash_connections(id).await?)
+    Ok(client
+        .call_shared_rpc(
+            window.label(),
+            "clash_api_delete_connections",
+            serde_json::json!({"id": id}),
+        )
+        .await?)
 }
 
 #[tauri::command]

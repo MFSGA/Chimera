@@ -26,3 +26,10 @@ pub async fn retry_configuration_runtime(
 ) -> anyhow::Result<()> {
     client.retry_configuration_runtime().await
 }
+
+#[chimera_rpc::rpc(expose = [http, local], query)]
+pub async fn clash_api_get_version(
+    client: RpcState<'_, ChimeraClient>,
+) -> anyhow::Result<chimera_core::clash::api::ClashVersion> {
+    Ok(client.clash_version().await?)
+}

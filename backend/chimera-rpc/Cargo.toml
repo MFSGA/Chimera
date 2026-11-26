@@ -6,6 +6,9 @@ license.workspace = true
 authors.workspace = true
 
 [dependencies]
+clash-api = { workspace = true }
+indexmap = { version = "2.2.3", features = ["serde"] }
+url = "2"
 inventory = "0.3"
 chimera-rpc-macro = { path = "../chimera-rpc-macro" }
 chimera-config = { path = "../chimera-config" }

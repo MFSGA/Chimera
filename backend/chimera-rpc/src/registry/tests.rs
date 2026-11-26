@@ -194,15 +194,79 @@ fn linked_declarations_match_the_resource_table_and_unlinked_commands_stay_known
         .filter(|c| c.handler.is_some())
         .map(|c| c.metadata.name)
         .collect();
-    assert_eq!(linked.len(), 4);
+    assert_eq!(linked.len(), 41);
     for name in [
-        "rpc_describe",
+        "activate_profile",
+        "clash_api_delete_connections",
+        "clash_api_flush_dns_cache",
+        "clash_api_flush_fake_ip_cache",
+        "clash_api_get_group_delay",
+        "clash_api_get_providers_proxies",
+        "clash_api_get_providers_rules",
+        "clash_api_get_rules",
+        "clash_api_get_settings",
+        "clash_api_get_version",
+        "clash_api_healthcheck_proxy_provider",
+        "clash_api_query_dns",
+        "clash_api_update_providers_rules",
+        "clear_proxy_fixed",
+        "create_profile",
+        "create_profile_folder",
+        "create_proxy_group_folder",
+        "delete_profile",
+        "enhance_profiles",
         "get_config_features",
         "get_core_status_summary",
+        "get_profiles_listing",
+        "get_proxies",
+        "import_profile",
+        "mutate_proxies",
+        "patch_profile_metadata",
+        "patch_remote_profile_options",
+        "probe_direct_egress",
+        "reorder_profile",
+        "reorder_profiles_by_list",
+        "replace_profile_definition",
         "retry_configuration_runtime",
+        "rpc_describe",
+        "save_profile_file",
+        "select_proxy",
+        "set_global_transforms",
+        "set_profile_layout",
+        "set_profile_valid_fields",
+        "set_proxy_group_layout",
+        "update_profile",
+        "update_proxy_provider",
     ] {
         assert!(linked.contains(&name));
         assert!(commands[name].linked(RpcTarget::Desktop));
+    }
+    for name in [
+        "activate_profile",
+        "clear_proxy_fixed",
+        "create_profile",
+        "create_profile_folder",
+        "create_proxy_group_folder",
+        "delete_profile",
+        "import_profile",
+        "patch_profile_metadata",
+        "patch_remote_profile_options",
+        "reorder_profile",
+        "reorder_profiles_by_list",
+        "replace_profile_definition",
+        "save_profile_file",
+        "select_proxy",
+        "set_global_transforms",
+        "set_profile_layout",
+        "set_profile_valid_fields",
+        "set_proxy_group_layout",
+        "update_profile",
+    ] {
+        let metadata = commands[name].metadata();
+        assert_eq!(
+            metadata.permission.access,
+            chimera_contracts::auth::Access::Write
+        );
     }
     assert!(!commands["get_profiles"].linked(RpcTarget::Desktop));
     assert_eq!(
