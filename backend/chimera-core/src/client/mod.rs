@@ -68,3 +68,7 @@ mod facade;
 pub use facade::{
     ChimeraClient, ClientParts, WeakChimeraClient, auto_activation_failure_degradation,
 };
+
+pub mod application_operations;
+
+pub mod clash_operations;

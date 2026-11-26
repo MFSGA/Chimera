@@ -51,35 +51,6 @@ impl ChimeraClient {
         Config::verge().latest().clone()
     }
 
-    pub(crate) async fn expected_system_proxy_port(&self) -> anyhow::Result<Option<u16>> {
-        let clash = self.inner.clash_config.get()?;
-        let receipt = match self.inner.shared.core().observe_runtime_baseline().await? {
-            super::application_workflow::mutation::KnownRuntimeState::Applied(receipt) => {
-                Some(receipt)
-            }
-            super::application_workflow::mutation::KnownRuntimeState::Stopped => {
-                self.inner.shared.core().last_confirmed_runtime_receipt()
-            }
-            super::application_workflow::mutation::KnownRuntimeState::NeverApplied => None,
-        };
-        Ok(super::ports::effective_mixed_port(
-            receipt.as_deref(),
-            &clash,
-        ))
-    }
-
-    #[cfg(not(any(target_os = "android", target_os = "ios")))]
-    pub(crate) async fn active_system_proxy_port(&self) -> anyhow::Result<Option<u16>> {
-        let receipt = match self.inner.shared.core().observe_runtime_baseline().await? {
-            super::application_workflow::mutation::KnownRuntimeState::Applied(receipt) => receipt,
-            super::application_workflow::mutation::KnownRuntimeState::Stopped
-            | super::application_workflow::mutation::KnownRuntimeState::NeverApplied => {
-                return Ok(None);
-            }
-        };
-        Ok(super::ports::confirmed_mixed_port(Some(&receipt)))
-    }
-
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     pub(crate) async fn reconcile_system_proxy_effect(
         &self,
@@ -180,23 +151,7 @@ impl ChimeraClient {
         &self,
         patch: ChimeraAppConfigPatch,
     ) -> anyhow::Result<super::MutationOutcome<()>> {
-        let before = self.inner.shared.application().snapshot();
-        let mut candidate = before.state.clone();
-        candidate.apply(patch.clone());
-        crate::state::application::validate_network_automation_policy(&candidate)?;
-        chimera_config::application::validate_public_ip_probe_sources(
-            &candidate.stun_servers,
-            &candidate.ip_lookup_providers,
-        )
-        .map_err(anyhow::Error::msg)?;
-        let clash = self.get_clash_config()?;
-        clash.validate_transparent_proxy(candidate.core, cfg!(target_os = "linux"))?;
-        anyhow::ensure!(
-            clash.transparent_proxy.mode
-                == chimera_config::clash::config::TransparentProxyMode::Disabled
-                || candidate.enable_service_mode,
-            "transparent capture requires Service mode"
-        );
+        let (before, candidate) = self.inner.shared.validate_application_candidate(&patch)?;
 
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
         let reconcile_hotkeys = patch.hotkeys.is_some();
@@ -213,32 +168,20 @@ impl ChimeraClient {
         )?;
 
         let service_connected = crate::core::service::ipc::get_ipc_state().is_connected();
-        let requires_reconcile =
-            chimera_core::state::mutation::impact::application_patch_requires_reconcile(
-                &patch,
-                service_connected,
-            ) || patch.enable_service_mode.is_some();
-        let native_checked = self.inner.checked_gate.is_some()
-            && super::reconciler::legacy_source::checked_application_patch_eligible(
-                &patch,
-                &before.state,
-                service_connected,
-            );
-        let native_source_only = self.inner.checked_gate.is_some()
-            && !requires_reconcile
-            && !chimera_core::state::mutation::impact::reaches_runtime(
-                &before.state,
-                &candidate,
-                &[],
-            );
-        let native = native_checked || native_source_only;
+        let route = chimera_core::client::application_operations::application_patch_route(
+            &patch,
+            &before.state,
+            &candidate,
+            service_connected,
+            self.inner.checked_gate.is_some(),
+        );
+        let requires_reconcile = route.requires_reconcile;
+        let native = route.native();
         let (mut degradations, notified_version, snapshot) = if native {
-            let requested = super::effects::plan::requested_owners(&patch);
             let snapshot = self
                 .inner
                 .shared
-                .application()
-                .commit_native(before.version, candidate, native_checked, false, requested)
+                .commit_native_application_candidate(before.version, candidate, route, &patch)
                 .await?;
             (Vec::new(), Some(snapshot.version), snapshot)
         } else if requires_reconcile {
@@ -309,43 +252,20 @@ impl ChimeraClient {
         if !native {
             self.inner.ui_sink.refresh_verge();
         }
-        let has_deferred_runtime = degradations
-            .iter()
-            .any(|item| item.code == "application_runtime_deferred");
-        Ok(
-            super::MutationOutcome::from_parts((), degradations).with_commit(
-                super::runtime::CommitReceipt {
-                    operation_id: snapshot.operation_id.map(|id| id.to_string()),
-                    domain: "application".into(),
-                    source_version: notified_version.unwrap_or(snapshot.version),
-                    runtime: if has_deferred_runtime {
-                        super::runtime::RuntimeCommitStatus::Deferred
-                    } else if snapshot.reaches_runtime
-                        || (requires_reconcile && notified_version.is_some())
-                    {
-                        super::runtime::RuntimeCommitStatus::Pending
-                    } else {
-                        super::runtime::RuntimeCommitStatus::Unchanged
-                    },
-                },
-            ),
-        )
+        let receipt = chimera_core::client::application_operations::application_commit_receipt(
+            &snapshot,
+            notified_version,
+            requires_reconcile,
+            &degradations,
+        );
+        Ok(super::MutationOutcome::from_parts((), degradations).with_commit(receipt))
     }
 
     pub(crate) async fn patch_clash_config(
         &self,
         patch: chimera_config::clash::config::ClashConfigPatch,
     ) -> anyhow::Result<super::MutationOutcome<()>> {
-        let mut candidate = self.get_clash_config()?;
-        candidate.apply(patch.clone());
-        let app = self.get_app_config()?;
-        candidate.validate_transparent_proxy(app.core, cfg!(target_os = "linux"))?;
-        anyhow::ensure!(
-            candidate.transparent_proxy.mode
-                == chimera_config::clash::config::TransparentProxyMode::Disabled
-                || app.enable_service_mode,
-            "transparent capture requires Service mode"
-        );
+        self.inner.shared.validate_clash_candidate(&patch)?;
 
         if patch.enable_tun_mode == Some(true) {
             #[cfg(target_os = "macos")]
@@ -386,9 +306,6 @@ impl ChimeraClient {
             .await?;
         let snapshot = report.snapshot;
         let degradations = report.degradations;
-        let runtime_deferred = degradations
-            .iter()
-            .any(|item| item.code == "clash_runtime_deferred");
         if report.checked_version.is_none() {
             // Checked typed builder flags publish their exact CAS version
             // through the source owner. No legacy notice may replay Core.
@@ -417,22 +334,12 @@ impl ChimeraClient {
             self.inner.ui_sink.refresh_clash();
         }
 
-        Ok(
-            super::MutationOutcome::from_parts((), degradations).with_commit(
-                super::runtime::CommitReceipt {
-                    operation_id: None,
-                    domain: "clash".into(),
-                    source_version: snapshot.version,
-                    runtime: if runtime_deferred {
-                        super::runtime::RuntimeCommitStatus::Deferred
-                    } else if report.reaches_runtime {
-                        super::runtime::RuntimeCommitStatus::Pending
-                    } else {
-                        super::runtime::RuntimeCommitStatus::Unchanged
-                    },
-                },
-            ),
-        )
+        let receipt = chimera_core::client::clash_operations::clash_commit_receipt(
+            &snapshot,
+            report.reaches_runtime,
+            &degradations,
+        );
+        Ok(super::MutationOutcome::from_parts((), degradations).with_commit(receipt))
     }
 
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -462,84 +369,10 @@ impl ChimeraClient {
         }
         super::effects::ports::CommitNotifications::publish_full(&self.inner.effects, ports);
     }
-
-    #[cfg(not(any(target_os = "android", target_os = "ios")))]
-    async fn confirmed_effect_port_binding(
-        &self,
-    ) -> Option<chimera_config::runtime::executor::ResolvedPortBindings> {
-        let receipt = match self.inner.shared.core().active_runtime_receipt().await {
-            Ok(receipt) => receipt,
-            Err(error) => {
-                tracing::debug!(%error, "no active runtime receipt is available for application effects");
-                return None;
-            }
-        };
-        // The legacy runtime receipt records a successful prior apply; it
-        // alone cannot prove that the ref CoreActor still owns that instance.
-        // Fence the port publication against both sides of this async read.
-        if let (Some(core), Some(receipt)) = (self.inner.shared.core_api(), receipt.as_deref()) {
-            let before = match core.refresh_status().await {
-                Ok(status) => status,
-                Err(error) => {
-                    tracing::debug!(%error, "CoreActor cannot confirm runtime effect ports");
-                    return None;
-                }
-            };
-            if !actor_confirms_effect_ports(receipt, &before, &before) {
-                return None;
-            }
-            let after = match core.refresh_status().await {
-                Ok(status) => status,
-                Err(error) => {
-                    tracing::debug!(%error, "CoreActor changed during runtime port verification");
-                    return None;
-                }
-            };
-            if !actor_confirms_effect_ports(receipt, &before, &after) {
-                return None;
-            }
-        }
-        match resolved_effect_port_binding(receipt.as_deref()) {
-            Some(binding) => Some(binding),
-            None => {
-                tracing::warn!(
-                    "the active core has no confirmed mixed port for application effects"
-                );
-                None
-            }
-        }
-    }
 }
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
-fn actor_confirms_effect_ports(
-    receipt: &super::runtime::RuntimeApplyReceipt,
-    before: &chimera_core::actor_v2::router::CoreStatusProjection,
-    after: &chimera_core::actor_v2::router::CoreStatusProjection,
-) -> bool {
-    use chimera_core::actor_v2::router::EndpointConnectivity;
-    matches!(before.connectivity, EndpointConnectivity::Connected)
-        && matches!(after.connectivity, EndpointConnectivity::Connected)
-        && before.host == after.host
-        && before.generation == after.generation
-        && receipt.confirms_projection(before)
-        && receipt.confirms_projection(after)
-}
-
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
-pub(super) fn resolved_effect_port_binding(
-    receipt: Option<&super::runtime::RuntimeApplyReceipt>,
-) -> Option<chimera_config::runtime::executor::ResolvedPortBindings> {
-    receipt
-        .map(|receipt| receipt.ports.bindings().mixed_port)
-        .filter(|port| *port != 0)
-        .map(
-            |mixed_port| chimera_config::runtime::executor::ResolvedPortBindings {
-                mixed_port,
-                ..Default::default()
-            },
-        )
-}
+pub(super) use chimera_core::client::application_operations::resolved_effect_port_binding;
 
 enum PreparedLegacyDomain {
     Application {
@@ -614,16 +447,7 @@ fn plan_verge_patch(
 }
 
 #[cfg(any(target_os = "windows", test))]
-fn validate_windows_service_mode_tun_transition(
-    service_mode: Option<bool>,
-    current_tun: bool,
-    target_tun: Option<bool>,
-) -> Result<()> {
-    if service_mode == Some(false) && target_tun.unwrap_or(current_tun) {
-        anyhow::bail!("disable TUN before disabling Service Mode on Windows");
-    }
-    Ok(())
-}
+use chimera_core::client::application_operations::validate_windows_service_mode_tun_transition;
 
 async fn apply_verge_runtime_change(client: &ChimeraClient, plan: &VergePatchPlan) -> Result<()> {
     let ipc_state = crate::core::service::ipc::get_ipc_state();
@@ -1047,13 +871,7 @@ async fn patch_legacy_uncoordinated(client: &ChimeraClient, patch: IVerge) -> Re
 }
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
-fn application_patch_touches_system_proxy(patch: &ChimeraAppConfigPatch) -> bool {
-    patch.enable_system_proxy.is_some()
-        || patch.enable_proxy_guard.is_some()
-        || patch.system_proxy_bypass.is_some()
-        || patch.proxy_guard_interval.is_some()
-        || patch.pac_url.is_some()
-}
+use chimera_core::client::application_operations::application_patch_touches_system_proxy;
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 fn legacy_patch_touches_system_proxy(patch: &IVerge) -> bool {
@@ -1209,131 +1027,6 @@ mod tests {
     #[test]
     fn legacy_patch_without_effect_fields_does_not_request_effect_retries() {
         assert!(requested_effects(&plan_verge_patch(&IVerge::default(), None).unwrap()).is_empty());
-    }
-
-    #[cfg(not(any(target_os = "android", target_os = "ios")))]
-    #[test]
-    fn effect_ports_require_current_ref_core_actor_owner_and_applied_revision() {
-        use chimera_core::actor_v2::{
-            endpoint::{CoreStatusSnapshot, ExecutionHost},
-            router::{CoreStatusProjection, EndpointConnectivity},
-        };
-        use chimera_ipc::api::status::{CoreStateDetail, RevisionIdInfo};
-
-        let mut receipt = crate::client::ports::test_runtime_receipt(Default::default());
-        receipt.controller_generation = Some(8);
-        let before = CoreStatusProjection {
-            host: ExecutionHost::Local,
-            generation: 8,
-            connectivity: EndpointConnectivity::Connected,
-            snapshot: Some(CoreStatusSnapshot {
-                instance_id: Some("current-runtime".into()),
-                controller: None,
-                state: Some(CoreStateDetail::Running {
-                    epoch: receipt.applied_revision.epoch,
-                    pid: 22,
-                }),
-                state_changed_at: 7,
-                revision: Some(RevisionIdInfo {
-                    epoch: receipt.applied_revision.epoch,
-                    generation: receipt.applied_revision.generation,
-                    effective_hash: receipt.applied_revision.effective_hash.clone(),
-                }),
-                source_hash: Some(receipt.applied_revision.source_hash.clone()),
-                healthy: Some(true),
-                applied_kind: None,
-            }),
-        };
-        assert!(actor_confirms_effect_ports(&receipt, &before, &before));
-
-        let mut handoff = before.clone();
-        handoff.host = ExecutionHost::Service;
-        handoff.generation += 1;
-        assert!(!actor_confirms_effect_ports(&receipt, &before, &handoff));
-
-        let mut stopped = before.clone();
-        stopped.snapshot.as_mut().unwrap().state = Some(CoreStateDetail::Stopped { reason: None });
-        assert!(!actor_confirms_effect_ports(&receipt, &before, &stopped));
-
-        let mut stale_revision = before.clone();
-        stale_revision
-            .snapshot
-            .as_mut()
-            .unwrap()
-            .revision
-            .as_mut()
-            .unwrap()
-            .generation += 1;
-        assert!(!actor_confirms_effect_ports(
-            &receipt,
-            &before,
-            &stale_revision
-        ));
-
-        let mut disconnected = before.clone();
-        disconnected.connectivity = EndpointConnectivity::Degraded {
-            desired: ExecutionHost::Local,
-            reason: "connection lost".into(),
-        };
-        assert!(!actor_confirms_effect_ports(
-            &receipt,
-            &before,
-            &disconnected
-        ));
-    }
-
-    #[cfg(not(any(target_os = "android", target_os = "ios")))]
-    #[test]
-    fn effects_receive_the_confirmed_mixed_port_not_the_controller_port() {
-        use std::net::TcpListener;
-
-        use crate::client::ports::{
-            CandidatePortBindings, SessionPortResolver, test_runtime_receipt,
-        };
-
-        assert!(resolved_effect_port_binding(None).is_none());
-        let empty_receipt = test_runtime_receipt(CandidatePortBindings::default());
-        assert!(resolved_effect_port_binding(Some(&empty_receipt)).is_none());
-        let mixed_probe = TcpListener::bind("127.0.0.1:0").unwrap();
-        let mixed_port = mixed_probe.local_addr().unwrap().port();
-        let controller_probe = TcpListener::bind("127.0.0.1:0").unwrap();
-        let controller_port = controller_probe.local_addr().unwrap().port();
-        drop((mixed_probe, controller_probe));
-
-        let mut clash = ClashConfig::default();
-        clash.mixed_port = chimera_config::clash::config::clash_strategy::PortStrategy {
-            kind: chimera_config::clash::config::clash_strategy::PortStrategyKind::Fixed,
-            start_port: mixed_port,
-        };
-        clash.external_controller.port =
-            chimera_config::clash::config::clash_strategy::PortStrategy {
-                kind: chimera_config::clash::config::clash_strategy::PortStrategyKind::Fixed,
-                start_port: controller_port,
-            };
-        let candidate = SessionPortResolver::default()
-            .resolve_candidate(&clash)
-            .unwrap();
-        let receipt = test_runtime_receipt(candidate);
-        assert_eq!(
-            receipt
-                .ports
-                .bindings()
-                .external_controller
-                .as_deref()
-                .unwrap()
-                .rsplit(':')
-                .next()
-                .unwrap()
-                .parse::<u16>()
-                .unwrap(),
-            controller_port
-        );
-        assert_eq!(
-            resolved_effect_port_binding(Some(&receipt))
-                .expect("confirmed runtime port should be published")
-                .mixed_port,
-            mixed_port
-        );
     }
 
     #[tokio::test]

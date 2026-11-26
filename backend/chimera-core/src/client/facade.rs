@@ -169,6 +169,9 @@ impl ChimeraClient {
     pub fn downgrade(&self) -> WeakChimeraClient {
         WeakChimeraClient(Arc::downgrade(&self.inner))
     }
+    pub(crate) fn clash_config_owner(&self) -> &ClashConfigClient {
+        &self.inner.clash_config
+    }
     pub fn application(&self) -> &ApplicationClient {
         &self.inner.application
     }
