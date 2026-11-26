@@ -68,3 +68,5 @@ pub mod dispatch;
 pub mod startup_convergence;
 
 pub mod service_observer;
+
+pub mod client;

@@ -13,13 +13,12 @@ use std::{
 use crate::client::reconciler::apply::checked_mode_effect_can_finish;
 #[cfg(test)]
 use crate::client::reconciler::checked::{
-    CheckedRuntimeInbox, CheckedSelection, MAX_CHECKED_PENDING,
+    CheckedRuntimeCandidate, CheckedRuntimeInbox, CheckedSelection, MAX_CHECKED_PENDING,
 };
+#[cfg(test)]
+use crate::client::reconciler::committed::SourceVersions;
 use crate::client::reconciler::{
-    checked::CheckedRuntimeCandidate,
-    committed::{SourceDomain, SourceVersions},
-    status::ReconcilerStatus,
-    workflow::RuntimeReconcilerState,
+    committed::SourceDomain, status::ReconcilerStatus, workflow::RuntimeReconcilerState,
 };
 #[cfg(test)]
 use chimera_core::client::reconciler::{
@@ -30,7 +29,7 @@ use chimera_core::client::reconciler::{
     completion::{
         HandoffContinuation, RebuildAction, checked_clash_notice, rebuild_after_completion,
     },
-    dispatch::{RequestAdmission, RoundAdmission, is_source_only_application_patch, request_kind},
+    dispatch::{RequestAdmission, RoundAdmission, request_kind},
     plan::RunIntent,
     source_dispatch::{SourceAction, SourceDispatch, SourceDispatchFacts},
     worker::{
@@ -38,7 +37,9 @@ use chimera_core::client::reconciler::{
         spawn_service_recovery_lease, spawn_startup_retry_lease,
     },
 };
-use ractor::{Actor, ActorProcessingErr, ActorRef, RpcReplyPort, rpc::CallResult};
+use ractor::{Actor, ActorProcessingErr, ActorRef};
+#[cfg(test)]
+use ractor::{RpcReplyPort, rpc::CallResult};
 use tokio_util::{sync::CancellationToken, task::TaskTracker};
 
 #[cfg(test)]
@@ -47,10 +48,12 @@ use crate::client::application_workflow::{
     workflow::ProfileRuntime,
 };
 #[cfg(test)]
-use crate::client::core_lifecycle::{BinaryInstallProgress, LegacyServiceBridge};
+use crate::client::core_lifecycle::{
+    BinaryInstallProgress, LegacyServiceBridge, ServiceTransitionLease,
+};
 use crate::client::core_lifecycle::{
     Command, CoreLifecyclePort, CoreLifecycleWorkflow, CoreStatusSnapshot, PreparedCoreBinary,
-    RuntimeTransformDiagnostics, ServiceLifecyclePort, ServiceTransitionLease, ports, workflow,
+    RuntimeTransformDiagnostics, ServiceLifecyclePort, ports, workflow,
 };
 use crate::client::{
     ChimeraClient, application::ApplicationClient, application_workflow::startup::StartupReport,
@@ -60,7 +63,8 @@ use crate::client::{
 
 #[cfg(test)]
 use chimera_core::client::reconciler::{
-    mailbox::MAX_PENDING,
+    dispatch::is_source_only_application_patch,
+    mailbox::{MAX_PENDING, OperationId, Response},
     service_evidence::{service_followup_evidence_changed, startup_recovery_evidence_changed},
 };
 
@@ -68,7 +72,7 @@ use chimera_core::client::core_lifecycle::RECOVERY_INTERVAL;
 use chimera_core::client::reconciler::worker::CALL_WAIT;
 
 use chimera_core::client::reconciler::mailbox::{
-    AdmissionFailure, DIRTY_WINDOW, DirtyTick, Mailbox, MailboxTimers, OperationId, Response,
+    AdmissionFailure, DIRTY_WINDOW, DirtyTick, Mailbox, MailboxTimers,
 };
 
 pub use chimera_core::client::app_lifecycle::CompletedLifecycleOperation;
@@ -169,147 +173,13 @@ fn classify_service_probe(info: chimera_ipc::types::StatusInfo<'static>) -> Serv
     ServiceHostStatus::from_probe(info, owned)
 }
 
-enum Message {
-    /// Pinned ref RuntimeReconciler::Message::Checked, kept in the existing
-    /// single CoreLifecycle mailbox until its prepared-apply path is ported.
-    Checked {
-        checked: CheckedRuntimeCandidate,
-        reply: RpcReplyPort<Result<(), Arc<chimera_contracts::runtime_error::RuntimeError>>>,
-    },
-    /// A checked candidate was never persisted; revoke its domain before
-    /// the next durable SourceCommitted can consume stale uncommitted bytes.
-    AbortChecked {
-        domain: SourceDomain,
-        request: Option<String>,
-    },
-    /// Install the single production ref CandidateCheck on the existing
-    /// lifecycle workflow before any Application source mutation can run.
-    InstallCandidateGate {
-        gate: Arc<crate::client::reconciler::check::CandidateCheck>,
-        reply: RpcReplyPort<anyhow::Result<()>>,
-    },
-    #[cfg(test)]
-    ConnectApplicationWorkflow {
-        workflow: ApplicationWorkflow,
-        reply: RpcReplyPort<anyhow::Result<()>>,
-        registered: Option<tokio::sync::oneshot::Sender<()>>,
-    },
-    Request(Request),
-    Completed {
-        completion: WorkerCompletion<ApplicationWorkflow>,
-    },
-    #[cfg(test)]
-    ProbeService {
-        reply: RpcReplyPort<anyhow::Result<ServiceHostStatus>>,
-    },
-    ObserveService {
-        info: chimera_ipc::types::StatusInfo<'static>,
-    },
-    ServiceReadiness,
-    ServiceProbeFailed,
-    ServiceRecoveryTick,
-    ServiceRecoveryLeaseFailed,
-    RecoverCore,
-    /// Ref RuntimeGate::committed: observe the durable source version.
-    /// Profiles requests run a latest-target reconciliation here, while
-    /// already-applied legacy domains may only record their source version.
-    SourceCommitted {
-        domain: SourceDomain,
-        version: u64,
-        reconcile_requested: bool,
-        /// The caller already observed a ref Service generation / owner that
-        /// requires Startup recovery. Retain the durable runtime intent while
-        /// that single owner is being re-established.
-        startup_recovery_required: bool,
-    },
-    /// Ref RuntimeGate::committed for an already Checked product. Unlike the
-    /// old SourceCommitted route, this must NEVER schedule an independent
-    /// legacy build for a candidate it successfully consumes.
-    CheckedSourceCommitted {
-        domain: SourceDomain,
-        version: u64,
-        request: Option<String>,
-    },
-    RuntimeDirty,
-    DirtyTick,
-    /// A committed checked value can only be dispatched from the sole Owner
-    /// mailbox after observing the matching source version. Not connected to
-    /// the production Source Gate until the authoritative latest-target read
-    /// is also integrated.
-    ApplyCheckedCommitted {
-        domain: SourceDomain,
-        version: u64,
-        target: String,
-        authority: Arc<dyn crate::client::reconciler::authority::RuntimeSourceAuthority>,
-        reply: RpcReplyPort<anyhow::Result<()>>,
-    },
-    #[cfg(test)]
-    ReadSourceVersionsForTest {
-        reply: RpcReplyPort<SourceVersions>,
-    },
-    #[cfg(test)]
-    ReadCheckedForTest {
-        reply: RpcReplyPort<Option<(Option<String>, String, Vec<u8>)>>,
-    },
-    #[cfg(test)]
-    ReadAppliedSelectionForTest {
-        reply: RpcReplyPort<Option<crate::client::reconciler::committed::Selection>>,
-    },
-    StartupRecoveryFinished {
-        succeeded: bool,
-    },
-    StartupRetryDue {
-        identity: String,
-    },
-    StartupRetryLeaseFailed {
-        identity: String,
-        reason: String,
-        #[cfg(test)]
-        observer: Option<tokio::sync::oneshot::Sender<()>>,
-    },
-    #[cfg(test)]
-    ArmStartupRetryLeaseFailureObserver {
-        observer: tokio::sync::oneshot::Sender<()>,
-        reply: RpcReplyPort<anyhow::Result<()>>,
-    },
-    #[cfg(test)]
-    ReadStartupRetryScheduleForTest {
-        reply: RpcReplyPort<Option<(String, tokio::time::Instant)>>,
-    },
-    #[cfg(test)]
-    SeedUnresolvedApplicationAttemptForTest {
-        reply: RpcReplyPort<anyhow::Result<chimera_core_manager::OperationId>>,
-    },
-    #[cfg(test)]
-    SeedUnresolvedSourceDecisionForTest {
-        decision: chimera_core::state::DecisionHandle,
-        reply: RpcReplyPort<anyhow::Result<chimera_core_manager::OperationId>>,
-    },
-    #[cfg(test)]
-    SeedUnresolvedAttemptWithDeferredRetryForTest {
-        decision: chimera_core::state::DecisionHandle,
-        reply: RpcReplyPort<anyhow::Result<(chimera_core_manager::OperationId, String)>>,
-    },
-    #[cfg(test)]
-    SeedUnresolvedCommittedTargetForTest {
-        decision: chimera_core::state::DecisionHandle,
-        reply: RpcReplyPort<anyhow::Result<chimera_core_manager::OperationId>>,
-    },
-    #[cfg(test)]
-    ReadApplicationRecoveryStateForTest {
-        reply: RpcReplyPort<(
-            Option<(chimera_core_manager::OperationId, bool)>,
-            Option<(String, tokio::time::Instant)>,
-            Option<(u8, u32)>,
-        )>,
-    },
-    DeferredRetry {
-        digest: String,
-    },
-    ReadStartupReport {
-        reply: RpcReplyPort<Option<StartupReport>>,
-    },
-}
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+type ProxyHandle = crate::client::system_proxy::SystemProxyClient;
+#[cfg(any(target_os = "android", target_os = "ios"))]
+type ProxyHandle = ();
+type Message = chimera_core::client::reconciler::client::Message<ApplicationWorkflow, ProxyHandle>;
+type ActorClient =
+    chimera_core::client::reconciler::client::ActorClient<ApplicationWorkflow, ProxyHandle>;
 
 struct RuntimeReconcilerActor;
 
@@ -1411,6 +1281,8 @@ impl Actor for RuntimeReconcilerActor {
                                 reason,
                                 #[cfg(test)]
                                 observer,
+                                #[cfg(not(test))]
+                                observer: None,
                             },
                         );
                     }
@@ -1419,7 +1291,6 @@ impl Actor for RuntimeReconcilerActor {
             Message::StartupRetryLeaseFailed {
                 identity,
                 reason,
-                #[cfg(test)]
                 observer,
             } => {
                 record_startup_retry_lease_failure(
@@ -1435,7 +1306,6 @@ impl Actor for RuntimeReconcilerActor {
                 {
                     state.schedule_startup_retry(&myself, identity, next_attempt);
                 }
-                #[cfg(test)]
                 if let Some(observer) = observer {
                     let _ = observer.send(());
                 }
@@ -1542,6 +1412,9 @@ impl Actor for RuntimeReconcilerActor {
                     state.schedule_deferred_retry(&myself, digest, next_attempt);
                 }
             }
+            #[cfg(not(test))]
+            #[allow(unreachable_patterns)]
+            _ => unreachable!("test-only reconciler message in production"),
         }
         state.drive(&myself);
         Ok(())
@@ -1566,22 +1439,7 @@ impl Actor for RuntimeReconcilerActor {
 }
 
 enum ClientInner {
-    Actor {
-        actor_ref: ActorRef<Message>,
-        next_id: Arc<AtomicU64>,
-        status: Arc<parking_lot::Mutex<CoreLifecycleStatus>>,
-        reconciler: tokio::sync::watch::Receiver<ReconcilerStatus>,
-        service_status: tokio::sync::watch::Receiver<ServiceHostStatus>,
-        service: Arc<dyn ports::ServiceLifecyclePort>,
-        core: Arc<dyn CoreLifecyclePort>,
-        startup_owner_unproven: Arc<AtomicBool>,
-        service_failed_generation: Arc<AtomicU64>,
-        startup_recovery_pending: Arc<AtomicBool>,
-        /// The source verifier comes only from the composition root's
-        /// committed Application, Clash and Profiles snapshots plus files.
-        source_authority:
-            Option<Arc<dyn crate::client::reconciler::authority::RuntimeSourceAuthority>>,
-    },
+    Actor(ActorClient),
     #[cfg(test)]
     Direct {
         workflow: tokio::sync::Mutex<CoreLifecycleWorkflow>,
@@ -1811,7 +1669,7 @@ impl RuntimeReconcilerClient {
         let service_actor_updates = service.actor_status_updates();
         #[cfg(not(test))]
         let service_followup_actor = actor_ref.clone();
-        let client = Self(Arc::new(ClientInner::Actor {
+        let client = Self(Arc::new(ClientInner::Actor(ActorClient {
             actor_ref,
             next_id,
             status,
@@ -1823,7 +1681,7 @@ impl RuntimeReconcilerClient {
             service_failed_generation,
             startup_recovery_pending,
             source_authority,
-        }));
+        })));
         #[cfg(not(test))]
         {
             let recovery_client = client.clone();
@@ -1894,21 +1752,7 @@ impl RuntimeReconcilerClient {
         gate: Arc<crate::client::reconciler::check::CandidateCheck>,
     ) -> anyhow::Result<()> {
         match self.0.as_ref() {
-            ClientInner::Actor { actor_ref, .. } => {
-                match actor_ref
-                    .call(
-                        |reply| Message::InstallCandidateGate { gate, reply },
-                        Some(CALL_WAIT),
-                    )
-                    .await?
-                {
-                    CallResult::Success(result) => result,
-                    CallResult::Timeout => anyhow::bail!("candidate gate installation timed out"),
-                    CallResult::SenderError => {
-                        anyhow::bail!("candidate gate installation reply dropped")
-                    }
-                }
-            }
+            ClientInner::Actor(client) => client.install_candidate_gate(gate).await,
             #[cfg(test)]
             ClientInner::Direct { .. } => {
                 anyhow::bail!("production CandidateCheck requires the lifecycle actor")
@@ -1932,7 +1776,7 @@ impl RuntimeReconcilerClient {
         registered: Option<tokio::sync::oneshot::Sender<()>>,
     ) -> anyhow::Result<()> {
         match self.0.as_ref() {
-            ClientInner::Actor { actor_ref, .. } => {
+            ClientInner::Actor(ActorClient { actor_ref, .. }) => {
                 match actor_ref
                     .call(
                         |reply| Message::ConnectApplicationWorkflow {
@@ -1966,9 +1810,9 @@ impl RuntimeReconcilerClient {
         request: crate::client::application_workflow::mutation::MutationRequest,
     ) -> anyhow::Result<()> {
         match self.0.as_ref() {
-            ClientInner::Actor {
+            ClientInner::Actor(ActorClient {
                 actor_ref, next_id, ..
-            } => {
+            }) => {
                 let id = next_id.fetch_add(1, Ordering::Relaxed);
                 actor_ref
                     .cast(Message::Request(Request {
@@ -2025,38 +1869,7 @@ impl RuntimeReconcilerClient {
         timeout: Duration,
     ) -> anyhow::Result<()> {
         match self.0.as_ref() {
-            ClientInner::Actor {
-                actor_ref, next_id, ..
-            } => {
-                let id = next_id.fetch_add(1, Ordering::Relaxed);
-                match actor_ref
-                    .call(
-                        |reply| {
-                            Message::Request(Request {
-                                command,
-                                response: Response {
-                                    id,
-                                    reply: Some(reply),
-                                },
-                                deferred_retry: None,
-                            })
-                        },
-                        Some(timeout),
-                    )
-                    .await
-                {
-                    Ok(CallResult::Success(result)) => result,
-                    Ok(CallResult::Timeout) => anyhow::bail!(
-                        "core lifecycle operation {id} timed out; it may still be queued or running; inspect get_core_lifecycle_status before retrying"
-                    ),
-                    Ok(CallResult::SenderError) => {
-                        anyhow::bail!(
-                            "core lifecycle actor reply dropped for operation {id}; outcome is unknown"
-                        )
-                    }
-                    Err(error) => Err(error.into()),
-                }
-            }
+            ClientInner::Actor(client) => client.execute_with_timeout(command, timeout).await,
             #[cfg(test)]
             ClientInner::Direct {
                 workflow,
@@ -2076,7 +1889,7 @@ impl RuntimeReconcilerClient {
     async fn startup_retry_schedule_for_tests(
         &self,
     ) -> anyhow::Result<Option<(String, tokio::time::Instant)>> {
-        let ClientInner::Actor { actor_ref, .. } = self.0.as_ref() else {
+        let ClientInner::Actor(ActorClient { actor_ref, .. }) = self.0.as_ref() else {
             anyhow::bail!("startup retry schedule test requires the lifecycle actor");
         };
         match actor_ref
@@ -2098,7 +1911,7 @@ impl RuntimeReconcilerClient {
     async fn seed_unresolved_application_attempt_for_tests(
         &self,
     ) -> anyhow::Result<chimera_core_manager::OperationId> {
-        let ClientInner::Actor { actor_ref, .. } = self.0.as_ref() else {
+        let ClientInner::Actor(ActorClient { actor_ref, .. }) = self.0.as_ref() else {
             anyhow::bail!("application attempt test requires the lifecycle actor");
         };
         match actor_ref
@@ -2119,7 +1932,7 @@ impl RuntimeReconcilerClient {
         &self,
         decision: chimera_core::state::DecisionHandle,
     ) -> anyhow::Result<chimera_core_manager::OperationId> {
-        let ClientInner::Actor { actor_ref, .. } = self.0.as_ref() else {
+        let ClientInner::Actor(ActorClient { actor_ref, .. }) = self.0.as_ref() else {
             anyhow::bail!("source decision test requires the lifecycle actor");
         };
         match actor_ref
@@ -2140,7 +1953,7 @@ impl RuntimeReconcilerClient {
         &self,
         decision: chimera_core::state::DecisionHandle,
     ) -> anyhow::Result<(chimera_core_manager::OperationId, String)> {
-        let ClientInner::Actor { actor_ref, .. } = self.0.as_ref() else {
+        let ClientInner::Actor(ActorClient { actor_ref, .. }) = self.0.as_ref() else {
             anyhow::bail!("deferred retry test requires the lifecycle actor");
         };
         match actor_ref
@@ -2161,7 +1974,7 @@ impl RuntimeReconcilerClient {
         &self,
         decision: chimera_core::state::DecisionHandle,
     ) -> anyhow::Result<chimera_core_manager::OperationId> {
-        let ClientInner::Actor { actor_ref, .. } = self.0.as_ref() else {
+        let ClientInner::Actor(ActorClient { actor_ref, .. }) = self.0.as_ref() else {
             anyhow::bail!("committed target test requires the lifecycle actor");
         };
         match actor_ref
@@ -2185,7 +1998,7 @@ impl RuntimeReconcilerClient {
         Option<(String, tokio::time::Instant)>,
         Option<(u8, u32)>,
     )> {
-        let ClientInner::Actor { actor_ref, .. } = self.0.as_ref() else {
+        let ClientInner::Actor(ActorClient { actor_ref, .. }) = self.0.as_ref() else {
             anyhow::bail!("application recovery test requires the lifecycle actor");
         };
         match actor_ref
@@ -2207,7 +2020,7 @@ impl RuntimeReconcilerClient {
     async fn observe_next_startup_retry_lease_failure(
         &self,
     ) -> anyhow::Result<tokio::sync::oneshot::Receiver<()>> {
-        let ClientInner::Actor { actor_ref, .. } = self.0.as_ref() else {
+        let ClientInner::Actor(ActorClient { actor_ref, .. }) = self.0.as_ref() else {
             anyhow::bail!("startup retry observer requires the lifecycle actor");
         };
         let (observer, observed) = tokio::sync::oneshot::channel();
@@ -2234,21 +2047,7 @@ impl RuntimeReconcilerClient {
 
     async fn cached_startup_report(&self) -> anyhow::Result<Option<StartupReport>> {
         match self.0.as_ref() {
-            ClientInner::Actor { actor_ref, .. } => {
-                match actor_ref
-                    .call(
-                        |reply| Message::ReadStartupReport { reply },
-                        Some(CALL_WAIT),
-                    )
-                    .await?
-                {
-                    CallResult::Success(report) => Ok(report),
-                    CallResult::Timeout => anyhow::bail!("startup report query timed out"),
-                    CallResult::SenderError => {
-                        anyhow::bail!("startup report query reply was dropped")
-                    }
-                }
-            }
+            ClientInner::Actor(client) => client.cached_startup_report().await,
             #[cfg(test)]
             ClientInner::Direct { workflow, .. } => Ok(workflow.lock().await.startup_report()),
         }
@@ -2259,116 +2058,7 @@ impl RuntimeReconcilerClient {
         timeout: Option<Duration>,
     ) -> anyhow::Result<CompletedLifecycleOperation> {
         match self.0.as_ref() {
-            ClientInner::Actor {
-                actor_ref,
-                next_id,
-                service,
-                ..
-            } => {
-                if let Some(report) = self.cached_startup_report().await? {
-                    return Ok(completed_from_startup_report(report));
-                }
-                let id = next_id.fetch_add(1, Ordering::Relaxed);
-                let transition = match service.begin_transition().await {
-                    Ok(transition) => transition,
-                    Err(error) => {
-                        let reason =
-                            format!("could not acquire the Service transition lease: {error:#}");
-                        let cache_id = next_id.fetch_add(1, Ordering::Relaxed);
-                        let _ = actor_ref
-                            .call(
-                                |reply| {
-                                    Message::Request(Request {
-                                        command: Command::CacheStartupUnsettled {
-                                            operation_id: id,
-                                            reason,
-                                        },
-                                        response: Response {
-                                            id: cache_id,
-                                            reply: Some(reply),
-                                        },
-                                        deferred_retry: None,
-                                    })
-                                },
-                                timeout,
-                            )
-                            .await?;
-                        return self
-                            .cached_startup_report()
-                            .await?
-                            .map(completed_from_startup_report)
-                            .ok_or_else(|| {
-                                anyhow::anyhow!("startup failure report was not cached")
-                            });
-                    }
-                };
-                if let Some(report) = self.cached_startup_report().await? {
-                    return Ok(completed_from_startup_report(report));
-                }
-                let result = match actor_ref
-                    .call(
-                        |reply| {
-                            Message::Request(Request {
-                                command: Command::StartupReconcile {
-                                    operation_id: id,
-                                    transition,
-                                },
-                                response: Response {
-                                    id,
-                                    reply: Some(reply),
-                                },
-                                deferred_retry: None,
-                            })
-                        },
-                        timeout,
-                    )
-                    .await
-                {
-                    Ok(CallResult::Success(result)) => result,
-                    Ok(CallResult::Timeout) => anyhow::bail!(
-                        "startup core lifecycle operation {id} timed out; it may still be queued or running"
-                    ),
-                    Ok(CallResult::SenderError) => anyhow::bail!(
-                        "startup core lifecycle actor reply dropped for operation {id}; outcome is unknown"
-                    ),
-                    Err(error) => Err(error.into()),
-                };
-                let report = match self.cached_startup_report().await? {
-                    Some(report) => report,
-                    None => {
-                        let reason = result
-                            .as_ref()
-                            .err()
-                            .map(ToString::to_string)
-                            .unwrap_or_else(|| {
-                                "startup lifecycle completed without a report".into()
-                            });
-                        let cache_id = next_id.fetch_add(1, Ordering::Relaxed);
-                        let _ = actor_ref
-                            .call(
-                                |reply| {
-                                    Message::Request(Request {
-                                        command: Command::CacheStartupUnsettled {
-                                            operation_id: id,
-                                            reason,
-                                        },
-                                        response: Response {
-                                            id: cache_id,
-                                            reply: Some(reply),
-                                        },
-                                        deferred_retry: None,
-                                    })
-                                },
-                                Some(CALL_WAIT),
-                            )
-                            .await?;
-                        self.cached_startup_report().await?.ok_or_else(|| {
-                            anyhow::anyhow!("startup failure report was not cached")
-                        })?
-                    }
-                };
-                Ok(CompletedLifecycleOperation { result, report })
-            }
+            ClientInner::Actor(client) => client.startup_reconcile_with_timeout(timeout).await,
             #[cfg(test)]
             ClientInner::Direct {
                 workflow,
@@ -2436,20 +2126,7 @@ impl RuntimeReconcilerClient {
 
     fn startup_recovery_needed(&self) -> bool {
         match self.0.as_ref() {
-            ClientInner::Actor {
-                startup_owner_unproven,
-                service_failed_generation,
-                service_status,
-                service,
-                core,
-                ..
-            } => chimera_core::client::reconciler::service_observer::startup_recovery_needed(
-                core.as_ref(),
-                service.as_ref(),
-                startup_owner_unproven,
-                service_failed_generation,
-                service_status,
-            ),
+            ClientInner::Actor(client) => client.startup_recovery_needed(),
             #[cfg(test)]
             ClientInner::Direct { .. } => false,
         }
@@ -2462,7 +2139,7 @@ impl RuntimeReconcilerClient {
         &self,
     ) -> Option<crate::client::ports::RuntimePreparationSession> {
         match self.0.as_ref() {
-            ClientInner::Actor { core, .. } => core.runtime_preparation_session(),
+            ClientInner::Actor(client) => client.runtime_preparation_session(),
             #[cfg(test)]
             ClientInner::Direct { core, .. } => core.runtime_preparation_session(),
         }
@@ -2470,7 +2147,7 @@ impl RuntimeReconcilerClient {
 
     pub(crate) fn status(&self) -> CoreLifecycleStatus {
         match self.0.as_ref() {
-            ClientInner::Actor { status, .. } => status.lock().clone(),
+            ClientInner::Actor(client) => client.status(),
             #[cfg(test)]
             ClientInner::Direct { .. } => CoreLifecycleStatus::default(),
         }
@@ -2480,7 +2157,7 @@ impl RuntimeReconcilerClient {
         &self,
     ) -> Option<tokio::sync::watch::Receiver<ReconcilerStatus>> {
         match self.0.as_ref() {
-            ClientInner::Actor { reconciler, .. } => Some(reconciler.clone()),
+            ClientInner::Actor(ActorClient { reconciler, .. }) => Some(reconciler.clone()),
             #[cfg(test)]
             ClientInner::Direct { .. } => None,
         }
@@ -2490,7 +2167,7 @@ impl RuntimeReconcilerClient {
     /// this carries the last sampled source versions and runtime conclusion.
     pub(crate) fn reconciler_status(&self) -> ReconcilerStatus {
         match self.0.as_ref() {
-            ClientInner::Actor { reconciler, .. } => reconciler.borrow().clone(),
+            ClientInner::Actor(client) => client.reconciler_status(),
             #[cfg(test)]
             ClientInner::Direct { .. } => ReconcilerStatus::default(),
         }
@@ -2508,10 +2185,10 @@ impl RuntimeReconcilerClient {
         target: String,
     ) -> anyhow::Result<()> {
         let authority = match self.0.as_ref() {
-            ClientInner::Actor {
+            ClientInner::Actor(ActorClient {
                 source_authority: Some(port),
                 ..
-            } => port.clone(),
+            }) => port.clone(),
             _ => anyhow::bail!("authoritative source verification is not connected"),
         };
         self.submit_checked_with_authority(domain, version, target, authority)
@@ -2525,28 +2202,12 @@ impl RuntimeReconcilerClient {
         target: String,
         authority: Arc<dyn crate::client::reconciler::authority::RuntimeSourceAuthority>,
     ) -> anyhow::Result<()> {
-        let ClientInner::Actor { actor_ref, .. } = self.0.as_ref() else {
+        let ClientInner::Actor(client) = self.0.as_ref() else {
             anyhow::bail!("checked runtime apply requires the lifecycle actor");
         };
-        match actor_ref
-            .call(
-                |reply| Message::ApplyCheckedCommitted {
-                    domain,
-                    version,
-                    target,
-                    authority,
-                    reply,
-                },
-                Some(CALL_WAIT),
-            )
-            .await?
-        {
-            CallResult::Success(result) => result,
-            CallResult::Timeout => anyhow::bail!("checked runtime apply outcome is unknown"),
-            CallResult::SenderError => {
-                anyhow::bail!("checked runtime apply reply was dropped; outcome unknown")
-            }
-        }
+        client
+            .submit_checked_with_authority(domain, version, target, authority)
+            .await
     }
 
     /// The ref Source Gate always tags an ACKed candidate with its own
@@ -2592,39 +2253,13 @@ impl RuntimeReconcilerClient {
         request: Option<String>,
         interrupt_mode: bool,
     ) -> Result<(), Arc<chimera_contracts::runtime_error::RuntimeError>> {
+        #[cfg(test)]
         use chimera_contracts::runtime_error::RuntimeError;
         match self.0.as_ref() {
-            ClientInner::Actor { actor_ref, .. } => {
-                let operation_id = chimera_core_manager::OperationId::generate();
-                match actor_ref
-                    .call(
-                        |reply| Message::Checked {
-                            checked: CheckedRuntimeCandidate {
-                                domain,
-                                request,
-                                interrupt_mode,
-                                prepared,
-                                core_spec,
-                            },
-                            reply,
-                        },
-                        None,
-                    )
+            ClientInner::Actor(client) => {
+                client
+                    .checked_candidate_inner(domain, prepared, core_spec, request, interrupt_mode)
                     .await
-                {
-                    Ok(CallResult::Success(result)) => result,
-                    // The message never entered the Actor, so no candidate
-                    // could have been accepted.
-                    Err(ractor::MessagingErr::SendErr(Message::Checked { .. })) => {
-                        Err(Arc::new(RuntimeError::ShuttingDown))
-                    }
-                    // A delivered request without an ACK may have been
-                    // accepted. Do not turn an uncertain ownership outcome
-                    // into a definitely closed owner.
-                    _ => Err(Arc::new(RuntimeError::OwnerUnresponsive {
-                        operation_id: operation_id.to_string(),
-                    })),
-                }
             }
             #[cfg(test)]
             ClientInner::Direct { .. } => Err(Arc::new(RuntimeError::ShuttingDown)),
@@ -2645,7 +2280,7 @@ impl RuntimeReconcilerClient {
     async fn applied_selection_for_tests(
         &self,
     ) -> Option<crate::client::reconciler::committed::Selection> {
-        let ClientInner::Actor { actor_ref, .. } = self.0.as_ref() else {
+        let ClientInner::Actor(ActorClient { actor_ref, .. }) = self.0.as_ref() else {
             return None;
         };
         match actor_ref
@@ -2659,7 +2294,7 @@ impl RuntimeReconcilerClient {
 
     #[cfg(test)]
     async fn checked_for_tests(&self) -> Option<(Option<String>, String, Vec<u8>)> {
-        let ClientInner::Actor { actor_ref, .. } = self.0.as_ref() else {
+        let ClientInner::Actor(ActorClient { actor_ref, .. }) = self.0.as_ref() else {
             return None;
         };
         match actor_ref
@@ -2672,7 +2307,7 @@ impl RuntimeReconcilerClient {
     }
 
     pub(crate) async fn settled(&self, domain: SourceDomain, version: u64) -> ReconcilerStatus {
-        let ClientInner::Actor { reconciler, .. } = self.0.as_ref() else {
+        let ClientInner::Actor(ActorClient { reconciler, .. }) = self.0.as_ref() else {
             return ReconcilerStatus::default();
         };
         chimera_core::client::reconciler::status::settled(reconciler.clone(), domain, version).await
@@ -2696,14 +2331,7 @@ impl RuntimeReconcilerClient {
 
     fn abort_checked_inner(&self, domain: SourceDomain, request: Option<String>) {
         match self.0.as_ref() {
-            ClientInner::Actor { actor_ref, .. } => {
-                if actor_ref
-                    .cast(Message::AbortChecked { domain, request })
-                    .is_err()
-                {
-                    tracing::debug!(?domain, "checked abort skipped: Core owner is unavailable");
-                }
-            }
+            ClientInner::Actor(client) => client.abort_checked_inner(domain, request),
             #[cfg(test)]
             ClientInner::Direct { .. } => {}
         }
@@ -2732,21 +2360,8 @@ impl RuntimeReconcilerClient {
         request: Option<String>,
     ) {
         match self.0.as_ref() {
-            ClientInner::Actor { actor_ref, .. } => {
-                if actor_ref
-                    .cast(Message::CheckedSourceCommitted {
-                        domain,
-                        version,
-                        request,
-                    })
-                    .is_err()
-                {
-                    tracing::warn!(
-                        ?domain,
-                        version,
-                        "checked source notice could not reach Core owner"
-                    );
-                }
+            ClientInner::Actor(client) => {
+                client.checked_source_committed_inner(domain, version, request)
             }
             #[cfg(test)]
             ClientInner::Direct { .. } => {}
@@ -2771,7 +2386,7 @@ impl RuntimeReconcilerClient {
             self.request_startup_recovery();
         }
         match self.0.as_ref() {
-            ClientInner::Actor { actor_ref, .. } => {
+            ClientInner::Actor(ActorClient { actor_ref, .. }) => {
                 if actor_ref
                     .cast(Message::SourceCommitted {
                         domain,
@@ -2799,7 +2414,7 @@ impl RuntimeReconcilerClient {
             return;
         }
         match self.0.as_ref() {
-            ClientInner::Actor { actor_ref, .. } => {
+            ClientInner::Actor(ActorClient { actor_ref, .. }) => {
                 if actor_ref.cast(Message::RuntimeDirty).is_err() {
                     tracing::warn!("failed to enqueue background runtime rebuild");
                 }
@@ -2811,13 +2426,13 @@ impl RuntimeReconcilerClient {
 
     fn request_startup_recovery(&self) {
         let (actor_ref, next_id, service, startup_recovery_pending) = match self.0.as_ref() {
-            ClientInner::Actor {
+            ClientInner::Actor(ActorClient {
                 actor_ref,
                 next_id,
                 service,
                 startup_recovery_pending,
                 ..
-            } => (actor_ref, next_id, service, startup_recovery_pending),
+            }) => (actor_ref, next_id, service, startup_recovery_pending),
             #[cfg(test)]
             ClientInner::Direct { .. } => return,
         };
@@ -2846,12 +2461,12 @@ impl RuntimeReconcilerClient {
         F: Fn() -> bool + Send + 'static,
     {
         let (actor_ref, next_id, service) = match self.0.as_ref() {
-            ClientInner::Actor {
+            ClientInner::Actor(ActorClient {
                 actor_ref,
                 next_id,
                 service,
                 ..
-            } => (actor_ref.clone(), next_id.clone(), service.clone()),
+            }) => (actor_ref.clone(), next_id.clone(), service.clone()),
             #[cfg(test)]
             ClientInner::Direct { .. } => return,
         };
@@ -2869,7 +2484,7 @@ impl RuntimeReconcilerClient {
 
     pub(in crate::client) fn service_status(&self) -> ServiceHostStatus {
         match self.0.as_ref() {
-            ClientInner::Actor { service_status, .. } => service_status.borrow().clone(),
+            ClientInner::Actor(client) => client.service_status(),
             #[cfg(test)]
             ClientInner::Direct { service_status, .. } => service_status.borrow().clone(),
         }
@@ -2879,9 +2494,9 @@ impl RuntimeReconcilerClient {
         &self,
         info: chimera_ipc::types::StatusInfo<'static>,
     ) {
-        if let ClientInner::Actor {
+        if let ClientInner::Actor(ActorClient {
             actor_ref, service, ..
-        } = self.0.as_ref()
+        }) = self.0.as_ref()
             && service.actor_status().is_none()
             && actor_ref.cast(Message::ObserveService { info }).is_err()
         {
@@ -2890,9 +2505,9 @@ impl RuntimeReconcilerClient {
     }
 
     pub(in crate::client) fn observe_service_probe_failure(&self) {
-        if let ClientInner::Actor {
+        if let ClientInner::Actor(ActorClient {
             actor_ref, service, ..
-        } = self.0.as_ref()
+        }) = self.0.as_ref()
             && service.actor_status().is_none()
             && actor_ref.cast(Message::ServiceProbeFailed).is_err()
         {
@@ -2903,7 +2518,7 @@ impl RuntimeReconcilerClient {
     #[cfg(test)]
     pub(in crate::client) async fn probe_service(&self) -> anyhow::Result<ServiceHostStatus> {
         match self.0.as_ref() {
-            ClientInner::Actor { actor_ref, .. } => {
+            ClientInner::Actor(ActorClient { actor_ref, .. }) => {
                 match actor_ref
                     .call(|reply| Message::ProbeService { reply }, None)
                     .await?
@@ -2946,19 +2561,7 @@ impl RuntimeReconcilerClient {
 
     async fn recover_startup(&self) -> anyhow::Result<()> {
         match self.0.as_ref() {
-            ClientInner::Actor {
-                next_id, service, ..
-            } => {
-                // Keep host-lock-before-mailbox ordering, matching every
-                // Service transition and the initial StartupReconcile path.
-                let transition = service.begin_transition().await?;
-                let operation_id = next_id.fetch_add(1, Ordering::Relaxed);
-                self.execute(Command::RecoverStartup {
-                    operation_id,
-                    transition,
-                })
-                .await
-            }
+            ClientInner::Actor(client) => client.recover_startup().await,
             #[cfg(test)]
             ClientInner::Direct {
                 workflow,
@@ -2999,7 +2602,7 @@ impl RuntimeReconcilerClient {
 
     pub(crate) async fn core_status(&self) -> anyhow::Result<CoreStatusSnapshot> {
         match self.0.as_ref() {
-            ClientInner::Actor { core, .. } => core.status().await,
+            ClientInner::Actor(client) => client.core_status().await,
             #[cfg(test)]
             ClientInner::Direct { core, .. } => core.status().await,
         }
@@ -3044,7 +2647,7 @@ impl RuntimeReconcilerClient {
         F: FnOnce(Box<dyn ports::ServiceTransitionLease>) -> Command,
     {
         let service = match self.0.as_ref() {
-            ClientInner::Actor { service, .. } => service.clone(),
+            ClientInner::Actor(ActorClient { service, .. }) => service.clone(),
             #[cfg(test)]
             ClientInner::Direct { service, .. } => service.clone(),
         };

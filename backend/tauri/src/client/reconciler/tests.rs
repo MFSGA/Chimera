@@ -251,11 +251,11 @@ async fn ref_service_actor_generation_drives_startup_recovery_not_legacy_watch()
         run_type: RunType::Normal,
     });
     let client = spawn_startup_client(core, service.clone()).await;
-    let ClientInner::Actor {
+    let ClientInner::Actor(ActorClient {
         service_failed_generation,
         service_status,
         ..
-    } = client.0.as_ref()
+    }) = client.0.as_ref()
     else {
         panic!("startup fixture must use the lifecycle actor")
     };
@@ -358,7 +358,7 @@ async fn ref_service_actor_does_not_publish_duplicate_legacy_status_or_probe() {
         service.clone(),
     )
     .await;
-    let ClientInner::Actor { service_status, .. } = client.0.as_ref() else {
+    let ClientInner::Actor(ActorClient { service_status, .. }) = client.0.as_ref() else {
         panic!("fixture must own the lifecycle actor");
     };
     assert_eq!(service_status.borrow().phase, ServicePhase::Probing);
@@ -1573,7 +1573,7 @@ async fn spawn_startup_client_with_application_and_clash(
 }
 
 fn signal_service_readiness_change(client: &RuntimeReconcilerClient) {
-    let ClientInner::Actor { actor_ref, .. } = client.0.as_ref() else {
+    let ClientInner::Actor(ActorClient { actor_ref, .. }) = client.0.as_ref() else {
         panic!("Service readiness follow-up requires the lifecycle actor");
     };
     actor_ref
@@ -4368,7 +4368,7 @@ async fn mailbox_serializes_stop_and_core_selection() {
         stop.abort();
         panic!("stop command did not reach the lifecycle actor");
     }
-    let ClientInner::Actor { actor_ref, .. } = client.0.as_ref() else {
+    let ClientInner::Actor(ActorClient { actor_ref, .. }) = client.0.as_ref() else {
         panic!("production lifecycle client should own an actor");
     };
     let (reply, result) = tokio::sync::oneshot::channel();
@@ -7868,7 +7868,7 @@ async fn committed_source_versions_share_one_mailbox_without_replaying_success()
     client.source_committed(SourceDomain::Profiles, 2, false);
     client.source_committed(SourceDomain::Clash, 7, false);
 
-    let ClientInner::Actor { actor_ref, .. } = client.0.as_ref() else {
+    let ClientInner::Actor(ActorClient { actor_ref, .. }) = client.0.as_ref() else {
         panic!("this test requires the live lifecycle actor");
     };
     let seen = match actor_ref
@@ -8982,11 +8982,11 @@ async fn source_commits_during_real_startup_recovery_lease_keep_latest_intent() 
     );
     assert_eq!(core.submissions.load(AtomicOrdering::Acquire), 1);
 
-    let ClientInner::Actor {
+    let ClientInner::Actor(ActorClient {
         startup_owner_unproven,
         startup_recovery_pending,
         ..
-    } = client.0.as_ref()
+    }) = client.0.as_ref()
     else {
         panic!("this test requires the actual actor entry");
     };
@@ -9163,11 +9163,11 @@ async fn queued_source_dirty_tick_waits_for_startup_owner_recovery() {
         StartupOutcome::Ready
     );
     assert_eq!(core.submissions.load(AtomicOrdering::Acquire), 1);
-    let ClientInner::Actor {
+    let ClientInner::Actor(ActorClient {
         actor_ref,
         startup_recovery_pending,
         ..
-    } = client.0.as_ref()
+    }) = client.0.as_ref()
     else {
         panic!("dirty-tick gate test requires the actor");
     };
@@ -9271,11 +9271,11 @@ async fn deferred_startup_source_commits_resume_once_or_cancel_on_stop() {
         assert_eq!(startup.report.outcome, StartupOutcome::Ready);
         assert_eq!(core.submissions.load(AtomicOrdering::Acquire), 1);
 
-        let ClientInner::Actor {
+        let ClientInner::Actor(ActorClient {
             actor_ref,
             startup_recovery_pending,
             ..
-        } = client.0.as_ref()
+        }) = client.0.as_ref()
         else {
             panic!("source recovery test requires the actor");
         };
@@ -12406,7 +12406,7 @@ async fn checked_core_completion_with_new_mailbox_source_requires_latest_reconci
     // checked target; the completion mailbox fence, not the worker's
     // pre/post authority callback, must detect the new source notice.
     client.source_committed(SourceDomain::Application, 1, false);
-    let ClientInner::Actor { actor_ref, .. } = client.0.as_ref() else {
+    let ClientInner::Actor(ActorClient { actor_ref, .. }) = client.0.as_ref() else {
         panic!("a real CoreLifecycle actor is required");
     };
     let observed = match actor_ref
