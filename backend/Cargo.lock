@@ -1739,6 +1739,7 @@ dependencies = [
  "chimera-config",
  "chimera-contracts",
  "chimera-core",
+ "chimera-jobs",
  "chimera-profile-transform",
  "chimera-rpc-macro",
  "chimera-rpc-protocol",

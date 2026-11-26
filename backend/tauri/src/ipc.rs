@@ -1049,8 +1049,15 @@ pub async fn get_native_proxies(
 #[specta::specta]
 pub async fn get_proxy_group_icons(
     client: State<'_, ChimeraClient>,
+    window: tauri::Window,
 ) -> Result<IndexMap<clash_api::ProxyName, String>> {
-    Ok(client.clash_proxy_group_icons().await?)
+    Ok(client
+        .call_shared_rpc(
+            window.label(),
+            "get_proxy_group_icons",
+            serde_json::json!({}),
+        )
+        .await?)
 }
 
 #[tauri::command]
@@ -1332,9 +1339,14 @@ pub async fn delete_profile(
 pub async fn read_profile_file(
     client: State<'_, ChimeraClient>,
     uid: ProfileUid,
+    window: tauri::Window,
 ) -> Result<String> {
     Ok(client
-        .read_profile_file(chimera_config::profile::ProfileId(uid))
+        .call_shared_rpc(
+            window.label(),
+            "read_profile_file",
+            serde_json::json!({"uid": uid}),
+        )
         .await?)
 }
 
@@ -1807,8 +1819,15 @@ pub fn unsubscribe_clash_connection_details(
 #[specta::specta]
 pub async fn clash_api_get_configs(
     client: State<'_, ChimeraClient>,
+    window: tauri::Window,
 ) -> Result<clash::api::ClashApiConfig> {
-    Ok(client.clash_configs().await?)
+    Ok(client
+        .call_shared_rpc(
+            window.label(),
+            "clash_api_get_configs",
+            serde_json::json!({}),
+        )
+        .await?)
 }
 
 #[tauri::command]

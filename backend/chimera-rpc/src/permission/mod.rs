@@ -132,7 +132,8 @@ pub(crate) fn describe_commands(
                 permission: metadata.permission,
                 sensitive: metadata.sensitive,
                 allowed: command.linked(target)
-                    && authority.visible(metadata, target, &auth.permissions),
+                    && authority.visible(metadata, target, &auth.permissions)
+                    && crate::redaction::permits_sensitive(metadata, &auth.permissions),
             }
         })
         .collect();

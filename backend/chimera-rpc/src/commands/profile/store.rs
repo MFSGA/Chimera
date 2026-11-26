@@ -147,3 +147,10 @@ pub async fn update_profile(
 ) -> Result<RpcUnitMutationOutcome> {
     Ok(client.refresh_profile(uid, option).await?.into())
 }
+
+#[chimera_rpc::rpc(operation = chimera_rpc_protocol::operations::GetProfiles, query, sensitive, expose = [http, local])]
+pub async fn get_profiles(
+    client: RpcState<'_, ChimeraClient>,
+) -> Result<chimera_config::profile::Profiles> {
+    Ok((*client.get_profiles()?).clone())
+}

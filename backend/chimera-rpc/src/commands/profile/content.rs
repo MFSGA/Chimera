@@ -13,3 +13,11 @@ pub async fn save_profile_file(
 ) -> Result<RpcUnitMutationOutcome> {
     Ok(client.save_profile_file(uid, file_data).await?.into())
 }
+
+#[chimera_rpc::rpc(operation = chimera_rpc_protocol::operations::ReadProfileFile, query, sensitive, expose = [http, local])]
+pub async fn read_profile_file(
+    client: RpcState<'_, ChimeraClient>,
+    uid: ProfileId,
+) -> Result<String> {
+    Ok(client.read_profile_file(uid).await?)
+}

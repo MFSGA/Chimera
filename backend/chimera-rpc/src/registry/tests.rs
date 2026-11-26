@@ -194,12 +194,13 @@ fn linked_declarations_match_the_resource_table_and_unlinked_commands_stay_known
         .filter(|c| c.handler.is_some())
         .map(|c| c.metadata.name)
         .collect();
-    assert_eq!(linked.len(), 41);
+    assert_eq!(linked.len(), 57);
     for name in [
         "activate_profile",
         "clash_api_delete_connections",
         "clash_api_flush_dns_cache",
         "clash_api_flush_fake_ip_cache",
+        "clash_api_get_configs",
         "clash_api_get_group_delay",
         "clash_api_get_providers_proxies",
         "clash_api_get_providers_rules",
@@ -215,15 +216,29 @@ fn linked_declarations_match_the_resource_table_and_unlinked_commands_stay_known
         "create_proxy_group_folder",
         "delete_profile",
         "enhance_profiles",
+        "get_clash_config",
+        "get_clash_info",
         "get_config_features",
+        "get_core_status",
         "get_core_status_summary",
+        "get_hotkey_functions",
+        "get_hotkeys",
+        "get_profile_sync_logs",
+        "get_profile_sync_runs",
+        "get_profile_sync_runs_summary",
+        "get_profile_sync_status",
+        "get_profile_sync_status_summary",
+        "get_profiles",
         "get_profiles_listing",
         "get_proxies",
+        "get_proxy_group_icons",
+        "get_service_status_summary",
         "import_profile",
         "mutate_proxies",
         "patch_profile_metadata",
         "patch_remote_profile_options",
         "probe_direct_egress",
+        "read_profile_file",
         "reorder_profile",
         "reorder_profiles_by_list",
         "replace_profile_definition",
@@ -235,6 +250,7 @@ fn linked_declarations_match_the_resource_table_and_unlinked_commands_stay_known
         "set_profile_layout",
         "set_profile_valid_fields",
         "set_proxy_group_layout",
+        "status_service",
         "update_profile",
         "update_proxy_provider",
     ] {
@@ -268,9 +284,9 @@ fn linked_declarations_match_the_resource_table_and_unlinked_commands_stay_known
             chimera_contracts::auth::Access::Write
         );
     }
-    assert!(!commands["get_profiles"].linked(RpcTarget::Desktop));
+    assert!(!commands["get_runtime_config"].linked(RpcTarget::Desktop));
     assert_eq!(
-        commands["get_profiles"]
+        commands["get_runtime_config"]
             .neutral_handler(RpcTarget::Desktop)
             .unwrap_err()
             .kind,

@@ -1048,7 +1048,7 @@ mod tests {
             described
                 .commands
                 .iter()
-                .any(|c| c.name == "get_profiles" && !c.allowed)
+                .any(|c| c.name == "get_runtime_config" && !c.allowed)
         );
         let expected = serde_json::to_value(client.config_features()).unwrap();
         assert_eq!(
@@ -1077,7 +1077,7 @@ mod tests {
         let unlinked = rpc
             .call(
                 RpcTransport::TauriIpc,
-                "get_profiles",
+                "get_runtime_config",
                 owner.clone(),
                 serde_json::json!({}),
             )

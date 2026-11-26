@@ -35,3 +35,10 @@ pub async fn clear_proxy_fixed(
     let strategy = client.get_clash_config()?.break_connection.on_proxy_change;
     Ok(client.clear_proxy_fixed(group, strategy).await?.into())
 }
+
+#[chimera_rpc::rpc(optional_capabilities(presentation), query, expose = [http], sensitive)]
+pub async fn get_proxy_group_icons(
+    client: RpcState<'_, ChimeraClient>,
+) -> Result<indexmap::IndexMap<clash_api::ProxyName, String>> {
+    Ok(client.clash_proxy_group_icons().await?)
+}

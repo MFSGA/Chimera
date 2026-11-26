@@ -438,6 +438,10 @@ impl UnifiedRpc {
             &command.metadata,
             target,
             auth.map(|auth| &auth.permissions),
+        )?;
+        crate::redaction::admit_sensitive(
+            &command.metadata,
+            &auth.expect("resolved caller").permissions,
         )
     }
 
@@ -465,6 +469,7 @@ impl UnifiedRpc {
             self.authority()
                 .admit(&command.metadata, target, Some(&caller.auth().permissions))?;
             admit_resource()?;
+            crate::redaction::admit_sensitive(&command.metadata, &caller.auth().permissions)?;
             // Data sharing (TODO, permission namespace spec section 4.6) sits here, reading the
             // admitted row from the call metadata.
             let meta = RpcCallMeta {

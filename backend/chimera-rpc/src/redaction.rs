@@ -31,6 +31,25 @@ pub fn for_caller(resource: &ResourceMetadata, caller: Option<&AuthContext>) -> 
 /// unknown method or event, or a subscription to every event. No `write` can lift it.
 pub const UNADMITTED: ResponseVisibility = ResponseVisibility::Public;
 
+/// Interim data-sharing fence: sensitive full-value commands have no public
+/// response projector. Do not execute them for a caller without full visibility.
+pub(crate) fn permits_sensitive(resource: &ResourceMetadata, permissions: &Permissions) -> bool {
+    !resource.sensitive || visibility(resource, permissions) == ResponseVisibility::Full
+}
+
+pub(crate) fn admit_sensitive(
+    resource: &ResourceMetadata,
+    permissions: &Permissions,
+) -> Result<(), chimera_rpc_protocol::RpcError> {
+    if permits_sensitive(resource, permissions) {
+        Ok(())
+    } else {
+        Err(chimera_rpc_protocol::RpcError::forbidden(
+            "sensitive response requires write permission on this resource",
+        ))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use chimera_contracts::auth::{Resource, Role};
@@ -92,6 +111,31 @@ mod tests {
                 "{name}"
             );
         }
+    }
+
+    #[test]
+    fn sensitive_values_require_full_visibility_on_the_called_resource() {
+        for resource in RESOURCES
+            .iter()
+            .filter(|row| row.sensitive && row.is_command())
+        {
+            let read = Permissions::NONE.with(resource.permission.resource, Access::Read);
+            let write = Permissions::NONE.with(resource.permission.resource, Access::Write);
+            assert!(!permits_sensitive(resource, &read), "{}", resource.name);
+            assert_eq!(
+                admit_sensitive(resource, &read).unwrap_err().kind,
+                "forbidden"
+            );
+            assert!(
+                admit_sensitive(resource, &write).is_ok(),
+                "{}",
+                resource.name
+            );
+        }
+        assert!(permits_sensitive(
+            resource("get_profiles_listing"),
+            &Role::Viewer.permissions()
+        ));
     }
 
     #[test]

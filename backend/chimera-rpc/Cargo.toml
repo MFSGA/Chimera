@@ -6,6 +6,7 @@ license.workspace = true
 authors.workspace = true
 
 [dependencies]
+chimera-jobs = { path = "../chimera-jobs" }
 chimera-profile-transform = { path = "../chimera-profile-transform" }
 clash-api = { workspace = true }
 indexmap = { version = "2.2.3", features = ["serde"] }

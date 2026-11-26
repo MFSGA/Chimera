@@ -3460,7 +3460,7 @@ mod tests {
                 rpc.call(
                     RpcTransport::Local,
                     "create_profile",
-                    viewer,
+                    viewer.clone(),
                     params.clone()
                 )
                 .await
@@ -3495,7 +3495,7 @@ mod tests {
                 .call(
                     RpcTransport::TauriIpc,
                     "get_profiles_listing",
-                    RpcCaller::desktop("test-window"),
+                    viewer.clone(),
                     serde_json::json!({}),
                 )
                 .await
@@ -3507,6 +3507,37 @@ mod tests {
                     .iter()
                     .any(|item| item["uid"] == id.0)
             );
+            // Discovery and dispatch agree. Read-only callers can see the listing,
+            // but neither full documents nor profile-file contents.
+            let described = rpc.describe(chimera_rpc_protocol::RpcTarget::Local, viewer.auth());
+            for name in ["get_profiles", "read_profile_file"] {
+                assert!(
+                    described
+                        .commands
+                        .iter()
+                        .any(|command| command.name == name && !command.allowed)
+                );
+                let refused = rpc
+                    .call(
+                        RpcTransport::Local,
+                        name,
+                        viewer.clone(),
+                        serde_json::json!({"uid": id}),
+                    )
+                    .await
+                    .unwrap_err();
+                assert_eq!(refused.kind, "forbidden");
+            }
+            let full = rpc
+                .call(
+                    RpcTransport::Local,
+                    "get_profiles",
+                    RpcCaller::desktop("test-window"),
+                    serde_json::json!({}),
+                )
+                .await
+                .unwrap();
+            assert_eq!(full, serde_json::to_value(&*durable).unwrap());
             assert!(!events.lock().unwrap().is_empty());
         }
     }
