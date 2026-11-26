@@ -1,9 +1,10 @@
-//! The `#[rpc]` attribute, to be re-exported as `chimera_rpc::rpc`.
-//! Production resource-table generation is migrated with the declaration roots.
+//! The `#[rpc]` attribute and development-only resource table generator.
 
 use proc_macro::TokenStream;
 use syn::parse_macro_input;
 
+#[cfg(test)]
+mod resource_table;
 mod unified_command;
 
 #[proc_macro_attribute]

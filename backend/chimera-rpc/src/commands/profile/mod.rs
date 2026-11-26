@@ -1,3 +1,7 @@
+//! Stored profile definitions, subscriptions, chains and the proxy group layout.
+
+chimera_rpc::namespace!(expose = [http, local]);
+
 pub mod content;
 pub mod layout;
 pub mod providers;

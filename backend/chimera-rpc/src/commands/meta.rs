@@ -1,4 +1,9 @@
-//! Caller-scoped discovery, copied from the upstream meta command.
+//! Capability discovery: `rpc_describe`, which every resolved caller may call.
+//!
+//! `meta` holds this one command; every resolved caller holds `meta:read`.
+
+chimera_rpc::namespace!(expose = [http, local]);
+
 use crate::registry::RpcDescribeContext;
 use chimera_rpc_protocol::RpcDescribeResponse;
 

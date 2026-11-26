@@ -804,7 +804,8 @@ fn is_result(ty: &Type) -> bool {
 mod tests {
     use std::collections::BTreeMap;
 
-    use syn::ItemFn;
+    use quote::{ToTokens, format_ident};
+    use syn::{Item, ItemFn};
 
     use super::expand;
 
@@ -944,6 +945,52 @@ mod tests {
             assert!(!expanded.contains("RpcResponseProjection"), "{output}");
             assert!(expanded.contains("unreported"), "{output}");
         }
+    }
+
+    #[test]
+    fn production_privacy_projection_commands_are_fixed() {
+        let mut reported = crate::resource_table::production_functions()
+            .into_iter()
+            .filter(|item| {
+                expand(item.clone())
+                    .unwrap()
+                    .to_string()
+                    .contains("RpcResponseProjection :: summarize_completion")
+            })
+            .map(|item| item.sig.ident.to_string())
+            .collect::<Vec<_>>();
+        reported.sort();
+        assert_eq!(
+            reported,
+            [
+                "activate_profile",
+                "clear_proxy_fixed",
+                "create_profile",
+                "create_profile_folder",
+                "create_proxy_group_folder",
+                "delete_profile",
+                "import_profile",
+                "patch_app_config",
+                "patch_clash_config",
+                "patch_clash_system_config",
+                "patch_profile_metadata",
+                "patch_remote_profile_options",
+                "patch_runtime_access",
+                "patch_runtime_overrides",
+                "patch_system_settings",
+                "reorder_profile",
+                "reorder_profiles_by_list",
+                "replace_profile_definition",
+                "save_profile_file",
+                "select_proxy",
+                "set_global_transforms",
+                "set_profile_layout",
+                "set_profile_valid_fields",
+                "set_proxy_group_layout",
+                "set_proxy_mode",
+                "update_profile",
+            ]
+        );
     }
 
     #[test]
@@ -1143,6 +1190,88 @@ mod tests {
                 error.to_string(),
                 "exposing a command over HTTP requires a transport-neutral signature",
                 "{arguments}"
+            );
+        }
+    }
+
+    #[test]
+    fn dispatchers_cover_each_command_category() {
+        let mut commands = crate::resource_table::production_functions();
+        for (name, targets) in [
+            ("shared_desktop_fixture", quote::quote!()),
+            ("shared_http_fixture", quote::quote!(expose = [http])),
+            ("shared_local_fixture", quote::quote!(expose = [local])),
+            ("shared_dual_fixture", quote::quote!(expose = [http, local])),
+        ] {
+            let name = format_ident!("{name}");
+            commands.push(syn::parse_quote! {
+                #[chimera_rpc::rpc(owner, #targets)]
+                fn #name(client: RpcState<'_, ChimeraClient>, owner: RpcCaller, value: String) -> String { value }
+            });
+        }
+        for command in commands {
+            let native = super::is_native(&command);
+            let needs_host_port = command.sig.inputs.iter().any(|arg| {
+                let syn::FnArg::Typed(arg) = arg else {
+                    return false;
+                };
+                super::state_inner_type(&arg.ty).is_some_and(|ty| {
+                    super::host_port_slot(super::type_name(&ty).as_deref()).is_some()
+                })
+            });
+            let name = command.sig.ident.to_string();
+            let expanded =
+                expand(command).unwrap_or_else(|error| panic!("failed to expand {name}: {error}"));
+            let expanded = syn::parse2::<syn::File>(expanded)
+                .unwrap_or_else(|error| panic!("failed to parse expansion for {name}: {error}"));
+            let registration = expanded.to_token_stream().to_string();
+            assert!(registration.contains(&format!("handler : __unified_rpc_{name}")));
+            assert_eq!(
+                registration.contains(&format!("handler : __unified_tauri_{name}")),
+                native
+            );
+            if !native {
+                assert!(!registration.contains(":: tauri"));
+                assert!(registration.contains("transport_neutral : true"), "{name}");
+                assert!(needs_host_port || !registration.contains("RpcError :: unsupported"));
+            }
+            assert!(
+                !registration.contains("dispatch_audited"),
+                "handlers must not audit twice"
+            );
+            assert!(
+                !registration.contains("RpcAudit"),
+                "the registry owns auditing"
+            );
+            let handler_name = if native {
+                format_ident!("__unified_tauri_{name}")
+            } else {
+                format_ident!("__unified_rpc_{name}")
+            };
+            let handler = expanded
+                .items
+                .iter()
+                .find_map(|item| match item {
+                    Item::Fn(function) if function.sig.ident == handler_name => Some(function),
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("missing Tauri handler for {name}"));
+            assert!(
+                handler
+                    .block
+                    .to_token_stream()
+                    .to_string()
+                    .contains(&format!("__unified_impl_{name}")),
+                "{name} must call its implementation even when a host port can be absent"
+            );
+            assert!(
+                needs_host_port
+                    || !handler
+                        .block
+                        .to_token_stream()
+                        .to_string()
+                        .contains("RpcError :: unsupported"),
+                "Tauri command {name} was compiled into an unsupported dispatcher"
             );
         }
     }
