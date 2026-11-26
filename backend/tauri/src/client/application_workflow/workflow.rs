@@ -24,169 +24,101 @@ use super::{
 use crate::client::reconciler::inputs::RuntimeInputs;
 use crate::client::runtime::RuntimeApplyReceipt;
 
-pub use chimera_core::client::reconciler::workflow_progress::RecoveryContext;
+use chimera_core::client::reconciler::application_workflow::ApplicationWorkflow as SharedApplicationWorkflow;
+pub use chimera_core::client::reconciler::application_workflow::{ProfileRuntime, RecoveryContext};
 
-#[async_trait::async_trait]
-pub(crate) trait ProfileRuntime: Send + Sync + 'static {
-    fn status(&self) -> CoreLifecycleStatus;
-    async fn core_status(&self) -> anyhow::Result<CoreStatusSnapshot>;
-    async fn effect_port_binding(
-        &self,
-    ) -> Option<chimera_config::runtime::executor::ResolvedPortBindings> {
-        None
-    }
-    async fn capture_profile_inputs(
-        &self,
-        profiles: Arc<Profiles>,
-        staged_content: std::collections::BTreeMap<String, String>,
-    ) -> anyhow::Result<RuntimeInputs>;
-    async fn observe_runtime_baseline(&self) -> anyhow::Result<KnownRuntimeState>;
-    async fn restore_runtime_baseline(&self, baseline: &KnownRuntimeState) -> anyhow::Result<()>;
-    async fn validate_profile_runtime(&self, inputs: RuntimeInputs) -> anyhow::Result<CheckRecord>;
-    async fn prepare_profile_runtime(
-        &self,
-        inputs: RuntimeInputs,
-        operation_id: &OperationId,
-    ) -> anyhow::Result<(AppliedCandidate, CheckRecord)>;
-    async fn confirm_profile_runtime(
-        &self,
-        operation_id: &OperationId,
-        candidate: AppliedCandidate,
-    ) -> anyhow::Result<()>;
-    async fn try_release_service_owner(&self) -> Result<(), String> {
-        Ok(())
-    }
-    async fn discard_profile_runtime(&self, operation_id: &OperationId);
-    async fn reconcile_profiles(
-        &self,
-        profiles: Arc<Profiles>,
-        staged_content: std::collections::BTreeMap<String, String>,
-    ) -> anyhow::Result<()>;
-    fn request_runtime_rebuild(&self);
-}
-
+/// Desktop composition and legacy test fixtures. All actual progress and
+/// production lifecycle execution are owned by the shared workflow.
 pub(in crate::client) struct ApplicationWorkflow {
-    pub(super) outcomes: Arc<Mutex<HashMap<OperationId, MutationReceipt>>>,
-    pub(super) notifications: Option<Arc<dyn crate::client::effects::ports::CommitNotifications>>,
-    pub(super) progress: chimera_core::client::reconciler::workflow_progress::WorkflowProgress,
-    /// Startup and Profile mutations share the application workflow actor;
-    /// CoreLifecycleWorkflow adapts its existing runtime and Service ports.
-    lifecycle: Option<Arc<CoreLifecycleWorkflow>>,
+    shared: SharedApplicationWorkflow<CoreLifecycleWorkflow>,
     #[cfg(test)]
     mutation_connected: bool,
 }
-
+impl std::ops::Deref for ApplicationWorkflow {
+    type Target = SharedApplicationWorkflow<CoreLifecycleWorkflow>;
+    fn deref(&self) -> &Self::Target {
+        &self.shared
+    }
+}
+impl std::ops::DerefMut for ApplicationWorkflow {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.shared
+    }
+}
 impl ApplicationWorkflow {
+    #[cfg(test)]
+    pub(super) fn new(
+        outcomes: Arc<Mutex<HashMap<OperationId, MutationReceipt>>>,
+        recovery_required: Arc<Mutex<Option<RecoveryContext>>>,
+        notifications: Option<Arc<dyn crate::client::effects::ports::CommitNotifications>>,
+    ) -> Self {
+        Self {
+            shared: SharedApplicationWorkflow::new(outcomes, recovery_required, notifications),
+            mutation_connected: false,
+        }
+    }
+    pub(in crate::client) fn with_lifecycle(lifecycle: CoreLifecycleWorkflow) -> Self {
+        Self {
+            shared: SharedApplicationWorkflow::with_lifecycle(lifecycle),
+            #[cfg(test)]
+            mutation_connected: false,
+        }
+    }
+
+    // Existing test fixture recovery must use the original TCC participant.
+    #[cfg(test)]
+    pub(in crate::client) async fn execute_lifecycle(
+        &mut self,
+        command: CoreCommand,
+    ) -> anyhow::Result<bool> {
+        use chimera_core::client::reconciler::application_command::ApplicationCommandOutcome;
+        let lifecycle = self.lifecycle_handle();
+        match self.shared.execute_command(command).await? {
+            ApplicationCommandOutcome::Settled {
+                service_reconnected,
+            } => Ok(service_reconnected),
+            ApplicationCommandOutcome::RecoverPrevious => {
+                self.recover_after_reconcile(lifecycle.as_ref()).await?;
+                Ok(false)
+            }
+        }
+    }
+
+    // UFCS is needed at the shared mailbox host boundary.
+    pub(in crate::client) fn lifecycle(&self) -> &CoreLifecycleWorkflow {
+        self.shared.lifecycle()
+    }
+    pub(in crate::client) fn lifecycle_handle(&self) -> Arc<CoreLifecycleWorkflow> {
+        self.shared.lifecycle_handle()
+    }
     pub(in crate::client) fn progress(
         &self,
     ) -> &chimera_core::client::reconciler::workflow_progress::WorkflowProgress {
-        &self.progress
+        self.shared.progress()
     }
-
     pub(in crate::client) fn progress_mut(
         &mut self,
     ) -> &mut chimera_core::client::reconciler::workflow_progress::WorkflowProgress {
-        &mut self.progress
+        self.shared.progress_mut()
     }
-
-    pub(in crate::client) fn has_unresolved_attempt(&self) -> bool {
-        self.progress.has_unresolved_attempt()
+    pub(in crate::client) fn recovery_command_allowed(&self, command: &CoreCommand) -> bool {
+        self.shared.recovery_command_allowed(command)
     }
-    pub(in crate::client) fn startup_owner_unproven(&self) -> bool {
-        self.progress.startup_owner_unproven()
+    pub(in crate::client) fn runtime_bound(
+        &self,
+        ports: Option<chimera_config::runtime::executor::ResolvedPortBindings>,
+    ) {
+        self.shared.runtime_bound(ports)
     }
-    pub(in crate::client) fn clear_startup_retry_target(&mut self) {
-        self.progress.clear_startup_retry_target()
+    pub(in crate::client) async fn service_endpoint_recovery_due(&self) -> bool {
+        self.shared.service_endpoint_recovery_due().await
     }
-    pub(in crate::client) fn startup_report(&self) -> Option<StartupReport> {
-        self.progress.startup_report()
-    }
+    #[cfg(test)]
     pub(in crate::client) fn startup_retry_schedule(
         &self,
     ) -> Option<(String, tokio::time::Instant)> {
-        self.progress.startup_retry_schedule()
+        self.shared.startup_retry_schedule()
     }
-    pub(in crate::client) fn startup_retry_due(&self, identity: &str) -> bool {
-        self.progress.startup_retry_due(identity)
-    }
-    pub(in crate::client) fn begin_startup_retry(&mut self, identity: &str) -> bool {
-        self.progress.begin_startup_retry(identity)
-    }
-    pub(in crate::client) fn defer_startup_retry(&mut self, identity: &str, reason: String) {
-        self.progress.defer_startup_retry(identity, reason)
-    }
-    pub(in crate::client) fn deferred_retry(&self) -> Option<(String, tokio::time::Instant)> {
-        self.progress.deferred_retry()
-    }
-    pub(in crate::client) fn begin_deferred_retry(&mut self, digest: &str) -> bool {
-        self.progress.begin_deferred_retry(digest)
-    }
-    pub(in crate::client) async fn finish_deferred_retry(
-        &mut self,
-        digest: &str,
-        succeeded: bool,
-        retryable: bool,
-        waiting_dependency: bool,
-        uncertain: bool,
-        error: Option<String>,
-    ) -> Option<tokio::time::Instant> {
-        self.progress
-            .finish_deferred_retry(
-                digest,
-                succeeded,
-                retryable,
-                waiting_dependency,
-                uncertain,
-                error,
-            )
-            .await
-    }
-    pub(in crate::client) fn reschedule_deferred_retry(
-        &mut self,
-        digest: &str,
-        delay: std::time::Duration,
-    ) -> Option<tokio::time::Instant> {
-        self.progress.reschedule_deferred_retry(digest, delay)
-    }
-    pub(in crate::client) fn wait_for_deferred_dependency(&mut self, digest: &str) {
-        self.progress.wait_for_deferred_dependency(digest)
-    }
-    pub(in crate::client) fn runtime_reconciled(&mut self) {
-        self.progress.runtime_reconciled()
-    }
-    pub(in crate::client) async fn publish_recovery_context(&self) -> Option<RecoveryContext> {
-        self.progress.publish_recovery_context().await
-    }
-    /// Ref's positive clearance rule consults the lower Core owner before
-    /// releasing an attempt. A pure Workflow test has no lifecycle adapter.
-    pub(super) fn lower_outcome_uncertain(&self) -> bool {
-        self.lifecycle
-            .as_ref()
-            .is_some_and(|lifecycle| lifecycle.outcome_uncertain())
-    }
-
-    pub(in crate::client) async fn service_endpoint_recovery_due(&self) -> bool {
-        if self.progress.has_unresolved_attempt() {
-            return false;
-        }
-        let Some(lifecycle) = &self.lifecycle else {
-            return false;
-        };
-        lifecycle.service_endpoint_recovery_due().await
-    }
-
-    pub(in crate::client) fn service_recovery_blocks_handoff(&self) -> bool {
-        self.lifecycle
-            .as_ref()
-            .is_some_and(|lifecycle| lifecycle.service_recovery_blocks_handoff())
-    }
-
-    pub(in crate::client) fn take_service_recovery_reconnected(&self) -> bool {
-        self.lifecycle
-            .as_ref()
-            .is_some_and(|lifecycle| lifecycle.take_service_recovery_reconnected())
-    }
-
     #[cfg(test)]
     pub(crate) fn seed_unresolved_lifecycle_attempt_for_tests(
         &mut self,
@@ -317,73 +249,6 @@ impl ApplicationWorkflow {
         (attempt, self.progress.deferred_retry(), retry_budget)
     }
 
-    pub(in crate::client) fn recovery_command_allowed(&self, command: &CoreCommand) -> bool {
-        use chimera_core::client::reconciler::workflow_progress::RecoveryCommand;
-        let command = match command {
-            CoreCommand::CacheStartupUnsettled { .. } => RecoveryCommand::SourceOnly,
-            CoreCommand::PatchApplicationConfig {
-                patch,
-                service_connected,
-                ..
-            } if !super::impact::application_patch_requires_reconcile(
-                patch,
-                *service_connected,
-            ) =>
-            {
-                RecoveryCommand::SourceOnly
-            }
-            CoreCommand::RecoverCore | CoreCommand::Reconcile | CoreCommand::ReconcileSource => {
-                RecoveryCommand::RecoverRuntime
-            }
-            CoreCommand::RecoverStartup { .. } => RecoveryCommand::RecoverStartup,
-            _ => RecoveryCommand::Other,
-        };
-        self.progress.recovery_command_allowed(command)
-    }
-
-    pub(super) fn new(
-        outcomes: Arc<Mutex<HashMap<OperationId, MutationReceipt>>>,
-        recovery_required: Arc<Mutex<Option<RecoveryContext>>>,
-        notifications: Option<Arc<dyn crate::client::effects::ports::CommitNotifications>>,
-    ) -> Self {
-        Self {
-            outcomes,
-            notifications,
-            progress: chimera_core::client::reconciler::workflow_progress::WorkflowProgress::new(
-                recovery_required,
-            ),
-            lifecycle: None,
-            #[cfg(test)]
-            mutation_connected: false,
-        }
-    }
-
-    pub(in crate::client) fn with_lifecycle(lifecycle: CoreLifecycleWorkflow) -> Self {
-        let startup =
-            StartupWorkflowState::with_owner_signal(lifecycle.startup_owner_unproven_handle());
-        let mut workflow = Self::new(
-            Arc::new(Mutex::new(HashMap::new())),
-            Arc::new(Mutex::new(None)),
-            None,
-        );
-        workflow.lifecycle = Some(Arc::new(lifecycle));
-        workflow.progress.startup = startup;
-        workflow
-    }
-
-    pub(in crate::client) fn lifecycle(&self) -> &CoreLifecycleWorkflow {
-        self.lifecycle
-            .as_deref()
-            .expect("actor-owned application workflow has a lifecycle adapter")
-    }
-
-    pub(in crate::client) fn lifecycle_handle(&self) -> Arc<CoreLifecycleWorkflow> {
-        self.lifecycle
-            .as_ref()
-            .cloned()
-            .expect("actor-owned application workflow has a lifecycle adapter")
-    }
-
     #[cfg(test)]
     pub(in crate::client) fn mutation_connected(&self) -> bool {
         self.mutation_connected
@@ -425,6 +290,7 @@ impl ApplicationWorkflow {
         workflow: ApplicationWorkflow,
     ) -> anyhow::Result<()> {
         self.validate_mutation_connection(&workflow)?;
+        let workflow = workflow.shared;
         self.outcomes = workflow.outcomes;
         self.progress.recovery_required = workflow.progress.recovery_required;
         self.notifications = workflow.notifications;
@@ -440,7 +306,7 @@ impl ApplicationWorkflow {
         &self,
         workflow: &ApplicationWorkflow,
     ) -> anyhow::Result<()> {
-        if self.lifecycle.is_none() {
+        if !self.shared.has_lifecycle() {
             anyhow::bail!("application workflow has no lifecycle adapter")
         }
         if self.mutation_connected {
@@ -452,76 +318,18 @@ impl ApplicationWorkflow {
         Ok(())
     }
 
-    #[cfg(not(test))]
-    async fn recover_after_reconcile(&mut self, core: &dyn ProfileRuntime) -> anyhow::Result<()> {
-        if let Some(operation_id) =
-            chimera_core::client::reconciler::reestablish::reconciled_native_attempt(
-                self.progress.live.as_ref(),
-                core.status().uncertain,
-            )?
-        {
-            core.discard_profile_runtime(&operation_id).await;
-            self.progress.live = None;
-            self.progress.deferred = None;
-            self.progress.publish_recovery_context().await;
-        }
-        Ok(())
-    }
-
-    pub(in crate::client) async fn execute_lifecycle(
-        &mut self,
-        command: CoreCommand,
-    ) -> anyhow::Result<bool> {
-        use chimera_core::client::reconciler::application_command::{
-            ApplicationCommandOutcome, execute_application_command,
-        };
-        let lifecycle = self.lifecycle_handle();
-        match execute_application_command(
-            &mut self.progress,
-            lifecycle.as_ref(),
-            self.notifications.as_deref(),
-            command,
-        )
-        .await?
-        {
-            ApplicationCommandOutcome::Settled {
-                service_reconnected,
-            } => Ok(service_reconnected),
-            ApplicationCommandOutcome::RecoverPrevious => {
-                self.recover_after_reconcile(lifecycle.as_ref()).await?;
-                Ok(false)
-            }
-        }
-    }
-
     #[cfg(test)]
     pub(in crate::client) async fn run_profile_mutation(
         &mut self,
         request: &mut super::mutation::MutationRequest,
     ) -> (bool, Result<(), String>) {
-        let Some(lifecycle) = self.lifecycle.as_ref().cloned() else {
+        let Some(lifecycle) = self.shared.optional_lifecycle_handle() else {
             return (
                 false,
                 Err("application workflow has no lifecycle adapter".into()),
             );
         };
         self.run_mutation(request, lifecycle.as_ref()).await
-    }
-
-    pub(in crate::client) fn runtime_bound(
-        &self,
-        ports: Option<chimera_config::runtime::executor::ResolvedPortBindings>,
-    ) {
-        if let Some(notifications) = &self.notifications {
-            notifications.runtime_bound(ports, false);
-        }
-    }
-
-    pub(in crate::client) async fn mark_recovery_required(
-        &mut self,
-        message: String,
-    ) -> RecoveryContext {
-        self.progress.mark_recovery_required(message).await
     }
 
     #[cfg(test)]
@@ -552,6 +360,21 @@ impl ApplicationWorkflow {
             .publish_recovery_context()
             .await
             .expect("an unresolved live attempt has a recovery projection")
+    }
+}
+
+#[async_trait::async_trait]
+impl chimera_core::client::reconciler::application_workflow::ApplicationLifecycleHost
+    for CoreLifecycleWorkflow
+{
+    fn startup_owner_unproven_handle(&self) -> Arc<std::sync::atomic::AtomicBool> {
+        CoreLifecycleWorkflow::startup_owner_unproven_handle(self)
+    }
+    fn outcome_uncertain(&self) -> bool {
+        CoreLifecycleWorkflow::outcome_uncertain(self)
+    }
+    async fn service_endpoint_recovery_due(&self) -> bool {
+        CoreLifecycleWorkflow::service_endpoint_recovery_due(self).await
     }
 }
 

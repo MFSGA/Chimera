@@ -19,18 +19,6 @@ pub use chimera_core::client::reconciler::reestablish::{
     AppliedVerdict, AttemptOrigin, AttemptStage, LiveAttempt, clearance_reason,
 };
 
-impl ApplicationWorkflow {
-    pub(crate) fn conclude_attempt(&mut self, unresolved: Option<String>) -> bool {
-        let lower_outcome_uncertain = self.lower_outcome_uncertain();
-        chimera_core::client::reconciler::reestablish::conclude_attempt(
-            &mut self.progress.live,
-            &mut self.progress.deferred,
-            unresolved,
-            lower_outcome_uncertain,
-        )
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
