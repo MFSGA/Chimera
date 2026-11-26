@@ -556,4 +556,158 @@ impl<W: Send + 'static, P: Send + 'static> ActorClient<W, P> {
             }
         }
     }
+
+    pub fn subscribe_reconciler(&self) -> tokio::sync::watch::Receiver<ReconcilerStatus> {
+        self.reconciler.clone()
+    }
+
+    pub async fn settled(&self, domain: SourceDomain, version: u64) -> ReconcilerStatus {
+        super::status::settled(self.subscribe_reconciler(), domain, version).await
+    }
+
+    pub async fn apply_checked_committed(
+        &self,
+        domain: SourceDomain,
+        version: u64,
+        target: String,
+    ) -> anyhow::Result<()> {
+        let authority = self
+            .source_authority
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("authoritative source verification is not connected"))?;
+        self.submit_checked_with_authority(domain, version, target, authority)
+            .await
+    }
+
+    /// Preserve the Service-generation fence before notifying durable source
+    /// commits. Source publication does not prove an established Core owner.
+    pub fn source_committed(&self, domain: SourceDomain, version: u64, reconcile_requested: bool) {
+        let recover_startup = reconcile_requested && self.startup_recovery_needed();
+        if recover_startup {
+            self.request_startup_recovery();
+        }
+        if self
+            .actor_ref
+            .cast(Message::SourceCommitted {
+                domain,
+                version,
+                reconcile_requested,
+                startup_recovery_required: recover_startup,
+            })
+            .is_err()
+        {
+            tracing::warn!(
+                ?domain,
+                version,
+                "failed to notify lifecycle of source commit"
+            );
+        }
+    }
+
+    pub fn request_runtime_rebuild(&self) {
+        if self.startup_recovery_needed() {
+            self.request_startup_recovery();
+            return;
+        }
+        if self.actor_ref.cast(Message::RuntimeDirty).is_err() {
+            tracing::warn!("failed to enqueue background runtime rebuild");
+        }
+    }
+
+    pub fn request_startup_recovery(&self) {
+        let client = self.clone();
+        super::worker::schedule_startup_recovery(
+            self.actor_ref.clone(),
+            self.next_id.clone(),
+            self.service.clone(),
+            self.startup_recovery_pending.clone(),
+            move || client.startup_recovery_needed(),
+            |operation_id, transition| Command::RecoverStartup {
+                operation_id,
+                transition,
+            },
+            Message::Request,
+            |succeeded| Message::StartupRecoveryFinished { succeeded },
+        );
+    }
+
+    pub async fn request_service_endpoint_down_if(
+        &self,
+        still_current: impl Fn() -> bool + Send + 'static,
+    ) {
+        super::worker::request_service_endpoint_down_if(
+            self.actor_ref.clone(),
+            self.next_id.clone(),
+            self.service.clone(),
+            still_current,
+            Command::ServiceEndpointDown,
+            Message::Request,
+        )
+        .await;
+    }
+
+    /// The native ServiceActor is still the sole production status publisher.
+    pub fn observe_service_status(&self, info: chimera_ipc::types::StatusInfo<'static>) {
+        if self.service.actor_status().is_none()
+            && self
+                .actor_ref
+                .cast(Message::ObserveService { info })
+                .is_err()
+        {
+            tracing::debug!("failed to publish legacy service status observation");
+        }
+    }
+
+    pub fn observe_service_probe_failure(&self) {
+        if self.service.actor_status().is_none()
+            && self.actor_ref.cast(Message::ServiceProbeFailed).is_err()
+        {
+            tracing::debug!("failed to publish legacy service probe failure");
+        }
+    }
+
+    pub async fn execute_service_command(
+        &self,
+        command: impl FnOnce(
+            Box<dyn crate::client::core_lifecycle::ports::ServiceTransitionLease>,
+        ) -> Command<P>,
+    ) -> anyhow::Result<()> {
+        let transition = self.service.begin_transition().await?;
+        self.execute(command(transition)).await
+    }
+
+    pub async fn patch_application_config(
+        &self,
+        patch: chimera_config::application::ChimeraAppConfigPatch,
+    ) -> anyhow::Result<crate::client::core_lifecycle::command::ApplicationPatchResult> {
+        let (degradations, settled) = tokio::sync::oneshot::channel();
+        self.execute(Command::PatchApplicationConfig {
+            patch,
+            service_connected: false,
+            degradations,
+            runtime_converged: Arc::new(AtomicBool::new(true)),
+        })
+        .await?;
+        settled
+            .await
+            .map_err(|_| anyhow::anyhow!("application runtime result was not delivered"))
+    }
+}
+
+impl<W: Send + 'static, P: Send + 'static> Clone for ActorClient<W, P> {
+    fn clone(&self) -> Self {
+        Self {
+            actor_ref: self.actor_ref.clone(),
+            next_id: self.next_id.clone(),
+            status: self.status.clone(),
+            reconciler: self.reconciler.clone(),
+            service_status: self.service_status.clone(),
+            service: self.service.clone(),
+            core: self.core.clone(),
+            startup_owner_unproven: self.startup_owner_unproven.clone(),
+            service_failed_generation: self.service_failed_generation.clone(),
+            startup_recovery_pending: self.startup_recovery_pending.clone(),
+            source_authority: self.source_authority.clone(),
+        }
+    }
 }

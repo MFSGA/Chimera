@@ -2157,7 +2157,7 @@ impl RuntimeReconcilerClient {
         &self,
     ) -> Option<tokio::sync::watch::Receiver<ReconcilerStatus>> {
         match self.0.as_ref() {
-            ClientInner::Actor(ActorClient { reconciler, .. }) => Some(reconciler.clone()),
+            ClientInner::Actor(client) => Some(client.subscribe_reconciler()),
             #[cfg(test)]
             ClientInner::Direct { .. } => None,
         }
@@ -2184,15 +2184,17 @@ impl RuntimeReconcilerClient {
         version: u64,
         target: String,
     ) -> anyhow::Result<()> {
-        let authority = match self.0.as_ref() {
-            ClientInner::Actor(ActorClient {
-                source_authority: Some(port),
-                ..
-            }) => port.clone(),
-            _ => anyhow::bail!("authoritative source verification is not connected"),
-        };
-        self.submit_checked_with_authority(domain, version, target, authority)
-            .await
+        match self.0.as_ref() {
+            ClientInner::Actor(client) => {
+                client
+                    .apply_checked_committed(domain, version, target)
+                    .await
+            }
+            #[cfg(test)]
+            ClientInner::Direct { .. } => {
+                anyhow::bail!("authoritative source verification is not connected")
+            }
+        }
     }
 
     async fn submit_checked_with_authority(
@@ -2307,10 +2309,11 @@ impl RuntimeReconcilerClient {
     }
 
     pub(crate) async fn settled(&self, domain: SourceDomain, version: u64) -> ReconcilerStatus {
-        let ClientInner::Actor(ActorClient { reconciler, .. }) = self.0.as_ref() else {
-            return ReconcilerStatus::default();
-        };
-        chimera_core::client::reconciler::status::settled(reconciler.clone(), domain, version).await
+        match self.0.as_ref() {
+            ClientInner::Actor(client) => client.settled(domain, version).await,
+            #[cfg(test)]
+            ClientInner::Direct { .. } => ReconcilerStatus::default(),
+        }
     }
 
     /// Conservative rollback for a failed source CAS after the Core owner
@@ -2368,40 +2371,15 @@ impl RuntimeReconcilerClient {
         }
     }
 
-    /// Observe a source-owned durable commit in the single lifecycle mailbox.
-    /// `reconcile_requested` asks the one runtime owner to apply the latest
-    /// committed snapshots. Already-applied legacy domains pass false.
     pub(crate) fn source_committed(
         &self,
         domain: SourceDomain,
         version: u64,
         reconcile_requested: bool,
     ) {
-        // Preserve request_runtime_rebuild's Service-generation fence: a
-        // failed startup generation may require owner recovery even when the
-        // generic "owner unproven" flag has already cleared. Reconcile must
-        // not race that host transition.
-        let recover_startup = reconcile_requested && self.startup_recovery_needed();
-        if recover_startup {
-            self.request_startup_recovery();
-        }
         match self.0.as_ref() {
-            ClientInner::Actor(ActorClient { actor_ref, .. }) => {
-                if actor_ref
-                    .cast(Message::SourceCommitted {
-                        domain,
-                        version,
-                        reconcile_requested,
-                        startup_recovery_required: recover_startup,
-                    })
-                    .is_err()
-                {
-                    tracing::warn!(
-                        ?domain,
-                        version,
-                        "failed to notify lifecycle of source commit"
-                    );
-                }
+            ClientInner::Actor(client) => {
+                client.source_committed(domain, version, reconcile_requested)
             }
             #[cfg(test)]
             ClientInner::Direct { .. } => {}
@@ -2409,47 +2387,19 @@ impl RuntimeReconcilerClient {
     }
 
     pub(crate) fn request_runtime_rebuild(&self) {
-        if self.startup_recovery_needed() {
-            self.request_startup_recovery();
-            return;
-        }
         match self.0.as_ref() {
-            ClientInner::Actor(ActorClient { actor_ref, .. }) => {
-                if actor_ref.cast(Message::RuntimeDirty).is_err() {
-                    tracing::warn!("failed to enqueue background runtime rebuild");
-                }
-            }
+            ClientInner::Actor(client) => client.request_runtime_rebuild(),
             #[cfg(test)]
             ClientInner::Direct { .. } => {}
         }
     }
 
     fn request_startup_recovery(&self) {
-        let (actor_ref, next_id, service, startup_recovery_pending) = match self.0.as_ref() {
-            ClientInner::Actor(ActorClient {
-                actor_ref,
-                next_id,
-                service,
-                startup_recovery_pending,
-                ..
-            }) => (actor_ref, next_id, service, startup_recovery_pending),
+        match self.0.as_ref() {
+            ClientInner::Actor(client) => client.request_startup_recovery(),
             #[cfg(test)]
-            ClientInner::Direct { .. } => return,
-        };
-        let client = self.clone();
-        schedule_startup_recovery(
-            actor_ref.clone(),
-            next_id.clone(),
-            service.clone(),
-            startup_recovery_pending.clone(),
-            move || client.startup_recovery_needed(),
-            |operation_id, transition| Command::RecoverStartup {
-                operation_id,
-                transition,
-            },
-            Message::Request,
-            |succeeded| Message::StartupRecoveryFinished { succeeded },
-        );
+            ClientInner::Direct { .. } => {}
+        }
     }
 
     pub(in crate::client) async fn request_service_endpoint_down(&self) {
@@ -2460,26 +2410,13 @@ impl RuntimeReconcilerClient {
     where
         F: Fn() -> bool + Send + 'static,
     {
-        let (actor_ref, next_id, service) = match self.0.as_ref() {
-            ClientInner::Actor(ActorClient {
-                actor_ref,
-                next_id,
-                service,
-                ..
-            }) => (actor_ref.clone(), next_id.clone(), service.clone()),
+        match self.0.as_ref() {
+            ClientInner::Actor(client) => {
+                client.request_service_endpoint_down_if(still_current).await
+            }
             #[cfg(test)]
-            ClientInner::Direct { .. } => return,
-        };
-
-        chimera_core::client::reconciler::worker::request_service_endpoint_down_if(
-            actor_ref,
-            next_id,
-            service,
-            still_current,
-            Command::ServiceEndpointDown,
-            Message::Request,
-        )
-        .await;
+            ClientInner::Direct { .. } => {}
+        }
     }
 
     pub(in crate::client) fn service_status(&self) -> ServiceHostStatus {
@@ -2494,24 +2431,18 @@ impl RuntimeReconcilerClient {
         &self,
         info: chimera_ipc::types::StatusInfo<'static>,
     ) {
-        if let ClientInner::Actor(ActorClient {
-            actor_ref, service, ..
-        }) = self.0.as_ref()
-            && service.actor_status().is_none()
-            && actor_ref.cast(Message::ObserveService { info }).is_err()
-        {
-            tracing::debug!("failed to publish legacy service status observation");
+        match self.0.as_ref() {
+            ClientInner::Actor(client) => client.observe_service_status(info),
+            #[cfg(test)]
+            ClientInner::Direct { .. } => {}
         }
     }
 
     pub(in crate::client) fn observe_service_probe_failure(&self) {
-        if let ClientInner::Actor(ActorClient {
-            actor_ref, service, ..
-        }) = self.0.as_ref()
-            && service.actor_status().is_none()
-            && actor_ref.cast(Message::ServiceProbeFailed).is_err()
-        {
-            tracing::debug!("failed to publish legacy service probe failure");
+        match self.0.as_ref() {
+            ClientInner::Actor(client) => client.observe_service_probe_failure(),
+            #[cfg(test)]
+            ClientInner::Direct { .. } => {}
         }
     }
 
@@ -2622,17 +2553,23 @@ impl RuntimeReconcilerClient {
         &self,
         patch: chimera_config::application::ChimeraAppConfigPatch,
     ) -> anyhow::Result<workflow::ApplicationPatchResult> {
-        let (degradations, settled) = tokio::sync::oneshot::channel();
-        self.execute(Command::PatchApplicationConfig {
-            patch,
-            service_connected: false,
-            degradations,
-            runtime_converged: Arc::new(AtomicBool::new(true)),
-        })
-        .await?;
-        settled
-            .await
-            .map_err(|_| anyhow::anyhow!("application runtime result was not delivered"))
+        match self.0.as_ref() {
+            ClientInner::Actor(client) => client.patch_application_config(patch).await,
+            #[cfg(test)]
+            ClientInner::Direct { .. } => {
+                let (degradations, settled) = tokio::sync::oneshot::channel();
+                self.execute(Command::PatchApplicationConfig {
+                    patch,
+                    service_connected: false,
+                    degradations,
+                    runtime_converged: Arc::new(AtomicBool::new(true)),
+                })
+                .await?;
+                settled
+                    .await
+                    .map_err(|_| anyhow::anyhow!("application runtime result was not delivered"))
+            }
+        }
     }
 
     pub(in crate::client) async fn replace_core_binary(
@@ -2646,13 +2583,14 @@ impl RuntimeReconcilerClient {
     where
         F: FnOnce(Box<dyn ports::ServiceTransitionLease>) -> Command,
     {
-        let service = match self.0.as_ref() {
-            ClientInner::Actor(ActorClient { service, .. }) => service.clone(),
+        match self.0.as_ref() {
+            ClientInner::Actor(client) => client.execute_service_command(command).await,
             #[cfg(test)]
-            ClientInner::Direct { service, .. } => service.clone(),
-        };
-        let transition = service.begin_transition().await?;
-        self.execute(command(transition)).await
+            ClientInner::Direct { service, .. } => {
+                let transition = service.begin_transition().await?;
+                self.execute(command(transition)).await
+            }
+        }
     }
 
     pub(in crate::client) async fn install_service(&self) -> anyhow::Result<()> {
