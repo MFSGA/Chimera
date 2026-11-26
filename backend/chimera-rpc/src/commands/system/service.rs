@@ -20,3 +20,12 @@ pub async fn status_service(
         .service_actor_status()
         .ok_or_else(|| anyhow::anyhow!("ServiceActor is not connected"))
 }
+
+/// Format the install command for the current host without executing it.
+#[chimera_rpc::rpc(query, expose = [http], sensitive)]
+pub async fn get_service_install_prompt(
+    prompt: RpcState<'_, dyn crate::ports::ServiceInstallPrompt>,
+    paths: RpcState<'_, chimera_paths::PathResolver>,
+) -> anyhow::Result<String> {
+    prompt.service_install_prompt(paths).await
+}

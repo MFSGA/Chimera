@@ -21,6 +21,8 @@ chimera-runtime-values = { path = '../chimera-runtime-values', default-features 
 chimera-contracts = { path = '../chimera-contracts', default-features = false }
 chimera-core = { path = '../chimera-core', default-features = false }
 anyhow = '1'
+async-trait = '0.1.77'
+chimera-paths = { path = '../chimera-paths' }
 serde = { version = '1', features = ['derive', 'rc'] }
 serde_json = { version = '1', features = ['preserve_order'] }
 snafu = { workspace = true }

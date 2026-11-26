@@ -1736,11 +1736,13 @@ name = "chimera-rpc"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "chimera-config",
  "chimera-contracts",
  "chimera-core",
  "chimera-jobs",
  "chimera-logging",
+ "chimera-paths",
  "chimera-profile-transform",
  "chimera-rpc-macro",
  "chimera-rpc-protocol",

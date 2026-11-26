@@ -10,17 +10,8 @@ use chimera_core::actor_v2::service_process::parse_service_status;
 use chimera_os::service;
 
 use super::SERVICE_PATH;
-use crate::utils::dirs::{app_config_dir, app_data_dir, app_install_dir};
 
 const SERVICE_STATUS_TIMEOUT: Duration = Duration::from_secs(5);
-
-/// Legacy IPC preview until all caller paths are injected from the app resolver.
-pub async fn get_service_install_args() -> anyhow::Result<Vec<std::ffi::OsString>> {
-    let data = app_data_dir()?;
-    let config = app_config_dir()?;
-    let install = app_install_dir()?;
-    Ok(service::get_service_install_args(&data, &config, &install).await?)
-}
 
 /// Legacy read-only status entry point; no OS service mutations occur here.
 pub(crate) async fn probe_service_status()

@@ -194,7 +194,7 @@ fn linked_declarations_match_the_resource_table_and_unlinked_commands_stay_known
         .filter(|c| c.handler.is_some())
         .map(|c| c.metadata.name)
         .collect();
-    assert_eq!(linked.len(), 102);
+    assert_eq!(linked.len(), 103);
     for name in [
         "activate_profile",
         "clash_api_delete_connections",
@@ -253,6 +253,7 @@ fn linked_declarations_match_the_resource_table_and_unlinked_commands_stay_known
         "get_profiles_listing",
         "get_proxies",
         "get_proxy_group_icons",
+        "get_service_install_prompt",
         "get_service_status_summary",
         "get_storage_item",
         "get_traffic_summary",

@@ -953,18 +953,17 @@ pub mod service {
 
 #[tauri::command]
 #[specta::specta]
-pub async fn get_service_install_prompt() -> Result<String> {
-    let args = crate::core::service::control::get_service_install_args()
-        .await?
-        .into_iter()
-        .map(|arg| arg.to_string_lossy().to_string())
-        .collect::<Vec<_>>()
-        .join(" ");
-    let mut prompt = format!("./chimera-service {args}");
-    if cfg!(not(windows)) {
-        prompt = format!("sudo {prompt}");
-    }
-    Ok(prompt)
+pub async fn get_service_install_prompt(
+    client: State<'_, ChimeraClient>,
+    window: tauri::Window,
+) -> Result<String> {
+    Ok(client
+        .call_shared_rpc(
+            window.label(),
+            "get_service_install_prompt",
+            serde_json::json!({}),
+        )
+        .await?)
 }
 
 #[tauri::command]

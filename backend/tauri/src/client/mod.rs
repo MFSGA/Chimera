@@ -128,6 +128,7 @@ fn utf8_path(path: std::path::PathBuf) -> anyhow::Result<camino::Utf8PathBuf> {
 }
 
 struct ChimeraClientInner {
+    resolved_paths: chimera_paths::PathResolver,
     storage: chimera_core::storage::Storage,
     rpc: std::sync::OnceLock<
         Result<chimera_rpc::registry::UnifiedRpc, chimera_rpc::registry::SetupError>,
@@ -233,6 +234,10 @@ impl ChimeraClient {
                         core_directory: Some(Arc::new(
                             crate::adapters::rpc_host::DesktopCoreDirectory,
                         )),
+                        service_prompt: Some(Arc::new(
+                            crate::adapters::rpc_host::OsServiceInstallPrompt,
+                        )),
+                        paths: self.inner.resolved_paths.clone(),
                         host_environment: chimera_rpc::ports::HostEnvironment {
                             is_appimage: *crate::consts::IS_APPIMAGE,
                         },
@@ -432,11 +437,12 @@ impl ChimeraClient {
         let file_logs = owners.file_logs;
         let changelog_http = (host_adapters.changelog_http)(self_proxy_port);
         let icons = chimera_core::service::icon::IconService::new(
-            resolved_paths,
+            resolved_paths.clone(),
             host_adapters.icon_fetcher,
         );
         let client = Self::with_parts_and_typed_config(
             storage,
+            resolved_paths,
             typed,
             core_lifecycle,
             core,
@@ -576,6 +582,10 @@ impl ChimeraClient {
                 &test_profile_dir.path().join("rpc-test-storage.redb"),
             )
             .unwrap(),
+            chimera_paths::PathResolver::with_base_dirs(
+                utf8_path(paths.app_config_dir().to_path_buf()).unwrap(),
+                utf8_path(paths.app_data_dir().to_path_buf()).unwrap(),
+            ),
             typed,
             core_lifecycle,
             core,
@@ -620,6 +630,7 @@ impl ChimeraClient {
 
     fn with_parts_and_typed_config(
         storage: chimera_core::storage::Storage,
+        resolved_paths: chimera_paths::PathResolver,
         typed: TypedConfigClients,
         core_lifecycle: RuntimeReconcilerClient,
         core: Arc<dyn CoreLifecyclePort>,
@@ -685,6 +696,7 @@ impl ChimeraClient {
                 system_dns,
             });
         let inner = ChimeraClientInner {
+            resolved_paths,
             storage,
             rpc: std::sync::OnceLock::new(),
             shared,
