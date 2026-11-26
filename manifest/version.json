@@ -2,12 +2,12 @@
   "manifest_version": 1,
   "latest": {
     "mihomo": "v1.19.34",
-    "mihomo_alpha": "alpha-dd74780",
+    "mihomo_alpha": "alpha-53f61d4",
     "clash_rs": "v0.10.12",
     "chimera_client": "v0.29.1",
     "chimera_client_alpha": "0.29.1-alpha+sha.afba908",
     "clash_premium": "2023-09-05-gdcc8d87",
-    "clash_rs_alpha": "0.10.12-alpha+sha.9846239"
+    "clash_rs_alpha": "0.10.12-alpha+sha.59730c8"
   },
   "arch_template": {
     "mihomo": {
@@ -67,5 +67,5 @@
       "darwin-x64": "clash-rs-x86_64-apple-darwin"
     }
   },
-  "updated_at": "2026-11-25T04:52:47.572Z"
+  "updated_at": "2026-11-26T04:07:36.814Z"
 }
