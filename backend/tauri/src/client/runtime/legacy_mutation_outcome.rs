@@ -105,6 +105,45 @@ impl<T> MutationOutcome<T> {
     }
 }
 
+impl<T> MutationOutcome<T> {
+    /// Preserve the original transaction receipt and flat evidence when a
+    /// shared RPC calls a desktop configuration transaction.
+    pub(crate) fn into_shared_configuration_outcome(self) -> shared::MutationOutcome<T> {
+        match self {
+            Self::Committed {
+                value,
+                commits,
+                notifications_pending,
+            } => shared::MutationOutcome::Committed {
+                value,
+                commits,
+                notifications_pending,
+            },
+            Self::CommittedDegraded {
+                value,
+                commits,
+                notifications_pending,
+                degradations,
+            } => shared::MutationOutcome::CommittedDegraded {
+                value,
+                commits,
+                notifications_pending,
+                degradations: degradations
+                    .into_iter()
+                    .map(|item| shared::Degradation {
+                        phase: item.phase,
+                        reason: shared::DegradationReason::LegacyConfigurationFailure {
+                            legacy_code: item.code,
+                        },
+                        message: item.message,
+                        retryable: item.retryable,
+                    })
+                    .collect(),
+            },
+        }
+    }
+}
+
 impl<T> From<shared::MutationOutcome<T>> for MutationOutcome<T> {
     fn from(outcome: shared::MutationOutcome<T>) -> Self {
         match outcome {

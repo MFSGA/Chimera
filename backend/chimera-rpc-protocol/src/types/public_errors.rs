@@ -476,6 +476,7 @@ pub struct PublicDegradation {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
 #[serde(tag = "code", rename_all = "snake_case")]
 pub enum PublicDegradationReason {
+    LegacyConfigurationFailure,
     RuntimeDeferred { cause: PublicRuntimeError },
     RuntimeProductPublishFailed { cause: PublicRuntimeError },
     ServiceStopFailed { cause: PublicRuntimeError },

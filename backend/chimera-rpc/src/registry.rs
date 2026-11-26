@@ -16,6 +16,8 @@ use std::{collections::HashMap, future::Future, pin::Pin, sync::Arc};
 
 /// Only already-composed, real host dependencies are installed.
 pub struct RpcDependencies {
+    pub configuration_mutations:
+        Option<Arc<dyn chimera_core::client::configuration_mutations::ConfigurationMutations>>,
     pub storage: chimera_core::storage::Storage,
     pub client: ChimeraClient,
     pub audit: RpcAudit,

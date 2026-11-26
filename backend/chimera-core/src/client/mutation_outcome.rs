@@ -17,7 +17,12 @@ impl Degradation {
     pub fn from_shared(degradation: chimera_contracts::runtime::Degradation) -> Self {
         Self {
             phase: degradation.phase,
-            code: degradation.reason.code().into(),
+            code: match &degradation.reason {
+                chimera_contracts::runtime::DegradationReason::LegacyConfigurationFailure {
+                    legacy_code,
+                } => legacy_code.clone(),
+                reason => reason.code().into(),
+            },
             message: degradation.message,
             retryable: degradation.retryable,
         }

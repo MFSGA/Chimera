@@ -194,7 +194,7 @@ fn linked_declarations_match_the_resource_table_and_unlinked_commands_stay_known
         .filter(|c| c.handler.is_some())
         .map(|c| c.metadata.name)
         .collect();
-    assert_eq!(linked.len(), 65);
+    assert_eq!(linked.len(), 69);
     for name in [
         "activate_profile",
         "clash_api_delete_connections",
@@ -241,8 +241,12 @@ fn linked_declarations_match_the_resource_table_and_unlinked_commands_stay_known
         "get_storage_item",
         "import_profile",
         "mutate_proxies",
+        "patch_app_config",
+        "patch_clash_config",
+        "patch_clash_system_config",
         "patch_profile_metadata",
         "patch_remote_profile_options",
+        "patch_system_settings",
         "probe_direct_egress",
         "read_profile_file",
         "remove_storage_item",

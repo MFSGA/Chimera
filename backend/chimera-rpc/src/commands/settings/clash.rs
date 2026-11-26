@@ -37,3 +37,15 @@ pub async fn get_clash_settings(
 ) -> Result<chimera_config::clash::config::ClashSettings> {
     Ok((&client.get_clash_config()?).into())
 }
+
+use chimera_config::clash::config::ClashSettingsPatch;
+use chimera_core::client::configuration_mutations::ConfigurationMutations;
+use chimera_rpc_protocol::types::RpcUnitMutationOutcome;
+
+#[chimera_rpc::rpc(privacy, optional_capabilities(elevation, os_integration, presentation), expose = [http])]
+pub async fn patch_clash_config(
+    host: RpcState<'_, dyn ConfigurationMutations>,
+    patch: ClashSettingsPatch,
+) -> Result<RpcUnitMutationOutcome> {
+    Ok(host.patch_clash(patch.into()).await?.into())
+}

@@ -164,6 +164,45 @@ impl ChimeraClientInner {
     }
 }
 
+struct DesktopConfigurationMutations(std::sync::Weak<ChimeraClientInner>);
+
+impl DesktopConfigurationMutations {
+    fn client(&self) -> anyhow::Result<ChimeraClient> {
+        Ok(ChimeraClient {
+            inner: self
+                .0
+                .upgrade()
+                .ok_or_else(|| anyhow::anyhow!("configuration host is shutting down"))?,
+        })
+    }
+}
+
+#[async_trait::async_trait]
+impl chimera_core::client::configuration_mutations::ConfigurationMutations
+    for DesktopConfigurationMutations
+{
+    async fn patch_application(
+        &self,
+        patch: chimera_config::application::ChimeraAppConfigPatch,
+    ) -> anyhow::Result<chimera_contracts::runtime::MutationOutcome<()>> {
+        Ok(self
+            .client()?
+            .patch_app_config(patch)
+            .await?
+            .into_shared_configuration_outcome())
+    }
+    async fn patch_clash(
+        &self,
+        patch: chimera_config::clash::config::ClashConfigPatch,
+    ) -> anyhow::Result<chimera_contracts::runtime::MutationOutcome<()>> {
+        Ok(self
+            .client()?
+            .patch_clash_config(patch)
+            .await?
+            .into_shared_configuration_outcome())
+    }
+}
+
 impl ChimeraClient {
     pub(crate) fn rpc(&self) -> anyhow::Result<&chimera_rpc::registry::UnifiedRpc> {
         use chimera_rpc::{
@@ -175,6 +214,9 @@ impl ChimeraClient {
             .get_or_init(|| {
                 UnifiedRpc::new(
                     RpcDependencies {
+                        configuration_mutations: Some(Arc::new(DesktopConfigurationMutations(
+                            Arc::downgrade(&self.inner),
+                        ))),
                         storage: self.inner.storage.clone(),
                         client: self.inner.shared.clone(),
                         audit: RpcAudit::new(Arc::new(TracingRpcAuditSink)),
@@ -1011,6 +1053,108 @@ mod tests {
         )
         .await;
         (client, events)
+    }
+
+    #[tokio::test]
+    async fn shared_rpc_configuration_respects_field_scope_and_preserves_commit_receipt() {
+        use chimera_contracts::auth::{Access, Grant, Permissions, Principal, Resource};
+        use chimera_rpc::{audit::RpcTransport, registry::RpcCaller};
+        use chimera_rpc_protocol::{AuthContext, RpcOwner};
+        let (client, events) = recording_client(true).await;
+        let rpc = client.rpc().unwrap();
+        let settings_writer = RpcCaller::new(
+            AuthContext::new(
+                Principal::Token {
+                    id: "settings".into(),
+                    name: "settings".into(),
+                },
+                Grant::Custom(Permissions::NONE.with(Resource::Settings, Access::Write)),
+            ),
+            RpcOwner::new("settings".into()),
+        );
+        let owner = RpcCaller::desktop("test-window");
+        let app_before = client.inner.shared.application().snapshot();
+        let clash_before = client.inner.clash_config.snapshot();
+        for (name, patch) in [
+            (
+                "patch_app_config",
+                serde_json::json!({"proxy_layout_column":9,"enable_system_proxy":true}),
+            ),
+            (
+                "patch_clash_config",
+                serde_json::json!({"expand_include_all":false,"enable_tun_mode":true}),
+            ),
+        ] {
+            let error = rpc
+                .call(
+                    RpcTransport::Http,
+                    name,
+                    settings_writer.clone(),
+                    serde_json::json!({"patch":patch}),
+                )
+                .await
+                .unwrap_err();
+            assert_eq!(error.kind, "invalid_params");
+        }
+        let denied = rpc
+            .call(
+                RpcTransport::Http,
+                "patch_clash_system_config",
+                settings_writer.clone(),
+                serde_json::json!({"patch":{"enable_clash_fields":true}}),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(denied.kind, "forbidden");
+        assert_eq!(
+            client.inner.shared.application().snapshot().version,
+            app_before.version
+        );
+        assert_eq!(
+            client.inner.clash_config.snapshot().version,
+            clash_before.version
+        );
+        assert!(!events.lock().unwrap().contains(&"rebuild"));
+        let committed = rpc
+            .call(
+                RpcTransport::Http,
+                "patch_app_config",
+                settings_writer,
+                serde_json::json!({"patch":{"proxy_layout_column":9}}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(client.get_app_config().unwrap().proxy_layout_column, 9);
+        assert_eq!(committed["commits"][0]["domain"], "application");
+        let deferred = rpc.call(RpcTransport::TauriIpc, "patch_clash_system_config", owner.clone(), serde_json::json!({"patch":{"enable_clash_fields":!clash_before.state.enable_clash_fields}})).await.unwrap();
+        assert_eq!(
+            client.get_clash_config().unwrap().enable_clash_fields,
+            !clash_before.state.enable_clash_fields
+        );
+        assert_eq!(deferred["status"], "committed_degraded");
+        assert_eq!(deferred["commits"][0]["runtime"], "deferred");
+        assert!(
+            deferred["degradations"].as_array().unwrap().iter().any(
+                |item| item["reason"]["legacy_code"] == "clash_runtime_deferred"
+                    && item["message"]
+                        .as_str()
+                        .unwrap()
+                        .contains("injected rebuild failure")
+            )
+        );
+        assert!(events.lock().unwrap().contains(&"rebuild"));
+        let before = client.inner.shared.application().snapshot().version;
+        assert!(
+            rpc.call(
+                RpcTransport::TauriIpc,
+                "patch_system_settings",
+                owner,
+                serde_json::json!({"patch":{"network_automation":{"enabled":false}}})
+            )
+            .await
+            .is_err()
+        );
+        assert_eq!(client.inner.shared.application().snapshot().version, before);
     }
 
     #[tokio::test]

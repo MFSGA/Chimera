@@ -82,3 +82,28 @@ pub fn get_hotkey_functions() -> Vec<&'static str> {
 pub async fn get_hotkeys(client: RpcState<'_, ChimeraClient>) -> anyhow::Result<Vec<String>> {
     Ok(client.get_app_config()?.hotkeys)
 }
+
+use chimera_config::{application::SystemSettingsPatch, clash::config::ClashSystemPatch};
+use chimera_core::client::configuration_mutations::ConfigurationMutations;
+use chimera_rpc_protocol::types::RpcUnitMutationOutcome;
+
+#[chimera_rpc::rpc(privacy, optional_capabilities(elevation, os_integration, presentation), expose = [http, local])]
+pub async fn patch_clash_system_config(
+    host: RpcState<'_, dyn ConfigurationMutations>,
+    patch: ClashSystemPatch,
+) -> anyhow::Result<RpcUnitMutationOutcome> {
+    Ok(host.patch_clash(patch.into()).await?.into())
+}
+
+#[chimera_rpc::rpc(privacy, optional_capabilities(os_integration, presentation, elevation), expose = [http, local])]
+pub async fn patch_system_settings(
+    host: RpcState<'_, dyn ConfigurationMutations>,
+    patch: SystemSettingsPatch,
+) -> anyhow::Result<RpcUnitMutationOutcome> {
+    // Chimera has not installed the dedicated network-policy authorization flow.
+    anyhow::ensure!(
+        patch.network_automation.is_none(),
+        "network automation policy edits require the dedicated authorized settings command"
+    );
+    Ok(host.patch_application(patch.into()).await?.into())
+}

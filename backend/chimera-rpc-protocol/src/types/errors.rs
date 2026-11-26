@@ -269,6 +269,12 @@ pub struct Degradation {
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "code", rename_all = "snake_case")]
 pub enum DegradationReason {
+    /// An existing configuration transaction reported a flat degradation.
+    /// The original code is retained, but no structured cause is inferred.
+    LegacyConfigurationFailure {
+        legacy_code: String,
+    },
+
     /// The runtime will apply the committed mutation later.
     RuntimeDeferred {
         cause: Arc<RuntimeError>,

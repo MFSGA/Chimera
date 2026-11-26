@@ -74,3 +74,5 @@ pub mod application_operations;
 pub mod clash_operations;
 
 pub mod profile_sync_summary;
+
+pub mod configuration_mutations;

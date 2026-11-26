@@ -146,6 +146,12 @@ pub struct Degradation {
 #[derive(Debug, Clone, Serialize, specta::Type)]
 #[serde(tag = "code", rename_all = "snake_case")]
 pub enum DegradationReason {
+    /// An existing configuration transaction reported a flat degradation.
+    /// The original code is retained, but no structured cause is inferred.
+    LegacyConfigurationFailure {
+        legacy_code: String,
+    },
+
     ModeInterruptionFailed {
         cause: InterruptFailure,
     },
@@ -185,6 +191,7 @@ impl DegradationReason {
     /// reason owns this mapping, rather than each UI adapter inventing one.
     pub const fn code(&self) -> &'static str {
         match self {
+            Self::LegacyConfigurationFailure { .. } => "legacy_configuration_failure",
             Self::ModeInterruptionFailed { .. } => "mode_interruption_failed",
             Self::ProfileInterruptionFailed { .. } => "profile_interruption_failed",
             Self::ProxyInterruptionFailed { .. } => "proxy_interruption_failed",

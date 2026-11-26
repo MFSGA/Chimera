@@ -103,6 +103,9 @@ fn project_degradation(degradation: &Degradation) -> PublicDegradation {
 
 fn project_degradation_reason(reason: &DegradationReason) -> PublicDegradationReason {
     match reason {
+        DegradationReason::LegacyConfigurationFailure { .. } => {
+            PublicDegradationReason::LegacyConfigurationFailure
+        }
         DegradationReason::RuntimeDeferred { cause } => PublicDegradationReason::RuntimeDeferred {
             cause: project_runtime_error(cause),
         },
@@ -533,6 +536,44 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn legacy_configuration_failure_keeps_receipt_without_public_diagnostics() {
+        use chimera_contracts::runtime::{CommitReceipt, DegradationPhase, RuntimeCommitStatus};
+        let outcome = MutationOutcome::from_parts(
+            (),
+            vec![Degradation {
+                phase: DegradationPhase::LegacyMirror,
+                reason: DegradationReason::LegacyConfigurationFailure {
+                    legacy_code: "private-code".into(),
+                },
+                message: "private-diagnostic".into(),
+                retryable: true,
+            }],
+        )
+        .with_commit(CommitReceipt {
+            operation_id: None,
+            domain: "application".into(),
+            source_version: 2,
+            runtime: RuntimeCommitStatus::Unchanged,
+        });
+        let result = RpcUnitMutationOutcome::from(outcome);
+        let full = result
+            .clone()
+            .encode_for_visibility(ResponseVisibility::Full)
+            .unwrap();
+        let public = result
+            .encode_for_visibility(ResponseVisibility::Public)
+            .unwrap();
+        assert_eq!(public["commits"], full["commits"]);
+        assert_eq!(
+            public["degradations"][0]["reason"]["code"],
+            "legacy_configuration_failure"
+        );
+        assert!(!public.to_string().contains("private-"));
+        assert!(full.to_string().contains("private-code"));
+        assert!(full.to_string().contains("private-diagnostic"));
     }
 
     #[test]
