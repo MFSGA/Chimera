@@ -396,6 +396,10 @@ pub fn setup(
     };
     let client = crate::startup_failure::report_boundary_with_backup_and_capture(
         ChimeraClient::try_new_with_args(ClientSetupArgs {
+            storage: app
+                .state::<chimera_core::storage::Storage>()
+                .inner()
+                .clone(),
             paths: paths.clone(),
             runtime_paths: runtime_paths.clone(),
             bundle_metadata,

@@ -30,3 +30,10 @@ pub fn get_clash_info(
 ) -> Result<chimera_core::client::clash_info::ClashInfo> {
     Ok(client.clash_info())
 }
+
+#[chimera_rpc::rpc(query, expose = [http, local])]
+pub async fn get_clash_settings(
+    client: RpcState<'_, ChimeraClient>,
+) -> Result<chimera_config::clash::config::ClashSettings> {
+    Ok((&client.get_clash_config()?).into())
+}

@@ -457,3 +457,6 @@ mod tests {
         );
     }
 }
+
+mod settings_view;
+pub use settings_view::ApplicationSettings;

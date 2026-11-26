@@ -1,8 +1,4 @@
-use std::{
-    collections::{BTreeMap, BTreeSet, HashMap},
-    path::PathBuf,
-    result::Result as StdResult,
-};
+use std::{collections::HashMap, path::PathBuf, result::Result as StdResult};
 
 use anyhow::{Context, anyhow};
 use indexmap::IndexMap;
@@ -840,43 +836,10 @@ pub async fn cleanup_processes(app_handle: AppHandle) -> Result {
     Ok(())
 }
 
-const WEB_STORAGE_KEY_PREFIX: &str = "web:";
-
-/// Keys written by frontend releases before web storage was namespaced.
-/// Keep this list narrow so storage commands never treat internal keys as UI data.
-const LEGACY_WEB_STORAGE_KEYS: &[&str] = &["connections_table_columns", "dashboard-widget-configs"];
-
-fn web_key(key: &str) -> String {
-    format!("{WEB_STORAGE_KEY_PREFIX}{key}")
-}
-
-fn is_legacy_web_storage_key(key: &str) -> bool {
-    LEGACY_WEB_STORAGE_KEYS.contains(&key)
-}
-
-fn get_web_storage_item(
-    storage: &Storage,
-    key: &str,
-) -> Result<crate::core::storage::StorageItem<String>> {
-    let namespaced_key = web_key(key);
-    if is_legacy_web_storage_key(key) {
-        Ok(storage.get_item_with_fallback(&namespaced_key, key)?)
-    } else {
-        Ok(storage.get_item(namespaced_key)?)
-    }
-}
-
-fn remove_web_storage_item(
-    storage: &Storage,
-    key: &str,
-) -> Result<crate::core::storage::StorageRevision> {
-    let namespaced_key = web_key(key);
-    if is_legacy_web_storage_key(key) {
-        Ok(storage.remove_item_with_fallback(namespaced_key, key)?)
-    } else {
-        Ok(storage.remove_item(namespaced_key)?)
-    }
-}
+use chimera_core::storage::frontend::{
+    clear_frontend_storage, frontend_storage_entries, get_web_storage_item,
+    remove_web_storage_item, set_web_storage_item,
+};
 
 pub mod service {
     use super::{ChimeraClient, Result, State};
@@ -1383,7 +1346,7 @@ pub fn get_storage_item(
     crate::e2e_test::fail_storage_operation("get_storage_item", &key)?;
 
     let storage = app_handle.state::<Storage>();
-    get_web_storage_item(&storage, &key)
+    Ok(get_web_storage_item(&storage, &key)?)
 }
 
 #[tauri::command]
@@ -1398,11 +1361,12 @@ pub fn set_storage_item(
     crate::e2e_test::fail_storage_operation("set_storage_item", &key)?;
 
     let storage = app_handle.state::<Storage>();
-    let key = web_key(&key);
-    match expected_revision {
-        Some(expected) => Ok(storage.set_item_if_revision(key, &value, expected)?),
-        None => Ok(storage.set_item(key, &value)?),
-    }
+    Ok(set_web_storage_item(
+        &storage,
+        &key,
+        &value,
+        expected_revision,
+    )?)
 }
 
 #[tauri::command]
@@ -1412,7 +1376,7 @@ pub fn remove_storage_item(
     key: String,
 ) -> Result<crate::core::storage::StorageRevision> {
     let storage = app_handle.state::<Storage>();
-    remove_web_storage_item(&storage, &key)
+    Ok(remove_web_storage_item(&storage, &key)?)
 }
 
 #[tauri::command]
@@ -1542,56 +1506,7 @@ pub mod uwp {
     }
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, specta::Type)]
-pub struct StorageEntry {
-    pub key: String,
-    /// Raw JSON-encoded value string.
-    pub value: String,
-}
-
-fn frontend_storage_entries(items: &[(String, String)]) -> Vec<StorageEntry> {
-    let mut entries = BTreeMap::new();
-    for (raw_key, value) in items {
-        if let Some(key) = raw_key.strip_prefix(WEB_STORAGE_KEY_PREFIX) {
-            entries.insert(key.to_owned(), value.clone());
-        }
-    }
-    for key in LEGACY_WEB_STORAGE_KEYS {
-        if !entries.contains_key(*key) {
-            if let Some((_, value)) = items.iter().find(|(raw_key, _)| raw_key.as_str() == *key) {
-                entries.insert((*key).to_owned(), value.clone());
-            }
-        }
-    }
-    entries
-        .into_iter()
-        .map(|(key, value)| StorageEntry { key, value })
-        .collect()
-}
-
-fn frontend_storage_keys(items: &[(String, String)]) -> Vec<String> {
-    let mut keys: BTreeSet<String> = items
-        .iter()
-        .filter_map(|(raw_key, _)| {
-            raw_key
-                .strip_prefix(WEB_STORAGE_KEY_PREFIX)
-                .map(str::to_owned)
-        })
-        .collect();
-    for key in LEGACY_WEB_STORAGE_KEYS {
-        if items.iter().any(|(raw_key, _)| raw_key.as_str() == *key) {
-            keys.insert((*key).to_owned());
-        }
-    }
-    keys.into_iter().collect()
-}
-
-fn clear_frontend_storage(storage: &Storage) -> Result {
-    for key in frontend_storage_keys(&storage.get_all()?) {
-        remove_web_storage_item(storage, &key)?;
-    }
-    Ok(())
-}
+pub use chimera_core::storage::frontend::StorageEntry;
 
 /// Debug: returns namespaced frontend KV entries and the known pre-namespace UI keys.
 /// Internal storage entries used by other subsystems are excluded.
@@ -1609,7 +1524,7 @@ pub fn get_all_storage_items(app_handle: AppHandle) -> Result<Vec<StorageEntry>>
 #[specta::specta]
 pub fn clear_storage(app_handle: AppHandle) -> Result {
     let storage = app_handle.state::<Storage>();
-    clear_frontend_storage(&storage)
+    Ok(clear_frontend_storage(&storage)?)
 }
 
 #[tauri::command]

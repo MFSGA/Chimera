@@ -194,7 +194,7 @@ fn linked_declarations_match_the_resource_table_and_unlinked_commands_stay_known
         .filter(|c| c.handler.is_some())
         .map(|c| c.metadata.name)
         .collect();
-    assert_eq!(linked.len(), 57);
+    assert_eq!(linked.len(), 65);
     for name in [
         "activate_profile",
         "clash_api_delete_connections",
@@ -211,13 +211,18 @@ fn linked_declarations_match_the_resource_table_and_unlinked_commands_stay_known
         "clash_api_query_dns",
         "clash_api_update_providers_rules",
         "clear_proxy_fixed",
+        "clear_storage",
         "create_profile",
         "create_profile_folder",
         "create_proxy_group_folder",
         "delete_profile",
         "enhance_profiles",
+        "get_all_storage_items",
+        "get_app_config",
+        "get_app_settings",
         "get_clash_config",
         "get_clash_info",
+        "get_clash_settings",
         "get_config_features",
         "get_core_status",
         "get_core_status_summary",
@@ -233,12 +238,14 @@ fn linked_declarations_match_the_resource_table_and_unlinked_commands_stay_known
         "get_proxies",
         "get_proxy_group_icons",
         "get_service_status_summary",
+        "get_storage_item",
         "import_profile",
         "mutate_proxies",
         "patch_profile_metadata",
         "patch_remote_profile_options",
         "probe_direct_egress",
         "read_profile_file",
+        "remove_storage_item",
         "reorder_profile",
         "reorder_profiles_by_list",
         "replace_profile_definition",
@@ -250,6 +257,7 @@ fn linked_declarations_match_the_resource_table_and_unlinked_commands_stay_known
         "set_profile_layout",
         "set_profile_valid_fields",
         "set_proxy_group_layout",
+        "set_storage_item",
         "status_service",
         "update_profile",
         "update_proxy_provider",

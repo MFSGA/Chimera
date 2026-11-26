@@ -78,6 +78,7 @@ pub use runtime::RuntimePaths;
 pub(crate) use chimera_core::client::composition::LegacyBridgeSet;
 
 pub(crate) struct ClientSetupArgs {
+    pub(crate) storage: chimera_core::storage::Storage,
     pub(crate) paths: PathResolver,
     pub runtime_paths: RuntimePaths,
     pub(crate) bundle_metadata: BundleMetadata,
@@ -127,6 +128,7 @@ fn utf8_path(path: std::path::PathBuf) -> anyhow::Result<camino::Utf8PathBuf> {
 }
 
 struct ChimeraClientInner {
+    storage: chimera_core::storage::Storage,
     rpc: std::sync::OnceLock<
         Result<chimera_rpc::registry::UnifiedRpc, chimera_rpc::registry::SetupError>,
     >,
@@ -173,6 +175,7 @@ impl ChimeraClient {
             .get_or_init(|| {
                 UnifiedRpc::new(
                     RpcDependencies {
+                        storage: self.inner.storage.clone(),
                         client: self.inner.shared.clone(),
                         audit: RpcAudit::new(Arc::new(TracingRpcAuditSink)),
                     },
@@ -230,6 +233,7 @@ impl chimera_contracts::net::SelfProxyPortSource for NoSelfProxyPort {
 impl ChimeraClient {
     pub(crate) fn try_new_with_args(args: ClientSetupArgs) -> anyhow::Result<Self> {
         let ClientSetupArgs {
+            storage,
             paths,
             runtime_paths,
             bundle_metadata,
@@ -368,6 +372,7 @@ impl ChimeraClient {
             host_adapters.icon_fetcher,
         );
         let client = Self::with_parts_and_typed_config(
+            storage,
             typed,
             core_lifecycle,
             core,
@@ -503,6 +508,10 @@ impl ChimeraClient {
         .expect("test streams actor should start");
 
         Self::with_parts_and_typed_config(
+            chimera_core::storage::Storage::try_new(
+                &test_profile_dir.path().join("rpc-test-storage.redb"),
+            )
+            .unwrap(),
             typed,
             core_lifecycle,
             core,
@@ -546,6 +555,7 @@ impl ChimeraClient {
     }
 
     fn with_parts_and_typed_config(
+        storage: chimera_core::storage::Storage,
         typed: TypedConfigClients,
         core_lifecycle: RuntimeReconcilerClient,
         core: Arc<dyn CoreLifecyclePort>,
@@ -611,6 +621,7 @@ impl ChimeraClient {
                 system_dns,
             });
         let inner = ChimeraClientInner {
+            storage,
             rpc: std::sync::OnceLock::new(),
             shared,
             clash_config: typed.clash_config,
@@ -1000,6 +1011,140 @@ mod tests {
         )
         .await;
         (client, events)
+    }
+
+    #[tokio::test]
+    async fn shared_rpc_storage_uses_existing_owner_and_namespace() {
+        use chimera_contracts::auth::{Grant, Principal, Role};
+        use chimera_core::storage::{WebStorage, frontend::set_web_storage_item};
+        use chimera_rpc::{audit::RpcTransport, registry::RpcCaller};
+        use chimera_rpc_protocol::{AuthContext, RpcOwner};
+        let (client, _) = recording_client(false).await;
+        let storage = &client.inner.storage;
+        storage.set_item("internal", &"private-internal").unwrap();
+        storage
+            .set_item("connections_table_columns", &"legacy")
+            .unwrap();
+        let rpc = client.rpc().unwrap();
+        let owner = RpcCaller::desktop("test-window");
+        let viewer = RpcCaller::new(
+            AuthContext::new(
+                Principal::Token {
+                    id: "viewer".into(),
+                    name: "viewer".into(),
+                },
+                Grant::Role(Role::Viewer),
+            ),
+            RpcOwner::new("viewer".into()),
+        );
+        let revision = rpc
+            .call(
+                RpcTransport::Local,
+                "set_storage_item",
+                owner.clone(),
+                serde_json::json!({"key":"connections_table_columns","value":"current"}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            storage
+                .get_item::<String>("web:connections_table_columns")
+                .unwrap()
+                .value
+                .as_deref(),
+            Some("current")
+        );
+        let item = rpc
+            .call(
+                RpcTransport::Local,
+                "get_storage_item",
+                owner.clone(),
+                serde_json::json!({"key":"connections_table_columns"}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(item["value"], "current");
+        let expected = serde_json::from_value(revision).unwrap();
+        set_web_storage_item(storage, "other", "new", None).unwrap();
+        assert!(
+            set_web_storage_item(
+                storage,
+                "connections_table_columns",
+                "stale",
+                Some(expected)
+            )
+            .is_err()
+        );
+        let denied = rpc
+            .call(
+                RpcTransport::Local,
+                "get_storage_item",
+                viewer.clone(),
+                serde_json::json!({"key":"connections_table_columns"}),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(denied.kind, "forbidden");
+        let safe = rpc
+            .call(
+                RpcTransport::Local,
+                "get_app_settings",
+                viewer.clone(),
+                serde_json::json!({}),
+            )
+            .await
+            .unwrap();
+        assert!(safe.get("default_latency_test").is_none());
+        let safe_clash = rpc
+            .call(
+                RpcTransport::Local,
+                "get_clash_settings",
+                viewer,
+                serde_json::json!({}),
+            )
+            .await
+            .unwrap();
+        assert!(safe_clash["overrides"].get("secret").is_none());
+        let entries = rpc
+            .call(
+                RpcTransport::TauriIpc,
+                "get_all_storage_items",
+                owner.clone(),
+                serde_json::json!({}),
+            )
+            .await
+            .unwrap();
+        assert!(!entries.to_string().contains("private-internal"));
+        rpc.call(
+            RpcTransport::TauriIpc,
+            "clear_storage",
+            owner,
+            serde_json::json!({}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            storage
+                .get_item::<String>("internal")
+                .unwrap()
+                .value
+                .as_deref(),
+            Some("private-internal")
+        );
+        assert_eq!(
+            storage
+                .get_item::<String>("connections_table_columns")
+                .unwrap()
+                .value,
+            None
+        );
+        assert_eq!(
+            storage
+                .get_item::<String>("web:connections_table_columns")
+                .unwrap()
+                .value,
+            None
+        );
     }
 
     #[tokio::test]

@@ -907,3 +907,5 @@ mod tests {
         assert!(rx.try_recv().is_err());
     }
 }
+
+pub mod frontend;
