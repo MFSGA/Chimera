@@ -2,8 +2,8 @@
 //!
 //! This is a deliberately narrow projection of the pinned upstream
 //! `nyanpasu-runtime-values/src/profiles.rs::ProfilesError`. The document
-//! owner retains its actual error and source chain; only variants with the
-//! same concrete data in Chimera can be published here. Never synthesize an
+//! owner retains its actual error and source chain; category-only cases
+//! keep their real local owner category. Never synthesize an
 //! upstream file/commit cause from a display string.
 
 use chimera_config::profile::{ProfileId, ProfileValidationError};
@@ -68,7 +68,7 @@ pub enum CommitFailureReason {
     RuntimeFailed,
 }
 
-#[derive(Debug, Clone, Serialize, specta::Type)]
+#[derive(Debug, Clone, Serialize, serde::Deserialize, specta::Type)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ProfileFailure {
     ProfileNotFound {
@@ -123,6 +123,19 @@ pub enum ProfileFailure {
     FingerprintDefinition {
         uid: ProfileId,
     },
+    // Actual Chimera owner failure categories, without reconstructing a
+    // specific operational source from the old diagnostic strings.
+    RefreshFailed,
+    ImportFailed,
+    Persist,
+    RuntimeCheck,
+    SourceTransaction,
+    MaterializationFailed,
+    FetchSubscriptionFailed,
+    ProfileContentRejected,
+    Rpc,
+    ProfileSyncJobs,
+    ShuttingDown,
 }
 
 #[cfg(test)]

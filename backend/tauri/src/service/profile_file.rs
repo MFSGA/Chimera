@@ -98,12 +98,7 @@ impl ProfileFileService {
     }
 }
 
-/// Normalize YAML mappings for the legacy profile file view.
-pub fn normalize_yaml_document(content: &str) -> anyhow::Result<String> {
-    let mapping: serde_yaml::Mapping =
-        serde_yaml::from_str(content).context("document is not a YAML mapping")?;
-    serde_yaml::to_string(&mapping).context("failed to reserialize YAML mapping")
-}
+pub use chimera_profile_io::yaml::normalize_yaml_document;
 
 impl ProfileFsPort for ProfileFileService {
     fn read(&self, path: &ManagedProfilePath) -> anyhow::Result<String> {

@@ -3,3 +3,5 @@
 pub mod content_source;
 pub mod fs_service;
 mod materialization;
+
+pub mod yaml;

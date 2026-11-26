@@ -298,7 +298,7 @@ pub enum DegradationReason {
     CleanupDeferred,
     ProfileAutoActivationFailed {
         profile: ProfileId,
-        cause: Arc<ProfilesError>,
+        cause: Arc<chimera_contracts::profiles::command_failure::ProfileFailure>,
     },
     HttpServerUnavailable,
     LocalSocketUnavailable,

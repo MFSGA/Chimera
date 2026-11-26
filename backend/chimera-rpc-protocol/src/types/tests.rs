@@ -342,3 +342,34 @@ fn chimera_runtime_extensions_preserve_wire_evidence() {
         serde_json::from_value(wire.clone()).unwrap();
     assert_eq!(serde_json::to_value(received).unwrap(), wire);
 }
+
+#[test]
+fn committed_auto_activation_failure_receives_the_actual_shared_projection() {
+    use chimera_config::profile::ProfileId;
+    use chimera_contracts::{profiles::command_failure::ProfileFailure, runtime as shared};
+    for failure in [
+        ProfileFailure::Persist,
+        ProfileFailure::VersionConflict {
+            expected: 2,
+            actual: 3,
+            cleanup: None,
+        },
+    ] {
+        let value = shared::MutationOutcome::from_parts(
+            ProfileId("created-profile".into()),
+            vec![shared::Degradation {
+                phase: shared::DegradationPhase::SystemEffect,
+                reason: shared::DegradationReason::ProfileAutoActivationFailed {
+                    profile: ProfileId("created-profile".into()),
+                    cause: Box::new(failure),
+                },
+                message: "activation failed".into(),
+                retryable: true,
+            }],
+        );
+        let json = serde_json::to_value(value).unwrap();
+        let received: super::MutationOutcome<ProfileId> =
+            serde_json::from_value(json.clone()).unwrap();
+        assert_eq!(serde_json::to_value(received).unwrap(), json);
+    }
+}

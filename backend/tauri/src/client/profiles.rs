@@ -3358,9 +3358,7 @@ mod tests {
             }
         ));
         assert!(error.to_string().contains("Core rejected candidate"));
-        let structured = error
-            .typed_failure()
-            .expect("a real rejected verdict is typed");
+        let structured = error.typed_failure();
         assert_eq!(
             serde_json::to_value(structured).unwrap()["reason"],
             "runtime_refused"
@@ -3394,6 +3392,128 @@ mod tests {
                     },
                 },
             ))
+        }
+    }
+
+    /// Real durable add/import through the desktop adapter and shared facade.
+    /// The activation is a second conditional commit, which can independently
+    /// fail; a later selection must never replace the first successful current.
+    #[tokio::test]
+    async fn shared_profile_facade_retains_created_id_and_commit_on_activation_failure() {
+        for refuse_activation in [false, true] {
+            let config_dir = tempdir().unwrap();
+            let data_dir = tempdir().unwrap();
+            let paths = PathResolver::with_base_dirs(
+                config_dir.path().to_path_buf(),
+                data_dir.path().to_path_buf(),
+            );
+            let fs = Arc::new(ProfileFileService::new(paths, Arc::new(NoProxyPort)));
+            let mutations = MutationCoordinator::isolated();
+            let mut fetcher = MockSubscriptionFetcher::new();
+            fetcher.expect_fetch().once().returning(|_, _| {
+                Ok(FetchedSubscription {
+                    content: "proxies: []\n".into(),
+                    filename: Some("server-title".into()),
+                    subscription: SubscriptionInfo::default(),
+                    suggested_update_interval_minutes: None,
+                    content_type: None,
+                    file_name: None,
+                })
+            });
+            let profiles = test_client_new(
+                mutations.clone(),
+                temp_profiles_path(&config_dir),
+                fs.clone(),
+                Arc::new(fetcher),
+                fs,
+            )
+            .await
+            .unwrap();
+            if refuse_activation {
+                mutations.install_test_runtime_gate(Arc::new(UnavailableRuntimeGate));
+            }
+            let (mut client, events) = super::super::tests::recording_client(false).await;
+            Arc::get_mut(&mut client.inner)
+                .unwrap()
+                .shared
+                .test_set_typed_profiles(profiles.clone());
+
+            let created = client
+                .create_profile(add_placeholder_request(), Some("proxies: []\n".into()))
+                .await
+                .unwrap();
+            let id = created.value().clone();
+            let durable = profiles.snapshot();
+            assert!(durable.items.contains_key(&id));
+            let wire = serde_json::to_value(&created).unwrap();
+            assert_eq!(wire["value"], id.0);
+            assert_eq!(
+                wire["commits"].as_array().unwrap().len(),
+                if refuse_activation { 1 } else { 2 }
+            );
+            if refuse_activation {
+                assert!(durable.current.is_none());
+                assert_eq!(wire["status"], "committed_degraded");
+                assert!(
+                    created
+                        .degradations()
+                        .iter()
+                        .any(|item| item.code == "profile_auto_activation_failed")
+                );
+            } else {
+                assert_eq!(durable.current.as_ref(), Some(&id));
+            }
+
+            let imported = client
+                .import_profile_with_transform(
+                    url::Url::parse("https://example.test/sub").unwrap(),
+                    Some("pinned-title".into()),
+                    None,
+                    None,
+                    None,
+                )
+                .await
+                .unwrap();
+            let imported_id = imported.value().clone();
+            let durable = profiles.snapshot();
+            assert_eq!(durable.items.len(), 2);
+            assert_eq!(durable.items[&imported_id].metadata.name, "pinned-title");
+            assert!(durable.items[&imported_id].metadata.custom_name);
+            assert_eq!(
+                serde_json::to_value(&imported).unwrap()["commits"]
+                    .as_array()
+                    .unwrap()
+                    .len(),
+                1
+            );
+            if refuse_activation {
+                assert!(durable.current.is_none());
+                assert!(
+                    imported
+                        .degradations()
+                        .iter()
+                        .any(|item| item.code == "profile_auto_activation_failed")
+                );
+            } else {
+                assert_eq!(durable.current.as_ref(), Some(&id));
+                assert!(imported.degradations().is_empty());
+            }
+            assert_eq!(
+                events
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .filter(|e| **e == "refresh-profiles")
+                    .count(),
+                if refuse_activation { 2 } else { 3 }
+            );
+            let persisted: Profiles = serde_yaml::from_str(
+                &std::fs::read_to_string(temp_profiles_path(&config_dir)).unwrap(),
+            )
+            .unwrap();
+            assert!(persisted.items.contains_key(&id));
+            assert!(persisted.items.contains_key(&imported_id));
+            assert_eq!(persisted.current, durable.current);
         }
     }
 

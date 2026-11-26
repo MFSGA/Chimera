@@ -81,6 +81,21 @@ pub(crate) trait UiEventSink: Send + Sync + 'static {
     }
 }
 
+/// Adapt the shared client to the real desktop notification port.
+pub(crate) struct SharedUiEventSink(pub Arc<dyn UiEventSink>);
+
+impl chimera_core::client::event_sink::UiEventSink for SharedUiEventSink {
+    fn state_changed(&self, state: StateChanged) {
+        match state {
+            StateChanged::Profiles { ref files } if files.is_empty() => self.0.refresh_profiles(),
+            StateChanged::RuntimeTransformDiagnostics => {
+                self.0.refresh_runtime_transform_diagnostics()
+            }
+            other => self.0.state_changed(other),
+        }
+    }
+}
+
 /// Every committed domain change notifies the UI independently of the caller.
 pub(crate) struct UiCommitNotifications(pub Arc<dyn UiEventSink>);
 

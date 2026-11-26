@@ -159,103 +159,108 @@ pub enum ProfilesError {
 }
 
 impl ProfilesError {
-    /// Project only real, shape-preserving profile command failures into the
-    /// shared Runtime Values boundary. The remaining variants keep their
-    /// original Tauri owner and source chain; never fabricate a file, commit
-    /// or materialization reason from a diagnostic string.
-    pub fn typed_failure(&self) -> Option<ProfileFailure> {
+    /// Project actual source categories and their available typed data.
+    /// Legacy errors without a typed operational source retain only their
+    /// actual owner category, never an invented filesystem or commit cause.
+    pub fn typed_failure(&self) -> ProfileFailure {
         match self {
-            Self::ProfileNotFound(uid) => {
-                Some(ProfileFailure::ProfileNotFound { uid: uid.clone() })
-            }
-            Self::ValidationFailed(errors) => Some(ProfileFailure::ValidationFailed {
+            Self::ProfileNotFound(uid) => ProfileFailure::ProfileNotFound { uid: uid.clone() },
+            Self::ValidationFailed(errors) => ProfileFailure::ValidationFailed {
                 errors: errors.clone(),
-            }),
-            Self::VersionConflict { expected, actual } => Some(ProfileFailure::VersionConflict {
+            },
+            Self::VersionConflict { expected, actual } => ProfileFailure::VersionConflict {
                 expected: *expected,
                 actual: *actual,
                 cleanup: None,
-            }),
+            },
             Self::ConflictCleanup {
                 expected,
                 actual,
                 cleanup,
                 ..
-            } => Some(ProfileFailure::VersionConflict {
+            } => ProfileFailure::VersionConflict {
                 expected: *expected,
                 actual: *actual,
                 cleanup: Some(cleanup.clone()),
-            }),
-            Self::Revision(ProfileRevisionError::Overflow) => {
-                Some(ProfileFailure::RevisionOverflow)
-            }
+            },
+            Self::Revision(ProfileRevisionError::Overflow) => ProfileFailure::RevisionOverflow,
             Self::SourceTransaction {
                 reason: Some(reason),
                 ..
-            } => Some(ProfileFailure::Commit { reason: *reason }),
+            } => ProfileFailure::Commit { reason: *reason },
             Self::Commit {
                 source: CommitAborted::RuntimeRefused { .. },
-            } => Some(ProfileFailure::Commit {
+            } => ProfileFailure::Commit {
                 reason: CommitFailureReason::RuntimeRefused,
-            }),
+            },
             Self::Commit {
                 source: CommitAborted::RuntimeFailed { .. },
-            } => Some(ProfileFailure::Commit {
+            } => ProfileFailure::Commit {
                 reason: CommitFailureReason::RuntimeFailed,
-            }),
-            Self::ProfileHasNoFile => Some(ProfileFailure::ProfileHasNoFile),
-            Self::NotARemoteProfile => Some(ProfileFailure::NotARemoteProfile),
+            },
+            Self::ProfileHasNoFile => ProfileFailure::ProfileHasNoFile,
+            Self::NotARemoteProfile => ProfileFailure::NotARemoteProfile,
             Self::ProfileInUse {
                 uid,
                 referrers,
                 current,
                 global_transforms,
-            } => Some(ProfileFailure::ProfileInUse {
+            } => ProfileFailure::ProfileInUse {
                 uid: uid.clone(),
                 referrers: referrers.clone(),
                 current: *current,
                 global_transforms: *global_transforms,
-            }),
+            },
             Self::ReorderListSizeMismatch { expected, got } => {
-                Some(ProfileFailure::ReorderListSizeMismatch {
+                ProfileFailure::ReorderListSizeMismatch {
                     expected: *expected,
                     got: *got,
-                })
+                }
             }
             Self::ReorderListDuplicate { uid } => {
-                Some(ProfileFailure::ReorderListDuplicate { uid: uid.clone() })
+                ProfileFailure::ReorderListDuplicate { uid: uid.clone() }
             }
             Self::ProfileFileNotWritable { uid } => {
-                Some(ProfileFailure::ProfileFileNotWritable { uid: uid.clone() })
+                ProfileFailure::ProfileFileNotWritable { uid: uid.clone() }
             }
             Self::ProfileIdCollision { uid } => {
-                Some(ProfileFailure::ProfileIdCollision { uid: uid.clone() })
+                ProfileFailure::ProfileIdCollision { uid: uid.clone() }
             }
             Self::RefreshInProgress { uid } => {
-                Some(ProfileFailure::RefreshInProgress { uid: uid.clone() })
+                ProfileFailure::RefreshInProgress { uid: uid.clone() }
             }
             Self::ProfileDeletedDuringRefresh { uid } => {
-                Some(ProfileFailure::ProfileDeletedDuringRefresh { uid: uid.clone() })
+                ProfileFailure::ProfileDeletedDuringRefresh { uid: uid.clone() }
             }
             Self::ProfileChangedDuringRefresh { uid } => {
-                Some(ProfileFailure::ProfileChangedDuringRefresh { uid: uid.clone() })
+                ProfileFailure::ProfileChangedDuringRefresh { uid: uid.clone() }
             }
             Self::FingerprintDefinition { uid, .. } => {
-                Some(ProfileFailure::FingerprintDefinition { uid: uid.clone() })
+                ProfileFailure::FingerprintDefinition { uid: uid.clone() }
             }
-            Self::RefreshFailed { .. }
-            | Self::ImportFailed { .. }
-            | Self::Persist(_)
-            | Self::RuntimeCheck(_)
-            | Self::Commit { .. }
-            | Self::SourceTransaction { reason: None, .. }
-            | Self::Materialization(_)
-            | Self::MaterializationFile { .. }
-            | Self::FetchSubscription { .. }
-            | Self::ProfileContentRejected { .. }
-            | Self::Rpc(_)
-            | Self::ProfileSyncJobs(_)
-            | Self::ShuttingDown => None,
+            Self::Commit {
+                source: CommitAborted::WriteConfig { .. },
+            } => ProfileFailure::Commit {
+                reason: CommitFailureReason::WriteConfig,
+            },
+            Self::Commit {
+                source: CommitAborted::RecoverAfterWriteFailure { .. },
+            } => ProfileFailure::Commit {
+                reason: CommitFailureReason::RecoverAfterWriteFailure,
+            },
+            Self::RefreshFailed { .. } => ProfileFailure::RefreshFailed,
+            Self::ImportFailed { .. } => ProfileFailure::ImportFailed,
+            Self::Persist(_) => ProfileFailure::Persist,
+            Self::RuntimeCheck(_) => ProfileFailure::RuntimeCheck,
+            Self::SourceTransaction { reason: None, .. } => ProfileFailure::SourceTransaction,
+            Self::Materialization(_) | Self::MaterializationFile { .. } => {
+                ProfileFailure::MaterializationFailed
+            }
+            Self::FetchSubscription { .. } => ProfileFailure::FetchSubscriptionFailed,
+            Self::ProfileContentRejected { .. } => ProfileFailure::ProfileContentRejected,
+            Self::Rpc(_) => ProfileFailure::Rpc,
+            Self::ProfileSyncJobs(_) => ProfileFailure::ProfileSyncJobs,
+            Self::ShuttingDown => ProfileFailure::ShuttingDown,
         }
     }
 }
@@ -2991,7 +2996,7 @@ mod tests {
         ));
         assert!(source.downcast_ref::<Arc<RuntimeError>>().is_some());
         assert_eq!(
-            serde_json::to_value(&refusal.typed_failure().unwrap()).unwrap()["reason"],
+            serde_json::to_value(&refusal.typed_failure()).unwrap()["reason"],
             "runtime_refused"
         );
 
@@ -3058,7 +3063,7 @@ mod tests {
             }
         ));
         assert_eq!(
-            serde_json::to_value(error.typed_failure().unwrap()).unwrap()["reason"],
+            serde_json::to_value(error.typed_failure()).unwrap()["reason"],
             "runtime_failed"
         );
     }
@@ -3090,7 +3095,7 @@ mod tests {
             ),
         ];
         for (error, expected_kind) in cases {
-            let wire = serde_json::to_value(error.typed_failure().unwrap()).unwrap();
+            let wire = serde_json::to_value(error.typed_failure()).unwrap();
             assert_eq!(wire["kind"], expected_kind);
         }
     }
@@ -3121,7 +3126,7 @@ mod tests {
                 cleanup: None,
                 cleanup_failures: Vec::new(),
             };
-            let typed = failure.typed_failure().expect("actual commit category");
+            let typed = failure.typed_failure();
             let wire = serde_json::to_value(typed).unwrap();
             assert_eq!(wire["kind"], "commit");
             assert_eq!(wire["reason"], serde_json::to_value(expected).unwrap(),);
@@ -3163,9 +3168,9 @@ mod tests {
         };
         assert!(matches!(
             refused.typed_failure(),
-            Some(ProfileFailure::Commit {
+            ProfileFailure::Commit {
                 reason: CommitFailureReason::RecoverAfterWriteFailure
-            })
+            }
         ));
     }
 
@@ -3201,7 +3206,7 @@ mod tests {
                 .all(|error| error.is::<ProfileFileError>())
         );
         assert_eq!(
-            serde_json::to_value(conflict.typed_failure().unwrap()).unwrap()["cleanup"],
+            serde_json::to_value(conflict.typed_failure()).unwrap()["cleanup"],
             combined
         );
     }
@@ -3212,7 +3217,7 @@ mod tests {
         let error = ProfilesError::ValidationFailed(vec![ProfileValidationError::CurrentNotFound(
             id.clone(),
         )]);
-        let typed = error.typed_failure().expect("typed validation reason");
+        let typed = error.typed_failure();
         let wire = serde_json::to_value(typed).unwrap();
         assert_eq!(wire["kind"], "validation_failed");
         assert_eq!(wire["errors"][0]["CurrentNotFound"], "missing");
@@ -3223,15 +3228,17 @@ mod tests {
             cleanup: "staging recovery needs reconciliation".into(),
             cleanup_failures: vec![anyhow::anyhow!("staging recovery needs reconciliation")],
         };
-        let wire = serde_json::to_value(conflict.typed_failure().unwrap()).unwrap();
+        let wire = serde_json::to_value(conflict.typed_failure()).unwrap();
         assert_eq!(wire["kind"], "version_conflict");
         assert_eq!(wire["expected"], 10);
         assert_eq!(wire["actual"], 11);
         assert_eq!(wire["cleanup"], "staging recovery needs reconciliation");
-        assert!(
-            ProfilesError::Persist("unspecified".into())
-                .typed_failure()
-                .is_none()
+        assert_eq!(
+            serde_json::to_value(
+                ProfilesError::Persist("private diagnostic sentinel".into()).typed_failure()
+            )
+            .unwrap(),
+            serde_json::json!({"kind": "persist"})
         );
     }
 

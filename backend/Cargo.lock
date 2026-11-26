@@ -1346,6 +1346,7 @@ dependencies = [
  "chimera-panics",
  "chimera-paths",
  "chimera-persistence",
+ "chimera-profile-io",
  "chimera-profile-transform",
  "chimera-runtime-values",
  "chimera-state-engine",

@@ -65,4 +65,6 @@ pub mod traffic;
 pub mod host_adapters;
 
 mod facade;
-pub use facade::{ChimeraClient, ClientParts, WeakChimeraClient};
+pub use facade::{
+    ChimeraClient, ClientParts, WeakChimeraClient, auto_activation_failure_degradation,
+};

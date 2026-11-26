@@ -38,7 +38,13 @@ use chimera_traffic::{
 use std::sync::Arc;
 use tokio::sync::watch;
 
+mod profile_operations;
+pub use profile_operations::auto_activation_failure_degradation;
+
 pub struct ClientParts {
+    pub profile_fs: Arc<dyn crate::state::profiles::ports::ProfileFsPort>,
+    pub profile_paths: chimera_profile_io::fs_service::ProfileFileService,
+    pub ui_sink: Arc<dyn super::event_sink::UiEventSink>,
     pub application: ApplicationClient,
     pub session_state: SessionStateClient,
     pub app_updater: Option<AppUpdateClient>,
@@ -77,6 +83,9 @@ impl WeakChimeraClient {
 }
 
 struct ChimeraClientInner {
+    profile_fs: Arc<dyn crate::state::profiles::ports::ProfileFsPort>,
+    profile_paths: chimera_profile_io::fs_service::ProfileFileService,
+    ui_sink: Arc<dyn super::event_sink::UiEventSink>,
     application: ApplicationClient,
     session_state: SessionStateClient,
     app_updater: Option<AppUpdateClient>,
@@ -125,6 +134,9 @@ impl ChimeraClient {
         ));
         Self {
             inner: Arc::new(ChimeraClientInner {
+                profile_fs: parts.profile_fs,
+                profile_paths: parts.profile_paths,
+                ui_sink: parts.ui_sink,
                 application: parts.application,
                 session_state: parts.session_state,
                 app_updater: parts.app_updater,
@@ -205,6 +217,13 @@ impl ChimeraClient {
             .expect("one shared fixture owner")
             .ref_facade = value;
     }
+    #[cfg(feature = "test-support")]
+    pub fn test_set_typed_profiles(&mut self, value: profiles::ProfilesClient) {
+        Arc::get_mut(&mut self.inner)
+            .expect("one shared fixture owner")
+            .typed_profiles = Some(value);
+    }
+
     #[cfg(feature = "test-support")]
     pub fn test_set_application(&mut self, value: ApplicationClient) {
         let inner = Arc::get_mut(&mut self.inner).expect("one shared fixture owner");
@@ -706,7 +725,14 @@ mod tests {
             .returning(|_, _, _| Some(13));
         let mut dns = MockSystemDnsCache::new();
         dns.expect_flush().once().returning(|| Ok(()));
+        struct TestEvents;
+        impl crate::client::event_sink::UiEventSink for TestEvents {
+            fn state_changed(&self, _: crate::client::event_sink::StateChanged) {}
+        }
         let client = ChimeraClient::with_parts(ClientParts {
+            ui_sink: Arc::new(TestEvents),
+            profile_fs: Arc::new(crate::state::profiles::ports::MockProfileFsPort::new()),
+            profile_paths: chimera_profile_io::fs_service::ProfileFileService::new(paths.clone()),
             application: ApplicationClient::legacy().unwrap(),
             session_state: SessionStateClient::legacy().unwrap(),
             clash_config: ClashConfigClient::legacy().unwrap(),

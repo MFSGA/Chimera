@@ -36,9 +36,8 @@ use std::sync::Arc;
 
 use anyhow::{Context as _, anyhow};
 use chimera_config::profile::{
-    FolderId, NewProfileRequest, ProfileDefinition, ProfileId, ProfileLayout, ProfileMetadata,
-    ProfileMetadataPatch, ProfileSource, RemoteProfileOptions, RemoteProfileOptionsPatch,
-    TransformKind,
+    FolderId, NewProfileRequest, ProfileDefinition, ProfileId, ProfileLayout, ProfileMetadataPatch,
+    RemoteProfileOptionsPatch, TransformKind,
 };
 use chimera_contracts::{
     bundle_metadata::BundleMetadata,
@@ -48,9 +47,7 @@ use chimera_contracts::{
 use chimera_core::{
     actor_v2::{CoreClient as CoreClientV2, service_actor::ServiceClient},
     client::app_update::{self, AppUpdateClient},
-    profile_import::url_derived_name,
 };
-use struct_patch::Patch as _;
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub(crate) use self::application::SystemProxyMutation;
@@ -72,10 +69,9 @@ pub(crate) use self::{
 
 #[cfg(test)]
 use crate::service::profile_file::ProfileFileService;
-use crate::{
-    state::profiles::{CommitReport, ProfilesError, ReorderOp},
-    utils::path::PathResolver,
-};
+#[cfg(test)]
+use crate::state::profiles::ProfilesError;
+use crate::utils::path::PathResolver;
 
 pub use runtime::RuntimePaths;
 
@@ -137,8 +133,6 @@ struct ChimeraClientInner {
     /// The one candidate checker shared by the Profiles gate and legacy
     /// Clash read-only preflight during the staged ref source cutover.
     checked_gate: Option<Arc<reconciler::check::CandidateCheck>>,
-    profile_fs: Arc<dyn chimera_core::state::profiles::ports::ProfileFsPort>,
-    profile_paths: chimera_profile_io::fs_service::ProfileFileService,
     ui_sink: Arc<dyn UiEventSink>,
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     effects: effects::actor::EffectsClient,
@@ -531,6 +525,9 @@ impl ChimeraClient {
     ) -> Self {
         let shared =
             chimera_core::client::ChimeraClient::with_parts(chimera_core::client::ClientParts {
+                ui_sink: Arc::new(event_sink::SharedUiEventSink(ui_sink.clone())),
+                profile_fs,
+                profile_paths,
                 application: typed.application,
                 session_state: typed.session_state,
                 clash_config: (*typed.clash_config).clone(),
@@ -559,8 +556,6 @@ impl ChimeraClient {
             clash_config: typed.clash_config,
             core_lifecycle,
             checked_gate,
-            profile_fs,
-            profile_paths,
             ui_sink,
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
             effects,
@@ -584,132 +579,17 @@ impl ChimeraClient {
 }
 
 impl ChimeraClient {
-    fn refresh_profiles(&self) {
-        self.inner.shared.proxies().invalidate();
-        self.inner.ui_sink.refresh_profiles();
-    }
-
-    async fn collect_post_commit_degradations(&self, report: &CommitReport) -> Vec<Degradation> {
-        let mut degradations = report
-            .degradations
-            .iter()
-            .map(|degradation| {
-                tracing::warn!(
-                    phase = ?degradation.phase,
-                    code = ?degradation.code,
-                    retryable = degradation.code.retryable(),
-                    message = %degradation.message,
-                    "profile commit completed with a degraded side effect",
-                );
-                application_workflow::profiles::map_profile_degradation(degradation)
-            })
-            .collect::<Vec<_>>();
-        degradations.extend(
-            report
-                .runtime_degradations
-                .iter()
-                .cloned()
-                .map(Degradation::from_shared),
-        );
-        degradations
-    }
-
-    async fn after_commit(&self, report: &CommitReport) -> MutationOutcome<()> {
-        MutationOutcome::from_parts((), self.collect_post_commit_degradations(report).await)
-            .with_commit(report.receipt.clone())
-    }
-
-    fn auto_activation_failure_degradation(error: &impl std::fmt::Display) -> Degradation {
-        tracing::warn!(
-            %error,
-            "profile auto-activation failed after commit; retaining committed profile id",
-        );
-        Degradation {
-            phase: DegradationPhase::SystemEffect,
-            code: "profile_auto_activation_failed".into(),
-            message: error.to_string(),
-            retryable: true,
-        }
-    }
-
-    /// Match ref's post-commit profile activation reason only when the
-    /// actual ProfilesActor failure supplies a lossless shared cause. Other
-    /// errors (including a missing ProfilesClient) retain the legacy flat
-    /// diagnostic instead of impersonating an upstream ProfilesError.
-    fn typed_auto_activation_failure(
-        profile: &ProfileId,
-        error: &ProfilesError,
-    ) -> Option<chimera_contracts::runtime::Degradation> {
-        use chimera_contracts::runtime::{
-            Degradation as SharedDegradation, DegradationPhase as SharedPhase,
-            DegradationReason as SharedReason,
-        };
-
-        Some(SharedDegradation {
-            phase: SharedPhase::SystemEffect,
-            reason: SharedReason::ProfileAutoActivationFailed {
-                profile: profile.clone(),
-                cause: Box::new(error.typed_failure()?),
-            },
-            message: error.to_string(),
-            retryable: true,
-        })
-    }
-
-    async fn try_auto_activate_if_none(&self, uid: ProfileId) -> MutationOutcome<()> {
-        let profiles = match self.profiles_client() {
-            Ok(profiles) => profiles.clone(),
-            Err(error) => {
-                return MutationOutcome::from_parts(
-                    (),
-                    vec![Self::auto_activation_failure_degradation(&error)],
-                );
-            }
-        };
-        match profiles.set_current_if_none(uid.clone()).await {
-            Ok(None) => MutationOutcome::from_parts((), Vec::new()),
-            Ok(Some(report)) => {
-                self.refresh_profiles();
-                self.after_commit(&report).await
-            }
-            Err(error) => {
-                let degradation = if let Some(typed) =
-                    Self::typed_auto_activation_failure(&uid, &error)
-                {
-                    tracing::warn!(%error, profile = %uid, "typed profile auto-activation failed after commit");
-                    Degradation::from_shared(typed)
-                } else {
-                    Self::auto_activation_failure_degradation(&error)
-                };
-                MutationOutcome::from_parts((), vec![degradation])
-            }
-        }
-    }
-
     pub(crate) async fn add_profile(
         &self,
         request: NewProfileRequest,
         initial_file: Option<String>,
     ) -> anyhow::Result<MutationOutcome<ProfileId>> {
-        if matches!(
-            request.definition.source(),
-            Some(ProfileSource::Remote { .. })
-        ) {
-            return Err(anyhow!(
-                "remote profiles must be created via import_profile"
-            ));
-        }
-        let report = self.profiles_client()?.add(request, initial_file).await?;
-        let created = report
-            .created
-            .clone()
-            .ok_or_else(|| anyhow!("profile add committed without a created uid"))?;
-        self.refresh_profiles();
-        Ok(MutationOutcome::from_parts(
-            created,
-            self.collect_post_commit_degradations(&report).await,
-        )
-        .with_commit(report.receipt.clone()))
+        Ok(self
+            .inner
+            .shared
+            .add_profile(request, initial_file)
+            .await?
+            .into())
     }
 
     pub(crate) async fn create_profile(
@@ -717,13 +597,12 @@ impl ChimeraClient {
         request: NewProfileRequest,
         initial_file: Option<String>,
     ) -> anyhow::Result<MutationOutcome<ProfileId>> {
-        let is_config = matches!(request.definition, ProfileDefinition::Config { .. });
-        let mut outcome = self.add_profile(request, initial_file).await?;
-        if is_config {
-            let uid = outcome.value().clone();
-            outcome = outcome.append_commit_result(self.try_auto_activate_if_none(uid).await);
-        }
-        Ok(outcome)
+        Ok(self
+            .inner
+            .shared
+            .create_profile(request, initial_file)
+            .await?
+            .into())
     }
 
     /// Download and suggest an import kind without committing a source document.
@@ -734,11 +613,7 @@ impl ChimeraClient {
         url: url::Url,
         options: Option<RemoteProfileOptionsPatch>,
     ) -> anyhow::Result<chimera_core::profile_import::ProfileUrlProbe> {
-        let mut option = RemoteProfileOptions::default();
-        if let Some(patch) = options {
-            option.apply(patch);
-        }
-        Ok(self.profiles_client()?.probe(url, option).await?)
+        Ok(self.inner.shared.probe_profile_url(url, options).await?)
     }
 
     pub(crate) async fn import_profile(
@@ -770,56 +645,19 @@ impl ChimeraClient {
         transform: Option<TransformKind>,
         folder: Option<FolderId>,
     ) -> anyhow::Result<MutationOutcome<ProfileId>> {
-        let update_interval_explicit = patch
-            .as_ref()
-            .and_then(|patch| patch.update_interval_minutes)
-            .is_some();
-        let (name, custom_name) = match name {
-            Some(name) if !name.trim().is_empty() => (name, true),
-            _ => (url_derived_name(&url), false),
-        };
-        let mut options = RemoteProfileOptions::default();
-        if let Some(patch) = patch {
-            options.apply(patch);
-        }
-        let report = self
-            .profiles_client()?
-            .import_with_transform(
-                url,
-                transform,
-                ProfileMetadata {
-                    name,
-                    desc: None,
-                    custom_name,
-                },
-                options,
-                update_interval_explicit,
-                folder,
-            )
-            .await?;
-        let created = report
-            .created
-            .clone()
-            .ok_or_else(|| anyhow!("profile import committed without a created uid"))?;
-        self.refresh_profiles();
-        let outcome = MutationOutcome::from_parts(
-            created.clone(),
-            self.collect_post_commit_degradations(&report).await,
-        )
-        .with_commit(report.receipt.clone());
-        if transform.is_some() {
-            return Ok(outcome);
-        }
-        Ok(outcome.append_commit_result(self.try_auto_activate_if_none(created).await))
+        Ok(self
+            .inner
+            .shared
+            .import_profile_with_transform(url, name, patch, transform, folder)
+            .await?
+            .into())
     }
 
     pub(crate) async fn delete_profile(
         &self,
         uid: ProfileId,
     ) -> anyhow::Result<MutationOutcome<()>> {
-        let report = self.profiles_client()?.delete(uid).await?;
-        self.refresh_profiles();
-        Ok(self.after_commit(&report).await)
+        Ok(self.inner.shared.delete_profile(uid).await?.into())
     }
 
     pub(crate) async fn reorder_profile(
@@ -827,24 +665,24 @@ impl ChimeraClient {
         active: ProfileId,
         over: ProfileId,
     ) -> anyhow::Result<MutationOutcome<()>> {
-        let report = self
-            .profiles_client()?
-            .reorder(ReorderOp::Move { active, over })
-            .await?;
-        self.refresh_profiles();
-        Ok(self.after_commit(&report).await)
+        Ok(self
+            .inner
+            .shared
+            .reorder_profile(active, over)
+            .await?
+            .into())
     }
 
     pub(crate) async fn reorder_profiles_by_list(
         &self,
         list: Vec<ProfileId>,
     ) -> anyhow::Result<MutationOutcome<()>> {
-        let report = self
-            .profiles_client()?
-            .reorder(ReorderOp::ByList(list))
-            .await?;
-        self.refresh_profiles();
-        Ok(self.after_commit(&report).await)
+        Ok(self
+            .inner
+            .shared
+            .reorder_profiles_by_list(list)
+            .await?
+            .into())
     }
 
     /// Atomically persist the Profile folders and Config display order.
@@ -852,9 +690,7 @@ impl ChimeraClient {
         &self,
         layout: ProfileLayout,
     ) -> anyhow::Result<MutationOutcome<()>> {
-        let report = self.profiles_client()?.set_layout(layout).await?;
-        self.refresh_profiles();
-        Ok(self.after_commit(&report).await)
+        Ok(self.inner.shared.set_profile_layout(layout).await?.into())
     }
 
     /// Create a folder and move Config members into it without a second write.
@@ -863,13 +699,12 @@ impl ChimeraClient {
         name: String,
         members: Vec<ProfileId>,
     ) -> anyhow::Result<MutationOutcome<FolderId>> {
-        let (report, folder) = self.profiles_client()?.create_folder(name, members).await?;
-        self.refresh_profiles();
-        Ok(MutationOutcome::from_parts(
-            folder,
-            self.collect_post_commit_degradations(&report).await,
-        )
-        .with_commit(report.receipt.clone()))
+        Ok(self
+            .inner
+            .shared
+            .create_profile_folder(name, members)
+            .await?
+            .into())
     }
 
     /// Presentation-only proxy group ordering for one Config Profile.
@@ -878,12 +713,12 @@ impl ChimeraClient {
         profile: ProfileId,
         layout: chimera_config::profile::ProxyGroupLayout,
     ) -> anyhow::Result<MutationOutcome<()>> {
-        let report = self
-            .profiles_client()?
+        Ok(self
+            .inner
+            .shared
             .set_proxy_group_layout(profile, layout)
-            .await?;
-        self.refresh_profiles();
-        Ok(self.after_commit(&report).await)
+            .await?
+            .into())
     }
 
     pub(crate) async fn create_proxy_group_folder(
@@ -892,16 +727,12 @@ impl ChimeraClient {
         name: String,
         members: Vec<String>,
     ) -> anyhow::Result<MutationOutcome<FolderId>> {
-        let (report, folder) = self
-            .profiles_client()?
+        Ok(self
+            .inner
+            .shared
             .create_proxy_group_folder(profile, name, members)
-            .await?;
-        self.refresh_profiles();
-        Ok(MutationOutcome::from_parts(
-            folder,
-            self.collect_post_commit_degradations(&report).await,
-        )
-        .with_commit(report.receipt.clone()))
+            .await?
+            .into())
     }
 
     pub(crate) async fn refresh_profile(
@@ -909,9 +740,7 @@ impl ChimeraClient {
         uid: ProfileId,
         patch: Option<RemoteProfileOptionsPatch>,
     ) -> anyhow::Result<MutationOutcome<()>> {
-        let report = self.profiles_client()?.refresh(uid, patch).await?;
-        self.refresh_profiles();
-        Ok(self.after_commit(&report).await)
+        Ok(self.inner.shared.refresh_profile(uid, patch).await?.into())
     }
 
     pub(crate) async fn patch_profile_metadata(
@@ -919,9 +748,12 @@ impl ChimeraClient {
         uid: ProfileId,
         patch: ProfileMetadataPatch,
     ) -> anyhow::Result<MutationOutcome<()>> {
-        let report = self.profiles_client()?.patch_metadata(uid, patch).await?;
-        self.refresh_profiles();
-        Ok(self.after_commit(&report).await)
+        Ok(self
+            .inner
+            .shared
+            .patch_profile_metadata(uid, patch)
+            .await?
+            .into())
     }
 
     pub(crate) async fn patch_remote_profile_options(
@@ -929,12 +761,12 @@ impl ChimeraClient {
         uid: ProfileId,
         patch: RemoteProfileOptionsPatch,
     ) -> anyhow::Result<MutationOutcome<()>> {
-        let report = self
-            .profiles_client()?
-            .patch_remote_options(uid, patch)
-            .await?;
-        self.refresh_profiles();
-        Ok(self.after_commit(&report).await)
+        Ok(self
+            .inner
+            .shared
+            .patch_remote_profile_options(uid, patch)
+            .await?
+            .into())
     }
 
     pub(crate) async fn replace_profile_definition(
@@ -942,52 +774,38 @@ impl ChimeraClient {
         uid: ProfileId,
         definition: ProfileDefinition,
     ) -> anyhow::Result<MutationOutcome<()>> {
-        let report = match self
-            .profiles_client()?
-            .replace_definition(uid, definition)
-            .await
-        {
-            Ok(report) => report,
-            Err(error) => {
-                self.inner.ui_sink.refresh_runtime_transform_diagnostics();
-                return Err(error.into());
-            }
-        };
-        self.refresh_profiles();
-        Ok(self.after_commit(&report).await)
+        Ok(self
+            .inner
+            .shared
+            .replace_profile_definition(uid, definition)
+            .await?
+            .into())
     }
 
     pub(crate) async fn activate_profile(
         &self,
         uid: Option<ProfileId>,
     ) -> anyhow::Result<MutationOutcome<()>> {
-        let report = self.profiles_client()?.set_current(uid).await?;
-        self.refresh_profiles();
-        Ok(self.after_commit(&report).await)
+        Ok(self.inner.shared.activate_profile(uid).await?.into())
     }
 
     pub(crate) async fn set_global_transforms(
         &self,
         ids: Vec<ProfileId>,
     ) -> anyhow::Result<MutationOutcome<()>> {
-        let report = match self.profiles_client()?.set_global_transforms(ids).await {
-            Ok(report) => report,
-            Err(error) => {
-                self.inner.ui_sink.refresh_runtime_transform_diagnostics();
-                return Err(error.into());
-            }
-        };
-        self.refresh_profiles();
-        Ok(self.after_commit(&report).await)
+        Ok(self.inner.shared.set_global_transforms(ids).await?.into())
     }
 
     pub(crate) async fn set_profile_valid_fields(
         &self,
         fields: Vec<String>,
     ) -> anyhow::Result<MutationOutcome<()>> {
-        let report = self.profiles_client()?.set_valid_fields(fields).await?;
-        self.refresh_profiles();
-        Ok(self.after_commit(&report).await)
+        Ok(self
+            .inner
+            .shared
+            .set_profile_valid_fields(fields)
+            .await?
+            .into())
     }
 
     pub(crate) async fn save_profile_file(
@@ -995,62 +813,7 @@ impl ChimeraClient {
         uid: ProfileId,
         data: String,
     ) -> anyhow::Result<MutationOutcome<()>> {
-        let report = match self.profiles_client()?.save_file(uid, data).await {
-            Ok(report) => report,
-            Err(error) => {
-                self.inner.ui_sink.refresh_runtime_transform_diagnostics();
-                return Err(error.into());
-            }
-        };
-        self.refresh_profiles();
-        Ok(self.after_commit(&report).await)
-    }
-
-    pub(crate) async fn read_profile_file(&self, uid: ProfileId) -> anyhow::Result<String> {
-        let snapshot = self.profiles_client()?.snapshot();
-        let item = snapshot
-            .items
-            .get(&uid)
-            .ok_or(ProfilesError::ProfileNotFound(uid))?;
-        let source = item
-            .definition
-            .source()
-            .ok_or(ProfilesError::ProfileHasNoFile)?;
-        let raw = crate::state::profiles::ports::ProfileFsPort::read(
-            self.inner.profile_fs.as_ref(),
-            &source.materialized().file,
-        )?;
-        profile_file_text_for_editor(raw, item.definition.is_config())
-    }
-
-    pub(crate) async fn get_profile_materialized_path(
-        &self,
-        uid: ProfileId,
-    ) -> anyhow::Result<std::path::PathBuf> {
-        let snapshot = self.profiles_client()?.snapshot();
-        let item = snapshot
-            .items
-            .get(&uid)
-            .ok_or(ProfilesError::ProfileNotFound(uid))?;
-        let source = item
-            .definition
-            .source()
-            .ok_or(ProfilesError::ProfileHasNoFile)?;
-        self.inner
-            .profile_paths
-            .resolve_path(&source.materialized().file)
-            .map_err(Into::into)
-    }
-}
-
-/// REF parity: config Profiles are YAML mappings, but transforms and scripts
-/// must be returned byte-for-byte as text (even when they are not valid YAML).
-fn profile_file_text_for_editor(raw: String, is_config: bool) -> anyhow::Result<String> {
-    if is_config {
-        crate::service::profile_file::normalize_yaml_document(&raw)
-            .context("failed to normalize profile YAML")
-    } else {
-        Ok(raw)
+        Ok(self.inner.shared.save_profile_file(uid, data).await?.into())
     }
 }
 
@@ -1060,32 +823,7 @@ mod tests {
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
     };
-
-    #[test]
-    fn transform_profile_file_read_preserves_non_yaml_source_exactly() {
-        let javascript = "function main(config) { return config; }\n// [invalid YAML";
-        let lua = "return { [\"proxies\"] = {} }\n-- not a YAML mapping";
-        for source in [javascript, lua] {
-            assert_eq!(
-                super::profile_file_text_for_editor(source.into(), false).unwrap(),
-                source,
-                "script and merge transform content must never be normalized as YAML"
-            );
-        }
-    }
-
-    #[test]
-    fn config_profile_file_read_normalizes_yaml_and_rejects_invalid_mapping() {
-        let normalized = super::profile_file_text_for_editor("mode: rule\n".into(), true).unwrap();
-        assert_eq!(normalized, "mode: rule\n");
-        let error =
-            super::profile_file_text_for_editor("not: [valid YAML".into(), true).unwrap_err();
-        assert!(
-            error
-                .to_string()
-                .contains("failed to normalize profile YAML")
-        );
-    }
+    use struct_patch::Patch as _;
 
     use async_trait::async_trait;
     use chimera_ipc::api::status::CoreState;
@@ -1829,8 +1567,8 @@ mod tests {
             expected: 2,
             actual: 3,
         };
-        let detail = ChimeraClient::typed_auto_activation_failure(&profile, &error)
-            .expect("a real MVCC conflict has a lossless structured cause");
+        let detail =
+            chimera_core::client::auto_activation_failure_degradation(profile.clone(), &error);
         match &detail.reason {
             DegradationReason::ProfileAutoActivationFailed {
                 profile: uid,
@@ -1859,12 +1597,19 @@ mod tests {
         assert_eq!(wire["phase"], "system_effect");
         assert_eq!(wire["retryable"], true);
         assert!(wire.get("reason").is_none());
-        assert!(
-            ChimeraClient::typed_auto_activation_failure(
-                &profile,
-                &ProfilesError::Persist("untyped source commit error".into())
-            )
-            .is_none()
+        let legacy_source = chimera_core::client::auto_activation_failure_degradation(
+            profile,
+            &ProfilesError::Persist("untyped source commit error".into()),
+        );
+        assert_eq!(
+            serde_json::to_value(&legacy_source).unwrap()["reason"]["cause"]["kind"],
+            "persist"
+        );
+        let wire = serde_json::to_value(Degradation::from_shared(legacy_source)).unwrap();
+        assert_eq!(wire["code"], "profile_auto_activation_failed");
+        assert_eq!(
+            wire["message"],
+            "failed to persist profiles: untyped source commit error"
         );
     }
 
