@@ -313,4 +313,81 @@ impl CoreLifecycleState {
         self.checked_connection_effect.lock().take();
         self.prepared_outcome.lock().take();
     }
+
+    pub async fn validate_profile_runtime(
+        &self,
+        inputs: crate::client::reconciler::inputs::RuntimeInputs,
+    ) -> anyhow::Result<crate::client::reconciler::workflow_mutation::CheckRecord> {
+        // A Stopped Profile TCC must validate the same exact strict product
+        // that a later running Try would submit. It is read-only: no Core
+        // operation, no Checked inbox entry and no source mutation.
+        if let Some(gate) = self.checked_gate.get()
+            && self.core.runtime_preparation_session().is_some()
+        {
+            return gate.validate_stopped_profile_tcc(inputs).await;
+        }
+        Err(crate::client::reconciler::workflow_mutation::RuntimeCheckFailure::candidate_unavailable(
+            "Stopped Profile validation requires the installed Core-owned RuntimeGate and preparation session",
+        ).into())
+    }
+
+    pub async fn prepare_profile_runtime(
+        &self,
+        inputs: crate::client::reconciler::inputs::RuntimeInputs,
+        operation_id: &chimera_core_manager::OperationId,
+        service_connected: impl FnOnce() -> bool + Send,
+    ) -> anyhow::Result<(
+        crate::client::reconciler::workflow_mutation::AppliedCandidate,
+        crate::client::reconciler::workflow_mutation::CheckRecord,
+    )> {
+        // Running Profile TCC cannot safely apply an independently generated
+        // YAML/port/IPC revision. Only the live Core-owned ref CandidateCheck
+        // may create the precommit product; compatibility ports fail closed.
+        let gate = self.checked_gate.get().ok_or_else(|| {
+            anyhow::Error::new(
+                crate::client::reconciler::workflow_mutation::RuntimeCheckFailure::
+                    candidate_unavailable(
+                        "Profile TCC requires the installed Core-owned strict candidate gate",
+                    ),
+            )
+        })?;
+        if self.core.runtime_preparation_session().is_none() {
+            return Err(crate::client::reconciler::workflow_mutation::RuntimeCheckFailure::
+                candidate_unavailable(
+                    "Profile TCC requires the active Core-owned runtime preparation session",
+                )
+                .into());
+        }
+        let run_type =
+            super::status::RunType::classify(inputs.app.enable_service_mode, service_connected());
+        let (prepared, core_spec) =
+            gate.prepare_profile_tcc_candidate(inputs)
+                .await
+                .map_err(|error| {
+                    anyhow::Error::new(
+                    crate::client::reconciler::workflow_mutation::RuntimeCheckFailure::
+                        candidate_unavailable(error.to_string()),
+                )
+                })?;
+        self.core
+            .prepare_profile_runtime_prepared(prepared, core_spec, run_type, operation_id.clone())
+            .await
+    }
+
+    pub async fn confirm_profile_runtime(
+        &self,
+        operation_id: &chimera_core_manager::OperationId,
+        candidate: crate::client::reconciler::workflow_mutation::AppliedCandidate,
+    ) -> anyhow::Result<()> {
+        self.core
+            .confirm_profile_runtime(operation_id.clone(), candidate)
+            .await?;
+        Ok(())
+    }
+
+    pub async fn discard_profile_runtime(&self, operation_id: &chimera_core_manager::OperationId) {
+        self.core
+            .discard_profile_runtime(operation_id.clone())
+            .await
+    }
 }

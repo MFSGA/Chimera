@@ -16,3 +16,6 @@ pub mod command;
 pub mod executor;
 
 pub mod state;
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+pub mod stale_proxy;

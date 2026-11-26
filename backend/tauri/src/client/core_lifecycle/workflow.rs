@@ -190,172 +190,21 @@ impl CoreLifecycleWorkflow {
         notifications: Arc<dyn crate::client::effects::ports::CommitNotifications>,
         persist_legacy_mirror: Arc<dyn Fn() -> anyhow::Result<()> + Send + Sync>,
     ) -> Result<(), crate::client::system_proxy::SystemProxyActionError> {
-        use chimera_ipc::api::status::CoreState;
-
-        let status = self.core.status().await.map_err(|error| {
-            crate::client::system_proxy::SystemProxyActionError::Failed(error.to_string())
-        })?;
-        if !matches!(status.state, CoreState::Stopped(_))
-            || status.state_changed_at != expected_core_state_changed_at
-        {
-            return Err(crate::client::system_proxy::SystemProxyActionError::StateChanged);
+        chimera_core::client::core_lifecycle::stale_proxy::StaleProxyAction {
+            core: self.core.as_ref(),
+            application: &self.application,
+            clash: &self.clash,
         }
-        let clash = self.clash.get().map_err(|error| {
-            crate::client::system_proxy::SystemProxyActionError::Failed(error.to_string())
-        })?;
-        let receipt = self.core.last_confirmed_runtime_receipt();
-        let effective_mixed_port =
-            crate::client::ports::effective_mixed_port(receipt.as_deref(), &clash);
-        if effective_mixed_port != Some(expected_port) {
-            return Err(crate::client::system_proxy::SystemProxyActionError::StateChanged);
-        }
-        let previous = self.application.get().await.map_err(|error| {
-            crate::client::system_proxy::SystemProxyActionError::Failed(error.to_string())
-        })?;
-        if previous.state.enable_system_proxy != desired_before {
-            return Err(crate::client::system_proxy::SystemProxyActionError::StateChanged);
-        }
-
-        if let Err(error) = system_proxy.disable_stale_proxy(expected_port).await {
-            return Err(self
-                .recover_stale_proxy_action(
-                    &system_proxy,
-                    original,
-                    desired_before,
-                    notifications.as_ref(),
-                    error,
-                )
-                .await);
-        }
-        if !desired_before {
-            notifications.runtime_bound(None, false);
-            return Ok(());
-        }
-
-        let mut candidate = previous.state.clone();
-        candidate.enable_system_proxy = false;
-        let clash = match self.clash.get() {
-            Ok(clash) => clash,
-            Err(error) => {
-                return Err(self
-                    .recover_stale_proxy_action(
-                        &system_proxy,
-                        original,
-                        desired_before,
-                        notifications.as_ref(),
-                        crate::client::system_proxy::SystemProxyActionError::Failed(
-                            error.to_string(),
-                        ),
-                    )
-                    .await);
-            }
-        };
-        let prepared = match self.application.prepare_replace(candidate.clone()).await {
-            Ok(prepared) => prepared,
-            Err(error) => {
-                return Err(self
-                    .recover_stale_proxy_action(
-                        &system_proxy,
-                        original,
-                        desired_before,
-                        notifications.as_ref(),
-                        crate::client::system_proxy::SystemProxyActionError::Failed(
-                            error.to_string(),
-                        ),
-                    )
-                    .await);
-            }
-        };
-        match self
-            .application
-            .replace_prepared_if_version(previous.version, prepared)
-            .await
-        {
-            Ok(crate::state::ConditionalReplaceResult::Replaced(_)) => {
-                let persist_error = persist_legacy_mirror().err();
-                let fields = crate::client::effects::plan::ApplicationEffectInputs::project(
-                    &candidate, &clash, None,
-                )
-                .app;
-                notifications.application_committed(
-                    fields,
-                    vec![crate::client::effects::plan::EffectKind::SystemProxy],
-                );
-                notifications.runtime_bound(None, false);
-                match persist_error {
-                    Some(error) => Err(
-                        crate::client::system_proxy::SystemProxyActionError::PartialApply(format!(
-                            "the proxy preference was committed, but the legacy mirror could not be persisted: {error:#}"
-                        )),
-                    ),
-                    None => Ok(()),
-                }
-            }
-            Ok(crate::state::ConditionalReplaceResult::Conflict { .. }) => Err(self
-                .publish_latest_proxy_preference(notifications.as_ref())
-                .await
-                .err()
-                .unwrap_or(crate::client::system_proxy::SystemProxyActionError::StateChanged)),
-            Err(error) => Err(self
-                .recover_stale_proxy_action(
-                    &system_proxy,
-                    original,
-                    desired_before,
-                    notifications.as_ref(),
-                    crate::client::system_proxy::SystemProxyActionError::Failed(error.to_string()),
-                )
-                .await),
-        }
-    }
-
-    async fn publish_latest_proxy_preference(
-        &self,
-        notifications: &dyn crate::client::effects::ports::CommitNotifications,
-    ) -> Result<(), crate::client::system_proxy::SystemProxyActionError> {
-        let latest = self.application.get().await.map_err(|error| {
-            crate::client::system_proxy::SystemProxyActionError::PartialApply(format!(
-                "could not read the latest application preference: {error:#}"
-            ))
-        })?;
-        let clash = self.clash.get().map_err(|error| {
-            crate::client::system_proxy::SystemProxyActionError::PartialApply(error.to_string())
-        })?;
-        let fields = crate::client::effects::plan::ApplicationEffectInputs::project(
-            &latest.state,
-            &clash,
-            None,
+        .disable_stale_system_proxy(
+            system_proxy,
+            expected_port,
+            expected_core_state_changed_at,
+            desired_before,
+            original,
+            notifications,
+            persist_legacy_mirror,
         )
-        .app;
-        notifications.application_committed(
-            fields,
-            vec![crate::client::effects::plan::EffectKind::SystemProxy],
-        );
-        notifications.runtime_bound(None, false);
-        Ok(())
-    }
-
-    async fn recover_stale_proxy_action(
-        &self,
-        system_proxy: &crate::client::system_proxy::SystemProxyClient,
-        original: chimera_contracts::system_proxy::OsProxyConfig,
-        desired_before: bool,
-        notifications: &dyn crate::client::effects::ports::CommitNotifications,
-        error: crate::client::system_proxy::SystemProxyActionError,
-    ) -> crate::client::system_proxy::SystemProxyActionError {
-        match self.application.get().await {
-            Ok(latest) if latest.state.enable_system_proxy != desired_before => {
-                match self.publish_latest_proxy_preference(notifications).await {
-                    Ok(()) => crate::client::system_proxy::SystemProxyActionError::StateChanged,
-                    Err(reconcile_error) => reconcile_error,
-                }
-            }
-            Ok(_) => rollback_stale_proxy_action(system_proxy, original, error.to_string()).await,
-            Err(read_error) => {
-                crate::client::system_proxy::SystemProxyActionError::PartialApply(format!(
-                    "{error}; could not determine the latest preference before rollback: {read_error:#}"
-                ))
-            }
-        }
+        .await
     }
 
     pub(in crate::client) fn convergence_clash(
@@ -628,20 +477,6 @@ impl CoreLifecycleWorkflow {
     }
 }
 
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
-async fn rollback_stale_proxy_action(
-    system_proxy: &crate::client::system_proxy::SystemProxyClient,
-    original: chimera_contracts::system_proxy::OsProxyConfig,
-    error: String,
-) -> crate::client::system_proxy::SystemProxyActionError {
-    match system_proxy.restore_after_failed_action(original).await {
-        Ok(()) => crate::client::system_proxy::SystemProxyActionError::Failed(error),
-        Err(rollback_error) => crate::client::system_proxy::SystemProxyActionError::PartialApply(
-            format!("{error}; rollback failed: {rollback_error}"),
-        ),
-    }
-}
-
 #[async_trait::async_trait]
 impl ProfileRuntime for CoreLifecycleWorkflow {
     fn status(&self) -> crate::client::core_lifecycle::CoreLifecycleStatus {
@@ -692,36 +527,16 @@ impl ProfileRuntime for CoreLifecycleWorkflow {
         &self,
         inputs: crate::client::application_workflow::inputs::RuntimeInputs,
     ) -> anyhow::Result<crate::client::application_workflow::mutation::CheckRecord> {
-        // A Stopped Profile TCC must validate the same exact strict product
-        // that a later running Try would submit. It is read-only: no Core
-        // operation, no Checked inbox entry and no source mutation.
-        if let Some(gate) = self.checked_gate.get()
-            && self.core.runtime_preparation_session().is_some()
-        {
-            return gate.validate_stopped_profile_tcc(inputs).await;
-        }
-        // Production must not build and validate a second runtime candidate
-        // through the old CoreLifecycle port. Only the live Core-owned
-        // RuntimePreparation/RuntimeGate can check stopped Profile TCC bytes.
-        #[cfg(not(test))]
-        {
-            let _ = inputs;
-            Err(crate::client::application_workflow::mutation::RuntimeCheckFailure::
-                candidate_unavailable(
-                    "Stopped Profile validation requires the installed Core-owned RuntimeGate and preparation session",
-                )
-                .into())
-        }
-
-        // Test fixtures without live Core-owned sessions retain the isolated
-        // legacy validator; no production fallback is compiled.
         #[cfg(test)]
-        crate::client::reconciler::legacy_check::check_candidate(
-            self.core.as_ref(),
-            inputs,
-            crate::core::service::ipc::get_ipc_state().is_connected(),
-        )
-        .await
+        if self.checked_gate.get().is_none() || self.core.runtime_preparation_session().is_none() {
+            return crate::client::reconciler::legacy_check::check_candidate(
+                self.core.as_ref(),
+                inputs,
+                crate::core::service::ipc::get_ipc_state().is_connected(),
+            )
+            .await;
+        }
+        self.shared.validate_profile_runtime(inputs).await
     }
 
     async fn prepare_profile_runtime(
@@ -732,39 +547,10 @@ impl ProfileRuntime for CoreLifecycleWorkflow {
         crate::client::application_workflow::mutation::AppliedCandidate,
         crate::client::application_workflow::mutation::CheckRecord,
     )> {
-        // Running Profile TCC cannot safely apply an independently generated
-        // YAML/port/IPC revision. Only the live Core-owned ref CandidateCheck
-        // may create the precommit product; compatibility ports fail closed.
-        let gate = self.checked_gate.get().ok_or_else(|| {
-            anyhow::Error::new(
-                crate::client::application_workflow::mutation::RuntimeCheckFailure::
-                    candidate_unavailable(
-                        "Profile TCC requires the installed Core-owned strict candidate gate",
-                    ),
-            )
-        })?;
-        if self.core.runtime_preparation_session().is_none() {
-            return Err(crate::client::application_workflow::mutation::RuntimeCheckFailure::
-                candidate_unavailable(
-                    "Profile TCC requires the active Core-owned runtime preparation session",
-                )
-                .into());
-        }
-        let run_type = crate::core::RunType::classify(
-            inputs.app.enable_service_mode,
-            crate::core::service::ipc::get_ipc_state().is_connected(),
-        );
-        let (prepared, core_spec) =
-            gate.prepare_profile_tcc_candidate(inputs)
-                .await
-                .map_err(|error| {
-                    anyhow::Error::new(
-                    crate::client::application_workflow::mutation::RuntimeCheckFailure::
-                        candidate_unavailable(error.to_string()),
-                )
-                })?;
-        self.core
-            .prepare_profile_runtime_prepared(prepared, core_spec, run_type, operation_id.clone())
+        self.shared
+            .prepare_profile_runtime(inputs, operation_id, || {
+                crate::core::service::ipc::get_ipc_state().is_connected()
+            })
             .await
     }
 
@@ -773,10 +559,9 @@ impl ProfileRuntime for CoreLifecycleWorkflow {
         operation_id: &chimera_core_manager::OperationId,
         candidate: crate::client::application_workflow::mutation::AppliedCandidate,
     ) -> anyhow::Result<()> {
-        self.core
-            .confirm_profile_runtime(operation_id.clone(), candidate)
-            .await?;
-        Ok(())
+        self.shared
+            .confirm_profile_runtime(operation_id, candidate)
+            .await
     }
 
     async fn try_release_service_owner(&self) -> std::result::Result<(), String> {
@@ -786,9 +571,7 @@ impl ProfileRuntime for CoreLifecycleWorkflow {
     }
 
     async fn discard_profile_runtime(&self, operation_id: &chimera_core_manager::OperationId) {
-        self.core
-            .discard_profile_runtime(operation_id.clone())
-            .await
+        self.shared.discard_profile_runtime(operation_id).await
     }
 
     async fn reconcile_profiles(
