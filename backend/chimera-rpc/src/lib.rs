@@ -1,4 +1,9 @@
-//! Shared RPC foundations; no listener or production command registry is linked yet.
+//! Shared RPC registry. Transport listeners remain separate.
+
+extern crate self as chimera_rpc;
+pub use chimera_rpc_macro::rpc;
+pub mod commands;
+pub mod error;
 
 pub mod audit;
 pub mod events;

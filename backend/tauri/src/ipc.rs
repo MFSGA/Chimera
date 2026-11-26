@@ -169,8 +169,13 @@ pub fn get_configuration_status_summary(
 
 #[tauri::command]
 #[specta::specta]
-pub async fn retry_configuration_runtime(client: State<'_, ChimeraClient>) -> Result<()> {
-    Ok(client.retry_configuration_runtime().await?)
+pub async fn retry_configuration_runtime(
+    client: State<'_, ChimeraClient>,
+    window: tauri::Window,
+) -> Result<()> {
+    Ok(client
+        .retry_configuration_runtime_rpc(window.label())
+        .await?)
 }
 
 #[tauri::command]

@@ -127,6 +127,9 @@ fn utf8_path(path: std::path::PathBuf) -> anyhow::Result<camino::Utf8PathBuf> {
 }
 
 struct ChimeraClientInner {
+    rpc: std::sync::OnceLock<
+        Result<chimera_rpc::registry::UnifiedRpc, chimera_rpc::registry::SetupError>,
+    >,
     shared: chimera_core::client::ChimeraClient,
     clash_config: ClashConfigClient,
     /// The one candidate checker shared by the Profiles gate and legacy
@@ -156,6 +159,43 @@ impl ChimeraClientInner {
         self.shared
             .reconciler()
             .expect("composed desktop client has a reconciler")
+    }
+}
+
+impl ChimeraClient {
+    pub(crate) fn rpc(&self) -> anyhow::Result<&chimera_rpc::registry::UnifiedRpc> {
+        use chimera_rpc::{
+            audit::{RpcAudit, TracingRpcAuditSink},
+            registry::{RpcDependencies, UnifiedRpc},
+        };
+        self.inner
+            .rpc
+            .get_or_init(|| {
+                UnifiedRpc::new(
+                    RpcDependencies {
+                        client: self.inner.shared.clone(),
+                        audit: RpcAudit::new(Arc::new(TracingRpcAuditSink)),
+                    },
+                    chimera_rpc_protocol::ServerInfo::desktop(env!("CARGO_PKG_VERSION")),
+                    &[],
+                )
+            })
+            .as_ref()
+            .map_err(|error| anyhow::anyhow!(error.to_string()))
+    }
+
+    pub(crate) async fn retry_configuration_runtime_rpc(&self, window: &str) -> anyhow::Result<()> {
+        use chimera_rpc::{audit::RpcTransport, registry::RpcCaller};
+        self.rpc()?
+            .call(
+                RpcTransport::TauriIpc,
+                "retry_configuration_runtime",
+                RpcCaller::desktop(window),
+                serde_json::json!({}),
+            )
+            .await
+            .map_err(|error| anyhow::anyhow!(error.message))?;
+        Ok(())
     }
 }
 
@@ -560,6 +600,7 @@ impl ChimeraClient {
                 system_dns,
             });
         let inner = ChimeraClientInner {
+            rpc: std::sync::OnceLock::new(),
             shared,
             clash_config: typed.clash_config,
             checked_gate,
@@ -948,6 +989,127 @@ mod tests {
         )
         .await;
         (client, events)
+    }
+
+    #[tokio::test]
+    async fn shared_rpc_inventory_admits_only_linked_and_permitted_commands() {
+        use chimera_contracts::auth::{Grant, Principal, Role};
+        use chimera_rpc::{audit::RpcTransport, registry::RpcCaller};
+        use chimera_rpc_protocol::{AuthContext, RpcDescribeResponse, RpcOwner, RpcTarget};
+        let (client, events) = recording_client(false).await;
+        let rpc = client.rpc().unwrap();
+        let owner = RpcCaller::desktop("test-window");
+        let viewer = RpcCaller::new(
+            AuthContext::new(
+                Principal::Token {
+                    id: "test-id".into(),
+                    name: "viewer".into(),
+                },
+                Grant::Role(Role::Viewer),
+            ),
+            RpcOwner::new("test-owner".into()),
+        );
+        let described: RpcDescribeResponse = serde_json::from_value(
+            rpc.call(
+                RpcTransport::TauriIpc,
+                "rpc_describe",
+                owner.clone(),
+                serde_json::json!({}),
+            )
+            .await
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(described, rpc.describe(RpcTarget::Desktop, owner.auth()));
+        assert!(
+            described
+                .commands
+                .iter()
+                .any(|c| c.name == "get_config_features" && c.allowed)
+        );
+        assert!(
+            described
+                .commands
+                .iter()
+                .any(|c| c.name == "retry_configuration_runtime" && c.allowed)
+        );
+        assert!(
+            described
+                .commands
+                .iter()
+                .any(|c| c.name == "get_profiles" && !c.allowed)
+        );
+        let expected = serde_json::to_value(client.config_features()).unwrap();
+        assert_eq!(
+            rpc.call(
+                RpcTransport::Http,
+                "get_config_features",
+                viewer.clone(),
+                serde_json::json!({})
+            )
+            .await
+            .unwrap(),
+            expected
+        );
+        let before = events.lock().unwrap().clone();
+        let denied = rpc
+            .call(
+                RpcTransport::Http,
+                "retry_configuration_runtime",
+                viewer.clone(),
+                serde_json::json!({}),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(denied.kind, "forbidden");
+        assert_eq!(*events.lock().unwrap(), before);
+        let unlinked = rpc
+            .call(
+                RpcTransport::TauriIpc,
+                "get_profiles",
+                owner.clone(),
+                serde_json::json!({}),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(unlinked.kind, "unsupported");
+        let unknown = rpc
+            .call(
+                RpcTransport::Http,
+                "private-sentinel",
+                viewer.clone(),
+                serde_json::json!({}),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(unknown.kind, "unknown_method");
+        assert!(!unknown.message.contains("private-sentinel"));
+        let wrong_transport = rpc
+            .call(
+                RpcTransport::Local,
+                "get_config_features",
+                owner.clone(),
+                serde_json::json!({}),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(wrong_transport.kind, "unsupported");
+        client.request_shutdown();
+        let error = client
+            .retry_configuration_runtime_rpc("test-window")
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("client is shutting down"));
+        let public_failure = rpc
+            .call(
+                RpcTransport::Http,
+                "get_core_status_summary",
+                viewer,
+                serde_json::json!({}),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(public_failure.message, "application command failed");
     }
 
     /// Initial state: the test client owns an uncancelled root token and an

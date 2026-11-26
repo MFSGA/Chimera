@@ -6,6 +6,9 @@ license.workspace = true
 authors.workspace = true
 
 [dependencies]
+inventory = "0.3"
+chimera-rpc-macro = { path = "../chimera-rpc-macro" }
+chimera-config = { path = "../chimera-config" }
 chimera-rpc-protocol = { path = '../chimera-rpc-protocol', default-features = false }
 chimera-runtime-values = { path = '../chimera-runtime-values', default-features = false }
 chimera-contracts = { path = '../chimera-contracts', default-features = false }

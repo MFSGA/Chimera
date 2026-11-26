@@ -7,11 +7,12 @@
 //!
 //! A call passes these layers, outside in (design section 4.6 of the permission namespace spec):
 //! transport, authentication, audit, resolution, admission here, then data sharing (reserved)
-//! and [`crate::redaction`] before the handler. The production registry is not yet linked.
+//! and [`crate::redaction`] before the handler.
 
+use crate::registry::CommandHandlers;
 use chimera_contracts::auth::Permissions;
 use chimera_rpc_protocol::{
-    RpcError, RpcTarget, ShellCapability,
+    AuthContext, DescribedCommand, RpcError, RpcTarget, ShellCapability,
     permission::{self, ResourceKind, ResourceMetadata},
 };
 
@@ -110,6 +111,33 @@ fn forbidden(resource: &ResourceMetadata) -> RpcError {
         )),
         _ => RpcError::forbidden(format!("missing permission {permission}")),
     }
+}
+
+/// Build the sorted discovery command list for `target` and `auth`, including
+/// known commands on `target` whose `allowed` flag is `false`.
+pub(crate) fn describe_commands(
+    commands: &CommandHandlers,
+    authority: Authority<'_>,
+    target: RpcTarget,
+    auth: &AuthContext,
+) -> Vec<DescribedCommand> {
+    let mut described: Vec<DescribedCommand> = commands
+        .values()
+        .filter(|command| command.metadata().targets.contains(&target))
+        .map(|command| {
+            let metadata = command.metadata();
+            DescribedCommand {
+                name: metadata.name.to_owned(),
+                effect: metadata.effect,
+                permission: metadata.permission,
+                sensitive: metadata.sensitive,
+                allowed: command.linked(target)
+                    && authority.visible(metadata, target, &auth.permissions),
+            }
+        })
+        .collect();
+    described.sort_by(|left, right| left.name.cmp(&right.name));
+    described
 }
 
 #[cfg(test)]

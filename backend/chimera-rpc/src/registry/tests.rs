@@ -185,3 +185,43 @@ async fn response_encoding_failure_keeps_committed_receipts() {
     );
     assert!(!format!("{records:?}").contains(SECRET));
 }
+
+#[test]
+fn linked_declarations_match_the_resource_table_and_unlinked_commands_stay_known() {
+    let commands = register_commands(RESOURCES, inventory::iter::<CommandEntry>).unwrap();
+    let linked: Vec<_> = commands
+        .values()
+        .filter(|c| c.handler.is_some())
+        .map(|c| c.metadata.name)
+        .collect();
+    assert_eq!(linked.len(), 4);
+    for name in [
+        "rpc_describe",
+        "get_config_features",
+        "get_core_status_summary",
+        "retry_configuration_runtime",
+    ] {
+        assert!(linked.contains(&name));
+        assert!(commands[name].linked(RpcTarget::Desktop));
+    }
+    assert!(!commands["get_profiles"].linked(RpcTarget::Desktop));
+    assert_eq!(
+        commands["get_profiles"]
+            .neutral_handler(RpcTarget::Desktop)
+            .unwrap_err()
+            .kind,
+        "unsupported"
+    );
+    let entries = inventory::iter::<CommandEntry>
+        .into_iter()
+        .collect::<Vec<_>>();
+    let repeated = [entries[0], entries[0]];
+    assert!(matches!(
+        register_commands(RESOURCES, repeated),
+        Err(SetupError::RegisterCommand { .. })
+    ));
+    assert!(matches!(
+        register_commands([], [entries[0]]),
+        Err(SetupError::UndeclaredCommand { .. })
+    ));
+}
