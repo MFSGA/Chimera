@@ -23,3 +23,28 @@ pub async fn query_traffic_closed_connections(
         .query_traffic_closed_connections(range, filters, before, limit)
         .await?)
 }
+
+use chimera_core::clash::ws::{ClashWsKind, ClashWsRecording, ClashWsSnapshot};
+
+#[chimera_rpc::rpc(expose = [http])]
+pub async fn clear_clash_ws_history(
+    client: RpcState<'_, ChimeraClient>,
+    kind: ClashWsKind,
+) -> Result<()> {
+    client.streams().clear_history(kind).await?;
+    Ok(())
+}
+
+#[chimera_rpc::rpc(query, expose = [http])]
+pub async fn get_clash_ws_snapshot(client: RpcState<'_, ChimeraClient>) -> Result<ClashWsSnapshot> {
+    Ok(client.streams().snapshot().await?)
+}
+
+#[chimera_rpc::rpc(expose = [http])]
+pub async fn set_clash_ws_recording(
+    client: RpcState<'_, ChimeraClient>,
+    kind: ClashWsKind,
+    enabled: bool,
+) -> Result<ClashWsRecording> {
+    Ok(client.streams().set_recording(kind, enabled).await?)
+}

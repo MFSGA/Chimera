@@ -107,3 +107,14 @@ pub async fn patch_system_settings(
     );
     Ok(host.patch_application(patch.into()).await?.into())
 }
+
+use chimera_config::clash::config::overrides::ClashAccessPatch;
+
+/// Patch LAN exposure and the controller secret, without logging either value.
+#[chimera_rpc::rpc(privacy, optional_capabilities(elevation, os_integration, presentation), expose = [http])]
+pub async fn patch_runtime_access(
+    host: RpcState<'_, dyn ConfigurationMutations>,
+    patch: ClashAccessPatch,
+) -> anyhow::Result<RpcUnitMutationOutcome> {
+    Ok(host.patch_overrides(patch.into()).await?.into())
+}

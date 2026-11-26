@@ -431,7 +431,7 @@ impl ChimeraClient {
         outcome
     }
 
-    async fn refresh_stream_log_level(&self) {
+    pub(super) async fn refresh_stream_log_level(&self) {
         match self.get_clash_config() {
             Ok(config) => {
                 if let Err(error) = self

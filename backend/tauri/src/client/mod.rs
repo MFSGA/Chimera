@@ -201,6 +201,22 @@ impl chimera_core::client::configuration_mutations::ConfigurationMutations
             .await?
             .into_shared_configuration_outcome())
     }
+    async fn patch_overrides(
+        &self,
+        patch: chimera_config::clash::config::overrides::ClashGuardOverridesPatch,
+    ) -> anyhow::Result<chimera_contracts::runtime::MutationOutcome<()>> {
+        let client = self.client()?;
+        // Use the typed transaction, not the lossy four-field legacy IPC DTO.
+        let outcome = client
+            .patch_clash_config(chimera_config::clash::config::ClashConfigPatch {
+                overrides: patch,
+                ..Default::default()
+            })
+            .await?;
+        client.refresh_stream_log_level().await;
+        client.request_proxy_refresh();
+        Ok(outcome.into_shared_configuration_outcome())
+    }
 }
 
 impl ChimeraClient {
@@ -1155,6 +1171,169 @@ mod tests {
             .is_err()
         );
         assert_eq!(client.inner.shared.application().snapshot().version, before);
+    }
+
+    #[tokio::test]
+    async fn shared_rpc_overrides_and_websocket_management_respect_resource_scope() {
+        use chimera_contracts::auth::{Access, Grant, Permissions, Principal, Resource};
+        use chimera_rpc::{audit::RpcTransport, registry::RpcCaller};
+        use chimera_rpc_protocol::{AuthContext, RpcOwner};
+        let (client, _) = recording_client(false).await;
+        let rpc = client.rpc().unwrap();
+        let caller = |resource: Resource| {
+            RpcCaller::new(
+                AuthContext::new(
+                    Principal::Token {
+                        id: "writer".into(),
+                        name: "writer".into(),
+                    },
+                    Grant::Custom(Permissions::NONE.with(resource, Access::Write)),
+                ),
+                RpcOwner::new("writer".into()),
+            )
+        };
+        let settings = caller(Resource::Settings);
+        let system = caller(Resource::System);
+        let traffic = caller(Resource::Traffic);
+        let owner = RpcCaller::desktop("test-window");
+        let before = client.inner.clash_config.snapshot();
+        let denied = rpc
+            .call(
+                RpcTransport::Http,
+                "patch_runtime_access",
+                settings.clone(),
+                serde_json::json!({"patch":{"secret":"private-test-secret"}}),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(denied.kind, "forbidden");
+        for (method, who, patch) in [
+            (
+                "patch_runtime_overrides",
+                settings.clone(),
+                serde_json::json!({"ipv6":true,"secret":"private-test-secret"}),
+            ),
+            (
+                "patch_runtime_access",
+                system.clone(),
+                serde_json::json!({"allow-lan":true,"mode":"direct"}),
+            ),
+        ] {
+            assert_eq!(
+                rpc.call(
+                    RpcTransport::Http,
+                    method,
+                    who,
+                    serde_json::json!({"patch":patch})
+                )
+                .await
+                .unwrap_err()
+                .kind,
+                "invalid_params"
+            );
+        }
+        assert_eq!(client.inner.clash_config.snapshot().version, before.version);
+        let expected_ipv6 = !serde_json::to_value(&before.state.overrides).unwrap()["ipv6"]
+            .as_bool()
+            .unwrap();
+        let committed = rpc.call(RpcTransport::Http, "patch_runtime_overrides", settings,
+            serde_json::json!({"patch":{"ipv6":expected_ipv6,"log-level":"warning","unified-delay":{"kind":"unmanaged"}}})).await.unwrap();
+        assert_eq!(committed["commits"][0]["domain"], "clash");
+        let current = client.get_clash_config().unwrap();
+        assert_eq!(
+            current.overrides.log_level(),
+            chimera_config::clash::config::overrides::LogLevel::Warning
+        );
+        assert_eq!(
+            serde_json::to_value(&current.overrides).unwrap()["ipv6"],
+            expected_ipv6
+        );
+        assert_eq!(
+            serde_json::to_value(&current.overrides).unwrap()["unified-delay"]["kind"],
+            "unmanaged"
+        );
+        let access = rpc
+            .call(
+                RpcTransport::Http,
+                "patch_runtime_access",
+                system,
+                serde_json::json!({"patch":{"allow-lan":true,"secret":"private-test-secret"}}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(access["commits"][0]["domain"], "clash");
+        assert_eq!(
+            client.get_clash_config().unwrap().overrides.secret(),
+            "private-test-secret"
+        );
+        assert_eq!(
+            serde_json::to_value(&client.get_clash_config().unwrap().overrides).unwrap()["allow-lan"],
+            true
+        );
+
+        let initial = rpc
+            .call(
+                RpcTransport::Http,
+                "get_clash_ws_snapshot",
+                traffic.clone(),
+                serde_json::json!({}),
+            )
+            .await
+            .unwrap();
+        for (method, params) in [
+            ("clear_clash_ws_history", serde_json::json!({"kind":"logs"})),
+            (
+                "set_clash_ws_recording",
+                serde_json::json!({"kind":"logs","enabled":false}),
+            ),
+        ] {
+            assert_eq!(
+                rpc.call(RpcTransport::Http, method, traffic.clone(), params)
+                    .await
+                    .unwrap_err()
+                    .kind,
+                "forbidden"
+            );
+        }
+        let recording = rpc
+            .call(
+                RpcTransport::Http,
+                "set_clash_ws_recording",
+                traffic.clone(),
+                serde_json::json!({"kind":"traffic","enabled":false}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(recording["traffic"], false);
+        assert_eq!(recording["logs"], initial["recording"]["logs"]);
+        rpc.call(
+            RpcTransport::Http,
+            "clear_clash_ws_history",
+            traffic.clone(),
+            serde_json::json!({"kind":"traffic"}),
+        )
+        .await
+        .unwrap();
+        let snapshot = rpc
+            .call(
+                RpcTransport::Http,
+                "get_clash_ws_snapshot",
+                traffic,
+                serde_json::json!({}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(snapshot["recording"]["traffic"], false);
+        let recording = rpc
+            .call(
+                RpcTransport::TauriIpc,
+                "set_clash_ws_recording",
+                owner,
+                serde_json::json!({"kind":"logs","enabled":false}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(recording["logs"], false);
     }
 
     #[tokio::test]

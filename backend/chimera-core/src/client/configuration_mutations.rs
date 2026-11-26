@@ -10,4 +10,8 @@ pub trait ConfigurationMutations: Send + Sync {
         patch: ChimeraAppConfigPatch,
     ) -> anyhow::Result<MutationOutcome<()>>;
     async fn patch_clash(&self, patch: ClashConfigPatch) -> anyhow::Result<MutationOutcome<()>>;
+    async fn patch_overrides(
+        &self,
+        patch: chimera_config::clash::config::overrides::ClashGuardOverridesPatch,
+    ) -> anyhow::Result<MutationOutcome<()>>;
 }

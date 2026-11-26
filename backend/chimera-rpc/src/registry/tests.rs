@@ -194,7 +194,7 @@ fn linked_declarations_match_the_resource_table_and_unlinked_commands_stay_known
         .filter(|c| c.handler.is_some())
         .map(|c| c.metadata.name)
         .collect();
-    assert_eq!(linked.len(), 86);
+    assert_eq!(linked.len(), 91);
     for name in [
         "activate_profile",
         "clash_api_delete_connections",
@@ -210,6 +210,7 @@ fn linked_declarations_match_the_resource_table_and_unlinked_commands_stay_known
         "clash_api_healthcheck_proxy_provider",
         "clash_api_query_dns",
         "clash_api_update_providers_rules",
+        "clear_clash_ws_history",
         "clear_core_logs",
         "clear_proxy_fixed",
         "clear_storage",
@@ -225,6 +226,7 @@ fn linked_declarations_match_the_resource_table_and_unlinked_commands_stay_known
         "get_clash_config",
         "get_clash_info",
         "get_clash_settings",
+        "get_clash_ws_snapshot",
         "get_config_features",
         "get_core_log",
         "get_core_log_status",
@@ -254,6 +256,8 @@ fn linked_declarations_match_the_resource_table_and_unlinked_commands_stay_known
         "patch_clash_system_config",
         "patch_profile_metadata",
         "patch_remote_profile_options",
+        "patch_runtime_access",
+        "patch_runtime_overrides",
         "patch_system_settings",
         "probe_direct_egress",
         "query_core_logs",
@@ -274,6 +278,7 @@ fn linked_declarations_match_the_resource_table_and_unlinked_commands_stay_known
         "rpc_describe",
         "save_profile_file",
         "select_proxy",
+        "set_clash_ws_recording",
         "set_global_transforms",
         "set_profile_layout",
         "set_profile_valid_fields",

@@ -473,6 +473,24 @@ impl UnifiedRpc {
                 .admit(&command.metadata, target, Some(&caller.auth().permissions))?;
             admit_resource()?;
             crate::redaction::admit_sensitive(&command.metadata, &caller.auth().permissions)?;
+            // Both operations also address the persistent Core log owner.
+            // A Traffic grant alone must not authorize log destruction or
+            // disabling its recording. Invalid kinds still fail in decoding.
+            if matches!(method, "clear_clash_ws_history" | "set_clash_ws_recording")
+                && params.get("kind").and_then(Value::as_str) == Some("logs")
+            {
+                use chimera_config::application::{Access, Permission, Resource};
+                if !caller
+                    .auth()
+                    .permissions
+                    .permits(Permission::new(Resource::Logs, Access::Write))
+                {
+                    return Err(RpcError::forbidden(
+                        "log history management requires logs write permission",
+                    ));
+                }
+            }
+
             // Data sharing (TODO, permission namespace spec section 4.6) sits here, reading the
             // admitted row from the call metadata.
             let meta = RpcCallMeta {
