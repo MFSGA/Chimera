@@ -306,7 +306,7 @@ impl ClashConfigClient {
         // Raw, override and running-override mutations share one source
         // notification; deferred retries are admitted by CoreLifecycle's
         // existing coalesced mailbox, not by a second runtime writer.
-        owner.inner.core_lifecycle.source_committed(
+        owner.inner.reconciler().source_committed(
             super::reconciler::committed::SourceDomain::Clash,
             report.snapshot.version,
             report
@@ -373,7 +373,7 @@ impl ChimeraClient {
                 self.inner.clash_config.clone(),
                 profiles.content_reader(),
                 profiles.snapshot_handle(),
-                self.inner.core_lifecycle.clone(),
+                self.inner.reconciler().clone(),
             );
             checker.check(proposed).await.map_err(anyhow::Error::new)
         }

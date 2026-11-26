@@ -4706,6 +4706,40 @@ async fn shutdown_is_idempotent_and_blocks_follow_up_mutations() {
 }
 
 #[tokio::test]
+async fn shared_reconciler_handle_uses_the_original_shutdown_owner() {
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let release_stop = Arc::new(Notify::new());
+    release_stop.notify_one();
+    let client = RuntimeReconcilerClient::spawn(
+        Arc::new(RecordingCore {
+            events: events.clone(),
+            stop_started: Arc::new(Notify::new()),
+            release_stop,
+            recovery_notify: Arc::new(Notify::new()),
+            run_type: RunType::Normal,
+        }),
+        ApplicationClient::legacy().unwrap(),
+        ClashConfigClient::legacy().unwrap(),
+        RuntimePaths::from_config_root(std::path::PathBuf::from("test-runtime-root")),
+    )
+    .await
+    .unwrap();
+    let shared = client.shared_handle();
+    let original_watch = client.subscribe_reconciler().unwrap();
+    let shared_watch = shared.subscribe_reconciler().unwrap();
+    assert!(original_watch.same_channel(&shared_watch));
+    shared.shutdown().await.unwrap();
+    assert!(client.status().shutting_down);
+    assert!(shared.status().shutting_down);
+    client.shutdown().await.unwrap();
+    assert!(shared.start_core().await.is_err());
+    assert_eq!(
+        events.lock().unwrap().as_slice(),
+        ["stop-start", "stop-end"]
+    );
+}
+
+#[tokio::test]
 async fn shutdown_drains_pending_queue_before_final_stop() {
     let events = Arc::new(Mutex::new(Vec::new()));
     let stop_started = Arc::new(Notify::new());

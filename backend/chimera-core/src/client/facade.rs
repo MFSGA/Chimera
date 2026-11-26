@@ -42,6 +42,7 @@ mod profile_operations;
 pub use profile_operations::auto_activation_failure_degradation;
 
 pub struct ClientParts {
+    pub reconciler: Option<Arc<dyn super::reconciler::facade::RuntimeReconciler>>,
     pub profile_fs: Arc<dyn crate::state::profiles::ports::ProfileFsPort>,
     pub profile_paths: chimera_profile_io::fs_service::ProfileFileService,
     pub ui_sink: Arc<dyn super::event_sink::UiEventSink>,
@@ -83,6 +84,7 @@ impl WeakChimeraClient {
 }
 
 struct ChimeraClientInner {
+    reconciler: Option<Arc<dyn super::reconciler::facade::RuntimeReconciler>>,
     profile_fs: Arc<dyn crate::state::profiles::ports::ProfileFsPort>,
     profile_paths: chimera_profile_io::fs_service::ProfileFileService,
     ui_sink: Arc<dyn super::event_sink::UiEventSink>,
@@ -134,6 +136,7 @@ impl ChimeraClient {
         ));
         Self {
             inner: Arc::new(ChimeraClientInner {
+                reconciler: parts.reconciler,
                 profile_fs: parts.profile_fs,
                 profile_paths: parts.profile_paths,
                 ui_sink: parts.ui_sink,
@@ -164,6 +167,50 @@ impl ChimeraClient {
                 geo_index: parking_lot::RwLock::new(None),
             }),
         }
+    }
+
+    /// Real actor handle supplied by the composition root. Only isolated
+    /// read-only facade fixtures may omit it.
+    pub fn reconciler(&self) -> Option<&Arc<dyn super::reconciler::facade::RuntimeReconciler>> {
+        self.inner.reconciler.as_ref()
+    }
+
+    fn runtime_reconciler(&self) -> Result<&dyn super::reconciler::facade::RuntimeReconciler> {
+        self.reconciler()
+            .map(Arc::as_ref)
+            .context("runtime reconciler is not connected")
+    }
+
+    pub async fn start_core(&self) -> Result<()> {
+        self.runtime_reconciler()?.start_core().await
+    }
+    pub async fn stop_core(&self) -> Result<()> {
+        self.runtime_reconciler()?.stop_core().await
+    }
+    pub async fn shutdown_core(&self) -> Result<()> {
+        self.runtime_reconciler()?.shutdown().await
+    }
+    pub async fn retry_configuration_runtime(&self) -> Result<()> {
+        anyhow::ensure!(!self.shutdown().is_cancelled(), "client is shutting down");
+        self.runtime_reconciler()?.reconcile().await
+    }
+    pub async fn replace_core_binary(
+        &self,
+        artifact: super::core_lifecycle::ports::PreparedCoreBinary,
+    ) -> Result<()> {
+        self.runtime_reconciler()?
+            .replace_core_binary(artifact)
+            .await
+    }
+
+    #[cfg(feature = "test-support")]
+    pub fn test_set_reconciler(
+        &mut self,
+        reconciler: Arc<dyn super::reconciler::facade::RuntimeReconciler>,
+    ) {
+        Arc::get_mut(&mut self.inner)
+            .expect("one shared fixture owner")
+            .reconciler = Some(reconciler);
     }
 
     pub fn downgrade(&self) -> WeakChimeraClient {
@@ -733,6 +780,7 @@ mod tests {
             fn state_changed(&self, _: crate::client::event_sink::StateChanged) {}
         }
         let client = ChimeraClient::with_parts(ClientParts {
+            reconciler: None,
             ui_sink: Arc::new(TestEvents),
             profile_fs: Arc::new(crate::state::profiles::ports::MockProfileFsPort::new()),
             profile_paths: chimera_profile_io::fs_service::ProfileFileService::new(paths.clone()),

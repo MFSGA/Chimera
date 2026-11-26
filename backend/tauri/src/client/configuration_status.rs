@@ -7,7 +7,7 @@ use chimera_core::client::{
 
 impl ChimeraClient {
     pub(crate) fn configuration_status(&self) -> ConfigurationStatus {
-        let status = self.inner.core_lifecycle.reconciler_status();
+        let status = self.inner.reconciler().reconciler_status();
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
         let effects = self.inner.effects.snapshot();
         #[cfg(any(target_os = "android", target_os = "ios"))]
@@ -35,11 +35,7 @@ impl ChimeraClient {
     }
 
     pub(crate) async fn retry_configuration_runtime(&self) -> anyhow::Result<()> {
-        anyhow::ensure!(
-            !self.inner.shared.shutdown().is_cancelled(),
-            "client is shutting down"
-        );
-        self.inner.core_lifecycle.reconcile().await
+        self.inner.shared.retry_configuration_runtime().await
     }
 
     pub(crate) fn retry_configuration_effect(
@@ -58,7 +54,7 @@ impl ChimeraClient {
     }
 
     pub(crate) fn start_configuration_status_observer(&self) -> bool {
-        let Some(reconciler) = self.inner.core_lifecycle.subscribe_reconciler() else {
+        let Some(reconciler) = self.inner.reconciler().subscribe_reconciler() else {
             return true;
         };
         let Some(profiles) = self.inner.shared.typed_profiles().as_ref() else {

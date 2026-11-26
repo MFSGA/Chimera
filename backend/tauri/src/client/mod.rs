@@ -129,7 +129,6 @@ fn utf8_path(path: std::path::PathBuf) -> anyhow::Result<camino::Utf8PathBuf> {
 struct ChimeraClientInner {
     shared: chimera_core::client::ChimeraClient,
     clash_config: ClashConfigClient,
-    core_lifecycle: RuntimeReconcilerClient,
     /// The one candidate checker shared by the Profiles gate and legacy
     /// Clash read-only preflight during the staged ref source cutover.
     checked_gate: Option<Arc<reconciler::check::CandidateCheck>>,
@@ -150,6 +149,14 @@ struct ChimeraClientInner {
     window: Arc<dyn hotkey::ports::WindowControl>,
     #[cfg(test)]
     _test_profile_dir: Option<Arc<tempfile::TempDir>>,
+}
+
+impl ChimeraClientInner {
+    fn reconciler(&self) -> &Arc<dyn chimera_core::client::reconciler::facade::RuntimeReconciler> {
+        self.shared
+            .reconciler()
+            .expect("composed desktop client has a reconciler")
+    }
 }
 
 impl std::ops::Deref for ChimeraClient {
@@ -525,6 +532,7 @@ impl ChimeraClient {
     ) -> Self {
         let shared =
             chimera_core::client::ChimeraClient::with_parts(chimera_core::client::ClientParts {
+                reconciler: Some(core_lifecycle.shared_handle()),
                 ui_sink: Arc::new(event_sink::SharedUiEventSink(ui_sink.clone())),
                 profile_fs,
                 profile_paths,
@@ -554,7 +562,6 @@ impl ChimeraClient {
         let inner = ChimeraClientInner {
             shared,
             clash_config: typed.clash_config,
-            core_lifecycle,
             checked_gate,
             ui_sink,
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -1183,7 +1190,7 @@ mod tests {
 
         let (mut client, _) = recording_client(false).await;
         assert_eq!(
-            client.inner.core_lifecycle.service_status().phase,
+            client.inner.reconciler().service_status().phase,
             ServicePhase::Probing
         );
         let actor = ServiceClient::spawn(
@@ -1206,7 +1213,7 @@ mod tests {
 
         assert_eq!(client.service_status().phase, ServicePhase::NotInstalled);
         assert_eq!(
-            client.inner.core_lifecycle.service_status().phase,
+            client.inner.reconciler().service_status().phase,
             ServicePhase::Probing,
             "the legacy workflow watch must not be consulted by UI status"
         );
@@ -1436,7 +1443,7 @@ mod tests {
         .unwrap();
         let inner = Arc::get_mut(&mut client.inner).expect("unique test client");
         inner.shared.test_set_application(application.clone());
-        inner.core_lifecycle = RuntimeReconcilerClient::direct(
+        let reconciler = RuntimeReconcilerClient::direct(
             inner.shared.core().clone(),
             application,
             inner.clash_config.clone(),
@@ -1449,6 +1456,7 @@ mod tests {
                     .to_path_buf(),
             ),
         );
+        inner.shared.test_set_reconciler(reconciler.shared_handle());
         (client, events)
     }
 

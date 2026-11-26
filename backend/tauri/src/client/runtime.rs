@@ -70,7 +70,7 @@ mod shared_runtime_values_contract_tests {
 
 impl ChimeraClient {
     pub(crate) async fn rebuild_running_config(&self) -> anyhow::Result<()> {
-        let result = self.inner.core_lifecycle.reconcile().await;
+        let result = self.inner.reconciler().reconcile().await;
         if let Err(error) = result {
             self.inner.ui_sink.refresh_runtime_transform_diagnostics();
             return Err(error);

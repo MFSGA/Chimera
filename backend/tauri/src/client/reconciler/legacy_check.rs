@@ -22,7 +22,7 @@ use crate::{
             mutation::{CheckRecord, RuntimeCheckFailure},
             ports::{RuntimeCheckOutcome, RuntimeCheckUnavailable as GateUnavailable},
         },
-        core_lifecycle::{CoreLifecycleClient, ports::CoreLifecyclePort},
+        core_lifecycle::ports::CoreLifecyclePort,
         reconciler::inputs::RuntimeInputs,
     },
     state::mutation::{DomainChange, ProfileContentReader, RuntimeCandidate},
@@ -241,7 +241,7 @@ pub(crate) struct CandidateCheck {
     clash: super::super::clash_config::ClashConfigClient,
     profile_content: crate::state::mutation::ProfileContentReader,
     profiles: StateSnapshot<Profiles>,
-    lifecycle: CoreLifecycleClient,
+    lifecycle: std::sync::Arc<dyn chimera_core::client::reconciler::facade::RuntimeReconciler>,
 }
 
 impl CandidateCheck {
@@ -251,7 +251,7 @@ impl CandidateCheck {
         clash: super::super::clash_config::ClashConfigClient,
         profile_content: crate::state::mutation::ProfileContentReader,
         profiles: StateSnapshot<Profiles>,
-        lifecycle: CoreLifecycleClient,
+        lifecycle: std::sync::Arc<dyn chimera_core::client::reconciler::facade::RuntimeReconciler>,
     ) -> Self {
         Self {
             core,

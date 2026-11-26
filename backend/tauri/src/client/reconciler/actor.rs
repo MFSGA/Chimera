@@ -1685,6 +1685,144 @@ impl RuntimeReconcilerClient {
     }
 }
 
+impl RuntimeReconcilerClient {
+    pub(in crate::client) fn shared_handle(
+        &self,
+    ) -> Arc<dyn chimera_core::client::reconciler::facade::RuntimeReconciler> {
+        match self.0.as_ref() {
+            ClientInner::Actor(client) => Arc::new(client.clone()),
+            #[cfg(test)]
+            ClientInner::Direct { .. } => Arc::new(self.clone()),
+        }
+    }
+}
+
+#[cfg(test)]
+#[async_trait::async_trait]
+impl chimera_core::client::reconciler::facade::RuntimeReconciler for RuntimeReconcilerClient {
+    async fn startup_reconcile(&self) -> anyhow::Result<CompletedLifecycleOperation> {
+        RuntimeReconcilerClient::startup_reconcile(self).await
+    }
+
+    fn status(&self) -> CoreLifecycleStatus {
+        RuntimeReconcilerClient::status(self)
+    }
+
+    fn subscribe_reconciler(&self) -> Option<tokio::sync::watch::Receiver<ReconcilerStatus>> {
+        RuntimeReconcilerClient::subscribe_reconciler(self)
+    }
+
+    fn reconciler_status(&self) -> ReconcilerStatus {
+        RuntimeReconcilerClient::reconciler_status(self)
+    }
+
+    async fn settled(&self, domain: SourceDomain, version: u64) -> ReconcilerStatus {
+        RuntimeReconcilerClient::settled(self, domain, version).await
+    }
+
+    fn source_committed(&self, domain: SourceDomain, version: u64, reconcile_requested: bool) {
+        RuntimeReconcilerClient::source_committed(self, domain, version, reconcile_requested)
+    }
+
+    fn request_runtime_rebuild(&self) {
+        RuntimeReconcilerClient::request_runtime_rebuild(self)
+    }
+
+    async fn request_service_endpoint_down_if(
+        &self,
+        still_current: Box<dyn Fn() -> bool + Send + 'static>,
+    ) {
+        RuntimeReconcilerClient::request_service_endpoint_down_if(self, still_current).await
+    }
+
+    fn service_status(&self) -> ServiceHostStatus {
+        RuntimeReconcilerClient::service_status(self)
+    }
+
+    fn observe_service_status(&self, info: chimera_ipc::types::StatusInfo<'static>) {
+        RuntimeReconcilerClient::observe_service_status(self, info)
+    }
+
+    fn observe_service_probe_failure(&self) {
+        RuntimeReconcilerClient::observe_service_probe_failure(self)
+    }
+
+    async fn start_core(&self) -> anyhow::Result<()> {
+        RuntimeReconcilerClient::start_core(self).await
+    }
+
+    async fn stop_core(&self) -> anyhow::Result<()> {
+        RuntimeReconcilerClient::stop_core(self).await
+    }
+
+    async fn shutdown(&self) -> anyhow::Result<()> {
+        RuntimeReconcilerClient::shutdown(self).await
+    }
+
+    async fn reconcile(&self) -> anyhow::Result<()> {
+        RuntimeReconcilerClient::reconcile(self).await
+    }
+
+    async fn patch_application_config(
+        &self,
+        patch: chimera_config::application::ChimeraAppConfigPatch,
+    ) -> anyhow::Result<workflow::ApplicationPatchResult> {
+        RuntimeReconcilerClient::patch_application_config(self, patch).await
+    }
+
+    async fn replace_core_binary(&self, artifact: PreparedCoreBinary) -> anyhow::Result<()> {
+        RuntimeReconcilerClient::replace_core_binary(self, artifact).await
+    }
+
+    async fn install_service(&self) -> anyhow::Result<()> {
+        RuntimeReconcilerClient::install_service(self).await
+    }
+
+    async fn uninstall_service(&self) -> anyhow::Result<()> {
+        RuntimeReconcilerClient::uninstall_service(self).await
+    }
+
+    async fn update_service(&self) -> anyhow::Result<()> {
+        RuntimeReconcilerClient::update_service(self).await
+    }
+
+    async fn start_service(&self, ready_timeout: Duration) -> anyhow::Result<()> {
+        RuntimeReconcilerClient::start_service(self, ready_timeout).await
+    }
+
+    async fn restart_service(&self, ready_timeout: Duration) -> anyhow::Result<()> {
+        RuntimeReconcilerClient::restart_service(self, ready_timeout).await
+    }
+
+    async fn stop_service(&self) -> anyhow::Result<()> {
+        RuntimeReconcilerClient::stop_service(self).await
+    }
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    async fn disable_stale_system_proxy(
+        &self,
+        system_proxy: crate::client::system_proxy::SystemProxyClient,
+        expected_port: u16,
+        expected_core_state_changed_at: i64,
+        desired_before: bool,
+        original: chimera_contracts::system_proxy::OsProxyConfig,
+        notifications: Arc<dyn crate::client::effects::ports::CommitNotifications>,
+        persist_legacy_mirror: Arc<dyn Fn() -> anyhow::Result<()> + Send + Sync>,
+    ) -> Result<(), crate::client::system_proxy::SystemProxyActionError> {
+        RuntimeReconcilerClient::disable_stale_system_proxy(
+            self,
+            system_proxy,
+            expected_port,
+            expected_core_state_changed_at,
+            desired_before,
+            original,
+            notifications,
+            persist_legacy_mirror,
+        )
+        .await
+    }
+}
+
 impl ChimeraClient {
     pub(crate) async fn core_status(&self) -> anyhow::Result<CoreStatusSnapshot> {
         // Legacy frontend IPC only has Running/Stopped. Do not collapse ref's
@@ -1700,20 +1838,20 @@ impl ChimeraClient {
         }
         // Injected legacy lifecycle fixtures deliberately omit ServiceActor.
         // Production always owns the ref ServiceClient from Tauri setup().
-        self.inner.core_lifecycle.service_status()
+        self.inner.reconciler().service_status()
     }
 
     pub(crate) fn observe_service_status(&self, info: chimera_ipc::types::StatusInfo<'static>) {
-        self.inner.core_lifecycle.observe_service_status(info);
+        self.inner.reconciler().observe_service_status(info);
     }
 
     pub(crate) fn observe_service_probe_failure(&self) {
-        self.inner.core_lifecycle.observe_service_probe_failure();
+        self.inner.reconciler().observe_service_probe_failure();
     }
 
     pub(crate) async fn request_service_endpoint_down(&self) {
         self.inner
-            .core_lifecycle
+            .reconciler()
             .request_service_endpoint_down()
             .await;
     }
@@ -1723,17 +1861,17 @@ impl ChimeraClient {
         F: Fn() -> bool + Send + 'static,
     {
         self.inner
-            .core_lifecycle
-            .request_service_endpoint_down_if(still_current)
+            .reconciler()
+            .request_service_endpoint_down_if(Box::new(still_current))
             .await;
     }
 
     pub(crate) fn core_lifecycle_status(&self) -> CoreLifecycleStatus {
-        self.inner.core_lifecycle.status()
+        self.inner.reconciler().status()
     }
 
     pub(crate) fn request_runtime_rebuild(&self) {
-        self.inner.core_lifecycle.request_runtime_rebuild();
+        self.inner.reconciler().request_runtime_rebuild();
     }
 
     pub(crate) fn runtime_transform_diagnostics(
@@ -1763,52 +1901,46 @@ impl ChimeraClient {
     }
 
     pub(crate) async fn start_core(&self) -> anyhow::Result<()> {
-        self.inner.core_lifecycle.start_core().await
+        self.inner.shared.start_core().await
     }
 
     pub(crate) async fn stop_core(&self) -> anyhow::Result<()> {
-        self.inner.core_lifecycle.stop_core().await
+        self.inner.shared.stop_core().await
     }
 
     pub(crate) async fn shutdown_core(&self) -> anyhow::Result<()> {
-        self.inner.core_lifecycle.shutdown().await
+        self.inner.shared.shutdown_core().await
     }
 
     pub(crate) async fn replace_core_binary(
         &self,
         artifact: PreparedCoreBinary,
     ) -> anyhow::Result<()> {
-        self.inner
-            .core_lifecycle
-            .replace_core_binary(artifact)
-            .await
+        self.inner.shared.replace_core_binary(artifact).await
     }
 
     pub(crate) async fn stop_service(&self) -> anyhow::Result<()> {
-        self.inner.core_lifecycle.stop_service().await
+        self.inner.reconciler().stop_service().await
     }
 
     pub(crate) async fn install_service(&self) -> anyhow::Result<()> {
-        self.inner.core_lifecycle.install_service().await
+        self.inner.reconciler().install_service().await
     }
 
     pub(crate) async fn uninstall_service(&self) -> anyhow::Result<()> {
-        self.inner.core_lifecycle.uninstall_service().await
+        self.inner.reconciler().uninstall_service().await
     }
 
     pub(crate) async fn update_service(&self) -> anyhow::Result<()> {
-        self.inner.core_lifecycle.update_service().await
+        self.inner.reconciler().update_service().await
     }
 
     pub(crate) async fn start_service(&self, ready_timeout: Duration) -> anyhow::Result<()> {
-        self.inner.core_lifecycle.start_service(ready_timeout).await
+        self.inner.reconciler().start_service(ready_timeout).await
     }
 
     pub(crate) async fn restart_service(&self, ready_timeout: Duration) -> anyhow::Result<()> {
-        self.inner
-            .core_lifecycle
-            .restart_service(ready_timeout)
-            .await
+        self.inner.reconciler().restart_service(ready_timeout).await
     }
 }
 

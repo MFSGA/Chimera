@@ -12,7 +12,7 @@ impl ChimeraClient {
     /// if the older Chimera CoreLifecycle transport loses its reply.
     pub(crate) async fn startup_reconcile(&self) -> StartupReport {
         let report = chimera_core::client::app_lifecycle::startup_report(
-            self.inner.core_lifecycle.startup_reconcile().await,
+            self.inner.reconciler().startup_reconcile().await,
         );
         // The ref actors, not LegacyCoreBridge, own the current host and
         // Service phase. Surface those typed projections while the

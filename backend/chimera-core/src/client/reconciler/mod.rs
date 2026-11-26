@@ -78,3 +78,5 @@ pub mod actor;
 pub mod application_workflow;
 
 pub mod source_transaction;
+
+pub mod facade;

@@ -65,7 +65,7 @@ impl ChimeraClient {
                 ..Default::default()
             })
             .await?;
-        self.inner.core_lifecycle.source_committed(
+        self.inner.reconciler().source_committed(
             crate::client::reconciler::committed::SourceDomain::Application,
             snapshot.version,
             false,

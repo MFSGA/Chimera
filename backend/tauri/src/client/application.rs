@@ -104,7 +104,7 @@ impl ChimeraClient {
         let persist_legacy_mirror: Arc<dyn Fn() -> anyhow::Result<()> + Send + Sync> =
             Arc::new(persist_legacy_application_mirror);
         self.inner
-            .core_lifecycle
+            .reconciler()
             .disable_stale_system_proxy(
                 system_proxy.clone(),
                 expected_port,
@@ -187,7 +187,7 @@ impl ChimeraClient {
         } else if requires_reconcile {
             let report = self
                 .inner
-                .core_lifecycle
+                .reconciler()
                 .patch_application_config(patch)
                 .await?;
             (
@@ -202,7 +202,7 @@ impl ChimeraClient {
         if notified_version.is_none() {
             // Already-applied legacy domains only publish their source version.
             // Retryable postcommit failures still request owner convergence.
-            self.inner.core_lifecycle.source_committed(
+            self.inner.reconciler().source_committed(
                 super::reconciler::committed::SourceDomain::Application,
                 snapshot.version,
                 degradations
@@ -309,7 +309,7 @@ impl ChimeraClient {
         if report.checked_version.is_none() {
             // Checked typed builder flags publish their exact CAS version
             // through the source owner. No legacy notice may replay Core.
-            self.inner.core_lifecycle.source_committed(
+            self.inner.reconciler().source_committed(
                 super::reconciler::committed::SourceDomain::Clash,
                 snapshot.version,
                 degradations
@@ -824,7 +824,7 @@ async fn patch_legacy_uncoordinated(client: &ChimeraClient, patch: IVerge) -> Re
             CommittedLegacyDomain::Application {
                 committed_version, ..
             } => {
-                client.inner.core_lifecycle.source_committed(
+                client.inner.reconciler().source_committed(
                     super::reconciler::committed::SourceDomain::Application,
                     *committed_version,
                     false,
@@ -833,7 +833,7 @@ async fn patch_legacy_uncoordinated(client: &ChimeraClient, patch: IVerge) -> Re
             CommittedLegacyDomain::Clash {
                 committed_version, ..
             } => {
-                client.inner.core_lifecycle.source_committed(
+                client.inner.reconciler().source_committed(
                     super::reconciler::committed::SourceDomain::Clash,
                     *committed_version,
                     false,
