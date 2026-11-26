@@ -194,7 +194,7 @@ fn linked_declarations_match_the_resource_table_and_unlinked_commands_stay_known
         .filter(|c| c.handler.is_some())
         .map(|c| c.metadata.name)
         .collect();
-    assert_eq!(linked.len(), 98);
+    assert_eq!(linked.len(), 100);
     for name in [
         "activate_profile",
         "clash_api_delete_connections",
@@ -235,6 +235,7 @@ fn linked_declarations_match_the_resource_table_and_unlinked_commands_stay_known
         "get_core_status_summary",
         "get_hotkey_functions",
         "get_hotkeys",
+        "get_ip_lookup_providers",
         "get_postprocessing_output",
         "get_runtime_config",
         "get_runtime_exists",
@@ -288,6 +289,7 @@ fn linked_declarations_match_the_resource_table_and_unlinked_commands_stay_known
         "set_clash_ws_recording",
         "set_global_transforms",
         "set_profile_layout",
+        "set_proxy_mode",
         "set_profile_valid_fields",
         "set_proxy_group_layout",
         "set_storage_item",
@@ -325,9 +327,9 @@ fn linked_declarations_match_the_resource_table_and_unlinked_commands_stay_known
             chimera_contracts::auth::Access::Write
         );
     }
-    assert!(!commands["set_proxy_mode"].linked(RpcTarget::Desktop));
+    assert!(!commands["get_core_dir"].linked(RpcTarget::Desktop));
     assert_eq!(
-        commands["set_proxy_mode"]
+        commands["get_core_dir"]
             .neutral_handler(RpcTarget::Desktop)
             .unwrap_err()
             .kind,

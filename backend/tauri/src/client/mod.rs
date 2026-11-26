@@ -1271,6 +1271,45 @@ mod tests {
             true
         );
 
+        // A proxy-only writer can change the mode, but cannot change LAN/secret.
+        let proxy = caller(Resource::Proxy);
+        let before_mode = client.inner.clash_config.snapshot();
+        let before_overrides = serde_json::to_value(&before_mode.state.overrides).unwrap();
+        let mode = if before_overrides["mode"] == "direct" {
+            "rule"
+        } else {
+            "direct"
+        };
+        let result = rpc
+            .call(
+                RpcTransport::Local,
+                "set_proxy_mode",
+                proxy.clone(),
+                serde_json::json!({"mode": mode}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(result["commits"][0]["domain"], "clash");
+        let after = client.inner.clash_config.snapshot();
+        assert!(after.version > before_mode.version);
+        let mut expected = before_overrides;
+        expected["mode"] = serde_json::json!(mode);
+        assert_eq!(
+            serde_json::to_value(&after.state.overrides).unwrap(),
+            expected
+        );
+        let denied = rpc
+            .call(
+                RpcTransport::Http,
+                "patch_runtime_access",
+                proxy,
+                serde_json::json!({"patch":{"allow-lan":false}}),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(denied.kind, "forbidden");
+        assert_eq!(client.inner.clash_config.snapshot().version, after.version);
+
         let initial = rpc
             .call(
                 RpcTransport::Http,
@@ -1699,7 +1738,7 @@ mod tests {
         let unlinked = rpc
             .call(
                 RpcTransport::TauriIpc,
-                "set_proxy_mode",
+                "get_core_dir",
                 owner.clone(),
                 serde_json::json!({}),
             )

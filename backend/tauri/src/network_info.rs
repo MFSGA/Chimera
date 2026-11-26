@@ -1,8 +1,7 @@
 //! Desktop entry points for shared direct-egress discovery.
 use crate::client::ChimeraClient;
 use chimera_config::application::{
-    IpLookupProvider, IpLookupProviderInfo, StunServer, StunServerCapabilities,
-    validate_public_ip_probe_sources,
+    IpLookupProviderInfo, StunServer, StunServerCapabilities, validate_public_ip_probe_sources,
 };
 use chimera_contracts::net::DirectEgressProbe as _;
 #[cfg(test)]
@@ -11,7 +10,7 @@ pub use chimera_contracts::net::{DirectEgress, StunServerTest};
 use chimera_net::direct_egress::NetworkDirectEgressProbe;
 
 pub fn ip_lookup_providers() -> Vec<IpLookupProviderInfo> {
-    IpLookupProvider::ALL.into_iter().map(Into::into).collect()
+    chimera_rpc::commands::system::network::get_ip_lookup_providers()
 }
 
 pub async fn probe_direct_egress(client: &ChimeraClient) -> anyhow::Result<DirectEgress> {
@@ -38,6 +37,7 @@ pub async fn test_stun_server(host: String, port: u16) -> anyhow::Result<StunSer
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chimera_config::application::IpLookupProvider;
     #[test]
     fn lookup_source_preserves_which_consented_service_answered() {
         assert_eq!(
