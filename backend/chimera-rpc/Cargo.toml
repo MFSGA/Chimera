@@ -6,6 +6,8 @@ license.workspace = true
 authors.workspace = true
 
 [dependencies]
+chimera-logging = { path = "../chimera-runtime/crates/chimera-logging", features = ["specta"] }
+chimera-traffic = { path = "../chimera-traffic" }
 chimera-jobs = { path = "../chimera-jobs" }
 chimera-profile-transform = { path = "../chimera-profile-transform" }
 clash-api = { workspace = true }

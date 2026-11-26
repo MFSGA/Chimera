@@ -1158,6 +1158,122 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn shared_rpc_log_sessions_keep_transport_owner_and_summary_privacy() {
+        use chimera_contracts::auth::{Grant, Principal, Role};
+        use chimera_rpc::{audit::RpcTransport, registry::RpcCaller};
+        use chimera_rpc_protocol::{AuthContext, RpcOwner};
+        let (mut client, _) = recording_client(false).await;
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("clash-chimera.2026-11-26.app.log"),
+            "{\"level\":\"INFO\",\"fields\":{\"message\":\"private-log-sentinel\"}}\n",
+        )
+        .unwrap();
+        let logs = chimera_core::client::logs::FileLogsClient::start(dir.path().to_path_buf())
+            .await
+            .unwrap();
+        Arc::get_mut(&mut client.inner)
+            .unwrap()
+            .shared
+            .test_set_file_logs(logs.clone());
+        let rpc = client.rpc().unwrap();
+        let owner = RpcCaller::desktop("owner");
+        let other = RpcCaller::desktop("other");
+        let viewer = RpcCaller::new(
+            AuthContext::new(
+                Principal::Token {
+                    id: "viewer".into(),
+                    name: "viewer".into(),
+                },
+                Grant::Role(Role::Viewer),
+            ),
+            RpcOwner::new("viewer".into()),
+        );
+        let catalog = rpc
+            .call(
+                RpcTransport::Http,
+                "list_log_files",
+                viewer.clone(),
+                serde_json::json!({"source":"app"}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(catalog.as_array().unwrap().len(), 1);
+        let open = serde_json::json!({"source":"app","request":{"request_id":"test","file":null}});
+        let opened = rpc
+            .call(
+                RpcTransport::TauriIpc,
+                "open_log_session",
+                owner.clone(),
+                open.clone(),
+            )
+            .await
+            .unwrap();
+        let session = opened["id"].as_str().unwrap();
+        let request = serde_json::json!({"source":"app","request":{"session":session,"filter":{"levels":[],"target":null,"from_ms":null,"to_ms":null,"text":null},"direction":"latest","cursor":null,"limit":10}});
+        let foreign = rpc
+            .call(RpcTransport::TauriIpc, "query_logs", other, request.clone())
+            .await
+            .unwrap_err();
+        assert_eq!(foreign.message, "log session expired");
+        let denied = rpc
+            .call(RpcTransport::Http, "query_logs", viewer.clone(), request)
+            .await
+            .unwrap_err();
+        assert_eq!(denied.kind, "forbidden");
+        let public_session = rpc
+            .call(RpcTransport::Http, "open_log_session", viewer.clone(), open)
+            .await
+            .unwrap();
+        let summary_request = serde_json::json!({"source":"app","request":{"session":public_session["id"],"filter":{"levels":[],"from_ms":null,"to_ms":null},"direction":"latest","cursor":null,"limit":10}});
+        let mut summary = serde_json::Value::Null;
+        for _ in 0..100 {
+            summary = rpc
+                .call(
+                    RpcTransport::Http,
+                    "query_logs_summary",
+                    viewer.clone(),
+                    summary_request.clone(),
+                )
+                .await
+                .unwrap();
+            if !summary["rows"].as_array().unwrap().is_empty() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        assert_eq!(summary["rows"].as_array().unwrap().len(), 1);
+        assert!(!summary.to_string().contains("private-log-sentinel"));
+        let denied = rpc
+            .call(
+                RpcTransport::Http,
+                "clear_core_logs",
+                viewer.clone(),
+                serde_json::json!({}),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(denied.kind, "forbidden");
+        rpc.call(
+            RpcTransport::TauriIpc,
+            "close_log_session",
+            owner,
+            serde_json::json!({"source":"app","session":session}),
+        )
+        .await
+        .unwrap();
+        rpc.call(
+            RpcTransport::Http,
+            "close_log_session",
+            viewer,
+            serde_json::json!({"source":"app","session":public_session["id"]}),
+        )
+        .await
+        .unwrap();
+        logs.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
     async fn shared_rpc_storage_uses_existing_owner_and_namespace() {
         use chimera_contracts::auth::{Grant, Principal, Role};
         use chimera_core::storage::{WebStorage, frontend::set_web_storage_item};

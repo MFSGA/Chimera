@@ -194,7 +194,7 @@ fn linked_declarations_match_the_resource_table_and_unlinked_commands_stay_known
         .filter(|c| c.handler.is_some())
         .map(|c| c.metadata.name)
         .collect();
-    assert_eq!(linked.len(), 69);
+    assert_eq!(linked.len(), 86);
     for name in [
         "activate_profile",
         "clash_api_delete_connections",
@@ -210,8 +210,10 @@ fn linked_declarations_match_the_resource_table_and_unlinked_commands_stay_known
         "clash_api_healthcheck_proxy_provider",
         "clash_api_query_dns",
         "clash_api_update_providers_rules",
+        "clear_core_logs",
         "clear_proxy_fixed",
         "clear_storage",
+        "close_log_session",
         "create_profile",
         "create_profile_folder",
         "create_proxy_group_folder",
@@ -224,6 +226,9 @@ fn linked_declarations_match_the_resource_table_and_unlinked_commands_stay_known
         "get_clash_info",
         "get_clash_settings",
         "get_config_features",
+        "get_core_log",
+        "get_core_log_status",
+        "get_core_log_status_summary",
         "get_core_status",
         "get_core_status_summary",
         "get_hotkey_functions",
@@ -239,8 +244,11 @@ fn linked_declarations_match_the_resource_table_and_unlinked_commands_stay_known
         "get_proxy_group_icons",
         "get_service_status_summary",
         "get_storage_item",
+        "get_traffic_summary",
         "import_profile",
+        "list_log_files",
         "mutate_proxies",
+        "open_log_session",
         "patch_app_config",
         "patch_clash_config",
         "patch_clash_system_config",
@@ -248,6 +256,15 @@ fn linked_declarations_match_the_resource_table_and_unlinked_commands_stay_known
         "patch_remote_profile_options",
         "patch_system_settings",
         "probe_direct_egress",
+        "query_core_logs",
+        "query_core_logs_summary",
+        "query_logs",
+        "query_logs_summary",
+        "query_traffic_active_connection_ids",
+        "query_traffic_closed_connections",
+        "query_traffic_report",
+        "query_traffic_usage",
+        "query_traffic_usage_by_keys",
         "read_profile_file",
         "remove_storage_item",
         "reorder_profile",

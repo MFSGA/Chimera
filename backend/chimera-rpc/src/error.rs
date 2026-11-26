@@ -53,6 +53,21 @@ pub fn application_error_for(
             }
             break;
         }
+        if let Some(log) = cause.downcast_ref::<chimera_core::logs::query::CoreLogError>() {
+            use chimera_core::logs::query::CoreLogError as E;
+            use chimera_rpc_protocol::types::PublicCoreLogReadError as P;
+            let projected = match log {
+                E::InvalidRequest => P::InvalidRequest,
+                E::CursorExpired => P::CursorExpired,
+                E::RecordGone => P::RecordGone,
+                E::TooLarge => P::TooLarge,
+                E::Unavailable(_) => P::Unavailable,
+            };
+            if visibility == ResponseVisibility::Public {
+                result.domain_error = encode(PublicFailure::CoreLogRead(projected));
+            }
+            break;
+        }
         if let Some(dns) = cause.downcast_ref::<SystemDnsError>() {
             if visibility == ResponseVisibility::Public {
                 result.domain_error =

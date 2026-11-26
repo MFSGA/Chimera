@@ -250,6 +250,13 @@ impl ChimeraClient {
         &self.inner.typed_profiles
     }
     #[cfg(feature = "test-support")]
+    pub fn test_set_file_logs(&mut self, value: crate::client::logs::FileLogsClient) {
+        Arc::get_mut(&mut self.inner)
+            .expect("one shared fixture owner")
+            .file_logs = Some(value);
+    }
+
+    #[cfg(feature = "test-support")]
     pub fn test_set_core_api(&mut self, value: Option<CoreClientV2>) {
         Arc::get_mut(&mut self.inner)
             .expect("one shared fixture owner")
