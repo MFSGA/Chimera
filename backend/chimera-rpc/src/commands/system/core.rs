@@ -36,3 +36,10 @@ pub async fn get_core_status(
         .ok_or_else(|| anyhow::anyhow!("CoreActor is not connected"))?
         .into())
 }
+
+#[chimera_rpc::rpc(query, expose = [http], sensitive)]
+pub fn get_core_dir(
+    resolver: RpcState<'_, dyn crate::ports::CoreDirectoryResolver>,
+) -> anyhow::Result<String> {
+    resolver.core_directory()
+}

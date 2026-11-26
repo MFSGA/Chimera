@@ -230,6 +230,12 @@ impl ChimeraClient {
             .get_or_init(|| {
                 UnifiedRpc::new(
                     RpcDependencies {
+                        core_directory: Some(Arc::new(
+                            crate::adapters::rpc_host::DesktopCoreDirectory,
+                        )),
+                        host_environment: chimera_rpc::ports::HostEnvironment {
+                            is_appimage: *crate::consts::IS_APPIMAGE,
+                        },
                         configuration_mutations: Some(Arc::new(DesktopConfigurationMutations(
                             Arc::downgrade(&self.inner),
                         ))),
@@ -1735,10 +1741,39 @@ mod tests {
                 .unwrap_err();
             assert_eq!(error.kind, "forbidden", "{method}");
         }
+        let expected_dir = dunce::canonicalize(
+            tauri::utils::platform::current_exe()
+                .unwrap()
+                .parent()
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            rpc.call(
+                RpcTransport::TauriIpc,
+                "get_core_dir",
+                owner.clone(),
+                serde_json::json!({})
+            )
+            .await
+            .unwrap(),
+            serde_json::json!(expected_dir.to_string_lossy())
+        );
+        assert_eq!(
+            rpc.call(
+                RpcTransport::TauriIpc,
+                "is_appimage",
+                owner.clone(),
+                serde_json::json!({})
+            )
+            .await
+            .unwrap(),
+            serde_json::json!(*crate::consts::IS_APPIMAGE)
+        );
         let unlinked = rpc
             .call(
                 RpcTransport::TauriIpc,
-                "get_core_dir",
+                "change_clash_core",
                 owner.clone(),
                 serde_json::json!({}),
             )

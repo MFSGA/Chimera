@@ -32,6 +32,7 @@ pub mod error;
 pub mod audit;
 pub mod events;
 pub mod permission;
+pub mod ports;
 pub mod redaction;
 pub mod registry;
 

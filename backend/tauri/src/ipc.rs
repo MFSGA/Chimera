@@ -842,8 +842,10 @@ pub async fn discard_app_update_package(
 
 #[tauri::command]
 #[specta::specta]
-pub fn is_appimage() -> Result<bool> {
-    Ok(*crate::consts::IS_APPIMAGE)
+pub async fn is_appimage(client: State<'_, ChimeraClient>, window: tauri::Window) -> Result<bool> {
+    Ok(client
+        .call_shared_rpc(window.label(), "is_appimage", serde_json::json!({}))
+        .await?)
 }
 
 #[tauri::command]
@@ -1095,13 +1097,13 @@ pub fn get_server_port() -> Result<u16> {
 
 #[tauri::command]
 #[specta::specta]
-pub fn get_core_dir() -> Result<String> {
-    let core_dir = tauri::utils::platform::current_exe()?;
-    let core_dir = core_dir
-        .parent()
-        .ok_or_else(|| anyhow!("failed to get core dir"))?;
-    let core_dir = dunce::canonicalize(core_dir)?;
-    Ok(core_dir.to_string_lossy().to_string())
+pub async fn get_core_dir(
+    client: State<'_, ChimeraClient>,
+    window: tauri::Window,
+) -> Result<String> {
+    Ok(client
+        .call_shared_rpc(window.label(), "get_core_dir", serde_json::json!({}))
+        .await?)
 }
 
 #[tauri::command]

@@ -194,7 +194,7 @@ fn linked_declarations_match_the_resource_table_and_unlinked_commands_stay_known
         .filter(|c| c.handler.is_some())
         .map(|c| c.metadata.name)
         .collect();
-    assert_eq!(linked.len(), 100);
+    assert_eq!(linked.len(), 102);
     for name in [
         "activate_profile",
         "clash_api_delete_connections",
@@ -228,6 +228,7 @@ fn linked_declarations_match_the_resource_table_and_unlinked_commands_stay_known
         "get_clash_settings",
         "get_clash_ws_snapshot",
         "get_config_features",
+        "get_core_dir",
         "get_core_log",
         "get_core_log_status",
         "get_core_log_status_summary",
@@ -255,6 +256,7 @@ fn linked_declarations_match_the_resource_table_and_unlinked_commands_stay_known
         "get_service_status_summary",
         "get_storage_item",
         "get_traffic_summary",
+        "is_appimage",
         "import_profile",
         "list_log_files",
         "mutate_proxies",
@@ -327,9 +329,9 @@ fn linked_declarations_match_the_resource_table_and_unlinked_commands_stay_known
             chimera_contracts::auth::Access::Write
         );
     }
-    assert!(!commands["get_core_dir"].linked(RpcTarget::Desktop));
+    assert!(!commands["change_clash_core"].linked(RpcTarget::Desktop));
     assert_eq!(
-        commands["get_core_dir"]
+        commands["change_clash_core"]
             .neutral_handler(RpcTarget::Desktop)
             .unwrap_err()
             .kind,
