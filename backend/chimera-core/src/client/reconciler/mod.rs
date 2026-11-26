@@ -72,3 +72,5 @@ pub mod service_observer;
 pub mod client;
 
 pub mod actor_state;
+
+pub mod actor;

@@ -31,8 +31,12 @@ use std::{
 /// Host workflow adapter: borrow the original progress and lifecycle, and
 /// delegate only the existing desktop ownership/legacy fixture operations.
 #[async_trait::async_trait]
-pub trait MailboxWorkflow<P: Send + 'static>: WorkerWorkflow<Command<P>> + Send + 'static {
-    type Lifecycle: StartupTransactionHost;
+pub trait MailboxWorkflow<P: Send + 'static>:
+    WorkerWorkflow<Command<P>> + Sized + Send + 'static
+{
+    type Lifecycle: StartupTransactionHost<Core = dyn crate::client::core_lifecycle::ports::CoreLifecyclePort>
+        + super::apply_executor::ApplyHost
+        + 'static;
     fn lifecycle(&self) -> &Self::Lifecycle;
     fn progress(&self) -> &WorkflowProgress;
     fn progress_mut(&mut self) -> &mut WorkflowProgress;
@@ -41,6 +45,26 @@ pub trait MailboxWorkflow<P: Send + 'static>: WorkerWorkflow<Command<P>> + Send 
     async fn service_release_observation(&self) -> super::release::ReleaseObservation;
     fn reject_workflow_command(command: &mut Command<P>, error: &anyhow::Error);
     fn admit_workflow_command(&self, command: &Command<P>) -> anyhow::Result<()>;
+    fn lifecycle_handle(&self) -> Arc<Self::Lifecycle>;
+    fn install_candidate_gate(&self, gate: Arc<super::check::CandidateCheck>)
+    -> anyhow::Result<()>;
+    fn legacy_service_connected() -> bool;
+    fn checked_clash_notice(notice: Result<(), String>);
+    fn take_prepared_outcome(&self) -> Option<super::mutation::ApplyOutcome>;
+    fn take_checked_connection_effect(&self) -> Option<super::apply::CheckedConnectionEffect>;
+    async fn effect_port_binding(
+        &self,
+    ) -> Option<chimera_config::runtime::executor::ResolvedPortBindings>;
+    fn runtime_bound(&self, ports: Option<chimera_config::runtime::executor::ResolvedPortBindings>);
+    async fn service_endpoint_recovery_due(&self) -> bool;
+    // Production refuses fixture messages even when Cargo unifies test-support.
+    async fn handle_test_message(
+        _message: Message<Self, P>,
+        _state: &mut RuntimeReconcilerMailbox<Self, P>,
+    ) -> Result<bool, ractor::ActorProcessingErr> {
+        Err(anyhow::anyhow!("test-only reconciler message in production").into())
+    }
+    fn restore_pending_connection(_state: &mut RuntimeReconcilerMailbox<Self, P>) {}
 }
 
 pub struct RuntimeReconcilerMailbox<W: Send + 'static, P: Send + 'static> {
