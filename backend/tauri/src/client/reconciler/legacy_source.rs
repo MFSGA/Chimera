@@ -91,12 +91,8 @@ impl CoreLifecycleWorkflow {
         Arc<chimera_config::profile::Profiles>,
         std::collections::BTreeMap<String, String>,
     )> {
-        let inputs = self
-            .capture_committed_profile_inputs_for(app, clash)
-            .await?;
-        let target = inputs.checked_target_key()?;
-        let (app, clash, profiles, content) = inputs.into_parts()?;
-        Ok((target, app, clash, profiles, content))
+        chimera_core::client::reconciler::startup_convergence::capture_target(self, app, clash)
+            .await
     }
 
     pub(in crate::client) async fn startup_target_identity(&self) -> anyhow::Result<String> {

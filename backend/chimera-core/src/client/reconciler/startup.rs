@@ -89,3 +89,72 @@ pub enum CommittedRound {
     LegacyRecovery,
     Settled(anyhow::Result<()>),
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::client::convergence::ConvergenceHealth;
+
+    #[test]
+    fn ref_start_and_core_change_join_the_canonical_convergence_round() {
+        for trigger in [Trigger::Start, Trigger::CoreChanged, Trigger::Startup] {
+            assert!(uses_committed_convergence(trigger, true));
+            assert!(!uses_committed_convergence(trigger, false));
+        }
+        for trigger in [Trigger::SourceCommitted, Trigger::Retry] {
+            assert!(uses_committed_convergence(trigger, true));
+            assert!(uses_committed_convergence(trigger, false));
+        }
+        for trigger in [
+            Trigger::Stop,
+            Trigger::ServiceOperation,
+            Trigger::PrepareService,
+        ] {
+            assert!(!uses_committed_convergence(trigger, true));
+        }
+    }
+
+    #[test]
+    fn ref_startup_projection_distinguishes_all_reconciler_conclusions() {
+        assert!(matches!(
+            StartupOutcome::from_conclusion(&Conclusion::Converged),
+            StartupOutcome::Ready
+        ));
+        assert!(matches!(
+            StartupOutcome::from_conclusion(&Conclusion::Inactive),
+            StartupOutcome::Ready
+        ));
+        let waiting = Arc::new(RuntimeError::new("service is not ready"));
+        assert!(
+            matches!(StartupOutcome::from_conclusion(&Conclusion::Waiting {cause: waiting}),
+            StartupOutcome::ReadyDegraded {health: ConvergenceHealth::WaitingDependency, reason} if reason.contains("service is not ready"))
+        );
+        let refused = Arc::new(RuntimeError::CoreRejectedConfig {
+            core_kind: None,
+            message: "candidate invalid".into(),
+        });
+        assert!(
+            matches!(StartupOutcome::from_conclusion(&Conclusion::NotInEffect {cause: refused}),
+            StartupOutcome::ReadyDegraded {health: ConvergenceHealth::Blocked, reason} if reason.contains("candidate invalid"))
+        );
+        let unknown = Arc::new(RuntimeError::new("result could not be observed"));
+        assert!(
+            matches!(StartupOutcome::from_conclusion(&Conclusion::Unknown {cause: unknown}),
+            StartupOutcome::RecoveryRequired {reason} if reason.contains("result could not be observed"))
+        );
+        assert!(
+            matches!(StartupOutcome::from_conclusion(&Conclusion::Closed),
+            StartupOutcome::RecoveryRequired {reason} if reason == RuntimeError::ShuttingDown.to_string())
+        );
+    }
+
+    #[test]
+    fn ref_startup_cause_keeps_the_exact_typed_reason() {
+        let cause = cause("service owner not established".into());
+        assert!(matches!(
+            cause.as_ref(),
+            RuntimeError::ConfigurationNotInEffect { .. }
+        ));
+        assert!(cause.to_string().contains("service owner not established"));
+    }
+}

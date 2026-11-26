@@ -64,3 +64,5 @@ pub mod composition;
 pub mod application_command;
 
 pub mod dispatch;
+
+pub mod startup_convergence;
