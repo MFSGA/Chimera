@@ -16,7 +16,7 @@ use chimera_config::{
     },
 };
 use chimera_ipc::api::{core::v2::CoreEffectiveConfig, status::ConfigRevisionInfo};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone)]
 pub struct RuntimeInspectionData {
@@ -54,7 +54,7 @@ pub struct EffectiveInspection {
     pub changed_fields: Option<Vec<String>>,
 }
 
-#[derive(Debug, Clone, Serialize, specta::Type)]
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
 pub struct RuntimeInspection {
     pub snapshot_id: String,
     /// Whether the selected build matches the currently active core receipt.
@@ -69,7 +69,7 @@ pub struct RuntimeInspection {
     pub nodes: Vec<RuntimeInspectionNode>,
 }
 
-#[derive(Debug, Clone, Serialize, specta::Type)]
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
 pub struct RuntimeInspectionNode {
     pub id: u32,
     pub tag: chimera_config::runtime::snapshot::OperatorTag,
@@ -81,14 +81,14 @@ pub struct RuntimeInspectionNode {
     pub changed_fields: Option<Vec<String>>,
 }
 
-#[derive(Debug, Clone, Serialize, specta::Type)]
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
 pub struct RuntimeInspectionContent {
     pub yaml: String,
     pub diff: Option<RuntimeInspectionDiff>,
     pub logs: Vec<StepLogEntry>,
 }
 
-#[derive(Debug, Clone, Serialize, specta::Type)]
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
 pub struct RuntimeInspectionDiff {
     pub parent_id: u32,
     pub hunks: Vec<SnapshotDiffHunk>,
@@ -1029,5 +1029,51 @@ mod reader_tests {
                 .inspection_content(&first.inspection_id, u32::MAX)
                 .is_err()
         );
+    }
+}
+
+impl super::ChimeraClient {
+    fn inspection_reader(&self) -> RuntimeInspectionReader<'_> {
+        RuntimeInspectionReader::new(self.core().as_ref(), self.core_api().as_ref())
+    }
+
+    pub async fn promoted_runtime(&self) -> Option<std::sync::Arc<RuntimeSnapshot>> {
+        self.core().promoted_runtime_snapshot()
+    }
+
+    pub async fn runtime_config(&self) -> anyhow::Result<Option<serde_json::Value>> {
+        self.promoted_runtime()
+            .await
+            .as_ref()
+            .map(|state| state.config_json())
+            .transpose()
+    }
+
+    pub async fn runtime_yaml(&self) -> anyhow::Result<String> {
+        let state = self.promoted_runtime().await.ok_or_else(|| {
+            anyhow::anyhow!(
+                "runtime configuration is unavailable: no promoted runtime snapshot; \
+                 start the selected core and apply a profile first"
+            )
+        })?;
+        Ok(state.runtime_yaml().to_owned())
+    }
+
+    pub async fn inspect_runtime(&self) -> Option<RuntimeInspection> {
+        self.inspection_reader().inspect_runtime().await
+    }
+
+    pub async fn inspect_applied_runtime(&self) -> Option<RuntimeInspection> {
+        self.inspection_reader().inspect_applied_runtime().await
+    }
+
+    pub async fn inspect_runtime_node(
+        &self,
+        snapshot_id: &str,
+        node_id: u32,
+    ) -> anyhow::Result<RuntimeInspectionContent> {
+        self.inspection_reader()
+            .inspect_runtime_node(snapshot_id, node_id)
+            .await
     }
 }

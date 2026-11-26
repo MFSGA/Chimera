@@ -1632,7 +1632,7 @@ mod tests {
             described
                 .commands
                 .iter()
-                .any(|c| c.name == "get_runtime_config" && !c.allowed)
+                .any(|c| c.name == "get_runtime_config" && c.allowed)
         );
         let expected = serde_json::to_value(client.config_features()).unwrap();
         assert_eq!(
@@ -1658,10 +1658,48 @@ mod tests {
             .unwrap_err();
         assert_eq!(denied.kind, "forbidden");
         assert_eq!(*events.lock().unwrap(), before);
+        // With no promoted snapshot, the linked runtime query returns JSON null.
+        assert_eq!(
+            rpc.call(
+                RpcTransport::TauriIpc,
+                "get_runtime_config",
+                owner.clone(),
+                serde_json::json!({}),
+            )
+            .await
+            .unwrap(),
+            serde_json::Value::Null
+        );
+        // A caller without profile permission must not read any runtime document.
+        let restricted = RpcCaller::new(
+            AuthContext::new(
+                Principal::Token {
+                    id: "settings-only".into(),
+                    name: "settings-only".into(),
+                },
+                Grant::Custom(chimera_contracts::auth::Permissions::NONE.with(
+                    chimera_contracts::auth::Resource::Settings,
+                    chimera_contracts::auth::Access::Read,
+                )),
+            ),
+            RpcOwner::new("restricted-owner".into()),
+        );
+        for method in ["get_runtime_config", "get_runtime_yaml", "inspect_runtime"] {
+            let error = rpc
+                .call(
+                    RpcTransport::Http,
+                    method,
+                    restricted.clone(),
+                    serde_json::json!({}),
+                )
+                .await
+                .unwrap_err();
+            assert_eq!(error.kind, "forbidden", "{method}");
+        }
         let unlinked = rpc
             .call(
                 RpcTransport::TauriIpc,
-                "get_runtime_config",
+                "set_proxy_mode",
                 owner.clone(),
                 serde_json::json!({}),
             )

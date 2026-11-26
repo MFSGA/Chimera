@@ -194,7 +194,7 @@ fn linked_declarations_match_the_resource_table_and_unlinked_commands_stay_known
         .filter(|c| c.handler.is_some())
         .map(|c| c.metadata.name)
         .collect();
-    assert_eq!(linked.len(), 91);
+    assert_eq!(linked.len(), 98);
     for name in [
         "activate_profile",
         "clash_api_delete_connections",
@@ -235,6 +235,13 @@ fn linked_declarations_match_the_resource_table_and_unlinked_commands_stay_known
         "get_core_status_summary",
         "get_hotkey_functions",
         "get_hotkeys",
+        "get_postprocessing_output",
+        "get_runtime_config",
+        "get_runtime_exists",
+        "get_runtime_yaml",
+        "inspect_applied_runtime",
+        "inspect_runtime",
+        "inspect_runtime_node",
         "get_profile_sync_logs",
         "get_profile_sync_runs",
         "get_profile_sync_runs_summary",
@@ -318,9 +325,9 @@ fn linked_declarations_match_the_resource_table_and_unlinked_commands_stay_known
             chimera_contracts::auth::Access::Write
         );
     }
-    assert!(!commands["get_runtime_config"].linked(RpcTarget::Desktop));
+    assert!(!commands["set_proxy_mode"].linked(RpcTarget::Desktop));
     assert_eq!(
-        commands["get_runtime_config"]
+        commands["set_proxy_mode"]
             .neutral_handler(RpcTarget::Desktop)
             .unwrap_err()
             .kind,

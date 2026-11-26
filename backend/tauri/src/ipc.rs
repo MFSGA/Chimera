@@ -260,43 +260,69 @@ pub fn get_runtime_transform_diagnostics(
 #[specta::specta]
 pub async fn inspect_runtime(
     client: State<'_, ChimeraClient>,
+    window: tauri::Window,
 ) -> Result<Option<RuntimeInspection>> {
-    Ok(client.inspect_runtime().await)
+    Ok(client
+        .call_shared_rpc(window.label(), "inspect_runtime", serde_json::json!({}))
+        .await?)
 }
 
 #[tauri::command]
 #[specta::specta]
 pub async fn inspect_applied_runtime(
     client: State<'_, ChimeraClient>,
+    window: tauri::Window,
 ) -> Result<Option<RuntimeInspection>> {
-    Ok(client.inspect_applied_runtime().await)
+    Ok(client
+        .call_shared_rpc(
+            window.label(),
+            "inspect_applied_runtime",
+            serde_json::json!({}),
+        )
+        .await?)
 }
 
 #[tauri::command]
 #[specta::specta]
-pub async fn get_runtime_exists(client: State<'_, ChimeraClient>) -> Result<Vec<String>> {
-    Ok(client.runtime_exists().await)
+pub async fn get_runtime_exists(
+    client: State<'_, ChimeraClient>,
+    window: tauri::Window,
+) -> Result<Vec<String>> {
+    Ok(client
+        .call_shared_rpc(window.label(), "get_runtime_exists", serde_json::json!({}))
+        .await?)
 }
 
 #[tauri::command]
 #[specta::specta]
 pub async fn get_postprocessing_output(
     client: State<'_, ChimeraClient>,
+    window: tauri::Window,
 ) -> Result<PostProcessingOutput> {
     Ok(client
-        .promoted_runtime_snapshot()
-        .map(|snapshot| snapshot.postprocessing_output.clone())
-        .unwrap_or_default())
+        .call_shared_rpc(
+            window.label(),
+            "get_postprocessing_output",
+            serde_json::json!({}),
+        )
+        .await?)
 }
 
 #[tauri::command]
 #[specta::specta]
 pub async fn inspect_runtime_node(
     client: State<'_, ChimeraClient>,
+    window: tauri::Window,
     snapshot_id: String,
     node_id: u32,
 ) -> Result<RuntimeInspectionContent> {
-    Ok(client.inspect_runtime_node(&snapshot_id, node_id).await?)
+    Ok(client
+        .call_shared_rpc(
+            window.label(),
+            "inspect_runtime_node",
+            serde_json::json!({"snapshotId": snapshot_id, "nodeId": node_id}),
+        )
+        .await?)
 }
 
 #[tauri::command]
@@ -1428,30 +1454,26 @@ pub async fn create_legacy_window(windows: State<'_, crate::window::WindowManage
 #[specta::specta]
 pub async fn get_runtime_config(
     client: State<'_, ChimeraClient>,
+    window: tauri::Window,
 ) -> Result<Option<Any<serde_json::Value>>> {
-    let state = client.promoted_runtime_snapshot();
-    match state.as_ref() {
-        Some(state) => {
-            let json_value = state.config_json()?;
-            let wrapped: Any<serde_json::Value> =
-                serde_json::from_value(json_value).map_err(anyhow::Error::from)?;
-            Ok(Some(wrapped))
-        }
-        None => Ok(None),
-    }
+    let value: Option<serde_json::Value> = client
+        .call_shared_rpc(window.label(), "get_runtime_config", serde_json::json!({}))
+        .await?;
+    Ok(value
+        .map(serde_json::from_value)
+        .transpose()
+        .map_err(anyhow::Error::from)?)
 }
 
 #[tauri::command]
 #[specta::specta]
-pub async fn get_runtime_yaml(client: State<'_, ChimeraClient>) -> Result<String> {
-    let state = client.promoted_runtime_snapshot().ok_or_else(|| {
-        anyhow!(
-            "runtime configuration is unavailable: no promoted runtime snapshot; \
-             start the selected core and apply a profile first"
-        )
-    })?;
-
-    Ok(state.runtime_yaml().to_owned())
+pub async fn get_runtime_yaml(
+    client: State<'_, ChimeraClient>,
+    window: tauri::Window,
+) -> Result<String> {
+    Ok(client
+        .call_shared_rpc(window.label(), "get_runtime_yaml", serde_json::json!({}))
+        .await?)
 }
 
 #[tauri::command]

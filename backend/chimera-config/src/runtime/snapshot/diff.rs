@@ -1,12 +1,12 @@
 //! Pure, bounded-effort YAML line comparisons for snapshot inspection.
 use std::time::Duration;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use similar::{Algorithm, ChangeTag, TextDiff};
 
 use super::ConfigSnapshot;
 
-#[derive(Debug, Clone, Serialize, specta::Type)]
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
 pub struct SnapshotDiffHunk {
     pub old_start: u32,
     pub old_lines: u32,

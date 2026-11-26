@@ -1880,12 +1880,6 @@ impl ChimeraClient {
         self.inner.shared.core().runtime_transform_diagnostics()
     }
 
-    pub(crate) fn promoted_runtime_snapshot(
-        &self,
-    ) -> Option<Arc<crate::client::runtime::RuntimeSnapshot>> {
-        self.inner.shared.core().promoted_runtime_snapshot()
-    }
-
     /// Ref: selecting a core is an Application source transaction, not a
     /// second mutating CoreLifecycle command. Preserve the commit receipt
     /// and post-commit runtime degradations for the UI.
