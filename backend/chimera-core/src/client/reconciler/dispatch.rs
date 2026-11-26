@@ -441,6 +441,120 @@ impl<P> Mailbox<Command<P>> {
     }
 }
 
+/// Service follow-up holds the existing host lease before enqueueing a
+/// transition. Recheck the exact owner evidence after acquiring it.
+pub async fn follow_service<P>(
+    mailbox: &mut Mailbox<Command<P>>,
+    runtime: &mut RuntimeReconcilerState,
+    startup_recovery_pending: &AtomicBool,
+    workflow: Option<(
+        &super::workflow_progress::WorkflowProgress,
+        &impl super::startup_transaction::StartupTransactionHost,
+    )>,
+    service: &dyn crate::client::core_lifecycle::ports::ServiceLifecyclePort,
+) -> bool {
+    if !mailbox.owner_followup_allowed(runtime, startup_recovery_pending) {
+        return false;
+    }
+    let Some((progress, lifecycle)) = workflow else {
+        return false;
+    };
+    if !progress.service_host_change_due(lifecycle).await {
+        return false;
+    }
+    let transition = match service.try_begin_transition().await {
+        Ok(transition) => transition,
+        Err(error) => {
+            tracing::debug!(%error, "Service owner follow-up deferred while a transition is active");
+            runtime.service_handoff_maintenance = Some(format!(
+                "Service ownership transition is waiting for its lease: {error:#}"
+            ));
+            return true;
+        }
+    };
+    if !progress.service_host_change_due(lifecycle).await {
+        return false;
+    }
+    mailbox.enqueue_follow_service(runtime, transition);
+    true
+}
+
+/// Keep deferred Profile recovery on the original mailbox and progress owner.
+/// No timer or retry spends a budget before the current Core state is known.
+pub async fn dispatch_deferred_retry<P>(
+    mailbox: &mut Mailbox<Command<P>>,
+    workflow: Option<(
+        &mut super::workflow_progress::WorkflowProgress,
+        &dyn crate::client::core_lifecycle::ports::CoreLifecyclePort,
+    )>,
+    digest: &str,
+) -> Option<tokio::time::Instant> {
+    use std::time::Duration;
+    if mailbox.uncertain || mailbox.shutting_down {
+        if let Some((progress, _)) = workflow {
+            progress
+                .finish_deferred_retry(digest, false, false, false, mailbox.uncertain, None)
+                .await;
+        }
+        return None;
+    }
+    let Some((progress, core)) = workflow else {
+        return Some(tokio::time::Instant::now() + super::mailbox::DIRTY_WINDOW);
+    };
+    if !mailbox.idle() || progress.has_unresolved_attempt() {
+        return progress.reschedule_deferred_retry(digest, Duration::from_secs(5));
+    }
+    match core.status().await.ok() {
+        Some(status) if matches!(status.state, chimera_ipc::api::status::CoreState::Running) => {
+            if progress.begin_deferred_retry(digest)
+                && !mailbox.push_deferred_retry(digest.to_owned())
+            {
+                return progress.reschedule_deferred_retry(digest, Duration::from_secs(1));
+            }
+        }
+        Some(_) => progress.wait_for_deferred_dependency(digest),
+        None => return progress.reschedule_deferred_retry(digest, Duration::from_secs(5)),
+    }
+    None
+}
+
+/// Startup timers must not acquire a new host lease after StopCore.
+pub enum StartupRetryAdmission {
+    Ignore,
+    Reschedule(tokio::time::Instant),
+    AcquireLease,
+}
+
+pub fn admit_startup_retry<P>(
+    mailbox: &Mailbox<Command<P>>,
+    runtime: &RuntimeReconcilerState,
+    progress: Option<&mut super::workflow_progress::WorkflowProgress>,
+    identity: &str,
+) -> StartupRetryAdmission {
+    if runtime.run_intent != RunIntent::Running || mailbox.uncertain || mailbox.shutting_down {
+        return StartupRetryAdmission::Ignore;
+    }
+    let Some(progress) = progress else {
+        return StartupRetryAdmission::Reschedule(
+            tokio::time::Instant::now() + super::mailbox::DIRTY_WINDOW,
+        );
+    };
+    if progress.startup_retry_due(identity) && progress.begin_startup_retry(identity) {
+        StartupRetryAdmission::AcquireLease
+    } else {
+        StartupRetryAdmission::Ignore
+    }
+}
+
+pub fn publish_maintenance(
+    runtime: &RuntimeReconcilerState,
+    reconciler: &tokio::sync::watch::Sender<super::status::ReconcilerStatus>,
+) {
+    let product = reconciler.borrow().product_publication_maintenance();
+    let reason = runtime.maintenance(product.as_deref());
+    reconciler.send_modify(|status| status.set_maintenance(reason));
+}
+
 pub fn record_startup_retry_lease_failure(
     workflow: Option<&mut super::workflow_progress::WorkflowProgress>,
     pending: &mut std::collections::VecDeque<(String, String)>,
@@ -490,6 +604,58 @@ mod tests {
             },
             deferred_retry: None,
         }
+    }
+
+    #[test]
+    fn startup_timer_never_acquires_lease_when_stopped_or_uncertain() {
+        let mut mailbox = mailbox();
+        let mut runtime = RuntimeReconcilerState::default();
+        assert!(matches!(
+            admit_startup_retry(&mailbox, &runtime, None, "target"),
+            StartupRetryAdmission::Reschedule(_)
+        ));
+        runtime.run_intent = RunIntent::Stopped;
+        assert!(matches!(
+            admit_startup_retry(&mailbox, &runtime, None, "target"),
+            StartupRetryAdmission::Ignore
+        ));
+        runtime.run_intent = RunIntent::Running;
+        mailbox.uncertain = true;
+        assert!(matches!(
+            admit_startup_retry(&mailbox, &runtime, None, "target"),
+            StartupRetryAdmission::Ignore
+        ));
+        mailbox.uncertain = false;
+        mailbox.close();
+        assert!(matches!(
+            admit_startup_retry(&mailbox, &runtime, None, "target"),
+            StartupRetryAdmission::Ignore
+        ));
+        assert!(mailbox.pending.is_empty());
+    }
+
+    #[tokio::test]
+    async fn deferred_timer_preserves_target_while_worker_owns_workflow_but_not_after_close() {
+        let mut mailbox = mailbox();
+        assert!(
+            dispatch_deferred_retry(&mut mailbox, None, "target")
+                .await
+                .is_some()
+        );
+        mailbox.uncertain = true;
+        assert!(
+            dispatch_deferred_retry(&mut mailbox, None, "target")
+                .await
+                .is_none()
+        );
+        mailbox.uncertain = false;
+        mailbox.close();
+        assert!(
+            dispatch_deferred_retry(&mut mailbox, None, "target")
+                .await
+                .is_none()
+        );
+        assert!(mailbox.pending.is_empty());
     }
 
     #[test]

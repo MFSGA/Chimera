@@ -546,10 +546,10 @@ impl RuntimeReconcilerMailbox {
     /// A handoff failure and a degraded Service endpoint are independent
     /// maintenance debts; keep both even when a Core round converged.
     fn publish_maintenance(&self) {
-        let product = self.reconciler.borrow().product_publication_maintenance();
-        let reason = self.runtime.maintenance(product.as_deref());
-        self.reconciler
-            .send_modify(|status| status.set_maintenance(reason));
+        chimera_core::client::reconciler::dispatch::publish_maintenance(
+            &self.runtime,
+            &self.reconciler,
+        );
     }
 
     /// Shared S2 admission barrier. A Startup recovery worker may hold the
@@ -615,35 +615,19 @@ impl RuntimeReconcilerMailbox {
     }
 
     async fn follow_service(&mut self) {
-        if !self
-            .mailbox
-            .owner_followup_allowed(&self.runtime, &self.startup_recovery_pending)
+        if chimera_core::client::reconciler::dispatch::follow_service(
+            &mut self.mailbox,
+            &mut self.runtime,
+            &self.startup_recovery_pending,
+            self.workflow
+                .as_ref()
+                .map(|workflow| (workflow.progress(), workflow.lifecycle())),
+            self.service.as_ref(),
+        )
+        .await
         {
-            return;
+            self.publish_maintenance();
         }
-        let Some(workflow) = self.workflow.as_ref() else {
-            return;
-        };
-        if !workflow.service_host_change_due().await {
-            return;
-        }
-        let transition = match workflow.lifecycle().try_begin_service_transition().await {
-            Ok(transition) => transition,
-            Err(error) => {
-                tracing::debug!(%error, "Service owner follow-up deferred while a transition is active");
-                self.runtime.service_handoff_maintenance = Some(format!(
-                    "Service ownership transition is waiting for its lease: {error:#}"
-                ));
-                self.publish_maintenance();
-                return;
-            }
-        };
-        if !workflow.service_host_change_due().await {
-            return;
-        }
-        self.mailbox
-            .enqueue_follow_service(&mut self.runtime, transition);
-        self.publish_maintenance();
     }
 
     fn reject(&mut self, request: Request, error: anyhow::Error) {
@@ -710,10 +694,6 @@ impl RuntimeReconcilerMailbox {
 
     fn push_background(&mut self, command: Command) {
         self.mailbox.push_background(command);
-    }
-
-    fn push_deferred_retry(&mut self, digest: String) -> bool {
-        self.mailbox.push_deferred_retry(digest)
     }
 
     fn drive(&mut self, myself: &ActorRef<Message>) {
@@ -1451,45 +1431,41 @@ impl Actor for RuntimeReconcilerActor {
                 }
             }
             Message::StartupRetryDue { identity } => {
-                // A timer armed before explicit StopCore must not take a
-                // Service transition lease after RunIntent becomes Stopped.
-                // The serialized RetryStartup command has its own stop gate,
-                // but that alone cannot undo an already acquired lease.
-                if state.runtime.run_intent == RunIntent::Running
-                    && !state.mailbox.uncertain
-                    && !state.mailbox.shutting_down
-                {
-                    if state.workflow.is_none() {
-                        state.schedule_startup_retry(
-                            &myself,
+                use chimera_core::client::reconciler::dispatch::{
+                    StartupRetryAdmission, admit_startup_retry,
+                };
+                match admit_startup_retry(
+                    &state.mailbox,
+                    &state.runtime,
+                    state
+                        .workflow
+                        .as_mut()
+                        .map(ApplicationWorkflow::progress_mut),
+                    &identity,
+                ) {
+                    StartupRetryAdmission::Ignore => {}
+                    StartupRetryAdmission::Reschedule(deadline) => {
+                        state.schedule_startup_retry(&myself, identity, deadline)
+                    }
+                    StartupRetryAdmission::AcquireLease => {
+                        let service = state.service.clone();
+                        let actor = myself.clone();
+                        let operation_id = state.mailbox.allocate_operation_id();
+                        #[cfg(test)]
+                        let observer = state.startup_retry_lease_failure_observer.take();
+                        spawn_startup_retry_lease(
+                            actor,
+                            service,
+                            operation_id,
                             identity,
-                            tokio::time::Instant::now() + DIRTY_WINDOW,
-                        );
-                    } else {
-                        let should_retry = state.workflow.as_mut().is_some_and(|workflow| {
-                            workflow.startup_retry_due(&identity)
-                                && workflow.begin_startup_retry(&identity)
-                        });
-                        if should_retry {
-                            let service = state.service.clone();
-                            let actor = myself.clone();
-                            let operation_id = state.mailbox.allocate_operation_id();
-                            #[cfg(test)]
-                            let observer = state.startup_retry_lease_failure_observer.take();
-                            spawn_startup_retry_lease(
-                                actor,
-                                service,
-                                operation_id,
+                            Message::Request,
+                            move |identity, reason| Message::StartupRetryLeaseFailed {
                                 identity,
-                                Message::Request,
-                                move |identity, reason| Message::StartupRetryLeaseFailed {
-                                    identity,
-                                    reason,
-                                    #[cfg(test)]
-                                    observer,
-                                },
-                            );
-                        }
+                                reason,
+                                #[cfg(test)]
+                                observer,
+                            },
+                        );
                     }
                 }
             }
@@ -1594,75 +1570,29 @@ impl Actor for RuntimeReconcilerActor {
                 let _ = reply.send(state);
             }
             Message::DeferredRetry { digest } => {
-                if state.mailbox.uncertain || state.mailbox.shutting_down {
-                    if let Some(application_workflow) = state.workflow.as_mut() {
-                        application_workflow
-                            .finish_deferred_retry(
-                                &digest,
-                                false,
-                                false,
-                                false,
-                                state.mailbox.uncertain,
-                                None,
-                            )
-                            .await;
-                    }
-                } else if state.workflow.is_none() {
-                    state.schedule_deferred_retry(
-                        &myself,
-                        digest,
-                        tokio::time::Instant::now() + DIRTY_WINDOW,
-                    );
-                } else if state.mailbox.active.is_some()
-                    || !state.mailbox.pending.is_empty()
-                    || state
+                // Take the same lifecycle Arc before borrowing its progress
+                // mutably. The worker owns it whenever workflow is absent.
+                let lifecycle = state
+                    .workflow
+                    .as_ref()
+                    .map(ApplicationWorkflow::lifecycle_handle);
+                let workflow =
+                    state
                         .workflow
-                        .as_ref()
-                        .is_some_and(ApplicationWorkflow::has_unresolved_attempt)
+                        .as_mut()
+                        .zip(lifecycle.as_ref())
+                        .map(|(workflow, lifecycle)| {
+                            (workflow.progress_mut(), lifecycle.convergence_core())
+                        });
+                if let Some(next_attempt) =
+                    chimera_core::client::reconciler::dispatch::dispatch_deferred_retry(
+                        &mut state.mailbox,
+                        workflow,
+                        &digest,
+                    )
+                    .await
                 {
-                    state.reschedule_deferred_retry(&myself, &digest, Duration::from_secs(5));
-                } else {
-                    use crate::client::application_workflow::workflow::ProfileRuntime;
-
-                    let core_status = match state.workflow.as_ref() {
-                        Some(workflow) => workflow.lifecycle().core_status().await.ok(),
-                        None => None,
-                    };
-                    match core_status {
-                        Some(status)
-                            if matches!(
-                                status.state,
-                                chimera_ipc::api::status::CoreState::Running
-                            ) =>
-                        {
-                            let should_retry = state
-                                .workflow
-                                .as_mut()
-                                .is_some_and(|workflow| workflow.begin_deferred_retry(&digest));
-                            if should_retry && !state.push_deferred_retry(digest.clone()) {
-                                let next_attempt = state.workflow.as_mut().and_then(|workflow| {
-                                    workflow
-                                        .reschedule_deferred_retry(&digest, Duration::from_secs(1))
-                                });
-                                if let Some(next_attempt) = next_attempt {
-                                    state.schedule_deferred_retry(&myself, digest, next_attempt);
-                                }
-                            }
-                        }
-                        Some(_) => {
-                            if let Some(application_workflow) = state.workflow.as_mut() {
-                                application_workflow.wait_for_deferred_dependency(&digest);
-                            }
-                        }
-                        None => {
-                            let next_attempt = state.workflow.as_mut().and_then(|workflow| {
-                                workflow.reschedule_deferred_retry(&digest, Duration::from_secs(5))
-                            });
-                            if let Some(next_attempt) = next_attempt {
-                                state.schedule_deferred_retry(&myself, digest, next_attempt);
-                            }
-                        }
-                    }
+                    state.schedule_deferred_retry(&myself, digest, next_attempt);
                 }
             }
         }
