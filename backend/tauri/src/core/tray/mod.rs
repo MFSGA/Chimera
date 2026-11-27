@@ -301,8 +301,7 @@ impl Tray {
         Self::request_refresh(app_handle, TrayRefresh::Part)
     }
 
-    #[cfg(any(windows, target_os = "linux"))]
-    fn max_scale_factor(app_handle: &AppHandle<tauri::Wry>) -> f64 {
+    pub(crate) fn max_scale_factor(app_handle: &AppHandle<tauri::Wry>) -> f64 {
         app_handle
             .available_monitors()
             .map(|monitors| {

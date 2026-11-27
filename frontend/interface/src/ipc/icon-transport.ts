@@ -1,6 +1,6 @@
 import { convertFileSrc, isTauri } from '@tauri-apps/api/core';
+import type { TrayIcon } from './bindings';
 
-export type TrayIcon = 'normal' | 'tun' | 'system_proxy';
 export type IconRequest =
   | { kind: 'cached'; url: string }
   | { kind: 'tray' | 'widget'; mode: TrayIcon; version?: number | null };

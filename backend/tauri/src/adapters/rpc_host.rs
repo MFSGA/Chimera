@@ -34,6 +34,20 @@ impl HostIconFiles for DesktopIconFiles {
     fn is_widget_icon_set(&self, paths: &PathResolver, mode: TrayIcon) -> bool {
         widget_logo::is_icon_set(paths, mode)
     }
+    fn set_tray_icon_from_bytes(
+        &self,
+        paths: &PathResolver,
+        mode: TrayIcon,
+        bytes: &[u8],
+    ) -> anyhow::Result<()> {
+        let scale = crate::core::handle::Handle::app_handle()
+            .as_ref()
+            .map(crate::core::tray::Tray::max_scale_factor)
+            .unwrap_or(1.0);
+        icon::set_icon_from_bytes(paths, mode, bytes, scale)?;
+        icon::check_icon(&icon::get_icon(paths, &mode))?;
+        Ok(())
+    }
 }
 
 pub struct OsServiceInstallPrompt;

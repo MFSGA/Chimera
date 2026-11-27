@@ -9,13 +9,19 @@ pub trait CoreDirectoryResolver: Send + Sync {
     fn core_directory(&self) -> Result<String>;
 }
 
-/// Read host icon files; presentation mutations follow the widget/tray runtime migration.
+/// Host icon files; presentation refresh remains a client operation.
 #[async_trait::async_trait]
 pub trait HostIconFiles: Send + Sync {
     fn tray_icon(&self, paths: &PathResolver, mode: TrayIcon) -> Vec<u8>;
     fn widget_icon(&self, paths: &PathResolver, mode: TrayIcon) -> Vec<u8>;
     async fn is_tray_icon_set(&self, paths: &PathResolver, mode: TrayIcon) -> bool;
     fn is_widget_icon_set(&self, paths: &PathResolver, mode: TrayIcon) -> bool;
+    fn set_tray_icon_from_bytes(
+        &self,
+        paths: &PathResolver,
+        mode: TrayIcon,
+        bytes: &[u8],
+    ) -> Result<()>;
 }
 
 /// Format installation instructions without installing or elevating.

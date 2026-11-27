@@ -850,6 +850,55 @@ pub async fn is_appimage(client: State<'_, ChimeraClient>, window: tauri::Window
 
 #[tauri::command]
 #[specta::specta]
+pub async fn set_tray_icon_from_bytes(
+    client: State<'_, ChimeraClient>,
+    window: tauri::Window,
+    mode: chimera_rpc_protocol::values::TrayIcon,
+    bytes_base64: String,
+) -> Result {
+    Ok(client
+        .call_shared_rpc(
+            window.label(),
+            "set_tray_icon_from_bytes",
+            serde_json::json!({"mode": mode, "bytesBase64": bytes_base64}),
+        )
+        .await?)
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn is_tray_icon_set(
+    client: State<'_, ChimeraClient>,
+    window: tauri::Window,
+    mode: chimera_rpc_protocol::values::TrayIcon,
+) -> Result<bool> {
+    Ok(client
+        .call_shared_rpc(
+            window.label(),
+            "is_tray_icon_set",
+            serde_json::json!({"mode": mode}),
+        )
+        .await?)
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn is_widget_icon_set(
+    client: State<'_, ChimeraClient>,
+    window: tauri::Window,
+    mode: chimera_rpc_protocol::values::TrayIcon,
+) -> Result<bool> {
+    Ok(client
+        .call_shared_rpc(
+            window.label(),
+            "is_widget_icon_set",
+            serde_json::json!({"mode": mode}),
+        )
+        .await?)
+}
+
+#[tauri::command]
+#[specta::specta]
 pub fn open_that(path: String) -> Result {
     crate::utils::open::that(path)?;
     Ok(())

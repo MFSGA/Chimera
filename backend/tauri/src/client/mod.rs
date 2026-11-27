@@ -222,39 +222,46 @@ impl chimera_core::client::configuration_mutations::ConfigurationMutations
 
 impl ChimeraClient {
     pub(crate) fn rpc(&self) -> anyhow::Result<&chimera_rpc::registry::UnifiedRpc> {
+        self.inner
+            .rpc
+            .get_or_init(|| {
+                self.build_rpc(if cfg!(any(windows, target_os = "linux")) {
+                    &[chimera_rpc_protocol::ShellCapability::Presentation]
+                } else {
+                    &[]
+                })
+            })
+            .as_ref()
+            .map_err(|error| anyhow::anyhow!(error.to_string()))
+    }
+
+    fn build_rpc(
+        &self,
+        provided: &[chimera_rpc_protocol::ShellCapability],
+    ) -> Result<chimera_rpc::registry::UnifiedRpc, chimera_rpc::registry::SetupError> {
         use chimera_rpc::{
             audit::{RpcAudit, TracingRpcAuditSink},
             registry::{RpcDependencies, UnifiedRpc},
         };
-        self.inner
-            .rpc
-            .get_or_init(|| {
-                UnifiedRpc::new(
-                    RpcDependencies {
-                        icon_files: Some(Arc::new(crate::adapters::rpc_host::DesktopIconFiles)),
-                        core_directory: Some(Arc::new(
-                            crate::adapters::rpc_host::DesktopCoreDirectory,
-                        )),
-                        service_prompt: Some(Arc::new(
-                            crate::adapters::rpc_host::OsServiceInstallPrompt,
-                        )),
-                        paths: self.inner.resolved_paths.clone(),
-                        host_environment: chimera_rpc::ports::HostEnvironment {
-                            is_appimage: *crate::consts::IS_APPIMAGE,
-                        },
-                        configuration_mutations: Some(Arc::new(DesktopConfigurationMutations(
-                            Arc::downgrade(&self.inner),
-                        ))),
-                        storage: self.inner.storage.clone(),
-                        client: self.inner.shared.clone(),
-                        audit: RpcAudit::new(Arc::new(TracingRpcAuditSink)),
-                    },
-                    chimera_rpc_protocol::ServerInfo::desktop(env!("CARGO_PKG_VERSION")),
-                    &[],
-                )
-            })
-            .as_ref()
-            .map_err(|error| anyhow::anyhow!(error.to_string()))
+        UnifiedRpc::new(
+            RpcDependencies {
+                icon_files: Some(Arc::new(crate::adapters::rpc_host::DesktopIconFiles)),
+                core_directory: Some(Arc::new(crate::adapters::rpc_host::DesktopCoreDirectory)),
+                service_prompt: Some(Arc::new(crate::adapters::rpc_host::OsServiceInstallPrompt)),
+                paths: self.inner.resolved_paths.clone(),
+                host_environment: chimera_rpc::ports::HostEnvironment {
+                    is_appimage: *crate::consts::IS_APPIMAGE,
+                },
+                configuration_mutations: Some(Arc::new(DesktopConfigurationMutations(
+                    Arc::downgrade(&self.inner),
+                ))),
+                storage: self.inner.storage.clone(),
+                client: self.inner.shared.clone(),
+                audit: RpcAudit::new(Arc::new(TracingRpcAuditSink)),
+            },
+            chimera_rpc_protocol::ServerInfo::desktop(env!("CARGO_PKG_VERSION")),
+            provided,
+        )
     }
 
     pub(crate) async fn call_shared_rpc<T: serde::de::DeserializeOwned>(
@@ -1701,6 +1708,59 @@ mod tests {
         assert_eq!(tray.bytes, stored);
         assert_eq!(widget.bytes, crate::core::tray::icon::raw_bytes(&mode));
         assert_eq!(tray.cache_policy.header(), "private, no-cache");
+    }
+
+    #[tokio::test]
+    async fn tray_icon_upload_obeys_presentation_capability_and_writes_valid_png() {
+        use base64::{Engine as _, prelude::BASE64_STANDARD};
+        use chimera_rpc::{audit::RpcTransport, registry::RpcCaller};
+        use chimera_rpc_protocol::{ShellCapability, values::TrayIcon};
+        let (client, _) = recording_client(false).await;
+        let without = client.build_rpc(&[]).unwrap();
+        let with = client.build_rpc(&[ShellCapability::Presentation]).unwrap();
+        let owner = RpcCaller::desktop("test-window");
+        let image = include_bytes!("../../icons/128x128.png");
+        let params =
+            serde_json::json!({"mode":"tun", "bytesBase64": BASE64_STANDARD.encode(image)});
+        let rejected = without
+            .call(
+                RpcTransport::TauriIpc,
+                "set_tray_icon_from_bytes",
+                owner.clone(),
+                params.clone(),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(rejected.kind, "unsupported");
+        let dependencies = with.dependencies();
+        let path = crate::core::tray::icon::tray_icons_path(&dependencies.paths, "tun");
+        assert!(!path.exists());
+        with.call(
+            RpcTransport::TauriIpc,
+            "set_tray_icon_from_bytes",
+            owner.clone(),
+            params,
+        )
+        .await
+        .unwrap();
+        let stored = std::fs::read(&path).unwrap();
+        assert_eq!(
+            image::load_from_memory(&stored).unwrap().into_rgba8(),
+            image::load_from_memory(image).unwrap().into_rgba8()
+        );
+        let cached = crate::core::tray::icon::get_icon(&dependencies.paths, &TrayIcon::Tun);
+        assert_eq!(image::load_from_memory(&cached).unwrap().width(), 32);
+        assert!(
+            with.call(
+                RpcTransport::TauriIpc,
+                "set_tray_icon_from_bytes",
+                owner,
+                serde_json::json!({"mode":"tun", "bytesBase64": "invalid!"})
+            )
+            .await
+            .is_err()
+        );
+        assert_eq!(std::fs::read(path).unwrap(), stored);
     }
 
     #[tokio::test]

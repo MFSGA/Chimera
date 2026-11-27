@@ -625,6 +625,14 @@ export const commands = {
     ),
   isPortable: () => typedError<boolean, string>(__TAURI_INVOKE('is_portable')),
   isAppimage: () => typedError<boolean, string>(__TAURI_INVOKE('is_appimage')),
+  isTrayIconSet: (mode: TrayIcon) =>
+    typedError<boolean, string>(__TAURI_INVOKE('is_tray_icon_set', { mode })),
+  isWidgetIconSet: (mode: TrayIcon) =>
+    typedError<boolean, string>(__TAURI_INVOKE('is_widget_icon_set', { mode })),
+  setTrayIconFromBytes: (mode: TrayIcon, bytesBase64: string) =>
+    typedError<null, string>(
+      __TAURI_INVOKE('set_tray_icon_from_bytes', { mode, bytesBase64 }),
+    ),
   openThat: (path: string) =>
     typedError<null, string>(__TAURI_INVOKE('open_that', { path })),
   cleanupProcesses: () =>
@@ -4798,6 +4806,8 @@ export type TransparentProxyConfigPatch = {
 };
 
 export type TransparentProxyMode = 'disabled' | 'redir' | 'tproxy';
+
+export type TrayIcon = 'normal' | 'tun' | 'system_proxy';
 
 /**  What happens to the WebView tray menu window when it loses focus. */
 export type TrayMenuCloseBehavior = 'hide' | 'close';
