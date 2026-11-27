@@ -1,4 +1,4 @@
-//! Read-only widget icon files, following ref's host icon storage.
+//! Widget icon files, following ref's host icon storage.
 
 use std::{borrow::Cow, path::PathBuf};
 
@@ -30,6 +30,19 @@ pub fn is_icon_set(paths: &PathResolver, state: TrayIcon) -> bool {
     widget_icon_path(paths, state).exists()
 }
 
+/// Stores the encoded image bytes as the widget's icon for the selected state.
+pub fn set_icon_from_bytes(
+    paths: &PathResolver,
+    state: TrayIcon,
+    bytes: &[u8],
+) -> anyhow::Result<()> {
+    let image = image::load_from_memory(bytes)?;
+    let target = widget_icon_path(paths, state);
+    std::fs::create_dir_all(target.parent().expect("widget icon path has a parent"))?;
+    image.save_with_format(target, image::ImageFormat::Png)?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -50,9 +63,14 @@ mod tests {
             icon::raw_bytes(&TrayIcon::SystemProxy)
         );
         let stored = include_bytes!("../../icons/128x128.png");
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(&path, stored).unwrap();
-        assert_eq!(get_raw_icon(&paths, TrayIcon::SystemProxy).as_ref(), stored);
+        set_icon_from_bytes(&paths, TrayIcon::SystemProxy, stored).unwrap();
+        let saved = get_raw_icon(&paths, TrayIcon::SystemProxy).into_owned();
+        assert_eq!(
+            image::load_from_memory(&saved).unwrap().into_rgba8(),
+            image::load_from_memory(stored).unwrap().into_rgba8()
+        );
+        assert!(set_icon_from_bytes(&paths, TrayIcon::SystemProxy, b"invalid").is_err());
+        assert_eq!(get_raw_icon(&paths, TrayIcon::SystemProxy).as_ref(), saved);
         assert_eq!(
             icon::get_raw_icon(&paths, TrayIcon::SystemProxy).as_ref(),
             icon::raw_bytes(&TrayIcon::SystemProxy)

@@ -196,6 +196,10 @@ impl Tray {
     }
 
     pub fn update_systray(app_handle: &AppHandle<tauri::Wry>) -> Result<()> {
+        #[cfg(any(windows, target_os = "linux"))]
+        if let Some(paths) = app_handle.try_state::<chimera_paths::PathResolver>() {
+            icon::resize_images(&paths, Self::max_scale_factor(app_handle));
+        }
         Self::request_refresh(app_handle, TrayRefresh::Full)
     }
 
@@ -297,10 +301,31 @@ impl Tray {
         Self::request_refresh(app_handle, TrayRefresh::Part)
     }
 
-    fn render_part_with_view(app_handle: &AppHandle<tauri::Wry>, view: TrayView) -> Result<()> {
-        if app_handle.tray_by_id(TRAY_ID).is_none() {
-            return Ok(());
+    #[cfg(any(windows, target_os = "linux"))]
+    fn max_scale_factor(app_handle: &AppHandle<tauri::Wry>) -> f64 {
+        app_handle
+            .available_monitors()
+            .map(|monitors| {
+                monitors
+                    .iter()
+                    .map(|monitor| monitor.scale_factor())
+                    .fold(1.0, f64::max)
+            })
+            .unwrap_or(1.0)
+    }
+
+    #[cfg(any(windows, target_os = "linux"))]
+    pub(crate) fn on_scale_factor_changed(app_handle: &AppHandle<tauri::Wry>) -> Result<()> {
+        if let Some(paths) = app_handle.try_state::<chimera_paths::PathResolver>() {
+            icon::resize_images(&paths, Self::max_scale_factor(app_handle));
         }
+        Self::update_part(app_handle)
+    }
+
+    fn render_part_with_view(app_handle: &AppHandle<tauri::Wry>, view: TrayView) -> Result<()> {
+        let Some(_tray) = app_handle.tray_by_id(TRAY_ID) else {
+            return Ok(());
+        };
 
         let state = match app_handle.try_state::<TrayState<tauri::Wry>>() {
             Some(state) => state,
@@ -316,6 +341,20 @@ impl Tray {
         let _ = menu
             .get("tun_mode")
             .and_then(|item| item.as_check_menuitem()?.set_checked(view.part.tun).ok());
+
+        #[cfg(any(windows, target_os = "linux"))]
+        if let Some(paths) = app_handle.try_state::<chimera_paths::PathResolver>() {
+            use chimera_rpc_protocol::values::TrayIcon;
+            let mode = if view.part.tun {
+                TrayIcon::Tun
+            } else if view.part.system_proxy {
+                TrayIcon::SystemProxy
+            } else {
+                TrayIcon::Normal
+            };
+            let bytes = icon::get_icon(&paths, &mode);
+            _tray.set_icon(Some(tauri::image::Image::from_bytes(&bytes)?))?;
+        }
 
         Ok(())
     }

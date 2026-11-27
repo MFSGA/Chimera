@@ -17,6 +17,53 @@ use tracing::{debug, instrument};
 
 use crate::client::ChimeraClient;
 
+pub fn resize_tray_image(img: &[u8], scale_factor: f64) -> Result<Vec<u8>> {
+    use fast_image_resize::{
+        FilterType, PixelType, ResizeAlg, ResizeOptions, Resizer,
+        images::{Image, ImageRef},
+    };
+    use image::{ColorType, ImageEncoder, ImageReader, codecs::png::PngEncoder};
+    use std::io::{BufWriter, Cursor};
+    let img = ImageReader::new(Cursor::new(img))
+        .with_guessed_format()?
+        .decode()?;
+    let width = img.width();
+    let height = img.height();
+    let src_pixels = img.into_rgba8().into_raw();
+    let src_image = ImageRef::new(width, height, &src_pixels, PixelType::U8x4)
+        .context("failed to parse image")?;
+
+    // Create container for data of destination image
+    let size = (32_f64 * scale_factor.max(1.0)).round() as u32; // 32px is the base tray size as the dpi is 96
+    let dst_width = size;
+    let dst_height = size;
+    let mut dst_image = Image::new(dst_width, dst_height, src_image.pixel_type());
+
+    // Create Resizer instance and resize source image
+    // into buffer of destination image
+    let mut resizer = Resizer::new();
+    let resizer_options = ResizeOptions {
+        algorithm: ResizeAlg::Convolution(FilterType::Lanczos3),
+        ..Default::default()
+    };
+    resizer
+        .resize(&src_image, &mut dst_image, &resizer_options)
+        .context("failed to resize image")?;
+
+    // Extract raw pixel data from the destination image
+    let dst_image_data = dst_image.buffer().to_vec();
+
+    // Write destination image as PNG-file
+    let mut result_buf = BufWriter::new(Vec::new());
+    PngEncoder::new(&mut result_buf).write_image(
+        &dst_image_data,
+        dst_width,
+        dst_height,
+        ColorType::Rgba8.into(),
+    )?;
+    Ok(result_buf.into_inner()?)
+}
+
 const ALPHABET: [char; 62] = [
     '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i',
     'j', 'k', 'l', 'm', 'n', 'o', 'p', 'q', 'r', 's', 't', 'u', 'v', 'w', 'x', 'y', 'z', 'A', 'B',

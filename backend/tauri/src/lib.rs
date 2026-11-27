@@ -476,6 +476,11 @@ pub fn run() -> std::process::ExitCode {
                     _ => {}
                 }
             }
+            #[cfg(any(windows, target_os = "linux"))]
+            if matches!(event, tauri::WindowEvent::ScaleFactorChanged { .. }) {
+                crate::log_err!(crate::core::tray::Tray::on_scale_factor_changed(app_handle));
+            }
+
             // Every webview's connection-detail subscriptions must end on
             // destroy, not just "main"'s: `Channel::send` cannot detect it.
             if matches!(event, tauri::WindowEvent::Destroyed) {
