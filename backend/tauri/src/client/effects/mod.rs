@@ -6,3 +6,5 @@ pub(crate) mod executor;
 pub mod plan;
 pub mod ports;
 pub mod status;
+
+pub(crate) mod widget;

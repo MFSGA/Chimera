@@ -321,8 +321,15 @@ pub fn setup(
         ))
         .context("failed to start the system proxy owner")?;
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    let widget_controller = Arc::new(crate::client::effects::widget::TauriWidgetController::new(
+        resolved_paths.clone(),
+    ));
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
     let effect_adapters = Arc::new(
-        crate::client::effects::adapters::TauriApplicationEffectAdapters::new(app.handle().clone()),
+        crate::client::effects::adapters::TauriApplicationEffectAdapters::new(
+            app.handle().clone(),
+            widget_controller.clone(),
+        ),
     );
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     let effects = Arc::new(
@@ -449,6 +456,18 @@ pub fn setup(
         &tasks,
         hotkey_action_pump(hotkey_rx, client.clone(), shutdown.child_token()),
     );
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    {
+        // Install the runtime before the startup reconcile publishes desired effects.
+        let widget_manager = tauri::async_runtime::block_on(crate::widget::setup(
+            client.streams().subscribe(),
+            shutdown.child_token(),
+            &tasks,
+        ));
+        widget_controller
+            .install(Arc::new(widget_manager))
+            .context("failed to install widget runtime")?;
+    }
     app.manage(resolved_paths);
     app.manage(client);
     startup_owners.core = None;

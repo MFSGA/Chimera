@@ -6,7 +6,9 @@
 
 use chimera_config::application::{I18nLanguage, NetworkStatisticWidgetConfig};
 
-use super::plan::{TrayRefresh, TrayView};
+use super::plan::{TrayRefresh, TrayView, WidgetLogoDesired};
+use super::widget::{TauriWidgetController, WidgetController};
+use std::sync::Arc;
 
 #[derive(Debug)]
 pub(crate) enum EffectAdapterError {
@@ -37,7 +39,11 @@ pub(crate) trait ApplicationEffectAdapters: Send + Sync + 'static {
         &self,
         desired: &super::plan::LoggerDesired,
     ) -> Result<(), EffectAdapterError>;
-    fn set_widget(&self, config: NetworkStatisticWidgetConfig) -> Result<(), EffectAdapterError>;
+    async fn set_widget(
+        &self,
+        config: NetworkStatisticWidgetConfig,
+    ) -> Result<(), EffectAdapterError>;
+    async fn set_widget_logo(&self, logo: WidgetLogoDesired) -> Result<(), EffectAdapterError>;
     async fn refresh_tray(
         &self,
         refresh: TrayRefresh,
@@ -48,11 +54,15 @@ pub(crate) trait ApplicationEffectAdapters: Send + Sync + 'static {
 /// Tauri adapters for the effects that do not have a dedicated owner yet.
 pub(crate) struct TauriApplicationEffectAdapters {
     app_handle: tauri::AppHandle<tauri::Wry>,
+    widget: Arc<TauriWidgetController>,
 }
 
 impl TauriApplicationEffectAdapters {
-    pub(crate) fn new(app_handle: tauri::AppHandle<tauri::Wry>) -> Self {
-        Self { app_handle }
+    pub(crate) fn new(
+        app_handle: tauri::AppHandle<tauri::Wry>,
+        widget: Arc<TauriWidgetController>,
+    ) -> Self {
+        Self { app_handle, widget }
     }
 }
 
@@ -71,13 +81,18 @@ impl ApplicationEffectAdapters for TauriApplicationEffectAdapters {
             .map_err(|error| EffectAdapterError::failed("logger_refresh_failed", error))
     }
 
-    fn set_widget(&self, config: NetworkStatisticWidgetConfig) -> Result<(), EffectAdapterError> {
-        match config {
-            NetworkStatisticWidgetConfig::Disabled => Ok(()),
-            NetworkStatisticWidgetConfig::Enabled(_) => Err(EffectAdapterError::Unsupported {
-                code: "widget_runtime_unavailable",
-            }),
-        }
+    async fn set_widget(
+        &self,
+        config: NetworkStatisticWidgetConfig,
+    ) -> Result<(), EffectAdapterError> {
+        self.widget.apply(config).await.map_err(widget_error)
+    }
+
+    async fn set_widget_logo(&self, logo: WidgetLogoDesired) -> Result<(), EffectAdapterError> {
+        self.widget
+            .show_logo(logo.source, logo.state)
+            .await
+            .map_err(widget_error)
     }
 
     async fn refresh_tray(
@@ -89,4 +104,15 @@ impl ApplicationEffectAdapters for TauriApplicationEffectAdapters {
         crate::core::tray::Tray::request_refresh(&self.app_handle, refresh)
             .map_err(|error| EffectAdapterError::failed("tray_refresh_failed", error))
     }
+}
+
+// Startup-ordering failures are retryable, as in the reference presentation executor.
+fn widget_error(error: crate::widget::WidgetError) -> EffectAdapterError {
+    let code = match error.code() {
+        chimera_runtime_values::configuration::EffectFailureCode::WidgetUnavailable => {
+            "widget_unavailable"
+        }
+        _ => "widget_apply_failed",
+    };
+    EffectAdapterError::failed(code, format!("{:#}", anyhow::Error::new(error)))
 }

@@ -303,14 +303,12 @@ impl ApplicationEffectsPort for ApplicationEffectExecutor {
                 ApplicationEffect::Widget(config) => self.status_from_result(
                     revision,
                     EffectKind::Widget,
-                    self.adapters.set_widget(*config),
+                    self.adapters.set_widget(*config).await,
                 ),
-                ApplicationEffect::WidgetLogo(_) => self.status_from_result(
+                ApplicationEffect::WidgetLogo(logo) => self.status_from_result(
                     revision,
                     EffectKind::WidgetLogo,
-                    Err(super::adapters::EffectAdapterError::Unsupported {
-                        code: "widget_runtime_unavailable",
-                    }),
+                    self.adapters.set_widget_logo(*logo).await,
                 ),
                 ApplicationEffect::Tray(refresh, view) => {
                     self.apply_tray(revision, *refresh, *view).await
@@ -360,7 +358,7 @@ mod tests {
     struct RecordingAdapters {
         effects: Mutex<Vec<EffectKind>>,
         tray_refreshes: Mutex<Vec<(TrayRefresh, TrayView)>>,
-        widget_unsupported: bool,
+        widget_unavailable: bool,
     }
 
     #[async_trait::async_trait]
@@ -378,18 +376,28 @@ mod tests {
             Ok(())
         }
 
-        fn set_widget(
+        async fn set_widget(
             &self,
             _config: chimera_config::application::NetworkStatisticWidgetConfig,
         ) -> Result<(), EffectAdapterError> {
             self.effects.lock().unwrap().push(EffectKind::Widget);
-            if self.widget_unsupported
+            if self.widget_unavailable
                 && matches!(_config, NetworkStatisticWidgetConfig::Enabled(_))
             {
-                return Err(EffectAdapterError::Unsupported {
-                    code: "widget_runtime_unavailable",
+                return Err(EffectAdapterError::Failed {
+                    code: "widget_unavailable",
+                    message: "widget runtime not installed".into(),
+                    retryable: true,
                 });
             }
+            Ok(())
+        }
+
+        async fn set_widget_logo(
+            &self,
+            _logo: super::super::plan::WidgetLogoDesired,
+        ) -> Result<(), EffectAdapterError> {
+            self.effects.lock().unwrap().push(EffectKind::WidgetLogo);
             Ok(())
         }
 
@@ -582,14 +590,7 @@ mod tests {
         assert_eq!(statuses.len(), plan.effects().len());
         assert!(statuses.iter().all(|status| {
             status.desired_revision == EffectRevision::new(7)
-                && (status.health == EffectHealth::Healthy
-                    || (status.kind == EffectKind::WidgetLogo
-                        && matches!(
-                            status.health,
-                            EffectHealth::Unsupported {
-                                code: "widget_runtime_unavailable"
-                            }
-                        )))
+                && status.health == EffectHealth::Healthy
         }));
         assert_eq!(
             adapters.effects.lock().unwrap().as_slice(),
@@ -597,6 +598,7 @@ mod tests {
                 EffectKind::Locale,
                 EffectKind::Logger,
                 EffectKind::Widget,
+                EffectKind::WidgetLogo,
                 EffectKind::Tray,
             ]
         );
@@ -641,9 +643,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn enabled_widget_is_reported_unsupported_by_the_current_runtime() {
+    async fn enabled_widget_without_runtime_is_reported_retryable() {
         let adapters = Arc::new(RecordingAdapters {
-            widget_unsupported: true,
+            widget_unavailable: true,
             ..Default::default()
         });
         let executor = new_executor(adapters).await;
@@ -665,12 +667,14 @@ mod tests {
         )
         .await;
 
-        assert_eq!(
+        assert!(matches!(
             statuses[0].health,
-            EffectHealth::Unsupported {
-                code: "widget_runtime_unavailable"
+            EffectHealth::Degraded {
+                code: "widget_unavailable",
+                retryable: true,
+                ..
             }
-        );
+        ));
     }
 
     #[tokio::test]
