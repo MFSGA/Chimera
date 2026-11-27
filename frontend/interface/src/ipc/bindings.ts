@@ -4536,10 +4536,6 @@ export type StateChanged =
 /**  The backend's authoritative state-change event, delivered to every window. */
 export type StateChangedEvent = StateChanged;
 
-/**
- *  Network statistic widget size. Kept in the config crate so the setting's
- *  wire contract does not depend on the optional desktop widget implementation.
- */
 export type StatisticWidgetVariant = 'large' | 'small';
 
 export type StatusResBody = StatusResBody_Serialize | StatusResBody_Deserialize;

@@ -26,6 +26,9 @@ members = [
   "chimera-runtime-values",
   'chimera-paths',
   'chimera-single-instance',
+  "chimera-local-channel",
+  "chimera-log-preview",
+  "chimera-widget-protocol",
   "tauri",
 ]
 # `chimera-runtime` is a submodule with its own workspace root. Keep it out of
@@ -48,6 +51,7 @@ lto = true
 opt-level = "s"
 
 [workspace.dependencies]
+chimera-log-preview = { path = "chimera-log-preview" }
 interprocess = '2.4.8'
 # --- chimera runtime ---
 # The gitlink under `backend/chimera-runtime` is the pin. The IPC client is read

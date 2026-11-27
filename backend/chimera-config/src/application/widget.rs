@@ -1,14 +1,8 @@
 use serde::{Deserialize, Serialize};
 use specta::Type;
 
-/// Network statistic widget size. Kept in the config crate so the setting's
-/// wire contract does not depend on the optional desktop widget implementation.
-#[derive(Debug, Serialize, Deserialize, Type, Copy, Clone, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum StatisticWidgetVariant {
-    Large,
-    Small,
-}
+// Part of this module's public API, so consumers need not depend on the widget protocol.
+pub use chimera_widget_protocol::StatisticWidgetVariant;
 
 /// Whether the network statistic widget is shown.
 #[derive(Debug, Default, Serialize, Deserialize, Type, Copy, Clone, PartialEq, Eq)]

@@ -17,6 +17,7 @@ serde = { version = "1", features = ["derive", "rc"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 serde_yaml_ng = { version = "0.10", git = "https://github.com/libnyanpasu/serde-yaml-ng.git", rev = "363da138dc97f90ef0a356f971c2dc1d8fe04c9e", features = ["specta"] }
 chimera-macro = { path = "../chimera-macro" }
+chimera-widget-protocol = { path = "../chimera-widget-protocol" }
 specta = { version = "^2.0.0-rc.25", features = ["derive", "serde_json", "indexmap", "url"] }
 specta-typescript = "0.0.12"
 struct-patch = "0.14"
