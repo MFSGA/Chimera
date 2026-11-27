@@ -42,6 +42,20 @@ pub async fn set_tray_icon_from_bytes(
     Ok(())
 }
 
+#[chimera_rpc::rpc(capabilities(presentation), expose = [http])]
+pub async fn set_widget_icon_from_bytes(
+    client: RpcState<'_, ChimeraClient>,
+    icons: RpcState<'_, dyn HostIconFiles>,
+    paths: RpcState<'_, PathResolver>,
+    mode: TrayIcon,
+    bytes_base64: String,
+) -> Result<()> {
+    let bytes = decode_icon_upload(&bytes_base64, "Widget")?;
+    icons.set_widget_icon_from_bytes(paths, mode, &bytes)?;
+    client.request_widget_logo_refresh()?;
+    Ok(())
+}
+
 /// Decodes an uploaded icon of at most 1 MiB. `kind` names the icon in the
 /// error.
 fn decode_icon_upload(bytes_base64: &str, kind: &str) -> Result<Vec<u8>> {

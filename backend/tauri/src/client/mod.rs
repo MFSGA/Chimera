@@ -225,11 +225,13 @@ impl ChimeraClient {
         self.inner
             .rpc
             .get_or_init(|| {
-                self.build_rpc(if cfg!(any(windows, target_os = "linux")) {
-                    &[chimera_rpc_protocol::ShellCapability::Presentation]
-                } else {
-                    &[]
-                })
+                self.build_rpc(
+                    if cfg!(any(windows, target_os = "linux", target_os = "macos")) {
+                        &[chimera_rpc_protocol::ShellCapability::Presentation]
+                    } else {
+                        &[]
+                    },
+                )
             })
             .as_ref()
             .map_err(|error| anyhow::anyhow!(error.to_string()))
@@ -1756,6 +1758,59 @@ mod tests {
                 "set_tray_icon_from_bytes",
                 owner,
                 serde_json::json!({"mode":"tun", "bytesBase64": "invalid!"})
+            )
+            .await
+            .is_err()
+        );
+        assert_eq!(std::fs::read(path).unwrap(), stored);
+    }
+
+    #[tokio::test]
+    async fn widget_icon_upload_obeys_presentation_capability_and_keeps_tray_separate() {
+        use base64::{Engine as _, prelude::BASE64_STANDARD};
+        use chimera_rpc::{audit::RpcTransport, registry::RpcCaller};
+        use chimera_rpc_protocol::{ShellCapability, values::TrayIcon};
+        let (client, _) = recording_client(false).await;
+        let without = client.build_rpc(&[]).unwrap();
+        let with = client.build_rpc(&[ShellCapability::Presentation]).unwrap();
+        let owner = RpcCaller::desktop("test-window");
+        let image = include_bytes!("../../icons/128x128.png");
+        let params =
+            serde_json::json!({"mode":"tun", "bytesBase64": BASE64_STANDARD.encode(image)});
+        let rejected = without
+            .call(
+                RpcTransport::TauriIpc,
+                "set_widget_icon_from_bytes",
+                owner.clone(),
+                params.clone(),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(rejected.kind, "unsupported");
+        let paths = &with.dependencies().paths;
+        let path = crate::core::widget_logo::widget_icon_path(paths, TrayIcon::Tun);
+        let tray = crate::core::tray::icon::tray_icons_path(paths, "tun");
+        assert!(!path.exists());
+        with.call(
+            RpcTransport::TauriIpc,
+            "set_widget_icon_from_bytes",
+            owner.clone(),
+            params,
+        )
+        .await
+        .unwrap();
+        let stored = std::fs::read(&path).unwrap();
+        assert_eq!(
+            image::load_from_memory(&stored).unwrap().into_rgba8(),
+            image::load_from_memory(image).unwrap().into_rgba8()
+        );
+        assert!(!tray.exists());
+        assert!(
+            with.call(
+                RpcTransport::TauriIpc,
+                "set_widget_icon_from_bytes",
+                owner,
+                serde_json::json!({"mode":"tun", "bytesBase64":"invalid!"})
             )
             .await
             .is_err()

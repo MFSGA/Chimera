@@ -48,6 +48,15 @@ impl HostIconFiles for DesktopIconFiles {
         icon::check_icon(&icon::get_icon(paths, &mode))?;
         Ok(())
     }
+    fn set_widget_icon_from_bytes(
+        &self,
+        paths: &PathResolver,
+        mode: TrayIcon,
+        bytes: &[u8],
+    ) -> anyhow::Result<()> {
+        widget_logo::set_icon_from_bytes(paths, mode, bytes)?;
+        Ok(())
+    }
 }
 
 pub struct OsServiceInstallPrompt;

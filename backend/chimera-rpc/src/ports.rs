@@ -22,6 +22,12 @@ pub trait HostIconFiles: Send + Sync {
         mode: TrayIcon,
         bytes: &[u8],
     ) -> Result<()>;
+    fn set_widget_icon_from_bytes(
+        &self,
+        paths: &PathResolver,
+        mode: TrayIcon,
+        bytes: &[u8],
+    ) -> Result<()>;
 }
 
 /// Format installation instructions without installing or elevating.

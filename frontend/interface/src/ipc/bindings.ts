@@ -633,6 +633,10 @@ export const commands = {
     typedError<null, string>(
       __TAURI_INVOKE('set_tray_icon_from_bytes', { mode, bytesBase64 }),
     ),
+  setWidgetIconFromBytes: (mode: TrayIcon, bytesBase64: string) =>
+    typedError<null, string>(
+      __TAURI_INVOKE('set_widget_icon_from_bytes', { mode, bytesBase64 }),
+    ),
   openThat: (path: string) =>
     typedError<null, string>(__TAURI_INVOKE('open_that', { path })),
   cleanupProcesses: () =>
