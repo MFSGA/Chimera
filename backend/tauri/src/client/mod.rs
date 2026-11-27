@@ -669,6 +669,10 @@ impl ChimeraClient {
     ) -> Self {
         let shared =
             chimera_core::client::ChimeraClient::with_parts(chimera_core::client::ClientParts {
+                #[cfg(not(any(target_os = "android", target_os = "ios")))]
+                effects: Some(effects.clone()),
+                #[cfg(any(target_os = "android", target_os = "ios"))]
+                effects: None,
                 reconciler: Some(core_lifecycle.shared_handle()),
                 ui_sink: Arc::new(event_sink::SharedUiEventSink(ui_sink.clone())),
                 profile_fs,

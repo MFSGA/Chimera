@@ -42,6 +42,7 @@ mod profile_operations;
 pub use profile_operations::auto_activation_failure_degradation;
 
 pub struct ClientParts {
+    pub effects: Option<super::effects::actor::EffectsClient>,
     pub reconciler: Option<Arc<dyn super::reconciler::facade::RuntimeReconciler>>,
     pub profile_fs: Arc<dyn crate::state::profiles::ports::ProfileFsPort>,
     pub profile_paths: chimera_profile_io::fs_service::ProfileFileService,
@@ -84,6 +85,7 @@ impl WeakChimeraClient {
 }
 
 struct ChimeraClientInner {
+    effects: Option<super::effects::actor::EffectsClient>,
     reconciler: Option<Arc<dyn super::reconciler::facade::RuntimeReconciler>>,
     profile_fs: Arc<dyn crate::state::profiles::ports::ProfileFsPort>,
     profile_paths: chimera_profile_io::fs_service::ProfileFileService,
@@ -136,6 +138,7 @@ impl ChimeraClient {
         ));
         Self {
             inner: Arc::new(ChimeraClientInner {
+                effects: parts.effects,
                 reconciler: parts.reconciler,
                 profile_fs: parts.profile_fs,
                 profile_paths: parts.profile_paths,
@@ -190,6 +193,16 @@ impl ChimeraClient {
     pub async fn shutdown_core(&self) -> Result<()> {
         self.runtime_reconciler()?.shutdown().await
     }
+    /// Notify the existing presentation owner after a tray icon write.
+    pub fn request_tray_refresh(&self) -> Result<()> {
+        anyhow::ensure!(!self.shutdown().is_cancelled(), "client is shutting down");
+        self.inner
+            .effects
+            .as_ref()
+            .context("effects owner is not connected")?
+            .request_tray_refresh()
+    }
+
     pub async fn retry_configuration_runtime(&self) -> Result<()> {
         anyhow::ensure!(!self.shutdown().is_cancelled(), "client is shutting down");
         self.runtime_reconciler()?.reconcile().await
@@ -787,6 +800,7 @@ mod tests {
             fn state_changed(&self, _: crate::client::event_sink::StateChanged) {}
         }
         let client = ChimeraClient::with_parts(ClientParts {
+            effects: None,
             reconciler: None,
             ui_sink: Arc::new(TestEvents),
             profile_fs: Arc::new(crate::state::profiles::ports::MockProfileFsPort::new()),

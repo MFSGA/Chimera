@@ -128,6 +128,7 @@ enum Slice {
     Clash(ClashEffectFields),
     Ports(Option<ResolvedPortBindings>),
     Profiles,
+    Icons,
     Full(Box<ApplicationEffectInputs>),
 }
 
@@ -136,7 +137,7 @@ fn merge_slice(mut inputs: ApplicationEffectInputs, slice: Slice) -> Application
         Slice::Application(app) => inputs.app = *app,
         Slice::Clash(clash) => inputs.clash = clash,
         Slice::Ports(ports) => inputs.ports = ports,
-        Slice::Profiles => {}
+        Slice::Profiles | Slice::Icons => {}
         Slice::Full(complete) => inputs = *complete,
     }
     inputs
@@ -823,6 +824,22 @@ impl EffectsClient {
             .map_err(|error| anyhow::anyhow!("{error}"))
     }
 
+    /// A tray icon file changed: redraw the tray from the latest committed inputs.
+    pub fn request_tray_refresh(&self) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            !self.shutdown.is_cancelled(),
+            "effects owner is shutting down"
+        );
+        self.actor
+            .cast(Message::Publish {
+                slice: Slice::Icons,
+                refresh: true,
+                full: false,
+                requested: Vec::new(),
+            })
+            .map_err(|error| anyhow::anyhow!("{error}"))
+    }
+
     pub async fn reconcile_hotkeys(&self, inputs: ApplicationEffectInputs) -> EffectStatus {
         match self
             .actor
@@ -1235,6 +1252,38 @@ mod tests {
             &[ApplicationEffect::Tray(
                 TrayRefresh::Part,
                 latest.tray_view(),
+            )]
+        );
+        let _ = effects.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn tray_icon_refresh_uses_latest_inputs_without_replaying_other_effects() {
+        let (sender, mut receiver) = mpsc::unbounded_channel();
+        let initial = inputs();
+        let effects = EffectsClient::spawn(EffectsArgs {
+            port: Arc::new(RecordingEffectsPort { plans: sender }),
+            initial: initial.clone(),
+        })
+        .await
+        .unwrap();
+        let mut latest = initial;
+        latest.clash.enable_tun_mode = true;
+        CommitNotifications::clash_committed(&effects, latest.clash.clone());
+        let _ = tokio::time::timeout(Duration::from_secs(5), receiver.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        effects.request_tray_refresh().unwrap();
+        let plan = tokio::time::timeout(Duration::from_secs(5), receiver.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            plan.effects(),
+            &[ApplicationEffect::Tray(
+                TrayRefresh::Part,
+                latest.tray_view()
             )]
         );
         let _ = effects.shutdown().await;
