@@ -1,0 +1,102 @@
+import { Theme } from "theme.slint";
+import { StatisticData, LogoPreset } from "state.slint";
+
+// A frameless, transparent, topmost window. The variant sets its fixed size.
+export component WidgetWindow inherits Window {
+    title: "Chimera Network Statistic Widget";
+    no-frame: true;
+    always-on-top: true;
+    background: transparent;
+    default-font-family: Theme.font-family;
+}
+
+// The rounded panel of a widget window. Dragging anywhere on it moves the
+// window.
+export component WidgetSurface inherits Rectangle {
+    WindowMoveArea {
+        @children
+    }
+}
+
+// The bundled Chimera logo sits on a translucent disc in the reference
+// logo box. Custom image logos fill the badge; Rust rasterizes them at the
+// physical badge size, so Slint draws them unscaled.
+export component LogoBadge inherits Rectangle {
+    // A multiple of 14px. The logo is 6:7, so its box is then a whole number
+    // of pixels wide and high at scale 1, 1.5 and 2; otherwise the rasterizer
+    // rounds one side up and the box clips the logo.
+    in property <length> logo-height;
+    height: self.width;
+    border-radius: self.width / 2;
+    background: StatisticData.logo-image-shown ? transparent : Theme.logo-badge;
+
+    if StatisticData.logo-image-shown: Image {
+        source: StatisticData.logo-image;
+        width: root.width;
+        height: root.height;
+    }
+    if !StatisticData.logo-image-shown: Image {
+        source: StatisticData.logo == LogoPreset.tun ? @image-url("../assets/logo-tun.svg")
+            : StatisticData.logo == LogoPreset.system ? @image-url("../assets/logo-system-proxy.svg")
+            : @image-url("../assets/logo.svg");
+        width: root.logo-height * 6 / 7;
+        height: root.logo-height;
+    }
+}
+
+// A single-color icon on an accent disc. The SVG is rasterized at the
+// window's physical size, so it stays sharp at any scale factor.
+export component IconBadge inherits Rectangle {
+    in property <image> icon;
+    width: Theme.badge-size;
+    height: Theme.badge-size;
+    border-radius: self.width / 2;
+    background: Theme.accent;
+
+    Image {
+        source: root.icon;
+        width: Theme.icon-size;
+        height: Theme.icon-size;
+        colorize: Theme.text;
+    }
+}
+
+// An icon badge followed by a value, on a pill. The value is centered in the
+// space right of the badge and elided rather than drawn over the badge.
+export component StatPill inherits Rectangle {
+    in property <image> icon;
+    in property <string> value;
+    // Whether the value is drawn whole, for the render tests.
+    out property <bool> fits: value-text.preferred-width <= value-text.width;
+    height: Theme.badge-size;
+    border-radius: self.height / 2;
+    background: Theme.sheet;
+
+    HorizontalLayout {
+        padding-right: 1px;
+
+        IconBadge {
+            icon: root.icon;
+        }
+
+        value-text := Text {
+            text: root.value;
+            color: Theme.text;
+            font-size: Theme.value-font-size;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+    }
+}
+
+// A value of the small widget.
+export component CompactValue inherits Text {
+    // Whether the value is drawn whole, for the render tests.
+    out property <bool> fits: self.preferred-width <= self.width;
+    color: Theme.compact-text;
+    font-size: Theme.compact-font-size;
+    horizontal-alignment: center;
+    vertical-alignment: center;
+    overflow: elide;
+}

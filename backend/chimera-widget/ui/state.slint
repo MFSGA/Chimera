@@ -1,0 +1,19 @@
+export enum LogoPreset { default, system, tun }
+
+// What the application sent last, already formatted. Rust writes it and both
+// windows read it, so the IPC wiring does not depend on the window variant.
+export global StatisticData {
+    in property <string> download-total;
+    in property <string> upload-total;
+    in property <string> download-speed;
+    in property <string> upload-speed;
+    // The state of the bundled logo, drawn unless an image logo is shown.
+    in property <LogoPreset> logo;
+    // Whether the logo is an image rather than the bundled logo.
+    in property <bool> logo-image-shown;
+    // The image logo as decoded, kept for rasterizing it again when the
+    // scale factor changes. Never drawn.
+    in property <image> logo-source;
+    // The image logo rasterized at the badge's physical size.
+    in property <image> logo-image;
+}
