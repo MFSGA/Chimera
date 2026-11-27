@@ -56,6 +56,7 @@ function effectLabel(kind: EffectKind) {
     core_log_storage: m.configuration_core_log_storage,
     transparent_proxy: m.configuration_transparent_proxy,
     widget: m.settings_nyanpasu_network_statistic_widget_label,
+    widget_logo: m.settings_nyanpasu_network_statistic_widget_logo_label,
     tray: m.configuration_tray,
   };
   return labels[kind]();

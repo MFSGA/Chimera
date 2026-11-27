@@ -137,8 +137,13 @@ fn merge_slice(mut inputs: ApplicationEffectInputs, slice: Slice) -> Application
         Slice::Application(app) => inputs.app = *app,
         Slice::Clash(clash) => inputs.clash = clash,
         Slice::Ports(ports) => inputs.ports = ports,
-        Slice::Profiles | Slice::Icons => {}
-        Slice::Full(complete) => inputs = *complete,
+        Slice::Profiles => {}
+        Slice::Icons => inputs.icon_revision += 1,
+        Slice::Full(complete) => {
+            let icon_revision = inputs.icon_revision;
+            inputs = *complete;
+            inputs.icon_revision = icon_revision;
+        }
     }
     inputs
 }
@@ -148,7 +153,11 @@ fn group(kind: EffectKind) -> usize {
         // One owner: the system proxy actor also applies auto-launch.
         EffectKind::SystemProxy | EffectKind::ProxyGuard | EffectKind::AutoLaunch => 0,
         EffectKind::Hotkeys => 1,
-        EffectKind::Locale | EffectKind::Logger | EffectKind::Widget | EffectKind::Tray => 2,
+        EffectKind::Locale
+        | EffectKind::Logger
+        | EffectKind::Widget
+        | EffectKind::WidgetLogo
+        | EffectKind::Tray => 2,
         EffectKind::CoreLogStorage | EffectKind::TransparentProxy => 3,
     }
 }
@@ -824,8 +833,18 @@ impl EffectsClient {
             .map_err(|error| anyhow::anyhow!("{error}"))
     }
 
-    /// A tray icon file changed: redraw the tray from the latest committed inputs.
+    /// A tray icon file changed: the tray redraws, and the widget logo follows
+    /// in case it shows the tray's icons.
     pub fn request_tray_refresh(&self) -> anyhow::Result<()> {
+        self.publish_icons(true)
+    }
+
+    /// A widget icon file changed.
+    pub fn request_widget_logo_refresh(&self) -> anyhow::Result<()> {
+        self.publish_icons(false)
+    }
+
+    fn publish_icons(&self, refresh_tray: bool) -> anyhow::Result<()> {
         anyhow::ensure!(
             !self.shutdown.is_cancelled(),
             "effects owner is shutting down"
@@ -833,7 +852,7 @@ impl EffectsClient {
         self.actor
             .cast(Message::Publish {
                 slice: Slice::Icons,
-                refresh: true,
+                refresh: refresh_tray,
                 full: false,
                 requested: Vec::new(),
             })
@@ -1281,9 +1300,28 @@ mod tests {
             .unwrap();
         assert_eq!(
             plan.effects(),
-            &[ApplicationEffect::Tray(
-                TrayRefresh::Part,
-                latest.tray_view()
+            &[
+                ApplicationEffect::WidgetLogo(super::super::plan::WidgetLogoDesired {
+                    source: chimera_config::application::NetworkStatisticWidgetLogoSource::Tray,
+                    state: super::super::plan::WidgetLogoState::Normal,
+                    icon_revision: 1,
+                }),
+                ApplicationEffect::Tray(TrayRefresh::Part, latest.tray_view())
+            ]
+        );
+        effects.request_widget_logo_refresh().unwrap();
+        let plan = tokio::time::timeout(Duration::from_secs(5), receiver.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            plan.effects(),
+            &[ApplicationEffect::WidgetLogo(
+                super::super::plan::WidgetLogoDesired {
+                    source: chimera_config::application::NetworkStatisticWidgetLogoSource::Tray,
+                    state: super::super::plan::WidgetLogoState::Normal,
+                    icon_revision: 2,
+                }
             )]
         );
         let _ = effects.shutdown().await;

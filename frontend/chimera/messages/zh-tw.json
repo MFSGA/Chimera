@@ -1601,5 +1601,6 @@
   "configuration_unconfirmed": "暫時無法確認結果。再次儲存前請查看近期操作。",
   "configuration_waiting_dependency": "等待相依項就緒",
   "settings_nyanpasu_app_log_level_label": "應用程式記錄級別",
-  "settings_nyanpasu_network_statistic_widget_label": "網路懸浮窗"
+  "settings_nyanpasu_network_statistic_widget_label": "網路懸浮窗",
+  "settings_nyanpasu_network_statistic_widget_logo_label": "懸浮窗圖示"
 }

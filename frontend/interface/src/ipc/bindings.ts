@@ -2713,6 +2713,7 @@ export type EffectKind =
   | 'transparent_proxy'
   | 'hotkeys'
   | 'widget'
+  | 'widget_logo'
   | 'tray';
 
 export type EgressAddress = {

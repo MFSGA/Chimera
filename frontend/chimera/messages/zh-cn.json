@@ -1600,5 +1600,6 @@
   "configuration_unconfirmed": "暂时无法确认结果。再次保存前请查看近期操作。",
   "configuration_waiting_dependency": "等待依赖就绪",
   "settings_nyanpasu_app_log_level_label": "应用程序日志级别",
-  "settings_nyanpasu_network_statistic_widget_label": "网络悬浮窗"
+  "settings_nyanpasu_network_statistic_widget_label": "网络悬浮窗",
+  "settings_nyanpasu_network_statistic_widget_logo_label": "悬浮窗图标"
 }

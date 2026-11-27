@@ -6,7 +6,8 @@ use std::{collections::BTreeSet, time::Duration};
 use chimera_config::{
     application::{
         ChimeraAppConfig, ClashCore, CoreLogSettings, I18nLanguage, LoggingLevel,
-        NetworkStatisticWidgetConfig, ProxiesSelectorMode, TrayMenuMode,
+        NetworkStatisticWidgetConfig, NetworkStatisticWidgetLogo, NetworkStatisticWidgetLogoSource,
+        ProxiesSelectorMode, TrayMenuMode,
     },
     clash::config::{
         ClashConfig, ClashControlChannel, TransparentProxyConfig, TransparentProxyMode,
@@ -29,6 +30,8 @@ pub struct ApplicationEffectInputs {
     pub clash: ClashEffectFields,
     /// Ports resolved for this session; `None` until the first resolve.
     pub ports: Option<ResolvedPortBindings>,
+    /// A changed icon file must re-resolve the widget logo.
+    pub icon_revision: u64,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -50,6 +53,7 @@ pub struct ApplicationEffectFields {
     pub enable_tray_text: bool,
     pub enable_tray_traffic: bool,
     pub network_statistic_widget: NetworkStatisticWidgetConfig,
+    pub network_statistic_widget_logo: NetworkStatisticWidgetLogo,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -92,6 +96,7 @@ impl From<&ChimeraAppConfig> for ApplicationEffectFields {
             enable_tray_text: app.enable_tray_text,
             enable_tray_traffic: app.enable_tray_traffic,
             network_statistic_widget: app.network_statistic_widget,
+            network_statistic_widget_logo: app.network_statistic_widget_logo,
         }
     }
 }
@@ -130,6 +135,7 @@ impl ApplicationEffectInputs {
             app: app.into(),
             clash: clash.into(),
             ports,
+            icon_revision: 0,
         }
     }
 
@@ -170,6 +176,19 @@ impl ApplicationEffectInputs {
             },
             hotkeys: app.hotkeys.clone(),
             widget: app.network_statistic_widget,
+            widget_logo: WidgetLogoDesired {
+                source: app.network_statistic_widget_logo.source,
+                state: if !app.network_statistic_widget_logo.follow_state {
+                    WidgetLogoState::Normal
+                } else if self.clash.enable_tun_mode {
+                    WidgetLogoState::Tun
+                } else if app.enable_system_proxy {
+                    WidgetLogoState::SystemProxy
+                } else {
+                    WidgetLogoState::Normal
+                },
+                icon_revision: self.icon_revision,
+            },
             tray_menu: TrayMenuDesired {
                 menu_mode: app.tray_menu_mode,
                 selector_mode: app.tray_selector_mode,
@@ -226,6 +245,26 @@ pub struct LoggerDesired {
     pub max_files: usize,
 }
 
+/// Which proxy state's icon the widget logo shows, in the tray's order: TUN
+/// before the system proxy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WidgetLogoState {
+    Normal,
+    Tun,
+    SystemProxy,
+}
+
+/// The widget logo: the icon of `state` from `source`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WidgetLogoDesired {
+    pub source: NetworkStatisticWidgetLogoSource,
+    /// [`WidgetLogoState::Normal`] unless the logo follows the state, so a
+    /// state change the logo ignores triggers nothing.
+    pub state: WidgetLogoState,
+    /// An icon file changing re-resolves the logo although the rest is equal.
+    pub icon_revision: u64,
+}
+
 /// What a [`TrayRefresh::Full`] rebuild renders.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TrayMenuDesired {
@@ -277,6 +316,7 @@ struct ApplicationDesired {
     proxy_guard: ProxyGuardDesired,
     hotkeys: Vec<String>,
     widget: NetworkStatisticWidgetConfig,
+    widget_logo: WidgetLogoDesired,
     /// `locale` is deliberately not repeated here; "a locale change implies a
     /// full tray refresh" is written out in the mapping instead.
     tray_menu: TrayMenuDesired,
@@ -306,6 +346,7 @@ pub enum ApplicationEffect {
     TransparentProxy(TransparentProxyDesired),
     Hotkeys(Vec<String>),
     Widget(NetworkStatisticWidgetConfig),
+    WidgetLogo(WidgetLogoDesired),
     Tray(TrayRefresh, TrayView),
 }
 
@@ -321,6 +362,7 @@ impl ApplicationEffect {
             Self::TransparentProxy(_) => EffectKind::TransparentProxy,
             Self::Hotkeys(_) => EffectKind::Hotkeys,
             Self::Widget(_) => EffectKind::Widget,
+            Self::WidgetLogo(_) => EffectKind::WidgetLogo,
             Self::Tray(..) => EffectKind::Tray,
         }
     }
@@ -406,6 +448,7 @@ impl ApplicationEffectPlan {
             transparent_proxy,
             hotkeys,
             widget,
+            widget_logo,
             tray_menu,
             tray_part,
         } = changes;
@@ -421,6 +464,7 @@ impl ApplicationEffectPlan {
         effects.extend(transparent_proxy.map(ApplicationEffect::TransparentProxy));
         effects.extend(hotkeys.map(ApplicationEffect::Hotkeys));
         effects.extend(widget.map(ApplicationEffect::Widget));
+        effects.extend(widget_logo.map(ApplicationEffect::WidgetLogo));
         // The menu is rendered with the locale, so a locale change is a menu
         // change. A full refresh rebuilds the menu and refreshes the parts on
         // its way out, so it subsumes a part refresh.
@@ -566,6 +610,7 @@ mod tests {
                 enable_tray_text: false,
                 enable_tray_traffic: false,
                 network_statistic_widget: NetworkStatisticWidgetConfig::Disabled,
+                network_statistic_widget_logo: NetworkStatisticWidgetLogo::default(),
             },
             clash: ClashEffectFields {
                 transparent_proxy: TransparentProxyConfig::default(),
@@ -584,6 +629,7 @@ mod tests {
                 clash_control_channel: ClashControlChannel::PreferIpc,
                 clash_ipc_disable_http_controller: false,
             },
+            icon_revision: 0,
             ports: Some(ResolvedPortBindings {
                 mixed_port: 7890,
                 ..ResolvedPortBindings::default()
@@ -864,6 +910,70 @@ mod tests {
     }
 
     #[test]
+    fn a_fixed_widget_logo_ignores_the_proxy_state() {
+        let before = inputs();
+        let mut after = inputs();
+        after.clash.enable_tun_mode = true;
+
+        let plan = ApplicationEffectPlan::diff(&before, &after);
+
+        assert!(!kinds(&plan).contains(&EffectKind::WidgetLogo));
+    }
+
+    #[test]
+    fn a_widget_logo_following_the_state_prefers_tun_like_the_tray() {
+        let mut before = inputs();
+        before.app.network_statistic_widget_logo = NetworkStatisticWidgetLogo {
+            follow_state: true,
+            source: NetworkStatisticWidgetLogoSource::Widget,
+        };
+        let mut after = before.clone();
+        after.app.enable_system_proxy = true;
+        after.clash.enable_tun_mode = true;
+
+        let plan = ApplicationEffectPlan::diff(&before, &after);
+
+        assert!(
+            plan.effects()
+                .contains(&ApplicationEffect::WidgetLogo(WidgetLogoDesired {
+                    source: NetworkStatisticWidgetLogoSource::Widget,
+                    state: WidgetLogoState::Tun,
+                    icon_revision: 0,
+                }))
+        );
+
+        before = after.clone();
+        after.clash.enable_tun_mode = false;
+        let plan = ApplicationEffectPlan::diff(&before, &after);
+        assert!(
+            plan.effects()
+                .contains(&ApplicationEffect::WidgetLogo(WidgetLogoDesired {
+                    source: NetworkStatisticWidgetLogoSource::Widget,
+                    state: WidgetLogoState::SystemProxy,
+                    icon_revision: 0,
+                }))
+        );
+    }
+
+    #[test]
+    fn an_icon_change_resolves_the_widget_logo_again() {
+        let before = inputs();
+        let mut after = inputs();
+        after.icon_revision += 1;
+
+        let plan = ApplicationEffectPlan::diff(&before, &after);
+
+        assert_eq!(
+            plan.effects(),
+            [ApplicationEffect::WidgetLogo(WidgetLogoDesired {
+                source: NetworkStatisticWidgetLogoSource::Tray,
+                state: WidgetLogoState::Normal,
+                icon_revision: 1,
+            })]
+        );
+    }
+
+    #[test]
     fn effects_are_sorted_by_kind() {
         let before = inputs();
         let mut after = inputs();
@@ -925,6 +1035,7 @@ mod tests {
                 EffectKind::TransparentProxy,
                 EffectKind::Hotkeys,
                 EffectKind::Widget,
+                EffectKind::WidgetLogo,
                 EffectKind::Tray,
             ]
         );
@@ -1338,6 +1449,9 @@ pub fn requested_owners(
     }
     if patch.network_statistic_widget.is_some() {
         kinds.push(EffectKind::Widget);
+    }
+    if patch.network_statistic_widget_logo.is_some() {
+        kinds.push(EffectKind::WidgetLogo);
     }
     if patch.language.is_some()
         || patch.tray_menu_mode.is_some()

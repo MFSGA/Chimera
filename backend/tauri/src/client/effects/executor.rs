@@ -305,6 +305,13 @@ impl ApplicationEffectsPort for ApplicationEffectExecutor {
                     EffectKind::Widget,
                     self.adapters.set_widget(*config),
                 ),
+                ApplicationEffect::WidgetLogo(_) => self.status_from_result(
+                    revision,
+                    EffectKind::WidgetLogo,
+                    Err(super::adapters::EffectAdapterError::Unsupported {
+                        code: "widget_runtime_unavailable",
+                    }),
+                ),
                 ApplicationEffect::Tray(refresh, view) => {
                     self.apply_tray(revision, *refresh, *view).await
                 }
@@ -575,7 +582,14 @@ mod tests {
         assert_eq!(statuses.len(), plan.effects().len());
         assert!(statuses.iter().all(|status| {
             status.desired_revision == EffectRevision::new(7)
-                && status.health == EffectHealth::Healthy
+                && (status.health == EffectHealth::Healthy
+                    || (status.kind == EffectKind::WidgetLogo
+                        && matches!(
+                            status.health,
+                            EffectHealth::Unsupported {
+                                code: "widget_runtime_unavailable"
+                            }
+                        )))
         }));
         assert_eq!(
             adapters.effects.lock().unwrap().as_slice(),

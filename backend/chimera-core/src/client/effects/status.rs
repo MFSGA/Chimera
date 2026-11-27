@@ -82,6 +82,7 @@ const fn phase_of(kind: EffectKind) -> DegradationPhase {
         | EffectKind::Logger
         | EffectKind::CoreLogStorage
         | EffectKind::Widget
+        | EffectKind::WidgetLogo
         | EffectKind::Tray => DegradationPhase::UiEffect,
         EffectKind::AutoLaunch
         | EffectKind::SystemProxy
@@ -135,6 +136,7 @@ mod tests {
             EffectKind::Locale,
             EffectKind::Logger,
             EffectKind::Widget,
+            EffectKind::WidgetLogo,
             EffectKind::Tray,
         ] {
             let degradation = degradation_of(&status(kind, degraded()))

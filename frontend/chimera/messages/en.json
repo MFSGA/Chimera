@@ -1627,5 +1627,6 @@
   "configuration_unconfirmed": "The result could not be confirmed. Check recent operations before saving again.",
   "configuration_waiting_dependency": "Waiting for a dependency",
   "settings_nyanpasu_app_log_level_label": "App Log Level",
-  "settings_nyanpasu_network_statistic_widget_label": "Network Statistic Widget"
+  "settings_nyanpasu_network_statistic_widget_label": "Network Statistic Widget",
+  "settings_nyanpasu_network_statistic_widget_logo_label": "Widget Logo"
 }

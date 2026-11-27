@@ -203,6 +203,16 @@ impl ChimeraClient {
             .request_tray_refresh()
     }
 
+    /// Notify the presentation owner after a widget icon write.
+    pub fn request_widget_logo_refresh(&self) -> Result<()> {
+        anyhow::ensure!(!self.shutdown().is_cancelled(), "client is shutting down");
+        self.inner
+            .effects
+            .as_ref()
+            .context("effects owner is not connected")?
+            .request_widget_logo_refresh()
+    }
+
     pub async fn retry_configuration_runtime(&self) -> Result<()> {
         anyhow::ensure!(!self.shutdown().is_cancelled(), "client is shutting down");
         self.runtime_reconciler()?.reconcile().await

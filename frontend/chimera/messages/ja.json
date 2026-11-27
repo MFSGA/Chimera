@@ -1600,5 +1600,6 @@
   "configuration_unconfirmed": "結果を確認できませんでした。もう一度保存する前に、最近の操作を確認してください。",
   "configuration_waiting_dependency": "依存関係の完了を待っています",
   "settings_nyanpasu_app_log_level_label": "アプリのログレベル",
-  "settings_nyanpasu_network_statistic_widget_label": "ネットワーク統計"
+  "settings_nyanpasu_network_statistic_widget_label": "ネットワーク統計",
+  "settings_nyanpasu_network_statistic_widget_logo_label": "ウィジェットのアイコン"
 }

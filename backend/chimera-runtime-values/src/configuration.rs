@@ -86,6 +86,7 @@ pub enum EffectKind {
     TransparentProxy,
     Hotkeys,
     Widget,
+    WidgetLogo,
     Tray,
 }
 
