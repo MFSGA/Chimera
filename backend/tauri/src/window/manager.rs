@@ -152,7 +152,9 @@ impl WindowManager {
         };
 
         #[cfg(all(not(windows), not(target_os = "macos")))]
-        let window = builder.build();
+        let window = builder
+            .decorations(config.decorations.unwrap_or(true))
+            .build();
 
         let window = match window {
             Ok(window) => window,
@@ -174,7 +176,9 @@ impl WindowManager {
         #[cfg(windows)]
         crate::trace_err!(window.set_shadow(true), "set win shadow");
 
-        if super::should_center_window(&window, window_state.as_ref()).unwrap_or(true) {
+        if config.center
+            && super::should_center_window(&window, window_state.as_ref()).unwrap_or(true)
+        {
             crate::trace_err!(window.center(), "set win center");
         }
 
@@ -199,7 +203,9 @@ impl WindowManager {
 
         #[cfg(all(debug_assertions, not(feature = "e2e")))]
         {
-            window.open_devtools();
+            if label != crate::consts::TRAY_MENU_WINDOW_LABEL {
+                window.open_devtools();
+            }
         }
 
         kind.on_created(&window);

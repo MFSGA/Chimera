@@ -76,6 +76,11 @@ impl WindowConfig {
         self
     }
 
+    pub fn always_on_top(mut self, enabled: bool) -> Self {
+        self.always_on_top = Some(enabled);
+        self
+    }
+
     pub fn skip_taskbar(mut self, skip: bool) -> Self {
         self.skip_taskbar = skip;
         self

@@ -45,6 +45,7 @@ pub static IS_APPIMAGE: Lazy<bool> = Lazy::new(|| std::env::var("APPIMAGE").is_o
 
 pub const LEGACY_WINDOW_LABEL: &str = "legacy";
 pub const MAIN_WINDOW_LABEL: &str = "main";
+pub const TRAY_MENU_WINDOW_LABEL: &str = "tray-menu";
 pub const APP_NAME: &str = "Chimera";
 
 /// A Tauri AppHandle copy for access from global context.

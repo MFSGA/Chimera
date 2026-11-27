@@ -342,6 +342,7 @@ pub fn run() -> std::process::ExitCode {
 
                     // All window/IPC state must exist before the first webview loads.
                     app.manage(crate::window::WindowManager::new(app.handle().clone()));
+                    app.manage(crate::window::kinds::TrayMenuWindowController::default());
                     app.manage(crate::utils::resolve::AppStartupStatus::default());
 
                     #[cfg(target_os = "macos")]
