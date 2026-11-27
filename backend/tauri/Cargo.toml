@@ -225,6 +225,11 @@ rfd = { version = '0.17', default-features = false, features = [
 dhat = { version = '0.3', optional = true }
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+chimera-widget = { path = "../chimera-widget" }
+chimera-runtime-values = { path = "../chimera-runtime-values" }
+chimera-widget-protocol = { path = "../chimera-widget-protocol", features = ["ipc-host"] }
+os_pipe = "1"
+
 tauri-plugin-single-instance = { version = "2.4.2", features = ["deep-link"] }
 tauri-plugin-global-shortcut = "2.3.2"
 

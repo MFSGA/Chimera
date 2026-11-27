@@ -50,6 +50,8 @@ pub mod startup_reporter;
 mod state;
 /// 4
 mod utils;
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+pub mod widget;
 /// 9
 mod window;
 
