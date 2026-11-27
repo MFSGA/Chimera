@@ -1176,6 +1176,7 @@ dependencies = [
  "chimera-state-engine",
  "chimera-traffic",
  "chimera-utils",
+ "chimera-widget-protocol",
  "chrono",
  "clash-api",
  "convert_case",

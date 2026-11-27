@@ -70,6 +70,7 @@ chimera-migration = { path = "../chimera-migration" }
 chimera-panics = { path = "../chimera-panics" }
 chimera-state-engine = { path = "../chimera-state-engine" }
 chimera-config = { path = "../chimera-config" }
+chimera-widget-protocol = { path = "../chimera-widget-protocol" }
 chimera-geodata = { path = "../chimera-geodata" }
 chimera-traffic = { path = "../chimera-traffic", features = ["specta"] }
 chimera-jobs = { path = "../chimera-jobs", features = ["specta"] }
