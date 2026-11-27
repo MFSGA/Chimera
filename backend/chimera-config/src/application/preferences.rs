@@ -21,9 +21,9 @@ use crate::request::{FieldsRejected, reject_present};
 
 use super::{
     ChimeraAppConfigPatch, CoreLogSettings, I18nLanguage, IpLookupProvider, LoggingLevel,
-    NetworkStatisticWidgetConfig, ProxiesSelectorMode, ReleaseChannel, StunServer, ThemeMode,
-    TrafficRetention, TrayMenuCloseBehavior, TrayMenuMode, UpdateSource, WindowCloseSettingsPatch,
-    WindowType,
+    NetworkStatisticWidgetConfig, NetworkStatisticWidgetLogo, ProxiesSelectorMode, ReleaseChannel,
+    StunServer, ThemeMode, TrafficRetention, TrayMenuCloseBehavior, TrayMenuMode, UpdateSource,
+    WindowCloseSettingsPatch, WindowType,
 };
 
 /// A patch of the ordinary preferences.
@@ -65,6 +65,7 @@ pub struct ApplicationPreferencesPatch {
     pub tray_menu_mode: Option<TrayMenuMode>,
     pub window_close: WindowCloseSettingsPatch,
     pub network_statistic_widget: Option<NetworkStatisticWidgetConfig>,
+    pub network_statistic_widget_logo: Option<NetworkStatisticWidgetLogo>,
     pub traffic_retention: Option<TrafficRetention>,
     pub enable_local_ip_probe: Option<bool>,
     pub stun_servers: Option<Vec<StunServer>>,
@@ -117,6 +118,7 @@ impl TryFrom<ChimeraAppConfigPatch> for ApplicationPreferencesPatch {
             tray_menu_mode,
             window_close,
             network_statistic_widget,
+            network_statistic_widget_logo,
             traffic_retention,
             enable_local_ip_probe,
             stun_servers,
@@ -168,6 +170,7 @@ impl TryFrom<ChimeraAppConfigPatch> for ApplicationPreferencesPatch {
             tray_menu_mode,
             window_close,
             network_statistic_widget,
+            network_statistic_widget_logo,
             traffic_retention,
             enable_local_ip_probe,
             stun_servers,
@@ -208,6 +211,7 @@ impl From<ApplicationPreferencesPatch> for ChimeraAppConfigPatch {
             tray_menu_mode,
             window_close,
             network_statistic_widget,
+            network_statistic_widget_logo,
             traffic_retention,
             enable_local_ip_probe,
             stun_servers,
@@ -243,6 +247,7 @@ impl From<ApplicationPreferencesPatch> for ChimeraAppConfigPatch {
             tray_menu_mode,
             window_close,
             network_statistic_widget,
+            network_statistic_widget_logo,
             traffic_retention,
             enable_local_ip_probe,
             stun_servers,

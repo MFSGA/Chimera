@@ -210,6 +210,9 @@ pub struct ChimeraAppConfig {
     pub tray_menu_close_behavior: TrayMenuCloseBehavior,
     #[patch(attribute(specta(optional)))]
     pub network_statistic_widget: NetworkStatisticWidgetConfig,
+    #[serde(default)]
+    #[patch(attribute(specta(optional)))]
+    pub network_statistic_widget_logo: NetworkStatisticWidgetLogo,
     /// How long recorded connection traffic is kept.
     #[serde(default)]
     #[patch(attribute(specta(optional)))]
@@ -287,6 +290,7 @@ impl Default for ChimeraAppConfig {
             window_close: WindowCloseSettings::default(),
             tray_menu_close_behavior: TrayMenuCloseBehavior::default(),
             network_statistic_widget: NetworkStatisticWidgetConfig::default(),
+            network_statistic_widget_logo: NetworkStatisticWidgetLogo::default(),
             traffic_retention: TrafficRetention::default(),
             network_automation: NetworkAutomation::default(),
             pac_url: None,

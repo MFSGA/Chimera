@@ -16,9 +16,9 @@ use specta::Type;
 
 use super::{
     ChimeraAppConfig, ClashCore, CoreLogSettings, I18nLanguage, IpLookupProvider, LoggingLevel,
-    NetworkStatisticWidgetConfig, ProxiesSelectorMode, ReleaseChannel, StunServer, ThemeMode,
-    TrafficRetention, TrayMenuCloseBehavior, TrayMenuMode, UpdateSource, WindowCloseSettings,
-    WindowType,
+    NetworkStatisticWidgetConfig, NetworkStatisticWidgetLogo, ProxiesSelectorMode, ReleaseChannel,
+    StunServer, ThemeMode, TrafficRetention, TrayMenuCloseBehavior, TrayMenuMode, UpdateSource,
+    WindowCloseSettings, WindowType,
 };
 
 /// The secret-free view of [`ChimeraAppConfig`].
@@ -61,6 +61,7 @@ pub struct ApplicationSettings {
     pub tray_menu_mode: TrayMenuMode,
     pub window_close: WindowCloseSettings,
     pub network_statistic_widget: NetworkStatisticWidgetConfig,
+    pub network_statistic_widget_logo: NetworkStatisticWidgetLogo,
     pub traffic_retention: TrafficRetention,
     pub enable_local_ip_probe: bool,
     pub stun_servers: Vec<StunServer>,
@@ -111,6 +112,7 @@ impl From<&ChimeraAppConfig> for ApplicationSettings {
             tray_menu_mode,
             window_close,
             network_statistic_widget,
+            network_statistic_widget_logo,
             traffic_retention,
             enable_local_ip_probe,
             stun_servers,
@@ -156,6 +158,7 @@ impl From<&ChimeraAppConfig> for ApplicationSettings {
             tray_menu_mode: *tray_menu_mode,
             window_close: window_close.clone(),
             network_statistic_widget: *network_statistic_widget,
+            network_statistic_widget_logo: *network_statistic_widget_logo,
             traffic_retention: *traffic_retention,
             enable_local_ip_probe: *enable_local_ip_probe,
             stun_servers: stun_servers.clone(),

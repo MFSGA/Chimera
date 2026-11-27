@@ -1246,6 +1246,7 @@ export type ChimeraAppConfigPatch_Deserialize = {
   window_close?: WindowCloseSettingsPatch_Deserialize;
   tray_menu_close_behavior?: TrayMenuCloseBehavior | null;
   network_statistic_widget?: NetworkStatisticWidgetConfig | null;
+  network_statistic_widget_logo?: NetworkStatisticWidgetLogo | null;
   traffic_retention?: TrafficRetention | null;
   network_automation?: NetworkAutomation | null;
   pac_url?: string | null;
@@ -1291,6 +1292,7 @@ export type ChimeraAppConfigPatch_Serialize = {
   window_close?: WindowCloseSettingsPatch_Serialize;
   tray_menu_close_behavior?: TrayMenuCloseBehavior | null;
   network_statistic_widget?: NetworkStatisticWidgetConfig | null;
+  network_statistic_widget_logo?: NetworkStatisticWidgetLogo | null;
   traffic_retention?: TrafficRetention | null;
   network_automation?: NetworkAutomation | null;
   pac_url?: string | null;
@@ -1354,6 +1356,7 @@ export type ChimeraAppConfig_Deserialize = {
   window_close?: WindowCloseSettings;
   tray_menu_close_behavior?: TrayMenuCloseBehavior;
   network_statistic_widget?: NetworkStatisticWidgetConfig;
+  network_statistic_widget_logo?: NetworkStatisticWidgetLogo;
   /**  How long recorded connection traffic is kept. */
   traffic_retention?: TrafficRetention;
   /**
@@ -1425,6 +1428,7 @@ export type ChimeraAppConfig_Serialize = {
   window_close: WindowCloseSettings;
   tray_menu_close_behavior: TrayMenuCloseBehavior;
   network_statistic_widget: NetworkStatisticWidgetConfig;
+  network_statistic_widget_logo: NetworkStatisticWidgetLogo;
   /**  How long recorded connection traffic is kept. */
   traffic_retention: TrafficRetention;
   /**
@@ -3428,6 +3432,23 @@ export type NetworkRule = {
 /**  Whether the network statistic widget is shown. */
 export type NetworkStatisticWidgetConfig =
   { kind: 'disabled' } | { kind: 'enabled'; value: StatisticWidgetVariant };
+
+/**  Which logo the statistic widget shows. */
+export type NetworkStatisticWidgetLogo = {
+  /**
+   *  Switch between the normal, TUN and system proxy icons with the proxy
+   *  state, as the tray does. Otherwise the normal icon stays.
+   */
+  follow_state?: boolean;
+  source?: NetworkStatisticWidgetLogoSource;
+};
+
+/**  Where the statistic widget's icons come from. */
+export type NetworkStatisticWidgetLogoSource =
+  /**  The tray's icons, including the ones the user set for the tray. */
+  | 'tray'
+  /**  A set of the widget's own, which leaves the tray alone. */
+  | 'widget';
 
 export type NetworkTransparentProxyMode = 'disabled' | 'redir' | 'tproxy';
 
