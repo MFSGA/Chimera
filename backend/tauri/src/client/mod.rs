@@ -245,7 +245,7 @@ impl ChimeraClient {
             audit::{RpcAudit, TracingRpcAuditSink},
             registry::{RpcDependencies, UnifiedRpc},
         };
-        UnifiedRpc::new(
+        let mut rpc = UnifiedRpc::new(
             RpcDependencies {
                 icon_files: Some(Arc::new(crate::adapters::rpc_host::DesktopIconFiles)),
                 core_directory: Some(Arc::new(crate::adapters::rpc_host::DesktopCoreDirectory)),
@@ -263,7 +263,10 @@ impl ChimeraClient {
             },
             chimera_rpc_protocol::ServerInfo::desktop(env!("CARGO_PKG_VERSION")),
             provided,
-        )
+        )?;
+        #[cfg(any(windows, target_os = "linux", target_os = "macos"))]
+        rpc.mark_native_linked(["set_tray_icon", "set_widget_icon"]);
+        Ok(rpc)
     }
 
     pub(crate) async fn call_shared_rpc<T: serde::de::DeserializeOwned>(
@@ -1816,6 +1819,84 @@ mod tests {
             .is_err()
         );
         assert_eq!(std::fs::read(path).unwrap(), stored);
+    }
+
+    #[tokio::test]
+    async fn native_icon_commands_require_linkage_presentation_and_write_permission() {
+        use chimera_contracts::auth::{Grant, Principal, Role};
+        use chimera_rpc::{
+            audit::RpcTransport,
+            registry::{RpcCaller, RpcCompletion},
+        };
+        use chimera_rpc_protocol::{AuthContext, RpcOwner, RpcTarget, ShellCapability};
+        let (client, _) = recording_client(false).await;
+        let without = client.build_rpc(&[]).unwrap();
+        let with = client.build_rpc(&[ShellCapability::Presentation]).unwrap();
+        let owner = RpcCaller::desktop("test-window");
+        let viewer = RpcCaller::new(
+            AuthContext::new(
+                Principal::Token {
+                    id: "test-id".into(),
+                    name: "viewer".into(),
+                },
+                Grant::Role(Role::Viewer),
+            ),
+            RpcOwner::new("viewer".into()),
+        );
+        for method in ["set_tray_icon", "set_widget_icon"] {
+            assert_eq!(
+                without
+                    .call_native(method, owner.clone(), |_| panic!(
+                        "unavailable capability reached handler"
+                    ))
+                    .await
+                    .unwrap_err()
+                    .kind,
+                "unsupported"
+            );
+            assert_eq!(
+                with.call_native(method, viewer.clone(), |_| panic!("viewer reached handler"))
+                    .await
+                    .unwrap_err()
+                    .kind,
+                "forbidden"
+            );
+            assert_eq!(
+                with.call(
+                    RpcTransport::Http,
+                    method,
+                    owner.clone(),
+                    serde_json::json!({})
+                )
+                .await
+                .unwrap_err()
+                .kind,
+                "unsupported"
+            );
+            assert!(
+                with.describe(RpcTarget::Desktop, owner.auth())
+                    .commands
+                    .iter()
+                    .any(|c| c.name == method && c.allowed)
+            );
+            assert_eq!(
+                with.call_native(method, owner.clone(), |_| Ok(Box::pin(async {
+                    RpcCompletion::unreported(Ok(serde_json::Value::Null))
+                })))
+                .await
+                .unwrap(),
+                serde_json::Value::Null
+            );
+        }
+        assert_eq!(
+            with.call_native("get_app_config", owner, |_| panic!(
+                "shared command reached native handler"
+            ))
+            .await
+            .unwrap_err()
+            .kind,
+            "unsupported"
+        );
     }
 
     #[tokio::test]

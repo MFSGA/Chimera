@@ -848,6 +848,83 @@ pub async fn is_appimage(client: State<'_, ChimeraClient>, window: tauri::Window
         .await?)
 }
 
+/// Native file operations stay on the trusted desktop transport and use the
+/// same audited permission and capability admission as shared commands.
+async fn set_native_icon(
+    client: &ChimeraClient,
+    window: &str,
+    mode: chimera_rpc_protocol::values::TrayIcon,
+    path: Option<PathBuf>,
+    widget: bool,
+) -> Result {
+    use chimera_rpc::{
+        error::application_error_for,
+        registry::{RpcCaller, RpcCompletion},
+    };
+    let rpc = client.rpc()?;
+    let dependencies = rpc.dependencies();
+    let method = if widget {
+        "set_widget_icon"
+    } else {
+        "set_tray_icon"
+    };
+    rpc.call_native(method, RpcCaller::desktop(window), move |visibility| {
+        Ok(Box::pin(async move {
+            let result = (|| -> anyhow::Result<()> {
+                let client = &dependencies.client;
+                anyhow::ensure!(!client.shutdown().is_cancelled(), "client is shutting down");
+                let paths = &dependencies.paths;
+                if widget {
+                    crate::core::widget_logo::set_icon(paths, mode, path)?;
+                    client.request_widget_logo_refresh()?;
+                } else {
+                    let scale = crate::core::handle::Handle::app_handle()
+                        .as_ref()
+                        .map(crate::core::tray::Tray::max_scale_factor)
+                        .unwrap_or(1.0);
+                    crate::core::tray::icon::set_icon(paths, mode, path, scale)?;
+                    crate::core::tray::icon::check_icon(&crate::core::tray::icon::get_icon(
+                        paths, &mode,
+                    ))?;
+                    // The shared effect owner refreshes both tray and widget logo.
+                    client.request_tray_refresh()?;
+                }
+                Ok(())
+            })();
+            RpcCompletion::unreported(
+                result
+                    .map(|_| serde_json::Value::Null)
+                    .map_err(|error| application_error_for(visibility, error)),
+            )
+        }))
+    })
+    .await
+    .map_err(|error| anyhow::anyhow!(error.message))?;
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn set_tray_icon(
+    client: State<'_, ChimeraClient>,
+    window: tauri::Window,
+    mode: chimera_rpc_protocol::values::TrayIcon,
+    path: Option<PathBuf>,
+) -> Result {
+    set_native_icon(&client, window.label(), mode, path, false).await
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn set_widget_icon(
+    client: State<'_, ChimeraClient>,
+    window: tauri::Window,
+    mode: chimera_rpc_protocol::values::TrayIcon,
+    path: Option<PathBuf>,
+) -> Result {
+    set_native_icon(&client, window.label(), mode, path, true).await
+}
+
 #[tauri::command]
 #[specta::specta]
 pub async fn set_tray_icon_from_bytes(

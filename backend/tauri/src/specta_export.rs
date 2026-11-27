@@ -153,6 +153,8 @@ macro_rules! build_builder {
                 crate::ipc::is_widget_icon_set,
                 crate::ipc::set_tray_icon_from_bytes,
                 crate::ipc::set_widget_icon_from_bytes,
+                crate::ipc::set_tray_icon,
+                crate::ipc::set_widget_icon,
                 crate::ipc::open_that,
                 crate::ipc::cleanup_processes,
                 crate::ipc::get_server_port,

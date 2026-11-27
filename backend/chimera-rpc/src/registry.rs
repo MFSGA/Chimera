@@ -372,6 +372,19 @@ impl UnifiedRpc {
         })
     }
 
+    /// Record native Tauri wrappers linked by the desktop shell so `rpc_describe`
+    /// accurately reports desktop availability without introducing a GUI dependency.
+    pub fn mark_native_linked(&mut self, names: impl IntoIterator<Item = &'static str>) {
+        let commands = Arc::make_mut(&mut self.commands);
+        for name in names {
+            if let Some(command) = commands.get_mut(name)
+                && command.metadata.is_native_command()
+            {
+                command.native_linked = true;
+            }
+        }
+    }
+
     pub fn command_names(&self) -> Vec<&'static str> {
         let mut names = self.commands.keys().copied().collect::<Vec<_>>();
         names.sort_unstable();
@@ -511,6 +524,47 @@ impl UnifiedRpc {
             };
             handler(self.dependencies.clone(), meta, caller, params)
         })
+        .await
+    }
+
+    /// Admit and audit a shell-bound invocation without accepting any shell handles.
+    /// The callback is invoked only after admission, under the same audit guard as
+    /// shared calls, so parameter failures and panics retain their existing semantics.
+    pub async fn call_native(
+        &self,
+        method: &str,
+        caller: RpcCaller,
+        call: impl FnOnce(ResponseVisibility) -> Result<RpcFuture, RpcError>,
+    ) -> Result<Value, RpcError> {
+        dispatch_audited(
+            &self.dependencies.audit,
+            RpcTransport::TauriIpc,
+            caller.owner().clone(),
+            Some(&caller.auth().principal),
+            || self.audit_command_name(method),
+            None,
+            || {
+                let command = self
+                    .commands
+                    .get(method)
+                    .ok_or_else(|| unknown_method(method))?;
+                if !command.metadata.is_native_command() || !command.native_linked {
+                    return Err(crate::permission::unavailable(
+                        &command.metadata,
+                        RpcTarget::Desktop,
+                    ));
+                }
+                self.authority().admit(
+                    &command.metadata,
+                    RpcTarget::Desktop,
+                    Some(&caller.auth().permissions),
+                )?;
+                call(crate::redaction::visibility(
+                    &command.metadata,
+                    &caller.auth().permissions,
+                ))
+            },
+        )
         .await
     }
 

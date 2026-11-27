@@ -51,7 +51,13 @@ fn cache_file(paths: &PathResolver, mode: &TrayIcon) -> camino::Utf8PathBuf {
 #[tracing_attributes::instrument(skip(paths))]
 fn resize_image(paths: &PathResolver, mode: TrayIcon, scale_factor: f64) -> anyhow::Result<()> {
     let raw_icon = get_raw_icon(paths, mode);
-    let icon = crate::utils::help::resize_tray_image(&raw_icon, scale_factor)?;
+    let icon = match crate::utils::help::resize_tray_image(&raw_icon, scale_factor) {
+        Ok(icon) => icon,
+        Err(error) => {
+            tracing::warn!(%error, ?mode, "failed to resize tray icon; using raw icon");
+            raw_icon.into_owned()
+        }
+    };
     let cache = cache_file(paths, &mode);
     std::fs::create_dir_all(cache.parent().expect("cache file has a parent"))?;
     std::fs::write(cache, icon)?;
@@ -73,6 +79,29 @@ pub fn get_icon(paths: &PathResolver, mode: &TrayIcon) -> Vec<u8> {
         Ok(bytes) if valid_png(&bytes) => bytes,
         _ => get_raw_icon(paths, *mode).into_owned(),
     }
+}
+
+/// Store the selected file as a PNG, or restore the bundled icon.
+pub fn set_icon(
+    paths: &PathResolver,
+    mode: TrayIcon,
+    path: Option<PathBuf>,
+    scale_factor: f64,
+) -> anyhow::Result<()> {
+    let target = tray_icons_path(paths, mode.as_str());
+    match path {
+        Some(path) => {
+            let image = image::open(path)?;
+            std::fs::create_dir_all(target.parent().expect("icon path has a parent"))?;
+            image.save_with_format(target, image::ImageFormat::Png)?;
+        }
+        None => match std::fs::remove_file(target) {
+            Err(error) if error.kind() != std::io::ErrorKind::NotFound => return Err(error.into()),
+            _ => {}
+        },
+    }
+    resize_image(paths, mode, scale_factor)?;
+    Ok(())
 }
 
 /// Store an encoded icon as PNG and refresh the tray's resized cache.
@@ -98,6 +127,34 @@ pub fn check_icon(bytes: &[u8]) -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn file_selection_and_reset_refresh_the_tray_cache() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = camino::Utf8PathBuf::from_path_buf(temp.path().to_path_buf()).unwrap();
+        let paths = PathResolver::with_base_dirs(root.join("config"), root.join("data"));
+        let mode = TrayIcon::Tun;
+        let source = root.join("source.png");
+        std::fs::write(&source, include_bytes!("../../../icons/128x128.png")).unwrap();
+        set_icon(&paths, mode, Some(source.into_std_path_buf()), 2.0).unwrap();
+        assert!(tray_icons_path(&paths, mode.as_str()).exists());
+        assert_eq!(
+            image::load_from_memory(&get_icon(&paths, &mode))
+                .unwrap()
+                .width(),
+            64
+        );
+        set_icon(&paths, mode, None, 1.0).unwrap();
+        assert!(!tray_icons_path(&paths, mode.as_str()).exists());
+        assert_eq!(get_raw_icon(&paths, mode).as_ref(), raw_bytes(&mode));
+        assert_eq!(
+            image::load_from_memory(&get_icon(&paths, &mode))
+                .unwrap()
+                .width(),
+            32
+        );
+        set_icon(&paths, mode, None, 1.0).unwrap();
+    }
 
     #[test]
     fn stored_tray_icon_is_resized_to_scale_and_invalid_upload_preserves_it() {
