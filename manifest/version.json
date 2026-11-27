@@ -7,7 +7,7 @@
     "chimera_client": "v0.29.1",
     "chimera_client_alpha": "0.29.1-alpha+sha.afba908",
     "clash_premium": "2023-09-05-gdcc8d87",
-    "clash_rs_alpha": "0.10.12-alpha+sha.59730c8"
+    "clash_rs_alpha": "0.10.12-alpha+sha.5790c6a"
   },
   "arch_template": {
     "mihomo": {
@@ -67,5 +67,5 @@
       "darwin-x64": "clash-rs-x86_64-apple-darwin"
     }
   },
-  "updated_at": "2026-11-26T04:07:36.814Z"
+  "updated_at": "2026-11-27T04:11:52.775Z"
 }
