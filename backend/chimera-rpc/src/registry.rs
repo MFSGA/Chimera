@@ -16,6 +16,7 @@ use std::{collections::HashMap, future::Future, pin::Pin, sync::Arc};
 
 /// Only already-composed, real host dependencies are installed.
 pub struct RpcDependencies {
+    pub icon_files: Option<Arc<dyn crate::ports::HostIconFiles>>,
     pub core_directory: Option<Arc<dyn crate::ports::CoreDirectoryResolver>>,
     pub service_prompt: Option<Arc<dyn crate::ports::ServiceInstallPrompt>>,
     pub host_environment: crate::ports::HostEnvironment,

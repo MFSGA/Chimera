@@ -231,6 +231,7 @@ impl ChimeraClient {
             .get_or_init(|| {
                 UnifiedRpc::new(
                     RpcDependencies {
+                        icon_files: Some(Arc::new(crate::adapters::rpc_host::DesktopIconFiles)),
                         core_directory: Some(Arc::new(
                             crate::adapters::rpc_host::DesktopCoreDirectory,
                         )),
@@ -1641,6 +1642,61 @@ mod tests {
                 .value,
             None
         );
+    }
+
+    #[tokio::test]
+    async fn shared_rpc_icon_reads_use_the_injected_host_paths() {
+        use chimera_rpc::{
+            audit::RpcTransport,
+            icons::{self, IconRequest},
+            registry::RpcCaller,
+        };
+        use chimera_rpc_protocol::{ResponseVisibility, values::TrayIcon};
+        let (client, _) = recording_client(false).await;
+        let rpc = client.rpc().unwrap();
+        let dependencies = rpc.dependencies();
+        let owner = RpcCaller::desktop("test-window");
+        let mode = TrayIcon::Tun;
+        let query = |name| {
+            rpc.call(
+                RpcTransport::TauriIpc,
+                name,
+                owner.clone(),
+                serde_json::json!({"mode": "tun"}),
+            )
+        };
+        assert_eq!(query("is_tray_icon_set").await.unwrap(), false);
+        assert_eq!(query("is_widget_icon_set").await.unwrap(), false);
+        let path = crate::core::tray::icon::tray_icons_path(&dependencies.paths, mode.as_str());
+        let stored = include_bytes!("../../icons/128x128.png");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, stored).unwrap();
+        assert_eq!(query("is_tray_icon_set").await.unwrap(), true);
+        assert_eq!(query("is_widget_icon_set").await.unwrap(), false);
+        let tray = icons::read(
+            &dependencies,
+            ResponseVisibility::Full,
+            IconRequest::Tray {
+                mode,
+                version: Some(1),
+            },
+        )
+        .await
+        .unwrap();
+        let widget = icons::read(
+            &dependencies,
+            ResponseVisibility::Full,
+            IconRequest::Widget {
+                mode,
+                version: Some(1),
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(tray.content_type, "image/png");
+        assert_eq!(tray.bytes, stored);
+        assert_eq!(widget.bytes, crate::core::tray::icon::raw_bytes(&mode));
+        assert_eq!(tray.cache_policy.header(), "private, no-cache");
     }
 
     #[tokio::test]

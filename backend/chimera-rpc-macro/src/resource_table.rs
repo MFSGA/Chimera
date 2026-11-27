@@ -1101,7 +1101,12 @@ fn shared_resource_rows_match_existing_catalog() {
         "shared declaration metadata differs from canonical catalog:\n{}",
         missing.into_iter().copied().collect::<Vec<_>>().join("\n")
     );
-    assert_eq!(rows.len(), production_functions().len());
+    assert_eq!(
+        rows.iter()
+            .filter(|row| row.contains("ResourceKind :: Command"))
+            .count(),
+        production_functions().len()
+    );
 }
 
 /// The generator must compile while the files it writes are stale or broken, so it depends on

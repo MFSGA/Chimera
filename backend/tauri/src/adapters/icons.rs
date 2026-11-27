@@ -1,8 +1,8 @@
 //! Desktop icon URI adapter, following ref's unified RPC icon entry.
-//! The full RPC audit and icon mutation operations remain pending.
+//! Origin and shutdown admission stay here; shared RPC owns the byte read.
 
-use chimera_paths::PathResolver;
-use chimera_rpc_protocol::icons::{self as transport, IconCachePolicy, IconRequest};
+use chimera_rpc::icons as transport;
+use chimera_rpc_protocol::ResponseVisibility;
 use tauri::{
     Manager as _,
     http::{HeaderValue, Method, Request, Response, StatusCode},
@@ -20,10 +20,9 @@ pub(crate) fn handle(
     responder: tauri::UriSchemeResponder,
 ) {
     let app = context.app_handle();
-    let (Some(client), Some(owners), Some(paths)) = (
+    let (Some(client), Some(owners)) = (
         app.try_state::<ChimeraClient>(),
         app.try_state::<StartupOwners>(),
-        app.try_state::<PathResolver>(),
     ) else {
         responder.respond(unavailable());
         return;
@@ -37,7 +36,6 @@ pub(crate) fn handle(
         return;
     };
     let client = client.inner().clone();
-    let paths = paths.inner().clone();
     let dev_origin = if tauri::is_dev() {
         app.config()
             .build
@@ -55,7 +53,7 @@ pub(crate) fn handle(
                 .url()
                 .is_ok_and(|url| trusted_page(&url, dev_origin.as_deref()));
             let result = if trusted {
-                response(&client, &paths, request, dev_origin.as_deref()).await
+                response(&client, request, dev_origin.as_deref()).await
             } else {
                 error_response(StatusCode::FORBIDDEN, "forbidden")
             };
@@ -109,7 +107,6 @@ fn cors_origin(
 
 async fn response(
     client: &ChimeraClient,
-    paths: &PathResolver,
     request: Request<Vec<u8>>,
     dev_origin: Option<&str>,
 ) -> Response<Vec<u8>> {
@@ -121,20 +118,23 @@ async fn response(
         error_response(StatusCode::METHOD_NOT_ALLOWED, "method_not_allowed")
     } else {
         match transport::parse(request.uri().path(), request.uri().query()) {
-            Ok(IconRequest::Cached { url }) => match client.get_cached_icon(&url).await {
-                Ok((mime, bytes)) => image_response(&mime, bytes.to_vec(), IconCachePolicy::Remote),
-                Err(_) => error_response(StatusCode::INTERNAL_SERVER_ERROR, "icon_fetch_failed"),
+            Ok(request) => match client.rpc() {
+                Ok(rpc) => {
+                    match transport::read(&rpc.dependencies(), ResponseVisibility::Public, request)
+                        .await
+                    {
+                        Ok(body) => image_response(body),
+                        Err(error) if error.kind == "invalid_icon" => {
+                            error_response(StatusCode::UNPROCESSABLE_ENTITY, "invalid_icon")
+                        }
+                        Err(error) if error.kind == "unavailable" => unavailable(),
+                        Err(_) => {
+                            error_response(StatusCode::INTERNAL_SERVER_ERROR, "icon_fetch_failed")
+                        }
+                    }
+                }
+                Err(_) => unavailable(),
             },
-            Ok(IconRequest::Tray { mode, .. }) => image_response(
-                "image/png",
-                crate::core::tray::icon::get_raw_icon(paths, mode).into_owned(),
-                IconCachePolicy::Mutable,
-            ),
-            Ok(IconRequest::Widget { mode, .. }) => image_response(
-                "image/png",
-                crate::core::widget_logo::get_raw_icon(paths, mode).into_owned(),
-                IconCachePolicy::Mutable,
-            ),
             Err(_) => error_response(StatusCode::BAD_REQUEST, "invalid_params"),
         }
     };
@@ -149,20 +149,16 @@ async fn response(
     result
 }
 
-fn image_response(mime: &str, bytes: Vec<u8>, policy: IconCachePolicy) -> Response<Vec<u8>> {
-    match transport::allowed_content_type(mime) {
-        Ok(content_type) => {
-            let mut response = Response::new(bytes);
-            response
-                .headers_mut()
-                .insert("content-type", HeaderValue::from_static(content_type));
-            response
-                .headers_mut()
-                .insert("cache-control", HeaderValue::from_static(policy.header()));
-            secure(response)
-        }
-        Err(_) => error_response(StatusCode::UNPROCESSABLE_ENTITY, "invalid_icon"),
-    }
+fn image_response(body: transport::IconBody) -> Response<Vec<u8>> {
+    let mut response = Response::new(body.bytes);
+    response
+        .headers_mut()
+        .insert("content-type", HeaderValue::from_static(body.content_type));
+    response.headers_mut().insert(
+        "cache-control",
+        HeaderValue::from_static(body.cache_policy.header()),
+    );
+    secure(response)
 }
 
 fn error_response(status: StatusCode, kind: &'static str) -> Response<Vec<u8>> {

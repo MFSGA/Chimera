@@ -31,6 +31,7 @@ pub mod error;
 
 pub mod audit;
 pub mod events;
+pub mod icons;
 pub mod permission;
 pub mod ports;
 pub mod redaction;

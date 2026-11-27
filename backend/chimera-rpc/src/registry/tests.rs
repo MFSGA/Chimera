@@ -194,7 +194,7 @@ fn linked_declarations_match_the_resource_table_and_unlinked_commands_stay_known
         .filter(|c| c.handler.is_some())
         .map(|c| c.metadata.name)
         .collect();
-    assert_eq!(linked.len(), 103);
+    assert_eq!(linked.len(), 105);
     for name in [
         "activate_profile",
         "clash_api_delete_connections",
@@ -258,6 +258,8 @@ fn linked_declarations_match_the_resource_table_and_unlinked_commands_stay_known
         "get_storage_item",
         "get_traffic_summary",
         "is_appimage",
+        "is_tray_icon_set",
+        "is_widget_icon_set",
         "import_profile",
         "list_log_files",
         "mutate_proxies",

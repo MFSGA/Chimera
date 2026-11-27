@@ -4,6 +4,7 @@ chimera_rpc::namespace!(expose = [http, local]);
 
 pub mod core;
 pub mod hotkeys;
+pub mod icons;
 pub mod network;
 pub mod os;
 pub mod proxy;

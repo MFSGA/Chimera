@@ -1,7 +1,10 @@
 //! Desktop implementations of the shared RPC layer's host facilities.
 
 use chimera_paths::PathResolver;
-use chimera_rpc::ports::{CoreDirectoryResolver, ServiceInstallPrompt};
+use chimera_rpc::ports::{CoreDirectoryResolver, HostIconFiles, ServiceInstallPrompt};
+use chimera_rpc_protocol::values::TrayIcon;
+
+use crate::core::{tray::icon, widget_logo};
 
 pub struct DesktopCoreDirectory;
 impl CoreDirectoryResolver for DesktopCoreDirectory {
@@ -12,6 +15,24 @@ impl CoreDirectoryResolver for DesktopCoreDirectory {
             .ok_or_else(|| anyhow::anyhow!("failed to get core dir"))?;
         let core_dir = dunce::canonicalize(core_dir)?;
         Ok(core_dir.to_string_lossy().to_string())
+    }
+}
+
+pub struct DesktopIconFiles;
+#[async_trait::async_trait]
+impl HostIconFiles for DesktopIconFiles {
+    fn tray_icon(&self, paths: &PathResolver, mode: TrayIcon) -> Vec<u8> {
+        icon::get_raw_icon(paths, mode).into_owned()
+    }
+    fn widget_icon(&self, paths: &PathResolver, mode: TrayIcon) -> Vec<u8> {
+        widget_logo::get_raw_icon(paths, mode).into_owned()
+    }
+    async fn is_tray_icon_set(&self, paths: &PathResolver, mode: TrayIcon) -> bool {
+        let icon_path = icon::tray_icons_path(paths, mode.as_str());
+        tokio::fs::metadata(icon_path).await.is_ok()
+    }
+    fn is_widget_icon_set(&self, paths: &PathResolver, mode: TrayIcon) -> bool {
+        widget_logo::is_icon_set(paths, mode)
     }
 }
 

@@ -26,6 +26,10 @@ pub fn get_raw_icon(paths: &PathResolver, state: TrayIcon) -> Cow<'static, [u8]>
     }
 }
 
+pub fn is_icon_set(paths: &PathResolver, state: TrayIcon) -> bool {
+    widget_icon_path(paths, state).exists()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
