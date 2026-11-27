@@ -8,6 +8,9 @@
     "duplicate_accelerator": "Горячая клавиша уже назначена: {hotkey}"
   },
   "tray": {
+    "no_proxies": "Без прокси",
+    "select_proxy": "Выбрать прокси",
+    "restore_auto_selection": "Восстановить автоматический выбор",
     "dashboard": "Open",
     "direct_mode": "Direct Mode",
     "global_mode": "Global Mode",

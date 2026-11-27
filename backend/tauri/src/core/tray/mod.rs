@@ -1,6 +1,16 @@
+mod display;
+mod executor;
 pub(crate) mod icon;
+mod proxies;
 
-use std::borrow::Cow;
+pub use self::executor::TrayWork;
+use self::{
+    display::{Paint, ProxySection, Publication, Shown, TrayDisplay},
+    executor::{Step, TrayQueue, TrayTarget},
+    proxies::SystemTrayMenuProxiesExt,
+};
+
+use std::{borrow::Cow, ops::ControlFlow};
 
 use anyhow::Result;
 use parking_lot::Mutex;
@@ -25,80 +35,30 @@ use crate::{
 const TRAY_ID: &str = "main-tray";
 
 struct TrayState<R: Runtime> {
-    menu: Mutex<Menu<R>>,
+    view: Mutex<TrayView>,
+    queue: Mutex<TrayQueue>,
+    display: Mutex<TrayDisplay<Attached<R>>>,
 }
 
-#[derive(Default)]
-struct PendingTrayRefresh {
-    full: bool,
-    part: bool,
+struct Attached<R: Runtime> {
+    menu: Menu<R>,
 }
 
-impl PendingTrayRefresh {
-    fn merge(&mut self, refresh: TrayRefresh) {
-        match refresh {
-            TrayRefresh::Full => self.full = true,
-            TrayRefresh::Part => self.part = true,
-        }
-    }
-
-    fn take(&mut self) -> Option<TrayRefresh> {
-        if std::mem::take(&mut self.full) {
-            self.part = false;
-            Some(TrayRefresh::Full)
-        } else if std::mem::take(&mut self.part) {
-            Some(TrayRefresh::Part)
-        } else {
-            None
+impl<R: Runtime> Clone for Attached<R> {
+    fn clone(&self) -> Self {
+        Self {
+            menu: self.menu.clone(),
         }
     }
 }
 
-struct TrayViewQueue {
-    view: TrayView,
-    pending: PendingTrayRefresh,
-    /// A drain is scheduled or running. New requests merge until it finishes.
-    scheduled: bool,
-}
-
-struct TrayViewState {
-    queue: Mutex<TrayViewQueue>,
-}
-
-impl TrayViewState {
+impl<R: Runtime> TrayState<R> {
     fn new(view: TrayView) -> Self {
         Self {
-            queue: Mutex::new(TrayViewQueue {
-                view,
-                pending: PendingTrayRefresh::default(),
-                scheduled: false,
-            }),
+            view: Mutex::new(view),
+            queue: Mutex::new(TrayQueue::default()),
+            display: Mutex::new(TrayDisplay::new()),
         }
-    }
-
-    fn store(&self, view: TrayView) {
-        self.queue.lock().view = view;
-    }
-
-    /// Merges work and returns whether this caller must schedule the drain.
-    fn request(&self, refresh: TrayRefresh) -> bool {
-        let mut queue = self.queue.lock();
-        queue.pending.merge(refresh);
-        !std::mem::replace(&mut queue.scheduled, true)
-    }
-
-    /// Returns pending work with the latest snapshot, or marks the drain idle.
-    fn take(&self) -> Option<(TrayRefresh, TrayView)> {
-        let mut queue = self.queue.lock();
-        let Some(refresh) = queue.pending.take() else {
-            queue.scheduled = false;
-            return None;
-        };
-        Some((refresh, queue.view))
-    }
-
-    fn schedule_failed(&self) {
-        self.queue.lock().scheduled = false;
     }
 }
 
@@ -158,16 +118,11 @@ fn mode_menu_checks(core: ClashCore, mode: Mode) -> impl Iterator<Item = (&'stat
         .map(move |item| (item.id, mode == item.mode))
 }
 
-fn update_mode_menu_checks<R: Runtime>(menu: &Menu<R>, core: ClashCore, mode: Mode) {
-    for (id, checked) in mode_menu_checks(core, mode) {
-        let _ = menu
-            .get(id)
-            .and_then(|menu_item| menu_item.as_check_menuitem()?.set_checked(checked).ok());
-    }
-}
-
 impl Tray {
-    fn tray_menu<R: Runtime>(app_handle: &AppHandle<R>, view: TrayView) -> Result<Menu<R>> {
+    fn tray_menu<R: Runtime>(
+        app_handle: &AppHandle<R>,
+        view: TrayView,
+    ) -> Result<(Menu<R>, ProxySection)> {
         let mut menu = MenuBuilder::new(app_handle)
             .text("open_window", t!("tray.dashboard"))
             .separator();
@@ -176,6 +131,7 @@ impl Tray {
             menu = menu.check(item.id, mode_menu_label(item.mode));
         }
 
+        let (menu, section) = menu.setup_proxies(app_handle, &view)?;
         let menu = menu
             .separator()
             .check("system_proxy", t!("tray.system_proxy"))
@@ -192,7 +148,7 @@ impl Tray {
             .text("quit", t!("tray.quit"))
             .build()?;
 
-        Ok(menu)
+        Ok((menu, section))
     }
 
     pub fn update_systray(app_handle: &AppHandle<tauri::Wry>) -> Result<()> {
@@ -204,13 +160,11 @@ impl Tray {
     }
 
     pub(crate) fn store_view<R: Runtime>(app_handle: &AppHandle<R>, view: TrayView) {
-        if let Some(state) = app_handle.try_state::<TrayViewState>() {
-            state.store(view);
-        } else {
-            let _ = app_handle.manage(TrayViewState::new(view));
-            if let Some(state) = app_handle.try_state::<TrayViewState>() {
-                state.store(view);
-            }
+        if app_handle.try_state::<TrayState<R>>().is_none() {
+            let _ = app_handle.manage(TrayState::<R>::new(view));
+        }
+        if let Some(state) = app_handle.try_state::<TrayState<R>>() {
+            *state.view.lock() = view;
         }
     }
 
@@ -218,51 +172,78 @@ impl Tray {
         app_handle: &AppHandle<tauri::Wry>,
         refresh: TrayRefresh,
     ) -> Result<()> {
-        if app_handle.try_state::<TrayViewState>().is_none() {
-            let view = Self::current_view(app_handle)?;
-            let _ = app_handle.manage(TrayViewState::new(view));
-        }
-        let state = app_handle
-            .try_state::<TrayViewState>()
-            .ok_or_else(|| anyhow::anyhow!("tray view state is not managed"))?;
-        if !state.request(refresh) {
-            return Ok(());
-        }
+        Self::request(
+            app_handle,
+            match refresh {
+                TrayRefresh::Full => TrayWork::REBUILD,
+                TrayRefresh::Part => TrayWork::PART,
+            },
+        )
+    }
 
-        let handle = app_handle.clone();
-        if let Err(error) = app_handle.run_on_main_thread(move || Self::drain(&handle)) {
-            state.schedule_failed();
-            return Err(error.into());
+    pub(crate) fn request(app_handle: &AppHandle<tauri::Wry>, work: TrayWork) -> Result<()> {
+        if app_handle.try_state::<TrayState<tauri::Wry>>().is_none() {
+            Self::store_view(app_handle, Self::current_view(app_handle)?);
         }
+        let state = app_handle.state::<TrayState<tauri::Wry>>();
+        let handle = app_handle.clone();
+        executor::request(&state.queue, work, || {
+            app_handle.run_on_main_thread(move || {
+                if let Some(state) = handle.try_state::<TrayState<tauri::Wry>>() {
+                    executor::drain(
+                        &state.queue,
+                        &mut LiveTray {
+                            app_handle: &handle,
+                            state: &state,
+                        },
+                    );
+                }
+            })
+        })?;
         Ok(())
     }
 
-    fn drain(app_handle: &AppHandle<tauri::Wry>) {
-        let Some(state) = app_handle.try_state::<TrayViewState>() else {
-            return;
-        };
-        while let Some((refresh, view)) = state.take() {
-            let result = match refresh {
-                TrayRefresh::Full => Self::render_systray_with_view(app_handle, view),
-                TrayRefresh::Part => Self::render_part_with_view(app_handle, view),
-            };
-            if let Err(error) = result {
-                tracing::warn!(%error, ?refresh, "failed to refresh the system tray");
+    fn rebuild(app_handle: &AppHandle<tauri::Wry>, state: &TrayState<tauri::Wry>) -> Result<()> {
+        let view = *state.view.lock();
+        let (menu, section) = match Self::tray_menu(app_handle, view) {
+            Ok(built) => built,
+            Err(error) => {
+                state.display.lock().published(Publication::NotStarted);
+                return Err(error);
             }
-        }
+        };
+        let mut attached = state.display.lock().attached();
+        let result = Self::attach(app_handle, menu, &mut attached);
+        state.display.lock().published(match (&result, attached) {
+            (Ok(()), Some(attached)) => Publication::Complete { attached, section },
+            (_, attached) => Publication::Interrupted { attached },
+        });
+        result
     }
 
-    fn render_systray_with_view(app_handle: &AppHandle<tauri::Wry>, view: TrayView) -> Result<()> {
-        let menu = Self::tray_menu(app_handle, view)?;
-        match app_handle.tray_by_id(TRAY_ID) {
+    fn attach(
+        app_handle: &AppHandle<tauri::Wry>,
+        menu: Menu<tauri::Wry>,
+        attached: &mut Option<Attached<tauri::Wry>>,
+    ) -> Result<()> {
+        let tray = match app_handle.tray_by_id(TRAY_ID) {
             Some(tray) => {
-                tray.set_menu(Some(menu.clone()))?;
-                tray.set_visible(true)?;
+                if cfg!(target_os = "linux") {
+                    if let Some(previous) = attached.as_ref() {
+                        refill_menu(&previous.menu, &menu)?;
+                    } else {
+                        tray.set_menu(Some(menu.clone()))?;
+                        *attached = Some(Attached { menu });
+                    }
+                } else {
+                    tray.set_menu(Some(menu.clone()))?;
+                    *attached = Some(Attached { menu });
+                }
+                tray
             }
             None => {
+                *attached = None;
                 let mut builder = TrayIconBuilder::with_id(TRAY_ID);
-                // A real native tray icon still receives the real menu event.
-                // The unique E2E tooltip identifies only the launched test process.
                 #[cfg(all(windows, feature = "e2e"))]
                 {
                     builder = builder.tooltip(format!("Chimera E2E {}", std::process::id()));
@@ -270,30 +251,17 @@ impl Tray {
                 if let Some(icon) = app_handle.default_window_icon().cloned() {
                     builder = builder.icon(icon);
                 }
-                builder
+                let tray = builder
                     .menu(&menu)
                     .show_menu_on_left_click(false)
-                    .on_menu_event(|app, event| {
-                        Self::on_menu_item_event(app, event);
-                    })
-                    .on_tray_icon_event(|tray_icon, event| {
-                        Self::on_system_tray_event(tray_icon, event);
-                    })
+                    .on_menu_event(Self::on_menu_item_event)
+                    .on_tray_icon_event(Self::on_system_tray_event)
                     .build(app_handle)?;
+                *attached = Some(Attached { menu });
+                tray
             }
-        }
-        match app_handle.try_state::<TrayState<tauri::Wry>>() {
-            Some(state) => {
-                *state.menu.lock() = menu;
-            }
-            None => {
-                app_handle.manage(TrayState {
-                    menu: Mutex::new(menu),
-                });
-            }
-        }
-
-        Self::render_part_with_view(app_handle, view)?;
+        };
+        tray.set_visible(true)?;
         Ok(())
     }
 
@@ -321,25 +289,34 @@ impl Tray {
         Self::update_part(app_handle)
     }
 
-    fn render_part_with_view(app_handle: &AppHandle<tauri::Wry>, view: TrayView) -> Result<()> {
-        let Some(_tray) = app_handle.tray_by_id(TRAY_ID) else {
-            return Ok(());
+    fn repaint_part(
+        app_handle: &AppHandle<tauri::Wry>,
+        state: &TrayState<tauri::Wry>,
+    ) -> Result<ControlFlow<()>> {
+        let tray = app_handle.tray_by_id(TRAY_ID);
+        let paint = state.display.lock().paint();
+        if executor::needs_rebuild(&paint, tray.is_some()) {
+            Self::request(app_handle, TrayWork::REBUILD)?;
+            return Ok(ControlFlow::Break(()));
+        }
+        let (Paint::Menu(attached), Some(_tray)) = (paint, tray) else {
+            return Ok(ControlFlow::Break(()));
         };
-
-        let state = match app_handle.try_state::<TrayState<tauri::Wry>>() {
-            Some(state) => state,
-            None => return Ok(()),
+        let view = *state.view.lock();
+        let menu = attached.menu;
+        let check = |id: &str, checked: bool| {
+            menu.get(id)
+                .and_then(|item| item.as_check_menuitem()?.set_checked(checked).ok())
+                .is_some()
         };
-        let menu = state.menu.lock();
-        update_mode_menu_checks(&menu, view.menu.core, view.part.mode);
-        let _ = menu.get("system_proxy").and_then(|item| {
-            item.as_check_menuitem()?
-                .set_checked(view.part.system_proxy)
-                .ok()
-        });
-        let _ = menu
-            .get("tun_mode")
-            .and_then(|item| item.as_check_menuitem()?.set_checked(view.part.tun).ok());
+        let mut whole = true;
+        for (id, checked) in mode_menu_checks(view.menu.core, view.part.mode) {
+            whole &= check(id, checked);
+        }
+        whole &= check("system_proxy", view.part.system_proxy);
+        whole &= check("tun_mode", view.part.tun);
+        let shown = if whole { Shown::Whole } else { Shown::Partly };
+        state.display.lock().repainted(None, shown);
 
         #[cfg(any(windows, target_os = "linux"))]
         if let Some(paths) = app_handle.try_state::<chimera_paths::PathResolver>() {
@@ -355,7 +332,11 @@ impl Tray {
             _tray.set_icon(Some(tauri::image::Image::from_bytes(&bytes)?))?;
         }
 
-        Ok(())
+        Ok(if whole {
+            ControlFlow::Continue(())
+        } else {
+            ControlFlow::Break(())
+        })
     }
 
     fn current_view<R: Runtime>(app_handle: &AppHandle<R>) -> Result<TrayView> {
@@ -386,13 +367,14 @@ impl Tray {
             "quit" => {
                 help::quit_application(app_handle);
             }
-            _ => {}
+            id => proxies::on_system_tray_event(app_handle, id),
         }
     }
 
     pub fn on_system_tray_event(tray_icon: &TrayIcon, event: TrayIconEvent) {
         if let TrayIconEvent::Click {
             button: MouseButton::Left,
+            button_state: tauri::tray::MouseButtonState::Up,
             ..
         } = event
         {
@@ -401,58 +383,63 @@ impl Tray {
     }
 }
 
+struct LiveTray<'a> {
+    app_handle: &'a AppHandle<tauri::Wry>,
+    state: &'a TrayState<tauri::Wry>,
+}
+
+impl TrayTarget for LiveTray<'_> {
+    type Menu = Attached<tauri::Wry>;
+    fn observe(&self) -> (Paint<Self::Menu>, bool) {
+        (
+            self.state.display.lock().paint(),
+            self.app_handle.tray_by_id(TRAY_ID).is_some(),
+        )
+    }
+    fn run(&mut self, step: Step) -> ControlFlow<()> {
+        let result = match step {
+            Step::Rebuild => Tray::rebuild(self.app_handle, self.state).map(ControlFlow::Continue),
+            Step::Part => Tray::repaint_part(self.app_handle, self.state),
+            Step::Proxies => proxies::repaint_proxies(self.app_handle, self.state),
+        };
+        result.unwrap_or_else(|error| {
+            tracing::warn!(%error, ?step, "failed to refresh the system tray");
+            ControlFlow::Break(())
+        })
+    }
+}
+
+fn refill_menu(previous_menu: &Menu<tauri::Wry>, menu: &Menu<tauri::Wry>) -> Result<()> {
+    let mut whole = true;
+    if let Ok(items) = previous_menu.items() {
+        tracing::debug!("removing previous tray menu items");
+        for item in items {
+            let removed = previous_menu.remove(&item);
+            whole &= removed.is_ok();
+            crate::log_err!(removed, "failed to remove menu item");
+        }
+    } else {
+        whole = false;
+    }
+    // migrate the menu items
+    if let Ok(items) = menu.items() {
+        tracing::debug!("migrating new tray menu items");
+        for item in items {
+            let appended = previous_menu.append(&item);
+            whole &= appended.is_ok();
+            crate::log_err!(appended, "failed to append menu item");
+        }
+    } else {
+        whole = false;
+    }
+    anyhow::ensure!(whole, "the tray menu was only partly replaced");
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chimera_config::application::{ClashCore, ProxiesSelectorMode, TrayMenuMode};
-
-    fn tray_view(core: ClashCore, mode: Mode, tun: bool) -> TrayView {
-        TrayView {
-            menu: crate::client::effects::plan::TrayMenuDesired {
-                menu_mode: TrayMenuMode::Native,
-                selector_mode: ProxiesSelectorMode::Normal,
-                core,
-            },
-            part: crate::client::effects::plan::TrayPartDesired {
-                mode,
-                system_proxy: false,
-                tun,
-                text: false,
-                traffic: false,
-            },
-        }
-    }
-
-    #[test]
-    fn queued_refresh_uses_the_latest_view_and_serializes_new_requests() {
-        let old = tray_view(ClashCore::default(), Mode::Rule, false);
-        let latest = tray_view(ClashCore::default(), Mode::Global, true);
-        let state = TrayViewState::new(old);
-
-        assert!(state.request(TrayRefresh::Part));
-        let (refresh, view) = state.take().unwrap();
-        assert_eq!(refresh, TrayRefresh::Part);
-        assert_eq!(view, old);
-
-        state.store(latest);
-        assert!(!state.request(TrayRefresh::Part));
-        assert_eq!(state.take(), Some((TrayRefresh::Part, latest)));
-        assert_eq!(state.take(), None);
-        assert!(state.request(TrayRefresh::Part));
-    }
-
-    #[test]
-    fn full_refresh_supersedes_queued_partial_refresh() {
-        let latest = tray_view(ClashCore::default(), Mode::Global, true);
-        let state = TrayViewState::new(tray_view(ClashCore::default(), Mode::Rule, false));
-
-        assert!(state.request(TrayRefresh::Part));
-        assert!(!state.request(TrayRefresh::Full));
-        state.store(latest);
-
-        assert_eq!(state.take(), Some((TrayRefresh::Full, latest)));
-        assert_eq!(state.take(), None);
-    }
+    use chimera_config::application::ClashCore;
 
     #[test]
     fn script_mode_menu_item_is_only_defined_for_the_clash_premium_core() {

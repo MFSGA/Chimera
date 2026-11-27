@@ -8,6 +8,9 @@
     "duplicate_accelerator": "快捷鍵已被占用：{hotkey}"
   },
   "tray": {
+    "no_proxies": "無 Proxy",
+    "select_proxy": "選取 Proxy",
+    "restore_auto_selection": "還原自動選擇",
     "dashboard": "打開",
     "direct_mode": "直連模式",
     "global_mode": "全域模式",

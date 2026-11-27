@@ -63,6 +63,15 @@ pub fn setup<R: Runtime, M: Manager<R>>(manager: &M) -> anyhow::Result<()> {
                 break;
             }
             crate::core::handle::Handle::mutate_proxies();
+            #[cfg(not(any(target_os = "android", target_os = "ios")))]
+            if let Some(app_handle) = crate::core::handle::Handle::app_handle() {
+                if let Err(error) = crate::core::tray::Tray::request(
+                    &app_handle,
+                    crate::core::tray::TrayWork::PROXIES,
+                ) {
+                    tracing::debug!(%error, "failed to schedule tray proxy refresh");
+                }
+            }
         }
     });
     let streams = client.streams().clone();

@@ -8,6 +8,9 @@
     "duplicate_accelerator": "このホットキーはすでに割り当てられています: {hotkey}"
   },
   "tray": {
+    "no_proxies": "プロキシなし",
+    "select_proxy": "プロキシを選択",
+    "restore_auto_selection": "自動選択に戻す",
     "dashboard": "Chimera を表示",
     "direct_mode": "ダイレクトモード",
     "global_mode": "グローバルモード",

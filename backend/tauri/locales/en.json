@@ -8,6 +8,9 @@
     "duplicate_accelerator": "Hotkey is already assigned: {hotkey}"
   },
   "tray": {
+    "no_proxies": "No Proxies",
+    "select_proxy": "Select Proxy",
+    "restore_auto_selection": "Restore Automatic Selection",
     "dashboard": "Open",
     "direct_mode": "Direct Mode",
     "global_mode": "Global Mode",
