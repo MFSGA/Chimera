@@ -19,6 +19,17 @@ import {
  * only, so keep typed query metadata outside generated bindings.
  */
 export const queries = {
+  isTrayIconSet: (mode: Parameters<typeof commands.isTrayIconSet>[0]) =>
+    queryOptions({
+      queryKey: ['isTrayIconSet', mode],
+      queryFn: async () => unwrapResult(await commands.isTrayIconSet(mode)),
+    }),
+  isWidgetIconSet: (mode: Parameters<typeof commands.isWidgetIconSet>[0]) =>
+    queryOptions({
+      queryKey: ['isWidgetIconSet', mode],
+      queryFn: async () => unwrapResult(await commands.isWidgetIconSet(mode)),
+    }),
+
   getConfigurationStatus: () =>
     queryOptions({
       queryKey: ['getConfigurationStatus'],
@@ -138,6 +149,42 @@ export const queries = {
 };
 
 export const mutations = {
+  setWidgetIcon: mutationOptions({
+    mutationKey: ['setWidgetIcon'],
+    mutationFn: async (input: {
+      mode: Parameters<typeof commands.setWidgetIcon>[0];
+      path: string | null;
+    }) => unwrapResult(await commands.setWidgetIcon(input.mode, input.path)),
+  }),
+  setWidgetIconFromBytes: mutationOptions({
+    mutationKey: ['setWidgetIconFromBytes'],
+    mutationFn: async (input: {
+      mode: Parameters<typeof commands.setWidgetIconFromBytes>[0];
+      bytesBase64: string;
+    }) =>
+      unwrapResult(
+        await commands.setWidgetIconFromBytes(input.mode, input.bytesBase64),
+      ),
+  }),
+
+  setTrayIcon: mutationOptions({
+    mutationKey: ['setTrayIcon'],
+    mutationFn: async (input: {
+      mode: Parameters<typeof commands.setTrayIcon>[0];
+      path: string | null;
+    }) => unwrapResult(await commands.setTrayIcon(input.mode, input.path)),
+  }),
+  setTrayIconFromBytes: mutationOptions({
+    mutationKey: ['setTrayIconFromBytes'],
+    mutationFn: async (input: {
+      mode: Parameters<typeof commands.setTrayIconFromBytes>[0];
+      bytesBase64: string;
+    }) =>
+      unwrapResult(
+        await commands.setTrayIconFromBytes(input.mode, input.bytesBase64),
+      ),
+  }),
+
   setReleaseChannel: mutationOptions({
     mutationKey: ['setReleaseChannel'],
     mutationFn: async (

@@ -26,6 +26,7 @@ export type { ClashApiConfig as ClashConfig } from './bindings';
 /** @deprecated The extended runtime projection is backend-internal. */
 export type { ClashApiConfig as ClashRuntimeConfig } from './bindings';
 export * from './use-settings';
+export * from './settings-conversions';
 export * from './use-clash-config';
 export * from './use-clash-core-config';
 export * from './use-clash-connections';

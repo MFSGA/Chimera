@@ -1,6 +1,8 @@
 import { createFileRoute } from '@tanstack/react-router';
 import { PageTitle } from '@/components/page-title';
+import { isMacOS } from '@/consts';
 import * as m from '@/paraglide/messages';
+import TrayIconConfig from '../_modules/tray-icon-config';
 import TrayProxiesSelector from '../_modules/tray-proxies-selector';
 import WindowCloseBehaviorCards from '../_modules/window-close-behavior';
 import { SettingsGroup, SettingsLabel } from '../../_modules/settings-card';
@@ -24,6 +26,7 @@ function RouteComponent() {
           <SettingsLabel>{m.settings_chimera_tray()}</SettingsLabel>
           <SettingsGroup>
             <TrayProxiesSelector />
+            {!isMacOS && <TrayIconConfig />}
           </SettingsGroup>
         </div>
         <div data-slot="window-settings-container">

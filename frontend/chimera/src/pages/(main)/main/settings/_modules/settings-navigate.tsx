@@ -22,6 +22,7 @@ import SettingsRounded from '~icons/material-symbols/settings-rounded';
 import SwapHorizRounded from '~icons/material-symbols/swap-horiz-rounded';
 import TuneRounded from '~icons/material-symbols/tune-rounded';
 import VpnLockRounded from '~icons/material-symbols/vpn-lock-rounded';
+import WidgetsRounded from '~icons/material-symbols/widgets-rounded';
 import type { ComponentProps, ForwardedRef, ReactNode } from 'react';
 import ChimeraIcon from '@root/backend/tauri/icons/icon.png';
 import * as m from '@/paraglide/messages';
@@ -154,6 +155,13 @@ export default function SettingsNavigate() {
           icon={<DesktopWindowsRounded />}
           label={m.settings_label_tray()}
           description={m.settings_label_tray_description()}
+        />
+        <SettingsNavigationItem
+          to="/main/settings/chimera/widget"
+          color="cyan"
+          icon={<WidgetsRounded />}
+          label={m.settings_label_widget()}
+          description={m.settings_label_widget_description()}
         />
         <SettingsNavigationItem
           to="/main/settings/chimera/shortcuts"
