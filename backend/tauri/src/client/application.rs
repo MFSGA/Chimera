@@ -151,114 +151,55 @@ impl ChimeraClient {
         &self,
         patch: ChimeraAppConfigPatch,
     ) -> anyhow::Result<super::MutationOutcome<()>> {
-        let (before, candidate) = self.inner.shared.validate_application_candidate(&patch)?;
-
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
         let reconcile_hotkeys = patch.hotkeys.is_some();
-        #[cfg(not(any(target_os = "android", target_os = "ios")))]
-        if let Some(hotkeys) = patch.hotkeys.as_deref() {
-            super::hotkey::validate_bindings(hotkeys, self.inner.accelerators.as_ref())?;
-        }
-
-        #[cfg(windows)]
-        validate_windows_service_mode_tun_transition(
-            patch.enable_service_mode,
-            self.get_clash_config()?.enable_tun_mode,
-            None,
-        )?;
-
-        let service_connected = crate::core::service::ipc::get_ipc_state().is_connected();
-        let route = chimera_core::client::application_operations::application_patch_route(
-            &patch,
-            &before.state,
-            &candidate,
-            service_connected,
-            self.inner.checked_gate.is_some(),
-        );
-        let requires_reconcile = route.requires_reconcile;
-        let native = route.native();
-        let (mut degradations, notified_version, snapshot) = if native {
-            let snapshot = self
-                .inner
-                .shared
-                .commit_native_application_candidate(before.version, candidate, route, &patch)
-                .await?;
-            (Vec::new(), Some(snapshot.version), snapshot)
-        } else if requires_reconcile {
-            let report = self
-                .inner
-                .reconciler()
-                .patch_application_config(patch)
-                .await?;
-            (
-                report.degradations,
-                report.notified_version,
-                self.inner.shared.application().get().await?,
+        let report = self
+            .inner
+            .shared
+            .patch_application_validated_with(
+                patch,
+                crate::core::service::ipc::get_ipc_state().is_connected(),
+                self.inner.checked_gate.is_some(),
+                |patch| {
+                    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+                    if let Some(hotkeys) = patch.hotkeys.as_deref() {
+                        super::hotkey::validate_bindings(
+                            hotkeys,
+                            self.inner.accelerators.as_ref(),
+                        )?;
+                    }
+                    let _ = patch;
+                    Ok(())
+                },
+                persist_legacy_application_mirror,
             )
-        } else {
-            let snapshot = self.inner.shared.application().patch_typed(patch).await?;
-            (Vec::new(), None, snapshot)
-        };
-        if notified_version.is_none() {
-            // Already-applied legacy domains only publish their source version.
-            // Retryable postcommit failures still request owner convergence.
-            self.inner.reconciler().source_committed(
-                super::reconciler::committed::SourceDomain::Application,
-                snapshot.version,
-                degradations
-                    .iter()
-                    .any(|item| item.code == "application_runtime_deferred" && item.retryable),
-            );
-        }
-        self.configure_app_update(&snapshot.state);
-
-        // Keep the legacy Verge file current while existing service and agent
-        // entry points still read it. The typed application.yaml is already
-        // committed, so a mirror write failure is reported as degraded.
-        if let Err(error) = persist_legacy_application_mirror() {
-            degradations.push(super::Degradation {
-                phase: super::runtime::DegradationPhase::LegacyMirror,
-                code: "legacy_application_mirror_write_failed".into(),
-                message: format!("failed to persist legacy application mirror: {error:#}"),
-                retryable: true,
-            });
-        }
+            .await?;
 
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
-        {
-            let clash = self.get_clash_config()?;
-            let inputs = super::effects::plan::ApplicationEffectInputs::project(
-                &snapshot.state,
-                &clash,
-                None,
-            );
+        let report = {
+            let mut report = report;
+            let fields =
+                super::effects::plan::ApplicationEffectFields::from(&report.snapshot.state);
             self.publish_runtime_port_binding().await;
-            if !native {
+            if !report.route.native() {
                 super::effects::ports::CommitNotifications::application_committed(
                     &self.inner.effects,
-                    inputs.app,
+                    fields,
                     Vec::new(),
                 );
             }
-
             if reconcile_hotkeys {
                 let status = self.reconcile_hotkeys().await;
                 if let Some(degradation) = super::effects::status::degradation_of(&status) {
-                    degradations.push(degradation);
+                    report.degradations.push(degradation);
                 }
             }
-        }
-
-        if !native {
+            report
+        };
+        if !report.route.native() {
             self.inner.ui_sink.refresh_verge();
         }
-        let receipt = chimera_core::client::application_operations::application_commit_receipt(
-            &snapshot,
-            notified_version,
-            requires_reconcile,
-            &degradations,
-        );
-        Ok(super::MutationOutcome::from_parts((), degradations).with_commit(receipt))
+        Ok(report.into_outcome().into())
     }
 
     pub(crate) async fn patch_clash_config(

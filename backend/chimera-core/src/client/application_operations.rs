@@ -6,6 +6,42 @@ use anyhow::Result;
 use chimera_config::application::{ChimeraAppConfig, ChimeraAppConfigPatch};
 use struct_patch::Patch as _;
 
+use super::mutation_outcome::{Degradation, DegradationPhase};
+use chimera_contracts::runtime::{DegradationReason, MutationOutcome};
+
+/// The committed source and its exact publication receipt. Native owner
+/// commits have already published their notification; legacy ones have not.
+pub struct ApplicationCommitReport {
+    pub snapshot: ApplicationSnapshot,
+    pub route: ApplicationPatchRoute,
+    pub notified_version: Option<u64>,
+    pub degradations: Vec<Degradation>,
+}
+
+impl ApplicationCommitReport {
+    pub fn into_outcome(self) -> MutationOutcome<()> {
+        let receipt = application_commit_receipt(
+            &self.snapshot,
+            self.notified_version,
+            self.route.requires_reconcile,
+            &self.degradations,
+        );
+        let degradations = self
+            .degradations
+            .into_iter()
+            .map(|item| chimera_contracts::runtime::Degradation {
+                phase: item.phase,
+                reason: DegradationReason::LegacyConfigurationFailure {
+                    legacy_code: item.code,
+                },
+                message: item.message,
+                retryable: item.retryable,
+            })
+            .collect();
+        MutationOutcome::from_parts((), degradations).with_commit(receipt)
+    }
+}
+
 impl ChimeraClient {
     pub fn validate_application_candidate(
         &self,
@@ -23,6 +59,80 @@ impl ChimeraClient {
         let clash = self.get_clash_config()?;
         super::clash_operations::validate_clash_for_application(&clash, &candidate)?;
         Ok((before, candidate))
+    }
+
+    /// The ref facade owns application admission, the commit route, and
+    /// publication. The shell provides its native preflight and legacy mirror.
+    pub async fn patch_application_validated_with<Preflight, Save>(
+        &self,
+        patch: ChimeraAppConfigPatch,
+        service_connected: bool,
+        checked_gate_ready: bool,
+        preflight: Preflight,
+        save_legacy: Save,
+    ) -> Result<ApplicationCommitReport>
+    where
+        Preflight: FnOnce(&ChimeraAppConfigPatch) -> Result<()>,
+        Save: FnOnce() -> Result<()>,
+    {
+        let (before, candidate) = self.validate_application_candidate(&patch)?;
+        preflight(&patch)?;
+        #[cfg(windows)]
+        validate_windows_service_mode_tun_transition(
+            patch.enable_service_mode,
+            self.get_clash_config()?.enable_tun_mode,
+            None,
+        )?;
+        let route = application_patch_route(
+            &patch,
+            &before.state,
+            &candidate,
+            service_connected,
+            checked_gate_ready,
+        );
+        let reconciler = self
+            .reconciler()
+            .ok_or_else(|| anyhow::anyhow!("runtime reconciler is not connected"))?;
+        let (mut degradations, notified_version, snapshot) = if route.native() {
+            let snapshot = self
+                .commit_native_application_candidate(before.version, candidate, route, &patch)
+                .await?;
+            (Vec::new(), Some(snapshot.version), snapshot)
+        } else if route.requires_reconcile {
+            let report = reconciler.patch_application_config(patch).await?;
+            (
+                report.degradations,
+                report.notified_version,
+                self.application().get().await?,
+            )
+        } else {
+            let snapshot = self.application().patch_typed(patch).await?;
+            (Vec::new(), None, snapshot)
+        };
+        if notified_version.is_none() {
+            reconciler.source_committed(
+                super::reconciler::committed::SourceDomain::Application,
+                snapshot.version,
+                degradations
+                    .iter()
+                    .any(|item| item.code == "application_runtime_deferred" && item.retryable),
+            );
+        }
+        self.configure_app_update(&snapshot.state);
+        if let Err(error) = save_legacy() {
+            degradations.push(Degradation {
+                phase: DegradationPhase::LegacyMirror,
+                code: "legacy_application_mirror_write_failed".into(),
+                message: format!("failed to persist legacy application mirror: {error:#}"),
+                retryable: true,
+            });
+        }
+        Ok(ApplicationCommitReport {
+            snapshot,
+            route,
+            notified_version,
+            degradations,
+        })
     }
 
     /// The existing source actor owns CAS, check admission and committed notices.
@@ -151,6 +261,7 @@ pub fn resolved_effect_port_binding(
 }
 
 /// Exact route decision for the current checked owner and the legacy handoff.
+#[derive(Debug, Clone, Copy)]
 pub struct ApplicationPatchRoute {
     pub requires_reconcile: bool,
     native_checked: bool,
