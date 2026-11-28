@@ -33,6 +33,7 @@ pub struct ClashPatchPlan {
 }
 
 /// Host inputs that select the checked source transaction.
+#[derive(Clone, Copy)]
 pub struct ClashPatchContext<'a> {
     pub application: &'a chimera_config::application::ChimeraAppConfig,
     pub service_connected: bool,
@@ -103,16 +104,23 @@ impl ClashConfigClient {
         next.apply(patch.clone());
         validate_clash_for_application(&next, context.application)?;
         let reaches_runtime = should_reconcile_clash_patch(&before.state, &next, &patch);
+        let override_route = typed_override_route(&patch, &before.state, &next, &context);
         let checked = context.checked_gate
-            && checked_clash_patch_eligible(
+            && (checked_clash_patch_eligible(
                 &patch,
                 &before.state,
                 context.application,
                 context.service_connected,
-            );
+            ) || override_route.checked);
         if context.checked_gate && (checked || !reaches_runtime) {
             return self
-                .commit_native_candidate_with(before, next, checked, false, save_legacy)
+                .commit_native_candidate_with(
+                    before,
+                    next,
+                    checked,
+                    override_route.interrupt_mode,
+                    save_legacy,
+                )
                 .await;
         }
         self.commit_candidate_with(before, next, reaches_runtime, check, apply, save_legacy)
@@ -326,6 +334,47 @@ pub fn checked_clash_patch_eligible(
     ) {
         (Ok(remainder), Ok(empty)) => remainder == empty,
         _ => false,
+    }
+}
+
+/// Ref's ordinary typed overrides use the same checked source admission as
+/// the raw mode path. Only isolated, local, non-controller edits are admitted;
+/// the full typed DTO stays intact (including managed/unmanaged fields).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TypedOverrideRoute {
+    pub checked: bool,
+    pub interrupt_mode: bool,
+}
+
+pub fn typed_override_route(
+    patch: &ClashConfigPatch,
+    before: &ClashConfig,
+    next: &ClashConfig,
+    context: &ClashPatchContext<'_>,
+) -> TypedOverrideRoute {
+    let mut remainder = patch.clone();
+    remainder.overrides = Default::default();
+    let isolated = match (
+        serde_yaml::to_value(&remainder),
+        serde_yaml::to_value(ClashConfig::new_empty_patch()),
+    ) {
+        (Ok(remainder), Ok(empty)) => remainder == empty,
+        _ => false,
+    };
+    let checked = isolated
+        && crate::state::mutation::impact::reaches_runtime(before, next, &[])
+        && matches!(
+            serde_yaml::to_value(&patch.overrides),
+            Ok(Value::Mapping(mapping))
+                if checked_raw_clash_patch_eligible(&mapping, context.application, context.service_connected)
+        );
+    TypedOverrideRoute {
+        checked,
+        // The exact source transition determines the effect, not the last
+        // observed Core selection (which may not yet have been published).
+        interrupt_mode: checked
+            && before.overrides.mode() != next.overrides.mode()
+            && before.break_connection.on_mode_change,
     }
 }
 
@@ -597,6 +646,65 @@ mod tests {
         assert!(no_interruption.mode_changed);
         assert!(!no_interruption.break_on_mode_change);
         assert!(checked_raw_clash_patch_eligible(&mode_request, &app, false));
+    }
+
+    #[test]
+    fn typed_override_route_preserves_checked_mode_intent_and_host_boundaries() {
+        use chimera_config::clash::config::overrides::{LogLevel, Mode};
+        let app = chimera_config::application::ChimeraAppConfig {
+            enable_service_mode: false,
+            ..Default::default()
+        };
+        let context = ClashPatchContext {
+            application: &app,
+            service_connected: false,
+            checked_gate: true,
+        };
+        let mut before = ClashConfig::default();
+        before.break_connection.on_mode_change = true;
+        let mut patch = ClashConfig::new_empty_patch();
+        patch.overrides.mode = Some(Mode::Global);
+        let mut next = before.clone();
+        next.apply(patch.clone());
+        assert_eq!(
+            typed_override_route(&patch, &before, &next, &context),
+            TypedOverrideRoute {
+                checked: true,
+                interrupt_mode: true
+            }
+        );
+        // No extra source version or forced checked runtime for same-mode intent.
+        assert!(!typed_override_route(&patch, &next, &next, &context).checked);
+        before.break_connection.on_mode_change = false;
+        assert_eq!(
+            typed_override_route(&patch, &before, &next, &context),
+            TypedOverrideRoute {
+                checked: true,
+                interrupt_mode: false
+            }
+        );
+        let connected = ClashPatchContext {
+            service_connected: true,
+            ..context
+        };
+        assert!(!typed_override_route(&patch, &before, &next, &connected).checked);
+        patch.overrides.secret = Some("new-secret".into());
+        assert!(!typed_override_route(&patch, &before, &next, &context).checked);
+        patch.overrides.secret = None;
+        patch.enable_tun_mode = Some(true);
+        assert!(!typed_override_route(&patch, &before, &next, &context).checked);
+        patch.enable_tun_mode = None;
+        patch.overrides.mode = None;
+        patch.overrides.log_level = Some(LogLevel::Warning);
+        let mut next = before.clone();
+        next.apply(patch.clone());
+        assert_eq!(
+            typed_override_route(&patch, &before, &next, &context),
+            TypedOverrideRoute {
+                checked: true,
+                interrupt_mode: false
+            }
+        );
     }
 
     struct RecordingBridge {
@@ -1692,7 +1800,7 @@ pub fn clash_commit_receipt(
 ) -> super::mutation_outcome::CommitReceipt {
     use super::mutation_outcome::{CommitReceipt, RuntimeCommitStatus};
     CommitReceipt {
-        operation_id: None,
+        operation_id: snapshot.operation_id.map(|id| id.to_string()),
         domain: "clash".into(),
         source_version: snapshot.version,
         runtime: if degradations
