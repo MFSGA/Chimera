@@ -10,7 +10,7 @@ use super::{
         record_startup_retry_lease_failure,
     },
     mailbox::{CoreLifecycleStatus, DirtyTick, Mailbox, MailboxTimers},
-    plan::RunIntent,
+    plan::{RunIntent, Trigger},
     startup_executor::StartupHost,
     status::ReconcilerStatus,
     worker::{WorkerCompletion, spawn_service_recovery_lease, spawn_startup_retry_lease},
@@ -387,7 +387,7 @@ impl<W: MailboxWorkflow<P>, P: Send + 'static> Actor for RuntimeReconcilerActor<
                         HandoffContinuation::MarkDirty => state.mark_runtime_dirty(&myself),
                     }
                     state
-                        .schedule_service_release(active.trigger == "Retry")
+                        .schedule_service_release(active.trigger == Trigger::Retry)
                         .await;
                 } else {
                     tracing::warn!(id, "ignoring stale core lifecycle completion");

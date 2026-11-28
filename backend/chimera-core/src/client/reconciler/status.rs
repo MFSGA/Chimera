@@ -6,7 +6,7 @@
 //! round, not copied from an unprocessed SourceCommitted message.
 use std::{collections::VecDeque, sync::Arc};
 
-use crate::client::reconciler::plan::{Conclusion, RunIntent, RuntimeError};
+use crate::client::reconciler::plan::{Conclusion, RunIntent, RuntimeError, Trigger};
 
 use super::{attempt::LegacyApplyVerdict, mutation::RoundRecord};
 
@@ -169,7 +169,7 @@ impl ReconcilerStatus {
     pub fn finish(
         &mut self,
         operation_id: u64,
-        trigger: &str,
+        trigger: Trigger,
         observed_sources: &SourceVersions,
         intent: RunIntent,
         result: &anyhow::Result<()>,
@@ -202,7 +202,7 @@ impl ReconcilerStatus {
     pub fn finish_observed(
         &mut self,
         operation_id: u64,
-        trigger: &str,
+        trigger: Trigger,
         observed_sources: &SourceVersions,
         intent: RunIntent,
         result: &anyhow::Result<()>,
@@ -233,7 +233,7 @@ impl ReconcilerStatus {
     pub fn finish_with_verdict(
         &mut self,
         operation_id: u64,
-        trigger: &str,
+        trigger: Trigger,
         observed_sources: &SourceVersions,
         intent: RunIntent,
         reconciled: bool,
@@ -244,9 +244,9 @@ impl ReconcilerStatus {
         self.seq = self.seq.saturating_add(1);
         self.active = None;
         self.seen.merge(observed_sources);
-        self.conclusion = if trigger == "Shutdown" {
+        self.conclusion = if trigger == Trigger::Shutdown {
             Conclusion::Closed
-        } else if trigger == "ServiceRelease" {
+        } else if trigger == Trigger::ServiceRelease {
             // Daemon cleanup is maintenance after an established Local Core,
             // not a new runtime application. Its failure must not revoke a
             // separately proven Converged runtime conclusion.
@@ -263,9 +263,9 @@ impl ReconcilerStatus {
             Conclusion::NotInEffect {
                 cause: cause.clone(),
             }
-        } else if intent == RunIntent::Stopped && trigger == "Stop" && verified_stopped {
+        } else if intent == RunIntent::Stopped && trigger == Trigger::Stop && verified_stopped {
             Conclusion::Inactive
-        } else if intent == RunIntent::Stopped && trigger == "Stop" {
+        } else if intent == RunIntent::Stopped && trigger == Trigger::Stop {
             Conclusion::Waiting {
                 cause: Arc::new(RuntimeError::new(
                     "stop returned successfully but a Stopped Core state has not been observed",
@@ -287,8 +287,11 @@ impl ReconcilerStatus {
         if self.recent.len() == HISTORY_LEN {
             self.recent.pop_front();
         }
-        self.recent
-            .push_back(RoundRecord::new(operation_id, trigger, &self.conclusion));
+        self.recent.push_back(RoundRecord::new(
+            operation_id,
+            trigger.label(),
+            &self.conclusion,
+        ));
     }
 }
 
@@ -354,7 +357,7 @@ mod tests {
         status.begin(11);
         status.finish_observed(
             11,
-            "SourceCommitted",
+            Trigger::SourceCommitted,
             &SourceVersions::default(),
             RunIntent::Running,
             &generic,
@@ -381,7 +384,7 @@ mod tests {
         ));
         status.finish_observed(
             12,
-            "SourceCommitted",
+            Trigger::SourceCommitted,
             &SourceVersions::default(),
             RunIntent::Running,
             &superseded,
@@ -405,7 +408,7 @@ mod tests {
         status.begin(13);
         status.finish_observed(
             13,
-            "Retry",
+            Trigger::Retry,
             &SourceVersions::default(),
             RunIntent::Running,
             &generic,
@@ -431,7 +434,7 @@ mod tests {
         status.begin(1);
         status.finish(
             1,
-            "SourceCommitted",
+            Trigger::SourceCommitted,
             &SourceVersions::default(),
             RunIntent::Running,
             &Ok(()),
@@ -525,7 +528,7 @@ mod tests {
             status.begin(id);
             status.finish(
                 id,
-                "Retry",
+                Trigger::Retry,
                 &SourceVersions::default(),
                 RunIntent::Running,
                 &Ok(()),
@@ -550,7 +553,7 @@ mod tests {
         status.begin(30);
         status.finish(
             30,
-            "Startup",
+            Trigger::Startup,
             &sampled,
             RunIntent::Running,
             &Err(CoreError::new(CoreErrorKind::ConfigCheckFailed, "bad source", false).into()),
@@ -564,7 +567,7 @@ mod tests {
         status.begin(31);
         status.finish(
             31,
-            "ServiceReadiness",
+            Trigger::ServiceReadiness,
             &sampled,
             RunIntent::Running,
             &Err(CoreError::new(CoreErrorKind::BackendUnavailable, "host offline", false).into()),
@@ -578,7 +581,7 @@ mod tests {
         status.begin(32);
         status.finish(
             32,
-            "SourceCommitted",
+            Trigger::SourceCommitted,
             &sampled,
             RunIntent::Running,
             &Err(CoreError::new(CoreErrorKind::ApplyFailed, "unobserved", false).into()),
@@ -592,7 +595,7 @@ mod tests {
         status.begin(33);
         status.finish(
             33,
-            "Startup",
+            Trigger::Startup,
             &sampled,
             RunIntent::Running,
             &Ok(()),
@@ -609,7 +612,7 @@ mod tests {
         status.begin(34);
         status.finish(
             34,
-            "Startup",
+            Trigger::Startup,
             &sampled,
             RunIntent::Running,
             &Ok(()),
@@ -642,7 +645,7 @@ mod tests {
                 Err(CoreError::new(kind, "the runtime host is temporarily busy", false).into());
             status.finish(
                 id as u64,
-                "SourceCommitted",
+                Trigger::SourceCommitted,
                 &observed,
                 RunIntent::Running,
                 &outcome,
@@ -667,7 +670,7 @@ mod tests {
         status.begin(9);
         status.finish(
             9,
-            "SourceCommitted",
+            Trigger::SourceCommitted,
             &sampled,
             RunIntent::Running,
             &Err(anyhow::anyhow!("source advanced during apply")),
@@ -682,7 +685,7 @@ mod tests {
         status.begin(10);
         status.finish(
             10,
-            "Stop",
+            Trigger::Stop,
             &sampled,
             RunIntent::Stopped,
             &Ok(()),

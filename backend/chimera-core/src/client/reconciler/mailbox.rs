@@ -3,7 +3,11 @@
 //! Like ref, one active round owns execution and only its terminal reply
 //! settles the round. Chimera allows Checked admissions during a host await,
 //! so the payload is generic and the active worker remains explicitly owned.
-use super::{committed::SourceVersions, plan::RunIntent, workflow::RuntimeReconcilerState};
+use super::{
+    committed::SourceVersions,
+    plan::{RunIntent, Trigger},
+    workflow::RuntimeReconcilerState,
+};
 use parking_lot::Mutex;
 use ractor::{ActorRef, Message, RpcReplyPort};
 use std::{
@@ -50,7 +54,7 @@ pub struct ActiveOperation {
     pub response: Response,
     pub task: tokio::task::JoinHandle<()>,
     pub shutdown: bool,
-    pub trigger: &'static str,
+    pub trigger: Trigger,
     pub checked_clash: bool,
     /// Checked Apply already promotes its own exact verified selection.
     /// Legacy startup/reconcile must recover it from the confirmed receipt.

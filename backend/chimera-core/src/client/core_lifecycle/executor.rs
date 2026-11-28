@@ -77,6 +77,8 @@ pub async fn execute<H: LifecycleHost + ?Sized>(
     // Reference's explicit interruption does not invalidate a confirmed
     // runtime selection or start another apply/recovery round.
     if let Command::InterruptConnections { reply } = command {
+        host.clear_round_effects();
+        host.progress().lock().clear_pending();
         let failure = if host.mode_interruption_enabled()? {
             crate::client::reconciler::apply::CheckedConnectionEffect {
                 change: crate::client::reconciler::committed::SelectionChange::Mode,

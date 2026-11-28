@@ -2,6 +2,7 @@
 use super::{
     apply::{CheckedConnectionEffect, finish_connection_effect},
     authority::RuntimeSourceAuthority,
+    plan::Trigger,
     proof::verified_applied_runtime,
     state::{RuntimeProgress, proven_selection_from_receipt},
 };
@@ -26,7 +27,7 @@ impl Round {
         authority: Option<&dyn RuntimeSourceAuthority>,
         take_effect: impl FnOnce() -> Option<CheckedConnectionEffect>,
         result: &anyhow::Result<()>,
-        trigger: &str,
+        trigger: Trigger,
         reconciled: bool,
         checked_apply: bool,
         source_advanced: bool,
@@ -36,7 +37,7 @@ impl Round {
         // A successful command alone is not proof that the Core
         // reached Running or Stopped. Publish Converged/Inactive
         // only after sampling the runtime owner.
-        let observed_core = if result.is_ok() && (reconciled || trigger == "Stop") {
+        let observed_core = if result.is_ok() && (reconciled || trigger == Trigger::Stop) {
             core.status().await.ok()
         } else {
             None
@@ -54,7 +55,7 @@ impl Round {
         };
         #[cfg(feature = "e2e")]
         tracing::warn!(target: "chimera::e2e_core_mailbox", stage = "completed_running_verified", "CoreLifecycle completion stage");
-        let verified_stopped = trigger == "Stop"
+        let verified_stopped = trigger == Trigger::Stop
             && observed_core.as_ref().is_some_and(|snapshot| {
                 matches!(
                     snapshot.state,
@@ -123,7 +124,7 @@ impl Round {
         progress: &parking_lot::Mutex<RuntimeProgress>,
         status: &tokio::sync::watch::Sender<super::status::ReconcilerStatus>,
         operation_id: u64,
-        trigger: &str,
+        trigger: Trigger,
         observed_sources: &super::committed::SourceVersions,
         intent: crate::client::reconciler::plan::RunIntent,
         reconciled: bool,

@@ -193,7 +193,7 @@ mod tests {
         status.begin(9);
         status.finish_with_verdict(
             9,
-            "SourceCommitted",
+            Trigger::SourceCommitted,
             &super::super::committed::SourceVersions::default(),
             RunIntent::Running,
             true,
@@ -236,7 +236,7 @@ mod tests {
         status.begin(10);
         status.finish_with_verdict(
             10,
-            "Retry",
+            Trigger::Retry,
             &super::super::committed::SourceVersions::default(),
             RunIntent::Running,
             true,
@@ -275,7 +275,7 @@ mod tests {
         status.begin(11);
         status.finish_with_verdict(
             11,
-            "SourceCommitted",
+            Trigger::SourceCommitted,
             &super::super::committed::SourceVersions::default(),
             RunIntent::Running,
             true,

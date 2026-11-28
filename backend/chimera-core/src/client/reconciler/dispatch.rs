@@ -5,7 +5,7 @@ use super::{
         ActiveOperation, AdmissionFailure, Mailbox, Request, RequestKind, Response,
         ShutdownAdmission, replay_shutdown,
     },
-    plan::{Conclusion, RunIntent},
+    plan::{Conclusion, RunIntent, Trigger},
     release::ReleaseObservation,
     worker::{WorkerCompletion, WorkerPlan, WorkerWorkflow, spawn_worker},
     workflow::{RuntimeAdmission, RuntimeReconcilerState},
@@ -182,7 +182,7 @@ impl<P> Mailbox<Command<P>> {
 
 pub struct RoundDispatch {
     pub plan: WorkerPlan,
-    pub trigger: &'static str,
+    pub trigger: Trigger,
     pub checked_apply: bool,
     pub checked_clash: bool,
     pub service_phase: Option<ServicePhase>,
@@ -776,7 +776,7 @@ mod tests {
         let dispatch = prepare_round(&request, false);
         assert_eq!(dispatch.plan.id, request.response.id);
         assert_eq!(dispatch.plan.deferred_retry.as_deref(), Some("digest-a"));
-        assert_eq!(dispatch.trigger, "Tick");
+        assert_eq!(dispatch.trigger, Trigger::Tick);
         assert!(dispatch.plan.reconciled);
         assert!(!dispatch.plan.service_mutation);
     }

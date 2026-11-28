@@ -3,7 +3,7 @@
 use super::{
     attempt::{CommittedTargetAdvanced, OwnershipTransitionPending, ServiceFallbackDeferred},
     committed::SourceVersions,
-    plan::RunIntent,
+    plan::{RunIntent, Trigger},
     round::Round,
     workflow::{RuntimeReconcilerState, committed_target_advanced, source_committed_during_round},
 };
@@ -49,7 +49,7 @@ pub struct CompletionFence {
 impl CompletionFence {
     pub fn observe(
         result: anyhow::Result<()>,
-        trigger: &str,
+        trigger: Trigger,
         started: &SourceVersions,
         latest: &SourceVersions,
         previously_uncertain: bool,
@@ -174,7 +174,7 @@ pub fn settle_completed<P>(
     reconciler: &tokio::sync::watch::Sender<super::status::ReconcilerStatus>,
     round: Round,
     response: super::mailbox::Response,
-    trigger: &str,
+    trigger: Trigger,
     observed_sources: &SourceVersions,
     reconciled: bool,
     shutdown: bool,
@@ -273,7 +273,7 @@ impl RuntimeReconcilerState {
 
     pub fn observe_host_completion(
         &mut self,
-        trigger: &str,
+        trigger: Trigger,
         endpoint_recovery: bool,
         result: &anyhow::Result<()>,
     ) -> bool {
@@ -283,20 +283,20 @@ impl RuntimeReconcilerState {
                 .err()
                 .map(|error| format!("Service endpoint recovery is pending: {error:#}"));
         }
-        if trigger == "ServiceReadiness" {
+        if trigger == Trigger::ServiceReadiness {
             self.service_handoff_maintenance = result
                 .as_ref()
                 .err()
                 .map(|error| format!("Service owner handoff is pending: {error:#}"));
         }
-        endpoint_recovery || trigger == "ServiceReadiness"
+        endpoint_recovery || trigger == Trigger::ServiceReadiness
     }
 
     /// A concrete S2 step retains the durable source continuation even if
     /// no additional source notice arrives. Release debt is independent.
     pub fn observe_completion_maintenance(
         &mut self,
-        trigger: &str,
+        trigger: Trigger,
         reconciled: bool,
         result: &anyhow::Result<()>,
     ) -> bool {
@@ -307,7 +307,7 @@ impl RuntimeReconcilerState {
             .is_some_and(|pending| pending.plan.is_some());
         if matches!(
             trigger,
-            "SourceCommitted" | "Retry" | "Start" | "CoreChanged"
+            Trigger::SourceCommitted | Trigger::Retry | Trigger::Start | Trigger::CoreChanged
         ) && needs_owner_handoff
         {
             self.source_after_handoff = true;
@@ -331,7 +331,7 @@ impl RuntimeReconcilerState {
             self.service_handoff_maintenance = None;
             changed = true;
         }
-        if trigger == "ServiceRelease" {
+        if trigger == Trigger::ServiceRelease {
             self.service_release_debt.finish(
                 result
                     .as_ref()
@@ -366,7 +366,7 @@ impl RuntimeReconcilerState {
     /// loaded the latest inputs, so it must not enqueue an identical round.
     pub fn complete_handoff(
         &mut self,
-        trigger: &str,
+        trigger: Trigger,
         reconciled: bool,
         failed: bool,
         verified_running: bool,
@@ -386,7 +386,7 @@ impl RuntimeReconcilerState {
             return HandoffContinuation::None;
         }
         self.source_after_handoff = false;
-        if trigger == "SourceCommitted" {
+        if trigger == Trigger::SourceCommitted {
             self.service_handoff_maintenance = None;
             HandoffContinuation::ClearMaintenance
         } else {
@@ -427,7 +427,7 @@ mod tests {
         latest.observe(SourceDomain::Profiles, 1);
         let fence = CompletionFence::observe(
             Ok(()),
-            "SourceCommitted",
+            Trigger::SourceCommitted,
             &started,
             &latest,
             false,
@@ -438,7 +438,7 @@ mod tests {
         assert!(committed_target_advanced(&fence.result));
         let fence = CompletionFence::observe(
             Err(anyhow::anyhow!("old refusal")),
-            "SourceCommitted",
+            Trigger::SourceCommitted,
             &started,
             &latest,
             false,
@@ -454,21 +454,21 @@ mod tests {
         let mut state = RuntimeReconcilerState::default();
         state.source_after_handoff = true;
         assert_eq!(
-            state.complete_handoff("Start", true, false, false, false, false, false),
+            state.complete_handoff(Trigger::Start, true, false, false, false, false, false),
             HandoffContinuation::None
         );
         assert!(state.source_after_handoff);
         assert_eq!(
-            state.complete_handoff("Start", true, false, true, false, true, false),
+            state.complete_handoff(Trigger::Start, true, false, true, false, true, false),
             HandoffContinuation::None
         );
         assert_eq!(
-            state.complete_handoff("Start", true, false, true, false, false, false),
+            state.complete_handoff(Trigger::Start, true, false, true, false, false, false),
             HandoffContinuation::MarkDirty
         );
         assert!(state.source_dirty && !state.source_after_handoff);
         assert_eq!(
-            state.complete_handoff("Start", true, false, true, false, false, false),
+            state.complete_handoff(Trigger::Start, true, false, true, false, false, false),
             HandoffContinuation::None
         );
     }
@@ -479,7 +479,15 @@ mod tests {
         state.source_after_handoff = true;
         state.service_handoff_maintenance = Some("old handoff".into());
         assert_eq!(
-            state.complete_handoff("SourceCommitted", true, false, true, false, false, false),
+            state.complete_handoff(
+                Trigger::SourceCommitted,
+                true,
+                false,
+                true,
+                false,
+                false,
+                false
+            ),
             HandoffContinuation::ClearMaintenance
         );
         assert!(state.service_handoff_maintenance.is_none());

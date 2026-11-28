@@ -1,6 +1,6 @@
 //! Shared lifecycle commands. Only the system proxy handle is host-specific.
 use super::ports::{PreparedCoreBinary, ServiceTransitionLease};
-use crate::client::reconciler::workflow::AdmissionCommand;
+use crate::client::reconciler::{plan::Trigger, workflow::AdmissionCommand};
 use chimera_config::application::ChimeraAppConfigPatch;
 #[cfg(any(test, feature = "test-support"))]
 use chimera_config::application::ClashCore;
@@ -133,23 +133,23 @@ pub fn admission_command<P>(command: &Command<P>) -> AdmissionCommand {
     }
 }
 
-pub fn runtime_trigger<P>(command: &Command<P>) -> &'static str {
+pub fn runtime_trigger<P>(command: &Command<P>) -> Trigger {
     match command {
-        Command::StartCore => "Start",
-        Command::StopCore => "Stop",
-        Command::Shutdown => "Shutdown",
-        Command::Reconcile => "Retry",
-        Command::InterruptConnections { .. } => "InterruptConnections",
-        Command::ReconcileSource | Command::ApplyChecked { .. } => "SourceCommitted",
-        Command::MaintainServiceRelease => "ServiceRelease",
-        Command::StartupReconcile { .. } => "Startup",
-        Command::RetryStartup { .. } => "Retry",
-        Command::FollowService { .. } => "ServiceReadiness",
-        Command::ReplaceCoreBinary(_) => "BinaryReplaced",
+        Command::StartCore => Trigger::Start,
+        Command::StopCore => Trigger::Stop,
+        Command::Shutdown => Trigger::Shutdown,
+        Command::Reconcile => Trigger::Retry,
+        Command::InterruptConnections { .. } => Trigger::InterruptConnections,
+        Command::ReconcileSource | Command::ApplyChecked { .. } => Trigger::SourceCommitted,
+        Command::MaintainServiceRelease => Trigger::ServiceRelease,
+        Command::StartupReconcile { .. } => Trigger::Startup,
+        Command::RetryStartup { .. } => Trigger::Retry,
+        Command::FollowService { .. } => Trigger::ServiceReadiness,
+        Command::ReplaceCoreBinary(_) => Trigger::BinaryReplaced { restart: false },
         #[cfg(any(test, feature = "test-support"))]
-        Command::ProfileMutation(_) => "Mutation",
-        Command::RecoverCore => "CoreChanged",
-        Command::RetryDeferredProfiles { .. } => "Tick",
-        _ => "ServiceOperation",
+        Command::ProfileMutation(_) => Trigger::Mutation,
+        Command::RecoverCore => Trigger::CoreChanged,
+        Command::RetryDeferredProfiles { .. } => Trigger::Tick,
+        _ => Trigger::ServiceOperation,
     }
 }

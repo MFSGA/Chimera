@@ -17,7 +17,7 @@ use super::{
     attempt::CommittedTargetAdvanced,
     checked::CheckedRuntimeInbox,
     committed::{SourceDomain, SourceVersions},
-    plan::RunIntent,
+    plan::{RunIntent, Trigger},
     release::ServiceReleaseDebt,
     service_evidence::ServiceEvidence,
 };
@@ -187,11 +187,11 @@ impl RuntimeReconcilerState {
 /// that read, but before Completed is handled. A verified old Core receipt
 /// cannot settle the newer version or release an S2 continuation.
 pub fn source_committed_during_round(
-    trigger: &str,
+    trigger: Trigger,
     started: &SourceVersions,
     latest: &SourceVersions,
 ) -> bool {
-    trigger == "SourceCommitted" && started != latest
+    trigger == Trigger::SourceCommitted && started != latest
 }
 
 pub fn committed_target_advanced(result: &anyhow::Result<()>) -> bool {

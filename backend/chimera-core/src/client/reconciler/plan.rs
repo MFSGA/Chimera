@@ -90,6 +90,10 @@ pub enum Trigger {
     ServiceOperation,
     PrepareService,
     InterruptConnections,
+    // Chimera's existing compatibility rounds, not forced runtime applies.
+    Shutdown,
+    ServiceRelease,
+    Mutation,
 }
 impl Trigger {
     pub fn forced(self) -> bool {
@@ -112,6 +116,9 @@ impl Trigger {
             Self::ServiceOperation => "ServiceOperation",
             Self::PrepareService => "PrepareService",
             Self::InterruptConnections => "InterruptConnections",
+            Self::Shutdown => "Shutdown",
+            Self::ServiceRelease => "ServiceRelease",
+            Self::Mutation => "Mutation",
         }
     }
 }

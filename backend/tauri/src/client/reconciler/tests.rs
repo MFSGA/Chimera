@@ -10329,30 +10329,46 @@ fn a_new_source_notice_between_core_checks_and_completion_invalidates_old_s2_rou
     started.observe(SourceDomain::Application, 2);
     let mut latest = started.clone();
     assert!(!source_committed_during_round(
-        "SourceCommitted",
+        chimera_core::client::reconciler::plan::Trigger::SourceCommitted,
         &started,
         &latest
     ));
     latest.observe(SourceDomain::Application, 3);
     assert!(
-        source_committed_during_round("SourceCommitted", &started, &latest),
+        source_committed_during_round(
+            chimera_core::client::reconciler::plan::Trigger::SourceCommitted,
+            &started,
+            &latest
+        ),
         "cross-domain commit received during source round cannot settle its old target"
     );
     assert!(
-        !source_committed_during_round("ServiceReadiness", &started, &latest),
+        !source_committed_during_round(
+            chimera_core::client::reconciler::plan::Trigger::ServiceReadiness,
+            &started,
+            &latest
+        ),
         "Service ownership events have their own independent settlement"
     );
     assert!(
-        !source_committed_during_round("Stop", &started, &latest),
+        !source_committed_during_round(
+            chimera_core::client::reconciler::plan::Trigger::Stop,
+            &started,
+            &latest
+        ),
         "explicit stop must settle independently of source updates"
     );
     assert!(
-        !source_committed_during_round("ServiceRelease", &started, &latest),
+        !source_committed_during_round(
+            chimera_core::client::reconciler::plan::Trigger::ServiceRelease,
+            &started,
+            &latest
+        ),
         "Service cleanup is maintenance independent of Source versions"
     );
     latest.observe(SourceDomain::Profiles, 5);
     assert!(source_committed_during_round(
-        "SourceCommitted",
+        chimera_core::client::reconciler::plan::Trigger::SourceCommitted,
         &started,
         &latest
     ));
@@ -10429,7 +10445,7 @@ fn superseded_source_does_not_publish_stale_effect_ports_or_assert_convergence()
     status.begin(1);
     status.finish(
         1,
-        "SourceCommitted",
+        chimera_core::client::reconciler::plan::Trigger::SourceCommitted,
         &observed,
         RunIntent::Running,
         &obsolete,
