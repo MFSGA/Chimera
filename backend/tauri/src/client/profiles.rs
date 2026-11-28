@@ -3433,10 +3433,9 @@ mod tests {
                 mutations.install_test_runtime_gate(Arc::new(UnavailableRuntimeGate));
             }
             let (mut client, events) = super::super::tests::recording_client(false).await;
-            Arc::get_mut(&mut client.inner)
-                .unwrap()
-                .shared
-                .test_set_typed_profiles(profiles.clone());
+            client.configure_test_inner(|inner| {
+                inner.shared.test_set_typed_profiles(profiles.clone())
+            });
 
             use chimera_contracts::auth::{AuthContext, Grant, Principal, Role};
             use chimera_rpc::{audit::RpcTransport, registry::RpcCaller};
@@ -3577,10 +3576,9 @@ mod tests {
                 mutations.install_test_runtime_gate(Arc::new(UnavailableRuntimeGate));
             }
             let (mut client, events) = super::super::tests::recording_client(false).await;
-            Arc::get_mut(&mut client.inner)
-                .unwrap()
-                .shared
-                .test_set_typed_profiles(profiles.clone());
+            client.configure_test_inner(|inner| {
+                inner.shared.test_set_typed_profiles(profiles.clone())
+            });
 
             let created = client
                 .create_profile(add_placeholder_request(), Some("proxies: []\n".into()))

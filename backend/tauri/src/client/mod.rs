@@ -151,7 +151,8 @@ struct ChimeraClientInner {
     system_proxy_mutation: tokio::sync::Mutex<()>,
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     accelerators: Arc<dyn hotkey::ports::AcceleratorValidator>,
-    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    #[cfg(test)]
+    test_configuration_mutations: Arc<DesktopConfigurationMutations>,
     #[cfg(test)]
     _test_profile_dir: Option<Arc<tempfile::TempDir>>,
 }
@@ -164,13 +165,28 @@ impl ChimeraClientInner {
     }
 }
 
-struct DesktopConfigurationMutations(std::sync::Weak<ChimeraClientInner>);
+struct DesktopConfigurationMutations(
+    #[cfg(not(test))] std::sync::Weak<ChimeraClientInner>,
+    #[cfg(test)] parking_lot::Mutex<std::sync::Weak<ChimeraClientInner>>,
+);
 
 impl DesktopConfigurationMutations {
+    fn new(host: std::sync::Weak<ChimeraClientInner>) -> Self {
+        Self(
+            #[cfg(not(test))]
+            host,
+            #[cfg(test)]
+            parking_lot::Mutex::new(host),
+        )
+    }
+
     fn client(&self) -> anyhow::Result<ChimeraClient> {
+        #[cfg(not(test))]
+        let host = &self.0;
+        #[cfg(test)]
+        let host = self.0.lock();
         Ok(ChimeraClient {
-            inner: self
-                .0
+            inner: host
                 .upgrade()
                 .ok_or_else(|| anyhow::anyhow!("configuration host is shutting down"))?,
         })
@@ -514,6 +530,14 @@ impl ChimeraClient {
     }
 
     #[cfg(test)]
+    fn configure_test_inner(&mut self, configure: impl FnOnce(&mut ChimeraClientInner)) {
+        let port = self.inner.test_configuration_mutations.clone();
+        drop(std::mem::take(&mut *port.0.lock()));
+        configure(Arc::get_mut(&mut self.inner).expect("one test Client owner before use"));
+        *port.0.lock() = Arc::downgrade(&self.inner);
+    }
+
+    #[cfg(test)]
     async fn with_parts(
         core: Arc<dyn CoreLifecyclePort>,
         system_dns: Arc<dyn SystemDnsCache>,
@@ -684,11 +708,11 @@ impl ChimeraClient {
         >,
     ) -> Self {
         let inner = Arc::new_cyclic(|weak| {
+            let configuration_mutations =
+                Arc::new(DesktopConfigurationMutations::new(weak.clone()));
             let shared = chimera_core::client::ChimeraClient::with_parts(
                 chimera_core::client::ClientParts {
-                    configuration_mutations: Some(Arc::new(DesktopConfigurationMutations(
-                        weak.clone(),
-                    ))),
+                    configuration_mutations: Some(configuration_mutations.clone()),
                     #[cfg(not(any(target_os = "android", target_os = "ios")))]
                     window: Some(window),
                     #[cfg(any(target_os = "android", target_os = "ios"))]
@@ -743,6 +767,8 @@ impl ChimeraClient {
                 system_proxy_mutation: tokio::sync::Mutex::new(()),
                 #[cfg(not(any(target_os = "android", target_os = "ios")))]
                 accelerators,
+                #[cfg(test)]
+                test_configuration_mutations: configuration_mutations,
                 #[cfg(test)]
                 _test_profile_dir,
             }
@@ -1435,10 +1461,7 @@ mod tests {
         let logs = chimera_core::client::logs::FileLogsClient::start(dir.path().to_path_buf())
             .await
             .unwrap();
-        Arc::get_mut(&mut client.inner)
-            .unwrap()
-            .shared
-            .test_set_file_logs(logs.clone());
+        client.configure_test_inner(|inner| inner.shared.test_set_file_logs(logs.clone()));
         let rpc = client.rpc().unwrap();
         let owner = RpcCaller::desktop("owner");
         let other = RpcCaller::desktop("other");
@@ -2269,10 +2292,7 @@ mod tests {
         let core_api = CoreClientV2::spawn(Arc::new(StoppedRoutedHost))
             .await
             .unwrap();
-        Arc::get_mut(&mut client.inner)
-            .expect("the fixture has one Client owner")
-            .shared
-            .test_set_core_api(Some(core_api.clone()));
+        client.configure_test_inner(|inner| inner.shared.test_set_core_api(Some(core_api.clone())));
 
         let routed = client
             .routed_core_status()
@@ -2353,10 +2373,8 @@ mod tests {
             actor.probe().await.expect("probe ServiceActor").phase,
             chimera_core::actor_v2::service_router::ServicePhase::NotInstalled
         );
-        Arc::get_mut(&mut client.inner)
-            .expect("test fixture has one owner")
-            .shared
-            .test_set_service_actor(Some(actor.clone()));
+        client
+            .configure_test_inner(|inner| inner.shared.test_set_service_actor(Some(actor.clone())));
 
         assert_eq!(client.service_status().phase, ServicePhase::NotInstalled);
         assert_eq!(
@@ -2403,13 +2421,11 @@ mod tests {
             service.probe().await.expect("probe ServiceActor").phase,
             ServicePhase::NotInstalled
         );
-        let inner = Arc::get_mut(&mut client.inner).expect("one test Client owner");
-        inner
-            .shared
-            .test_set_ref_facade(Some(chimera_core::actor_v2::facade::CoreFacade::new(
-                core.clone(),
-                service.clone(),
-            )));
+        client.configure_test_inner(|inner| {
+            inner.shared.test_set_ref_facade(Some(
+                chimera_core::actor_v2::facade::CoreFacade::new(core.clone(), service.clone()),
+            ));
+        });
 
         assert_eq!(
             client
@@ -2491,10 +2507,7 @@ mod tests {
         let (mut client, _) = tauri::async_runtime::block_on(recording_client(false));
         let core = tauri::async_runtime::block_on(CoreClientV2::spawn(Arc::new(StoppedRoutedHost)))
             .unwrap();
-        Arc::get_mut(&mut client.inner)
-            .expect("the fixture has one Client owner")
-            .shared
-            .test_set_core_api(Some(core.clone()));
+        client.configure_test_inner(|inner| inner.shared.test_set_core_api(Some(core.clone())));
 
         // A bare TaskTracker::spawn here would panic without a reactor. The
         // composition root must enter Tauri's runtime for registration.
@@ -2520,10 +2533,7 @@ mod tests {
         let core = CoreClientV2::spawn(Arc::new(StoppedRoutedHost))
             .await
             .unwrap();
-        Arc::get_mut(&mut client.inner)
-            .expect("the fixture has one Client owner")
-            .shared
-            .test_set_core_api(Some(core.clone()));
+        client.configure_test_inner(|inner| inner.shared.test_set_core_api(Some(core.clone())));
 
         assert!(client.start_core_status_observer());
         // The ref router publishes an observable terminal transition. The
@@ -2588,22 +2598,23 @@ mod tests {
         )
         .await
         .unwrap();
-        let inner = Arc::get_mut(&mut client.inner).expect("unique test client");
-        inner.shared.test_set_application(application.clone());
-        let reconciler = RuntimeReconcilerClient::direct(
-            inner.shared.core().clone(),
-            application,
-            inner.clash_config.clone(),
-            RuntimePaths::from_config_root(
-                inner
-                    ._test_profile_dir
-                    .as_ref()
-                    .unwrap()
-                    .path()
-                    .to_path_buf(),
-            ),
-        );
-        inner.shared.test_set_reconciler(reconciler.shared_handle());
+        client.configure_test_inner(|inner| {
+            inner.shared.test_set_application(application.clone());
+            let reconciler = RuntimeReconcilerClient::direct(
+                inner.shared.core().clone(),
+                application,
+                inner.clash_config.clone(),
+                RuntimePaths::from_config_root(
+                    inner
+                        ._test_profile_dir
+                        .as_ref()
+                        .unwrap()
+                        .path()
+                        .to_path_buf(),
+                ),
+            );
+            inner.shared.test_set_reconciler(reconciler.shared_handle());
+        });
         (client, events)
     }
 
