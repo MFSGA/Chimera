@@ -42,6 +42,9 @@ mod profile_operations;
 pub use profile_operations::auto_activation_failure_degradation;
 
 pub struct ClientParts {
+    pub configuration_mutations:
+        Option<Arc<dyn super::configuration_mutations::ConfigurationMutations>>,
+    pub window: Option<Arc<dyn super::hotkey::ports::WindowControl>>,
     pub effects: Option<super::effects::actor::EffectsClient>,
     pub reconciler: Option<Arc<dyn super::reconciler::facade::RuntimeReconciler>>,
     pub profile_fs: Arc<dyn crate::state::profiles::ports::ProfileFsPort>,
@@ -85,6 +88,9 @@ impl WeakChimeraClient {
 }
 
 struct ChimeraClientInner {
+    configuration_mutations:
+        Option<Arc<dyn super::configuration_mutations::ConfigurationMutations>>,
+    window: Option<Arc<dyn super::hotkey::ports::WindowControl>>,
     effects: Option<super::effects::actor::EffectsClient>,
     reconciler: Option<Arc<dyn super::reconciler::facade::RuntimeReconciler>>,
     profile_fs: Arc<dyn crate::state::profiles::ports::ProfileFsPort>,
@@ -138,6 +144,8 @@ impl ChimeraClient {
         ));
         Self {
             inner: Arc::new(ChimeraClientInner {
+                configuration_mutations: parts.configuration_mutations,
+                window: parts.window,
                 effects: parts.effects,
                 reconciler: parts.reconciler,
                 profile_fs: parts.profile_fs,
@@ -170,6 +178,20 @@ impl ChimeraClient {
                 geo_index: parking_lot::RwLock::new(None),
             }),
         }
+    }
+
+    pub(super) fn configuration_mutations(
+        &self,
+    ) -> Result<&dyn super::configuration_mutations::ConfigurationMutations> {
+        anyhow::ensure!(!self.shutdown().is_cancelled(), "client is shutting down");
+        self.inner
+            .configuration_mutations
+            .as_deref()
+            .context("configuration mutations are unavailable on this host")
+    }
+
+    pub(super) fn window_control(&self) -> Option<&dyn super::hotkey::ports::WindowControl> {
+        self.inner.window.as_deref()
     }
 
     /// Real actor handle supplied by the composition root. Only isolated
@@ -759,11 +781,9 @@ mod tests {
         }
     }
 
-    async fn assert_hotkey_dispatch_uses_composed_ports(client: &ChimeraClient) {
-        use crate::client::{
-            configuration_mutations::ConfigurationMutations,
-            hotkey::ports::{HotkeyAction, MockWindowControl},
-        };
+    mod recording_hotkeys {
+        use super::*;
+        use crate::client::configuration_mutations::ConfigurationMutations;
         use chimera_config::{
             application::ChimeraAppConfigPatch,
             clash::config::{
@@ -776,10 +796,10 @@ mod tests {
         };
 
         #[derive(Default)]
-        struct RecordingMutations {
-            app: parking_lot::Mutex<Vec<ChimeraAppConfigPatch>>,
-            clash: parking_lot::Mutex<Vec<ClashConfigPatch>>,
-            overrides: parking_lot::Mutex<Vec<ClashGuardOverridesPatch>>,
+        pub(super) struct RecordingMutations {
+            pub(super) app: parking_lot::Mutex<Vec<ChimeraAppConfigPatch>>,
+            pub(super) clash: parking_lot::Mutex<Vec<ClashConfigPatch>>,
+            pub(super) overrides: parking_lot::Mutex<Vec<ClashGuardOverridesPatch>>,
         }
         #[async_trait::async_trait]
         impl ConfigurationMutations for RecordingMutations {
@@ -813,21 +833,16 @@ mod tests {
                 Ok(MutationOutcome::from_parts((), vec![]))
             }
         }
-        let mutations = RecordingMutations::default();
-        let mut window = MockWindowControl::new();
-        window.expect_toggle_dashboard().once().returning(|| Ok(()));
-        assert!(
-            client
-                .dispatch_hotkey_action(HotkeyAction::OpenOrCloseDashboard, &mutations, None)
-                .await
-                .is_err()
-        );
+    }
+
+    async fn assert_hotkey_dispatch_uses_composed_ports(
+        client: &ChimeraClient,
+        mutations: &recording_hotkeys::RecordingMutations,
+    ) {
+        use crate::client::hotkey::ports::HotkeyAction;
+        use chimera_config::clash::config::overrides::Mode;
         client
-            .dispatch_hotkey_action(
-                HotkeyAction::OpenOrCloseDashboard,
-                &mutations,
-                Some(&window),
-            )
+            .dispatch_hotkey_action(HotkeyAction::OpenOrCloseDashboard)
             .await
             .unwrap();
 
@@ -845,10 +860,7 @@ mod tests {
             HotkeyAction::ClashModeDirect,
             HotkeyAction::ClashModeScript,
         ] {
-            client
-                .dispatch_hotkey_action(action, &mutations, None)
-                .await
-                .unwrap();
+            client.dispatch_hotkey_action(action).await.unwrap();
         }
         assert_eq!(
             mutations
@@ -886,7 +898,7 @@ mod tests {
         {
             assert!(
                 client
-                    .dispatch_hotkey_action(HotkeyAction::EnableTransparentProxy, &mutations, None)
+                    .dispatch_hotkey_action(HotkeyAction::EnableTransparentProxy)
                     .await
                     .is_err()
             );
@@ -944,7 +956,12 @@ mod tests {
         impl crate::client::event_sink::UiEventSink for TestEvents {
             fn state_changed(&self, _: crate::client::event_sink::StateChanged) {}
         }
+        let mutations = Arc::new(recording_hotkeys::RecordingMutations::default());
+        let mut window = crate::client::hotkey::ports::MockWindowControl::new();
+        window.expect_toggle_dashboard().once().returning(|| Ok(()));
         let client = ChimeraClient::with_parts(ClientParts {
+            configuration_mutations: Some(mutations.clone()),
+            window: Some(Arc::new(window)),
             effects: None,
             reconciler: None,
             ui_sink: Arc::new(TestEvents),
@@ -985,7 +1002,7 @@ mod tests {
             core.status().host
         );
         assert!(client.traffic_summary().await.is_err());
-        assert_hotkey_dispatch_uses_composed_ports(&client).await;
+        assert_hotkey_dispatch_uses_composed_ports(&client, &mutations).await;
         let weak = client.downgrade();
         let clone = weak.upgrade().unwrap();
         drop(client);

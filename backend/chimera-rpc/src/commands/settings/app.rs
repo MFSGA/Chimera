@@ -15,13 +15,12 @@ pub async fn get_app_settings(client: RpcState<'_, ChimeraClient>) -> Result<App
 }
 
 use chimera_config::application::ApplicationPreferencesPatch;
-use chimera_core::client::configuration_mutations::ConfigurationMutations;
 use chimera_rpc_protocol::types::RpcUnitMutationOutcome;
 
 #[chimera_rpc::rpc(privacy, optional_capabilities(os_integration, presentation, elevation), expose = [http, local])]
 pub async fn patch_app_config(
-    host: RpcState<'_, dyn ConfigurationMutations>,
+    client: RpcState<'_, ChimeraClient>,
     patch: ApplicationPreferencesPatch,
 ) -> Result<RpcUnitMutationOutcome> {
-    Ok(host.patch_application(patch.into()).await?.into())
+    Ok(client.patch_app_config(patch.into()).await?.into())
 }

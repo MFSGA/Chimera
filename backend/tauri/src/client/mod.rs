@@ -152,7 +152,6 @@ struct ChimeraClientInner {
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     accelerators: Arc<dyn hotkey::ports::AcceleratorValidator>,
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
-    window: Arc<dyn hotkey::ports::WindowControl>,
     #[cfg(test)]
     _test_profile_dir: Option<Arc<tempfile::TempDir>>,
 }
@@ -214,8 +213,6 @@ impl chimera_core::client::configuration_mutations::ConfigurationMutations
                 ..Default::default()
             })
             .await?;
-        client.refresh_stream_log_level().await;
-        client.request_proxy_refresh();
         Ok(outcome.into_shared_configuration_outcome())
     }
 }
@@ -258,9 +255,6 @@ impl ChimeraClient {
                 host_environment: chimera_rpc::ports::HostEnvironment {
                     is_appimage: *crate::consts::IS_APPIMAGE,
                 },
-                configuration_mutations: Some(Arc::new(DesktopConfigurationMutations(
-                    Arc::downgrade(&self.inner),
-                ))),
                 storage: self.inner.storage.clone(),
                 client: self.inner.shared.clone(),
                 audit: RpcAudit::new(Arc::new(TracingRpcAuditSink)),
@@ -689,65 +683,71 @@ impl ChimeraClient {
             dyn hotkey::ports::WindowControl,
         >,
     ) -> Self {
-        let shared =
-            chimera_core::client::ChimeraClient::with_parts(chimera_core::client::ClientParts {
+        let inner = Arc::new_cyclic(|weak| {
+            let shared = chimera_core::client::ChimeraClient::with_parts(
+                chimera_core::client::ClientParts {
+                    configuration_mutations: Some(Arc::new(DesktopConfigurationMutations(
+                        weak.clone(),
+                    ))),
+                    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+                    window: Some(window),
+                    #[cfg(any(target_os = "android", target_os = "ios"))]
+                    window: None,
+                    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+                    effects: Some(effects.clone()),
+                    #[cfg(any(target_os = "android", target_os = "ios"))]
+                    effects: None,
+                    reconciler: Some(core_lifecycle.shared_handle()),
+                    ui_sink: Arc::new(event_sink::SharedUiEventSink(ui_sink.clone())),
+                    profile_fs,
+                    profile_paths,
+                    application: typed.application,
+                    session_state: typed.session_state,
+                    clash_config: (*typed.clash_config).clone(),
+                    direct_egress: Arc::new(
+                        chimera_net::direct_egress::NetworkDirectEgressProbe::default(),
+                    ),
+                    app_updater,
+                    changelog_http,
+                    network_diagnostics,
+                    icons,
+                    bundle_metadata,
+                    core_api,
+                    service_actor,
+                    core,
+                    shutdown,
+                    tasks,
+                    file_logs,
+                    streams,
+                    streams_shutdown,
+                    proxies,
+                    typed_profiles,
+                    system_dns,
+                },
+            );
+            ChimeraClientInner {
+                resolved_paths,
+                storage,
+                rpc: std::sync::OnceLock::new(),
+                shared,
+                clash_config: typed.clash_config,
+                checked_gate,
+                ui_sink,
                 #[cfg(not(any(target_os = "android", target_os = "ios")))]
-                effects: Some(effects.clone()),
-                #[cfg(any(target_os = "android", target_os = "ios"))]
-                effects: None,
-                reconciler: Some(core_lifecycle.shared_handle()),
-                ui_sink: Arc::new(event_sink::SharedUiEventSink(ui_sink.clone())),
-                profile_fs,
-                profile_paths,
-                application: typed.application,
-                session_state: typed.session_state,
-                clash_config: (*typed.clash_config).clone(),
-                direct_egress: Arc::new(
-                    chimera_net::direct_egress::NetworkDirectEgressProbe::default(),
-                ),
-                app_updater,
-                changelog_http,
-                network_diagnostics,
-                icons,
-                bundle_metadata,
-                core_api,
-                service_actor,
-                core,
-                shutdown,
-                tasks,
-                file_logs,
-                streams,
-                streams_shutdown,
-                proxies,
-                typed_profiles,
-                system_dns,
-            });
-        let inner = ChimeraClientInner {
-            resolved_paths,
-            storage,
-            rpc: std::sync::OnceLock::new(),
-            shared,
-            clash_config: typed.clash_config,
-            checked_gate,
-            ui_sink,
-            #[cfg(not(any(target_os = "android", target_os = "ios")))]
-            effects,
-            #[cfg(not(any(target_os = "android", target_os = "ios")))]
-            system_proxy,
-            #[cfg(not(any(target_os = "android", target_os = "ios")))]
-            hotkey_mutation: tokio::sync::Mutex::new(()),
-            #[cfg(not(any(target_os = "android", target_os = "ios")))]
-            system_proxy_mutation: tokio::sync::Mutex::new(()),
-            #[cfg(not(any(target_os = "android", target_os = "ios")))]
-            accelerators,
-            #[cfg(not(any(target_os = "android", target_os = "ios")))]
-            window,
-            #[cfg(test)]
-            _test_profile_dir,
-        };
-        Self {
-            inner: Arc::new(inner),
-        }
+                effects,
+                #[cfg(not(any(target_os = "android", target_os = "ios")))]
+                system_proxy,
+                #[cfg(not(any(target_os = "android", target_os = "ios")))]
+                hotkey_mutation: tokio::sync::Mutex::new(()),
+                #[cfg(not(any(target_os = "android", target_os = "ios")))]
+                system_proxy_mutation: tokio::sync::Mutex::new(()),
+                #[cfg(not(any(target_os = "android", target_os = "ios")))]
+                accelerators,
+                #[cfg(test)]
+                _test_profile_dir,
+            }
+        });
+        Self { inner }
     }
 }
 

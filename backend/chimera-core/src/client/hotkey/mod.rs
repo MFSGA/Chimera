@@ -10,7 +10,6 @@ use self::{
 };
 use super::{
     ChimeraClient,
-    configuration_mutations::ConfigurationMutations,
     effects::{
         plan::EffectKind,
         status::{EffectHealth, EffectRevision, EffectStatus},
@@ -21,7 +20,7 @@ use chimera_config::{
     clash::config::{
         ClashConfig, ClashConfigPatch, TransparentProxyConfigPatch, TransparentProxyMode,
         clash_strategy::port::{PortStrategy, PortStrategyKind},
-        overrides::{ClashGuardOverridesPatch, Mode},
+        overrides::Mode,
     },
 };
 use chimera_contracts::runtime::MutationOutcome;
@@ -129,73 +128,51 @@ fn timeout_health() -> EffectHealth {
 impl ChimeraClient {
     /// Runs a shortcut or tray action through the same committed configuration
     /// transactions as settings edits. The shell supplies only its native ports.
-    pub async fn dispatch_hotkey_action(
-        &self,
-        action: HotkeyAction,
-        mutations: &dyn ConfigurationMutations,
-        window: Option<&dyn ports::WindowControl>,
-    ) -> anyhow::Result<()> {
+    pub async fn dispatch_hotkey_action(&self, action: HotkeyAction) -> anyhow::Result<()> {
         anyhow::ensure!(!self.shutdown().is_cancelled(), "client is shutting down");
         match action {
             HotkeyAction::OpenOrCloseDashboard => {
-                window
+                self.window_control()
                     .ok_or_else(|| anyhow::anyhow!("dashboard toggle is unavailable"))?
                     .toggle_dashboard()
                     .await?;
                 Ok(())
             }
-            HotkeyAction::ClashModeRule => self.set_clash_mode(mutations, Mode::Rule).await,
-            HotkeyAction::ClashModeGlobal => self.set_clash_mode(mutations, Mode::Global).await,
-            HotkeyAction::ClashModeDirect => self.set_clash_mode(mutations, Mode::Direct).await,
-            HotkeyAction::ClashModeScript => self.set_clash_mode(mutations, Mode::Script).await,
+            HotkeyAction::ClashModeRule => self.set_clash_mode(Mode::Rule).await,
+            HotkeyAction::ClashModeGlobal => self.set_clash_mode(Mode::Global).await,
+            HotkeyAction::ClashModeDirect => self.set_clash_mode(Mode::Direct).await,
+            HotkeyAction::ClashModeScript => self.set_clash_mode(Mode::Script).await,
             HotkeyAction::ToggleSystemProxy => {
                 let enabled = self.get_app_config()?.enable_system_proxy;
-                self.set_system_proxy(mutations, !enabled).await
+                self.set_system_proxy(!enabled).await
             }
-            HotkeyAction::EnableSystemProxy => self.set_system_proxy(mutations, true).await,
-            HotkeyAction::DisableSystemProxy => self.set_system_proxy(mutations, false).await,
+            HotkeyAction::EnableSystemProxy => self.set_system_proxy(true).await,
+            HotkeyAction::DisableSystemProxy => self.set_system_proxy(false).await,
             HotkeyAction::ToggleTunMode => {
                 let enabled = self.get_clash_config()?.enable_tun_mode;
-                self.set_tun_mode(mutations, !enabled).await
+                self.set_tun_mode(!enabled).await
             }
-            HotkeyAction::EnableTunMode => self.set_tun_mode(mutations, true).await,
-            HotkeyAction::DisableTunMode => self.set_tun_mode(mutations, false).await,
+            HotkeyAction::EnableTunMode => self.set_tun_mode(true).await,
+            HotkeyAction::DisableTunMode => self.set_tun_mode(false).await,
             HotkeyAction::ToggleTransparentProxy => {
                 let enabled = self.get_clash_config()?.transparent_proxy.mode
                     != TransparentProxyMode::Disabled;
-                self.set_transparent_proxy(mutations, !enabled).await
+                self.set_transparent_proxy(!enabled).await
             }
-            HotkeyAction::EnableTransparentProxy => {
-                self.set_transparent_proxy(mutations, true).await
-            }
-            HotkeyAction::DisableTransparentProxy => {
-                self.set_transparent_proxy(mutations, false).await
-            }
+            HotkeyAction::EnableTransparentProxy => self.set_transparent_proxy(true).await,
+            HotkeyAction::DisableTransparentProxy => self.set_transparent_proxy(false).await,
         }
     }
 
-    async fn set_clash_mode(
-        &self,
-        mutations: &dyn ConfigurationMutations,
-        mode: Mode,
-    ) -> anyhow::Result<()> {
-        let outcome = mutations
-            .patch_overrides(ClashGuardOverridesPatch {
-                mode: Some(mode),
-                ..Default::default()
-            })
-            .await?;
+    async fn set_clash_mode(&self, mode: Mode) -> anyhow::Result<()> {
+        let outcome = self.set_proxy_mode(mode).await?;
         log_degradations(&outcome);
         Ok(())
     }
 
-    async fn set_system_proxy(
-        &self,
-        mutations: &dyn ConfigurationMutations,
-        enabled: bool,
-    ) -> anyhow::Result<()> {
-        let outcome = mutations
-            .patch_application(ChimeraAppConfigPatch {
+    async fn set_system_proxy(&self, enabled: bool) -> anyhow::Result<()> {
+        let outcome = self
+            .patch_app_config(ChimeraAppConfigPatch {
                 enable_system_proxy: Some(enabled),
                 ..Default::default()
             })
@@ -204,11 +181,7 @@ impl ChimeraClient {
         Ok(())
     }
 
-    async fn set_transparent_proxy(
-        &self,
-        mutations: &dyn ConfigurationMutations,
-        enabled: bool,
-    ) -> anyhow::Result<()> {
+    async fn set_transparent_proxy(&self, enabled: bool) -> anyhow::Result<()> {
         anyhow::ensure!(
             cfg!(target_os = "linux"),
             "transparent capture is supported only on Linux"
@@ -228,18 +201,14 @@ impl ChimeraClient {
                 "transparent capture status is unhealthy"
             );
         }
-        let outcome = mutations.patch_clash(patch).await?;
+        let outcome = self.patch_clash_config(patch).await?;
         log_degradations(&outcome);
         Ok(())
     }
 
-    async fn set_tun_mode(
-        &self,
-        mutations: &dyn ConfigurationMutations,
-        enabled: bool,
-    ) -> anyhow::Result<()> {
-        let outcome = mutations
-            .patch_clash(ClashConfigPatch {
+    async fn set_tun_mode(&self, enabled: bool) -> anyhow::Result<()> {
+        let outcome = self
+            .patch_clash_config(ClashConfigPatch {
                 enable_tun_mode: Some(enabled),
                 ..Default::default()
             })

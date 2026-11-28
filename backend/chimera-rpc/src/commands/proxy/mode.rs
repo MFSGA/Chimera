@@ -1,7 +1,7 @@
 //! The proxy mode.
 
 use chimera_config::clash::config::overrides::Mode;
-use chimera_core::client::configuration_mutations::ConfigurationMutations;
+use chimera_core::client::ChimeraClient;
 use chimera_rpc_protocol::types::RpcUnitMutationOutcome;
 
 use crate::registry::RpcState;
@@ -14,8 +14,8 @@ use anyhow::Result;
     expose = [http, local]
 )]
 pub async fn set_proxy_mode(
-    host: RpcState<'_, dyn ConfigurationMutations>,
+    client: RpcState<'_, ChimeraClient>,
     mode: Mode,
 ) -> Result<RpcUnitMutationOutcome> {
-    Ok(host.patch_overrides(mode.into()).await?.into())
+    Ok(client.set_proxy_mode(mode).await?.into())
 }

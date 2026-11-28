@@ -111,11 +111,6 @@ impl ChimeraClient {
 
     /// Compose the reference dispatcher with the desktop transaction and window ports.
     pub(crate) async fn dispatch_hotkey_action(&self, action: HotkeyAction) -> Result<()> {
-        let mutations =
-            super::DesktopConfigurationMutations(std::sync::Arc::downgrade(&self.inner));
-        self.inner
-            .shared
-            .dispatch_hotkey_action(action, &mutations, Some(self.inner.window.as_ref()))
-            .await
+        self.inner.shared.dispatch_hotkey_action(action).await
     }
 }

@@ -764,7 +764,6 @@ fn is_state_of(ty: &Type, expected: &str) -> bool {
 
 fn host_port_slot(name: Option<&str>) -> Option<&'static str> {
     match name? {
-        "ConfigurationMutations" => Some("configuration_mutations"),
         "HostIconFiles" => Some("icon_files"),
         "CoreDirectoryResolver" => Some("core_directory"),
         "ServiceInstallPrompt" => Some("service_prompt"),

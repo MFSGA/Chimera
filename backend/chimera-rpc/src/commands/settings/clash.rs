@@ -39,15 +39,14 @@ pub async fn get_clash_settings(
 }
 
 use chimera_config::clash::config::ClashSettingsPatch;
-use chimera_core::client::configuration_mutations::ConfigurationMutations;
 use chimera_rpc_protocol::types::RpcUnitMutationOutcome;
 
 #[chimera_rpc::rpc(privacy, optional_capabilities(elevation, os_integration, presentation), expose = [http])]
 pub async fn patch_clash_config(
-    host: RpcState<'_, dyn ConfigurationMutations>,
+    client: RpcState<'_, ChimeraClient>,
     patch: ClashSettingsPatch,
 ) -> Result<RpcUnitMutationOutcome> {
-    Ok(host.patch_clash(patch.into()).await?.into())
+    Ok(client.patch_clash_config(patch.into()).await?.into())
 }
 
 use chimera_config::clash::config::overrides::ClashOverridesSettingsPatch;
@@ -55,8 +54,8 @@ use chimera_config::clash::config::overrides::ClashOverridesSettingsPatch;
 /// Patch the ordinary overrides, keeping managed/unmanaged fields intact.
 #[chimera_rpc::rpc(privacy, optional_capabilities(elevation, os_integration, presentation), expose = [http])]
 pub async fn patch_runtime_overrides(
-    host: RpcState<'_, dyn ConfigurationMutations>,
+    client: RpcState<'_, ChimeraClient>,
     patch: ClashOverridesSettingsPatch,
 ) -> Result<RpcUnitMutationOutcome> {
-    Ok(host.patch_overrides(patch.into()).await?.into())
+    Ok(client.patch_runtime_overrides(patch.into()).await?.into())
 }

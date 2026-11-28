@@ -21,8 +21,6 @@ pub struct RpcDependencies {
     pub service_prompt: Option<Arc<dyn crate::ports::ServiceInstallPrompt>>,
     pub host_environment: crate::ports::HostEnvironment,
     pub paths: chimera_paths::PathResolver,
-    pub configuration_mutations:
-        Option<Arc<dyn chimera_core::client::configuration_mutations::ConfigurationMutations>>,
     pub storage: chimera_core::storage::Storage,
     pub client: ChimeraClient,
     pub audit: RpcAudit,

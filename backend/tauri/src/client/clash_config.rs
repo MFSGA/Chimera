@@ -410,25 +410,6 @@ impl ChimeraClient {
         self.refresh_stream_log_level().await;
         outcome
     }
-
-    pub(super) async fn refresh_stream_log_level(&self) {
-        match self.get_clash_config() {
-            Ok(config) => {
-                if let Err(error) = self
-                    .inner
-                    .shared
-                    .streams()
-                    .set_log_level(config.overrides.log_level())
-                    .await
-                {
-                    tracing::warn!(%error, "failed to update the Clash logs WebSocket level");
-                }
-            }
-            Err(error) => {
-                tracing::warn!(%error, "failed to read Clash log level after config update");
-            }
-        }
-    }
 }
 
 fn validate_mixed_port_change(plan: &ClashPatchPlan, current: &ClashConfig) -> Result<()> {
