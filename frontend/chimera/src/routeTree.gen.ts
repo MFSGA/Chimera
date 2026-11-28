@@ -22,6 +22,7 @@ import { Route as legacyProxiesRouteImport } from './pages/(legacy)/proxies'
 import { Route as legacyRulesRouteImport } from './pages/(legacy)/rules'
 import { Route as legacySettingsRouteImport } from './pages/(legacy)/settings'
 import { Route as legacySubscriptionOnboardingRouteImport } from './pages/(legacy)/subscription-onboarding'
+import { Route as trayMenuTrayMenuRouteRouteImport } from './pages/(tray-menu)/tray-menu/route'
 import { Route as mainMainIndexRouteImport } from './pages/(main)/main/index'
 import { Route as mainMainAssistantRouteRouteImport } from './pages/(main)/main/assistant/route'
 import { Route as mainMainConnectionsRouteRouteImport } from './pages/(main)/main/connections/route'
@@ -33,6 +34,8 @@ import { Route as mainMainProxiesRouteRouteImport } from './pages/(main)/main/pr
 import { Route as mainMainRulesRouteRouteImport } from './pages/(main)/main/rules/route'
 import { Route as mainMainSettingsRouteRouteImport } from './pages/(main)/main/settings/route'
 import { Route as mainMainTopologyRouteRouteImport } from './pages/(main)/main/topology/route'
+import { Route as trayMenuTrayMenuIndexRouteImport } from './pages/(tray-menu)/tray-menu/index'
+import { Route as trayMenuTrayMenuProxiesRouteRouteImport } from './pages/(tray-menu)/tray-menu/proxies/route'
 import { Route as editorEditorCssIndexRouteImport } from './pages/(editor)/editor/css/index'
 import { Route as editorEditorProfileIndexRouteImport } from './pages/(editor)/editor/profile/index'
 import { Route as mainMainConnectionsIndexRouteImport } from './pages/(main)/main/connections/index'
@@ -54,6 +57,8 @@ import { Route as mainMainSettingsSystemRouteRouteImport } from './pages/(main)/
 import { Route as mainMainSettingsUserInterfaceRouteRouteImport } from './pages/(main)/main/settings/user-interface/route'
 import { Route as mainMainSettingsWebUiRouteRouteImport } from './pages/(main)/main/settings/web-ui/route'
 import { Route as mainMainTopologyIndexRouteImport } from './pages/(main)/main/topology/index'
+import { Route as trayMenuTrayMenuProxiesIndexRouteImport } from './pages/(tray-menu)/tray-menu/proxies/index'
+import { Route as trayMenuTrayMenuProxiesGroupRouteRouteImport } from './pages/(tray-menu)/tray-menu/proxies/group/route'
 import { Route as mainMainProfilesTypeIndexRouteImport } from './pages/(main)/main/profiles/$type/index'
 import { Route as mainMainProfilesFolderIndexRouteImport } from './pages/(main)/main/profiles/folder/index'
 import { Route as mainMainProvidersProxiesKeyRouteImport } from './pages/(main)/main/providers/proxies/$key'
@@ -67,6 +72,7 @@ import { Route as mainMainTopologyMapIndexRouteImport } from './pages/(main)/mai
 import { Route as mainMainTopologyProcessIndexRouteImport } from './pages/(main)/main/topology/process/index'
 import { Route as mainMainTopologySourceIndexRouteImport } from './pages/(main)/main/topology/source/index'
 import { Route as mainMainTopologyTargetIndexRouteImport } from './pages/(main)/main/topology/target/index'
+import { Route as trayMenuTrayMenuProxiesGroupNameRouteImport } from './pages/(tray-menu)/tray-menu/proxies/group/$name'
 import { Route as mainMainProfilesTypeDetailUidRouteImport } from './pages/(main)/main/profiles/$type/detail/$uid'
 import { Route as mainMainProfilesFolderFolderIdIndexRouteImport } from './pages/(main)/main/profiles/folder/$folderId/index'
 import { Route as mainMainSettingsChimeraInterfaceIndexRouteImport } from './pages/(main)/main/settings/chimera/interface/index'
@@ -148,6 +154,11 @@ const legacySubscriptionOnboardingRoute =
     path: '/subscription-onboarding',
     getParentRoute: () => legacyRouteRoute,
   } as any)
+const trayMenuTrayMenuRouteRoute = trayMenuTrayMenuRouteRouteImport.update({
+  id: '/(tray-menu)/tray-menu',
+  path: '/tray-menu',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const mainMainIndexRoute = mainMainIndexRouteImport.update({
   id: '/main/',
   path: '/main/',
@@ -204,6 +215,17 @@ const mainMainTopologyRouteRoute = mainMainTopologyRouteRouteImport.update({
   path: '/main/topology',
   getParentRoute: () => mainRouteRoute,
 } as any)
+const trayMenuTrayMenuIndexRoute = trayMenuTrayMenuIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => trayMenuTrayMenuRouteRoute,
+} as any)
+const trayMenuTrayMenuProxiesRouteRoute =
+  trayMenuTrayMenuProxiesRouteRouteImport.update({
+    id: '/proxies',
+    path: '/proxies',
+    getParentRoute: () => trayMenuTrayMenuRouteRoute,
+  } as any)
 const editorEditorCssIndexRoute = editorEditorCssIndexRouteImport.update({
   id: '/css/',
   path: '/css/',
@@ -320,6 +342,18 @@ const mainMainTopologyIndexRoute = mainMainTopologyIndexRouteImport.update({
   path: '/',
   getParentRoute: () => mainMainTopologyRouteRoute,
 } as any)
+const trayMenuTrayMenuProxiesIndexRoute =
+  trayMenuTrayMenuProxiesIndexRouteImport.update({
+    id: '/',
+    path: '/',
+    getParentRoute: () => trayMenuTrayMenuProxiesRouteRoute,
+  } as any)
+const trayMenuTrayMenuProxiesGroupRouteRoute =
+  trayMenuTrayMenuProxiesGroupRouteRouteImport.update({
+    id: '/group',
+    path: '/group',
+    getParentRoute: () => trayMenuTrayMenuProxiesRouteRoute,
+  } as any)
 const mainMainProfilesTypeIndexRoute =
   mainMainProfilesTypeIndexRouteImport.update({
     id: '/$type/',
@@ -397,6 +431,12 @@ const mainMainTopologyTargetIndexRoute =
     id: '/target/',
     path: '/target/',
     getParentRoute: () => mainMainTopologyRouteRoute,
+  } as any)
+const trayMenuTrayMenuProxiesGroupNameRoute =
+  trayMenuTrayMenuProxiesGroupNameRouteImport.update({
+    id: '/$name',
+    path: '/$name',
+    getParentRoute: () => trayMenuTrayMenuProxiesGroupRouteRoute,
   } as any)
 const mainMainProfilesTypeDetailUidRoute =
   mainMainProfilesTypeDetailUidRouteImport.update({
@@ -498,6 +538,7 @@ const mainMainSettingsSystemServiceIndexRoute =
 export interface FileRoutesByFullPath {
   '/': typeof legacyIndexRoute
   '/editor': typeof editorEditorRouteRouteWithChildren
+  '/tray-menu': typeof trayMenuTrayMenuRouteRouteWithChildren
   '/connections': typeof legacyConnectionsRoute
   '/dashboard': typeof legacyDashboardRoute
   '/logs': typeof legacyLogsRoute
@@ -517,7 +558,9 @@ export interface FileRoutesByFullPath {
   '/main/rules': typeof mainMainRulesRouteRouteWithChildren
   '/main/settings': typeof mainMainSettingsRouteRouteWithChildren
   '/main/topology': typeof mainMainTopologyRouteRouteWithChildren
+  '/tray-menu/proxies': typeof trayMenuTrayMenuProxiesRouteRouteWithChildren
   '/main/': typeof mainMainIndexRoute
+  '/tray-menu/': typeof trayMenuTrayMenuIndexRoute
   '/main/profiles/global': typeof mainMainProfilesGlobalRouteRoute
   '/main/profiles/inspect': typeof mainMainProfilesInspectRouteRoute
   '/main/settings/about': typeof mainMainSettingsAboutRouteRoute
@@ -527,6 +570,7 @@ export interface FileRoutesByFullPath {
   '/main/settings/system': typeof mainMainSettingsSystemRouteRouteWithChildren
   '/main/settings/user-interface': typeof mainMainSettingsUserInterfaceRouteRoute
   '/main/settings/web-ui': typeof mainMainSettingsWebUiRouteRoute
+  '/tray-menu/proxies/group': typeof trayMenuTrayMenuProxiesGroupRouteRouteWithChildren
   '/main/proxies/$name': typeof mainMainProxiesNameRoute
   '/editor/css/': typeof editorEditorCssIndexRoute
   '/editor/profile/': typeof editorEditorProfileIndexRoute
@@ -539,9 +583,11 @@ export interface FileRoutesByFullPath {
   '/main/rules/': typeof mainMainRulesIndexRoute
   '/main/settings/': typeof mainMainSettingsIndexRoute
   '/main/topology/': typeof mainMainTopologyIndexRoute
+  '/tray-menu/proxies/': typeof trayMenuTrayMenuProxiesIndexRoute
   '/main/providers/proxies/$key': typeof mainMainProvidersProxiesKeyRoute
   '/main/providers/rules/$key': typeof mainMainProvidersRulesKeyRoute
   '/main/proxies/group/$name': typeof mainMainProxiesGroupNameRoute
+  '/tray-menu/proxies/group/$name': typeof trayMenuTrayMenuProxiesGroupNameRoute
   '/main/profiles/$type/': typeof mainMainProfilesTypeIndexRoute
   '/main/profiles/folder/': typeof mainMainProfilesFolderIndexRoute
   '/main/settings/debug/': typeof mainMainSettingsDebugIndexRoute
@@ -583,6 +629,7 @@ export interface FileRoutesByTo {
   '/subscription-onboarding': typeof legacySubscriptionOnboardingRoute
   '/main/assistant': typeof mainMainAssistantRouteRoute
   '/main': typeof mainMainIndexRoute
+  '/tray-menu': typeof trayMenuTrayMenuIndexRoute
   '/main/profiles/global': typeof mainMainProfilesGlobalRouteRoute
   '/main/profiles/inspect': typeof mainMainProfilesInspectRouteRoute
   '/main/settings/about': typeof mainMainSettingsAboutRouteRoute
@@ -591,6 +638,7 @@ export interface FileRoutesByTo {
   '/main/settings/system': typeof mainMainSettingsSystemRouteRouteWithChildren
   '/main/settings/user-interface': typeof mainMainSettingsUserInterfaceRouteRoute
   '/main/settings/web-ui': typeof mainMainSettingsWebUiRouteRoute
+  '/tray-menu/proxies/group': typeof trayMenuTrayMenuProxiesGroupRouteRouteWithChildren
   '/main/proxies/$name': typeof mainMainProxiesNameRoute
   '/editor/css': typeof editorEditorCssIndexRoute
   '/editor/profile': typeof editorEditorProfileIndexRoute
@@ -603,9 +651,11 @@ export interface FileRoutesByTo {
   '/main/rules': typeof mainMainRulesIndexRoute
   '/main/settings': typeof mainMainSettingsIndexRoute
   '/main/topology': typeof mainMainTopologyIndexRoute
+  '/tray-menu/proxies': typeof trayMenuTrayMenuProxiesIndexRoute
   '/main/providers/proxies/$key': typeof mainMainProvidersProxiesKeyRoute
   '/main/providers/rules/$key': typeof mainMainProvidersRulesKeyRoute
   '/main/proxies/group/$name': typeof mainMainProxiesGroupNameRoute
+  '/tray-menu/proxies/group/$name': typeof trayMenuTrayMenuProxiesGroupNameRoute
   '/main/profiles/$type': typeof mainMainProfilesTypeIndexRoute
   '/main/profiles/folder': typeof mainMainProfilesFolderIndexRoute
   '/main/settings/debug': typeof mainMainSettingsDebugIndexRoute
@@ -638,6 +688,7 @@ export interface FileRoutesById {
   '/(legacy)': typeof legacyRouteRouteWithChildren
   '/(main)': typeof mainRouteRouteWithChildren
   '/(editor)/editor': typeof editorEditorRouteRouteWithChildren
+  '/(tray-menu)/tray-menu': typeof trayMenuTrayMenuRouteRouteWithChildren
   '/(legacy)/connections': typeof legacyConnectionsRoute
   '/(legacy)/dashboard': typeof legacyDashboardRoute
   '/(legacy)/logs': typeof legacyLogsRoute
@@ -658,7 +709,9 @@ export interface FileRoutesById {
   '/(main)/main/rules': typeof mainMainRulesRouteRouteWithChildren
   '/(main)/main/settings': typeof mainMainSettingsRouteRouteWithChildren
   '/(main)/main/topology': typeof mainMainTopologyRouteRouteWithChildren
+  '/(tray-menu)/tray-menu/proxies': typeof trayMenuTrayMenuProxiesRouteRouteWithChildren
   '/(main)/main/': typeof mainMainIndexRoute
+  '/(tray-menu)/tray-menu/': typeof trayMenuTrayMenuIndexRoute
   '/(main)/main/profiles/global': typeof mainMainProfilesGlobalRouteRoute
   '/(main)/main/profiles/inspect': typeof mainMainProfilesInspectRouteRoute
   '/(main)/main/settings/about': typeof mainMainSettingsAboutRouteRoute
@@ -668,6 +721,7 @@ export interface FileRoutesById {
   '/(main)/main/settings/system': typeof mainMainSettingsSystemRouteRouteWithChildren
   '/(main)/main/settings/user-interface': typeof mainMainSettingsUserInterfaceRouteRoute
   '/(main)/main/settings/web-ui': typeof mainMainSettingsWebUiRouteRoute
+  '/(tray-menu)/tray-menu/proxies/group': typeof trayMenuTrayMenuProxiesGroupRouteRouteWithChildren
   '/(main)/main/proxies/$name': typeof mainMainProxiesNameRoute
   '/(editor)/editor/css/': typeof editorEditorCssIndexRoute
   '/(editor)/editor/profile/': typeof editorEditorProfileIndexRoute
@@ -680,9 +734,11 @@ export interface FileRoutesById {
   '/(main)/main/rules/': typeof mainMainRulesIndexRoute
   '/(main)/main/settings/': typeof mainMainSettingsIndexRoute
   '/(main)/main/topology/': typeof mainMainTopologyIndexRoute
+  '/(tray-menu)/tray-menu/proxies/': typeof trayMenuTrayMenuProxiesIndexRoute
   '/(main)/main/providers/proxies/$key': typeof mainMainProvidersProxiesKeyRoute
   '/(main)/main/providers/rules/$key': typeof mainMainProvidersRulesKeyRoute
   '/(main)/main/proxies/group/$name': typeof mainMainProxiesGroupNameRoute
+  '/(tray-menu)/tray-menu/proxies/group/$name': typeof trayMenuTrayMenuProxiesGroupNameRoute
   '/(main)/main/profiles/$type/': typeof mainMainProfilesTypeIndexRoute
   '/(main)/main/profiles/folder/': typeof mainMainProfilesFolderIndexRoute
   '/(main)/main/settings/debug/': typeof mainMainSettingsDebugIndexRoute
@@ -715,6 +771,7 @@ export interface FileRouteTypes {
   fullPaths:
     | '/'
     | '/editor'
+    | '/tray-menu'
     | '/connections'
     | '/dashboard'
     | '/logs'
@@ -734,7 +791,9 @@ export interface FileRouteTypes {
     | '/main/rules'
     | '/main/settings'
     | '/main/topology'
+    | '/tray-menu/proxies'
     | '/main/'
+    | '/tray-menu/'
     | '/main/profiles/global'
     | '/main/profiles/inspect'
     | '/main/settings/about'
@@ -744,6 +803,7 @@ export interface FileRouteTypes {
     | '/main/settings/system'
     | '/main/settings/user-interface'
     | '/main/settings/web-ui'
+    | '/tray-menu/proxies/group'
     | '/main/proxies/$name'
     | '/editor/css/'
     | '/editor/profile/'
@@ -756,9 +816,11 @@ export interface FileRouteTypes {
     | '/main/rules/'
     | '/main/settings/'
     | '/main/topology/'
+    | '/tray-menu/proxies/'
     | '/main/providers/proxies/$key'
     | '/main/providers/rules/$key'
     | '/main/proxies/group/$name'
+    | '/tray-menu/proxies/group/$name'
     | '/main/profiles/$type/'
     | '/main/profiles/folder/'
     | '/main/settings/debug/'
@@ -800,6 +862,7 @@ export interface FileRouteTypes {
     | '/subscription-onboarding'
     | '/main/assistant'
     | '/main'
+    | '/tray-menu'
     | '/main/profiles/global'
     | '/main/profiles/inspect'
     | '/main/settings/about'
@@ -808,6 +871,7 @@ export interface FileRouteTypes {
     | '/main/settings/system'
     | '/main/settings/user-interface'
     | '/main/settings/web-ui'
+    | '/tray-menu/proxies/group'
     | '/main/proxies/$name'
     | '/editor/css'
     | '/editor/profile'
@@ -820,9 +884,11 @@ export interface FileRouteTypes {
     | '/main/rules'
     | '/main/settings'
     | '/main/topology'
+    | '/tray-menu/proxies'
     | '/main/providers/proxies/$key'
     | '/main/providers/rules/$key'
     | '/main/proxies/group/$name'
+    | '/tray-menu/proxies/group/$name'
     | '/main/profiles/$type'
     | '/main/profiles/folder'
     | '/main/settings/debug'
@@ -854,6 +920,7 @@ export interface FileRouteTypes {
     | '/(legacy)'
     | '/(main)'
     | '/(editor)/editor'
+    | '/(tray-menu)/tray-menu'
     | '/(legacy)/connections'
     | '/(legacy)/dashboard'
     | '/(legacy)/logs'
@@ -874,7 +941,9 @@ export interface FileRouteTypes {
     | '/(main)/main/rules'
     | '/(main)/main/settings'
     | '/(main)/main/topology'
+    | '/(tray-menu)/tray-menu/proxies'
     | '/(main)/main/'
+    | '/(tray-menu)/tray-menu/'
     | '/(main)/main/profiles/global'
     | '/(main)/main/profiles/inspect'
     | '/(main)/main/settings/about'
@@ -884,6 +953,7 @@ export interface FileRouteTypes {
     | '/(main)/main/settings/system'
     | '/(main)/main/settings/user-interface'
     | '/(main)/main/settings/web-ui'
+    | '/(tray-menu)/tray-menu/proxies/group'
     | '/(main)/main/proxies/$name'
     | '/(editor)/editor/css/'
     | '/(editor)/editor/profile/'
@@ -896,9 +966,11 @@ export interface FileRouteTypes {
     | '/(main)/main/rules/'
     | '/(main)/main/settings/'
     | '/(main)/main/topology/'
+    | '/(tray-menu)/tray-menu/proxies/'
     | '/(main)/main/providers/proxies/$key'
     | '/(main)/main/providers/rules/$key'
     | '/(main)/main/proxies/group/$name'
+    | '/(tray-menu)/tray-menu/proxies/group/$name'
     | '/(main)/main/profiles/$type/'
     | '/(main)/main/profiles/folder/'
     | '/(main)/main/settings/debug/'
@@ -931,6 +1003,7 @@ export interface RootRouteChildren {
   legacyRouteRoute: typeof legacyRouteRouteWithChildren
   mainRouteRoute: typeof mainRouteRouteWithChildren
   editorEditorRouteRoute: typeof editorEditorRouteRouteWithChildren
+  trayMenuTrayMenuRouteRoute: typeof trayMenuTrayMenuRouteRouteWithChildren
 }
 
 declare module '@tanstack/react-router' {
@@ -1026,6 +1099,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof legacySubscriptionOnboardingRouteImport
       parentRoute: typeof legacyRouteRoute
     }
+    '/(tray-menu)/tray-menu': {
+      id: '/(tray-menu)/tray-menu'
+      path: '/tray-menu'
+      fullPath: '/tray-menu'
+      preLoaderRoute: typeof trayMenuTrayMenuRouteRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/(main)/main/': {
       id: '/(main)/main/'
       path: '/main'
@@ -1102,6 +1182,20 @@ declare module '@tanstack/react-router' {
       fullPath: '/main/topology'
       preLoaderRoute: typeof mainMainTopologyRouteRouteImport
       parentRoute: typeof mainRouteRoute
+    }
+    '/(tray-menu)/tray-menu/': {
+      id: '/(tray-menu)/tray-menu/'
+      path: '/'
+      fullPath: '/tray-menu/'
+      preLoaderRoute: typeof trayMenuTrayMenuIndexRouteImport
+      parentRoute: typeof trayMenuTrayMenuRouteRoute
+    }
+    '/(tray-menu)/tray-menu/proxies': {
+      id: '/(tray-menu)/tray-menu/proxies'
+      path: '/proxies'
+      fullPath: '/tray-menu/proxies'
+      preLoaderRoute: typeof trayMenuTrayMenuProxiesRouteRouteImport
+      parentRoute: typeof trayMenuTrayMenuRouteRoute
     }
     '/(editor)/editor/css/': {
       id: '/(editor)/editor/css/'
@@ -1250,6 +1344,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof mainMainTopologyIndexRouteImport
       parentRoute: typeof mainMainTopologyRouteRoute
     }
+    '/(tray-menu)/tray-menu/proxies/': {
+      id: '/(tray-menu)/tray-menu/proxies/'
+      path: '/'
+      fullPath: '/tray-menu/proxies/'
+      preLoaderRoute: typeof trayMenuTrayMenuProxiesIndexRouteImport
+      parentRoute: typeof trayMenuTrayMenuProxiesRouteRoute
+    }
+    '/(tray-menu)/tray-menu/proxies/group': {
+      id: '/(tray-menu)/tray-menu/proxies/group'
+      path: '/group'
+      fullPath: '/tray-menu/proxies/group'
+      preLoaderRoute: typeof trayMenuTrayMenuProxiesGroupRouteRouteImport
+      parentRoute: typeof trayMenuTrayMenuProxiesRouteRoute
+    }
     '/(main)/main/profiles/$type/': {
       id: '/(main)/main/profiles/$type/'
       path: '/$type'
@@ -1340,6 +1448,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/main/topology/target/'
       preLoaderRoute: typeof mainMainTopologyTargetIndexRouteImport
       parentRoute: typeof mainMainTopologyRouteRoute
+    }
+    '/(tray-menu)/tray-menu/proxies/group/$name': {
+      id: '/(tray-menu)/tray-menu/proxies/group/$name'
+      path: '/$name'
+      fullPath: '/tray-menu/proxies/group/$name'
+      preLoaderRoute: typeof trayMenuTrayMenuProxiesGroupNameRouteImport
+      parentRoute: typeof trayMenuTrayMenuProxiesGroupRouteRoute
     }
     '/(main)/main/profiles/$type/detail/$uid': {
       id: '/(main)/main/profiles/$type/detail/$uid'
@@ -1787,10 +1902,59 @@ const editorEditorRouteRouteChildren: editorEditorRouteRouteChildren = {
 const editorEditorRouteRouteWithChildren =
   editorEditorRouteRoute._addFileChildren(editorEditorRouteRouteChildren)
 
+interface trayMenuTrayMenuProxiesGroupRouteRouteChildren {
+  trayMenuTrayMenuProxiesGroupNameRoute: typeof trayMenuTrayMenuProxiesGroupNameRoute
+}
+
+const trayMenuTrayMenuProxiesGroupRouteRouteChildren: trayMenuTrayMenuProxiesGroupRouteRouteChildren =
+  {
+    trayMenuTrayMenuProxiesGroupNameRoute:
+      trayMenuTrayMenuProxiesGroupNameRoute,
+  }
+
+const trayMenuTrayMenuProxiesGroupRouteRouteWithChildren =
+  trayMenuTrayMenuProxiesGroupRouteRoute._addFileChildren(
+    trayMenuTrayMenuProxiesGroupRouteRouteChildren,
+  )
+
+interface trayMenuTrayMenuProxiesRouteRouteChildren {
+  trayMenuTrayMenuProxiesGroupRouteRoute: typeof trayMenuTrayMenuProxiesGroupRouteRouteWithChildren
+  trayMenuTrayMenuProxiesIndexRoute: typeof trayMenuTrayMenuProxiesIndexRoute
+}
+
+const trayMenuTrayMenuProxiesRouteRouteChildren: trayMenuTrayMenuProxiesRouteRouteChildren =
+  {
+    trayMenuTrayMenuProxiesGroupRouteRoute:
+      trayMenuTrayMenuProxiesGroupRouteRouteWithChildren,
+    trayMenuTrayMenuProxiesIndexRoute: trayMenuTrayMenuProxiesIndexRoute,
+  }
+
+const trayMenuTrayMenuProxiesRouteRouteWithChildren =
+  trayMenuTrayMenuProxiesRouteRoute._addFileChildren(
+    trayMenuTrayMenuProxiesRouteRouteChildren,
+  )
+
+interface trayMenuTrayMenuRouteRouteChildren {
+  trayMenuTrayMenuProxiesRouteRoute: typeof trayMenuTrayMenuProxiesRouteRouteWithChildren
+  trayMenuTrayMenuIndexRoute: typeof trayMenuTrayMenuIndexRoute
+}
+
+const trayMenuTrayMenuRouteRouteChildren: trayMenuTrayMenuRouteRouteChildren = {
+  trayMenuTrayMenuProxiesRouteRoute:
+    trayMenuTrayMenuProxiesRouteRouteWithChildren,
+  trayMenuTrayMenuIndexRoute: trayMenuTrayMenuIndexRoute,
+}
+
+const trayMenuTrayMenuRouteRouteWithChildren =
+  trayMenuTrayMenuRouteRoute._addFileChildren(
+    trayMenuTrayMenuRouteRouteChildren,
+  )
+
 const rootRouteChildren: RootRouteChildren = {
   legacyRouteRoute: legacyRouteRouteWithChildren,
   mainRouteRoute: mainRouteRouteWithChildren,
   editorEditorRouteRoute: editorEditorRouteRouteWithChildren,
+  trayMenuTrayMenuRouteRoute: trayMenuTrayMenuRouteRouteWithChildren,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
