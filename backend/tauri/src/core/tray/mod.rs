@@ -17,7 +17,7 @@ use parking_lot::Mutex;
 use rust_i18n::t;
 use tauri::{
     AppHandle, Manager, Runtime,
-    menu::{Menu, MenuBuilder, MenuEvent},
+    menu::{Menu, MenuBuilder, MenuEvent, MenuItemBuilder, SubmenuBuilder},
     tray::{MouseButton, TrayIcon, TrayIconBuilder, TrayIconEvent},
 };
 
@@ -30,9 +30,14 @@ use crate::{
     client::{
         ChimeraClient,
         effects::plan::{ApplicationEffectInputs, TrayRefresh, TrayView},
+        hotkey::ports::HotkeyAction,
     },
     feat, ipc,
-    utils::{help, resolve},
+    utils::{
+        help,
+        proxy_env::{self, CopyEnvOption},
+        resolve,
+    },
 };
 
 const TRAY_ID: &str = "main-tray";
@@ -142,32 +147,53 @@ impl Tray {
         app_handle: &AppHandle<R>,
         view: TrayView,
     ) -> Result<(Menu<R>, ProxySection)> {
-        let mut menu = MenuBuilder::new(app_handle)
+        let version = env!("CHIMERA_VERSION");
+        let (menu, section) = MenuBuilder::new(app_handle)
             .text("open_window", t!("tray.dashboard"))
-            .separator();
+            .setup_proxies(app_handle, &view)?;
+        let mut menu = menu.separator();
 
         for item in mode_menu_items(view.menu.core) {
             menu = menu.check(item.id, mode_menu_label(item.mode));
         }
 
-        let (menu, section) = menu.setup_proxies(app_handle, &view)?;
         let menu = menu
             .separator()
             .check("system_proxy", t!("tray.system_proxy"))
             .check("tun_mode", t!("tray.tun_mode"))
             .separator()
-            .text("restart_clash", t!("tray.more.restart_clash"))
-            .text("restart_app", t!("tray.more.restart_app"))
+            .text("copy_env_sh", t!("tray.copy_env.sh"))
+            .text("copy_env_cmd", t!("tray.copy_env.cmd"))
+            .text("copy_env_ps", t!("tray.copy_env.ps"))
+            .item(
+                &SubmenuBuilder::new(app_handle, t!("tray.open_dir.menu"))
+                    .text("open_app_config_dir", t!("tray.open_dir.app_config_dir"))
+                    .text("open_app_data_dir", t!("tray.open_dir.app_data_dir"))
+                    .text("open_core_dir", t!("tray.open_dir.core_dir"))
+                    .text("open_logs_dir", t!("tray.open_dir.log_dir"))
+                    .build()?,
+            )
+            .item(
+                &SubmenuBuilder::new(app_handle, t!("tray.more.menu"))
+                    .text("restart_app", t!("tray.more.restart_app"))
+                    .text("restart_core", t!("tray.more.restart_core"))
+                    .item(
+                        &MenuItemBuilder::new(format!("Version {version}"))
+                            .id("app_version")
+                            .enabled(false)
+                            .build(app_handle)?,
+                    )
+                    .build()?,
+            )
             .separator()
-            .text("open_app_config_dir", t!("tray.open_dir.app_config_dir"))
-            .text("open_app_data_dir", t!("tray.open_dir.app_data_dir"))
-            .text("open_core_dir", t!("tray.open_dir.core_dir"))
-            .text("open_logs_dir", t!("tray.open_dir.log_dir"))
-            .separator()
-            .text("quit", t!("tray.quit"))
-            .build()?;
+            .item(
+                &MenuItemBuilder::new(t!("tray.quit"))
+                    .id("quit")
+                    .accelerator("CmdOrControl+Q")
+                    .build(app_handle)?,
+            );
 
-        Ok((menu, section))
+        Ok((menu.build()?, section))
     }
 
     pub fn update_systray(app_handle: &AppHandle<tauri::Wry>) -> Result<()> {
@@ -382,6 +408,36 @@ impl Tray {
             _tray.set_icon(Some(tauri::image::Image::from_bytes(&bytes)?))?;
         }
 
+        let switch_text = |enabled| {
+            if enabled {
+                t!("tray.proxy_action.enabled")
+            } else {
+                t!("tray.proxy_action.disabled")
+            }
+        };
+        let status = format!(
+            "{}: {}\n{}: {}",
+            t!("tray.system_proxy"),
+            switch_text(view.part.system_proxy),
+            t!("tray.tun_mode"),
+            switch_text(view.part.tun)
+        );
+
+        #[cfg(not(target_os = "linux"))]
+        {
+            // The native Windows test locates the real tray by its unique tooltip.
+            #[cfg(all(windows, feature = "e2e"))]
+            let status = {
+                let _ = status;
+                format!("Chimera E2E {}", std::process::id())
+            };
+            let _ = _tray.set_tooltip(Some(&status));
+        }
+        #[cfg(target_os = "linux")]
+        {
+            let _ = _tray.set_title(view.part.text.then_some(status.as_str()));
+        }
+
         Ok(if whole {
             ControlFlow::Continue(())
         } else {
@@ -401,18 +457,26 @@ impl Tray {
 
     pub fn on_menu_item_event(app_handle: &AppHandle, event: MenuEvent) {
         match event.id().0.as_str() {
-            "open_window" => resolve::create_window(app_handle),
-            "rule_mode" => feat::change_clash_mode(app_handle, "rule".to_string()),
-            "global_mode" => feat::change_clash_mode(app_handle, "global".to_string()),
-            "direct_mode" => feat::change_clash_mode(app_handle, "direct".to_string()),
-            "script_mode" => feat::change_clash_mode(app_handle, "script".to_string()),
-            "system_proxy" => feat::toggle_system_proxy(app_handle),
-            "tun_mode" => feat::toggle_tun_mode(app_handle),
+            "open_window" => {
+                let app_handle = app_handle.clone();
+                tauri::async_runtime::spawn(async move {
+                    resolve::create_window(&app_handle);
+                });
+            }
+            "rule_mode" => dispatch_action(app_handle, HotkeyAction::ClashModeRule),
+            "global_mode" => dispatch_action(app_handle, HotkeyAction::ClashModeGlobal),
+            "direct_mode" => dispatch_action(app_handle, HotkeyAction::ClashModeDirect),
+            "script_mode" => dispatch_action(app_handle, HotkeyAction::ClashModeScript),
+            "system_proxy" => dispatch_action(app_handle, HotkeyAction::ToggleSystemProxy),
+            "tun_mode" => dispatch_action(app_handle, HotkeyAction::ToggleTunMode),
             "open_app_config_dir" => crate::log_err!(ipc::open_app_config_dir()),
             "open_app_data_dir" => crate::log_err!(ipc::open_app_data_dir()),
             "open_core_dir" => crate::log_err!(ipc::open_core_dir()),
             "open_logs_dir" => crate::log_err!(ipc::open_logs_dir()),
-            "restart_clash" => feat::restart_clash_core(app_handle),
+            "copy_env_sh" => copy_clash_env(app_handle, CopyEnvOption::Shell),
+            "copy_env_cmd" => copy_clash_env(app_handle, CopyEnvOption::Cmd),
+            "copy_env_ps" => copy_clash_env(app_handle, CopyEnvOption::Pwsh),
+            "restart_core" => feat::restart_clash_core(app_handle),
             "restart_app" => help::restart_application(app_handle),
             "quit" => {
                 help::quit_application(app_handle);
@@ -512,6 +576,38 @@ fn refill_menu(previous_menu: &Menu<tauri::Wry>, menu: &Menu<tauri::Wry>) -> Res
     }
     anyhow::ensure!(whole, "the tray menu was only partly replaced");
     Ok(())
+}
+
+/// Copies the proxy environment for the port the facade reports.
+fn copy_clash_env(app_handle: &AppHandle, option: CopyEnvOption) {
+    let Some(client) = app_handle.try_state::<ChimeraClient>() else {
+        tracing::warn!("the tray copied the proxy env before the client was ready");
+        return;
+    };
+    proxy_env::copy_clash_env(app_handle, client.clash_info().port, &option);
+}
+
+/// Runs a tray item through the facade, the same path a global shortcut takes.
+fn dispatch_action(app_handle: &AppHandle, action: HotkeyAction) {
+    // A tray click during startup can arrive before the client is managed;
+    // dropping it is better than taking the whole app down.
+    let Some(client) = app_handle
+        .try_state::<ChimeraClient>()
+        .map(|state| state.inner().clone())
+    else {
+        tracing::warn!(%action, "the tray fired before the client was ready");
+        return;
+    };
+    let app_handle = app_handle.clone();
+    tauri::async_runtime::spawn(async move {
+        if let Err(error) = client.dispatch_hotkey_action(action).await {
+            tracing::error!(%error, %action, "tray action failed");
+        }
+        crate::log_err!(Tray::request(
+            &app_handle,
+            TrayWork::PART | TrayWork::PROXIES
+        ));
+    });
 }
 
 #[cfg(test)]

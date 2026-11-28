@@ -23,11 +23,23 @@
       "app_config_dir": "設定ディレクトリ",
       "app_data_dir": "データディレクトリ",
       "core_dir": "コアディレクトリ",
-      "log_dir": "ログディレクトリ"
+      "log_dir": "ログディレクトリ",
+      "menu": "ディレクトリを開く"
     },
     "more": {
       "restart_clash": "コアを再起動",
-      "restart_app": "Chimera を再起動"
+      "restart_app": "Chimera を再起動",
+      "menu": "その他",
+      "restart_core": "コアを再起動"
+    },
+    "copy_env": {
+      "cmd": "環境変数をコピー (Cmd)",
+      "ps": "環境変数をコピー (Pwsh)",
+      "sh": "環境変数をコピー (Shell)"
+    },
+    "proxy_action": {
+      "enabled": "有効",
+      "disabled": "無効"
     }
   }
 }

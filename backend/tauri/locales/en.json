@@ -23,11 +23,23 @@
       "app_config_dir": "Open Config Dir",
       "app_data_dir": "Open Data Dir",
       "core_dir": "Open Core Dir",
-      "log_dir": "Open Logs Dir"
+      "log_dir": "Open Logs Dir",
+      "menu": "Open Dir"
     },
     "more": {
       "restart_clash": "Restart Core",
-      "restart_app": "Restart App"
+      "restart_app": "Restart App",
+      "menu": "More",
+      "restart_core": "Restart Core"
+    },
+    "copy_env": {
+      "cmd": "Copy Env (Cmd)",
+      "ps": "Copy Env (Pwsh)",
+      "sh": "Copy Env (Shell)"
+    },
+    "proxy_action": {
+      "enabled": "Enabled",
+      "disabled": "Disabled"
     }
   }
 }

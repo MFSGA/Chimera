@@ -23,11 +23,23 @@
       "app_config_dir": "Open Config Dir",
       "app_data_dir": "Open Data Dir",
       "core_dir": "Open Core Dir",
-      "log_dir": "Open Logs Dir"
+      "log_dir": "Open Logs Dir",
+      "menu": "Открыть папку"
     },
     "more": {
       "restart_clash": "Restart Core",
-      "restart_app": "Restart App"
+      "restart_app": "Restart App",
+      "menu": "Еще",
+      "restart_core": "Restart Core"
+    },
+    "copy_env": {
+      "cmd": "Копировать Env (CMD)",
+      "ps": "Копировать Env (PS)",
+      "sh": "Копировать Env (sh)"
+    },
+    "proxy_action": {
+      "enabled": "Включить",
+      "disabled": "Выключить"
     }
   }
 }

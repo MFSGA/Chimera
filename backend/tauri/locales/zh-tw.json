@@ -23,11 +23,23 @@
       "app_config_dir": "打開配置目錄",
       "app_data_dir": "打開數據目錄",
       "core_dir": "打開核心目錄",
-      "log_dir": "打開日誌目錄"
+      "log_dir": "打開日誌目錄",
+      "menu": "開啟目錄"
     },
     "more": {
       "restart_clash": "重啟核心",
-      "restart_app": "重啟應用"
+      "restart_app": "重啟應用",
+      "menu": "更多",
+      "restart_core": "重啟核心"
+    },
+    "copy_env": {
+      "cmd": "複製環境變數 (Cmd)",
+      "ps": "複製環境變數 (Pwsh)",
+      "sh": "複製環境變數 (Shell)"
+    },
+    "proxy_action": {
+      "enabled": "已啟用",
+      "disabled": "已停用"
     }
   }
 }
