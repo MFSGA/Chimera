@@ -676,6 +676,17 @@ impl<W: Send + 'static, P: Send + 'static> ActorClient<W, P> {
         self.execute(command(transition)).await
     }
 
+    pub async fn interrupt_connections(
+        &self,
+    ) -> anyhow::Result<Option<chimera_contracts::runtime::Degradation>> {
+        let (reply, settled) = tokio::sync::oneshot::channel();
+        self.execute(Command::InterruptConnections { reply })
+            .await?;
+        settled
+            .await
+            .map_err(|_| anyhow::anyhow!("connection interruption result was not delivered"))
+    }
+
     pub async fn patch_application_config(
         &self,
         patch: chimera_config::application::ChimeraAppConfigPatch,

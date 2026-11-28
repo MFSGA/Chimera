@@ -200,7 +200,9 @@ impl ChimeraClient {
         self.inner.reconciler.as_ref()
     }
 
-    fn runtime_reconciler(&self) -> Result<&dyn super::reconciler::facade::RuntimeReconciler> {
+    pub(super) fn runtime_reconciler(
+        &self,
+    ) -> Result<&dyn super::reconciler::facade::RuntimeReconciler> {
         self.reconciler()
             .map(Arc::as_ref)
             .context("runtime reconciler is not connected")
@@ -855,13 +857,18 @@ mod tests {
             HotkeyAction::ToggleTunMode,
             HotkeyAction::EnableTunMode,
             HotkeyAction::DisableTunMode,
-            HotkeyAction::ClashModeRule,
             HotkeyAction::ClashModeGlobal,
             HotkeyAction::ClashModeDirect,
             HotkeyAction::ClashModeScript,
         ] {
             client.dispatch_hotkey_action(action).await.unwrap();
         }
+        assert!(
+            client
+                .dispatch_hotkey_action(HotkeyAction::ClashModeRule)
+                .await
+                .is_err()
+        );
         assert_eq!(
             mutations
                 .app
@@ -887,12 +894,7 @@ mod tests {
                 .iter()
                 .map(|patch| patch.mode)
                 .collect::<Vec<_>>(),
-            [
-                Some(Mode::Rule),
-                Some(Mode::Global),
-                Some(Mode::Direct),
-                Some(Mode::Script)
-            ]
+            [Some(Mode::Global), Some(Mode::Direct), Some(Mode::Script)]
         );
         #[cfg(not(target_os = "linux"))]
         {

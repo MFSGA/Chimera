@@ -1763,6 +1763,17 @@ impl chimera_core::client::reconciler::facade::RuntimeReconciler for RuntimeReco
         RuntimeReconcilerClient::reconcile(self).await
     }
 
+    async fn interrupt_connections(
+        &self,
+    ) -> anyhow::Result<Option<chimera_contracts::runtime::Degradation>> {
+        let (reply, settled) = tokio::sync::oneshot::channel();
+        self.execute(Command::InterruptConnections { reply })
+            .await?;
+        settled
+            .await
+            .map_err(|_| anyhow::anyhow!("connection interruption result was not delivered"))
+    }
+
     async fn patch_application_config(
         &self,
         patch: chimera_config::application::ChimeraAppConfigPatch,

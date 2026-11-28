@@ -736,6 +736,9 @@ impl chimera_core::client::core_lifecycle::executor::LifecycleHost for CoreLifec
     fn application_config(&self) -> ChimeraAppConfig {
         self.application.get_typed()
     }
+    fn mode_interruption_enabled(&self) -> anyhow::Result<bool> {
+        Ok(self.clash.get()?.break_connection.on_mode_change)
+    }
     fn core(&self) -> &dyn CoreLifecyclePort {
         self.core.as_ref()
     }

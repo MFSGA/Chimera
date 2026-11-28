@@ -73,6 +73,12 @@ pub async fn execute_application_command<H: ApplicationCommandHost>(
                 service_reconnected: false,
             })
         }
+        command @ Command::InterruptConnections { .. } => {
+            lifecycle.execute_lower(command).await?;
+            Ok(ApplicationCommandOutcome::Settled {
+                service_reconnected: false,
+            })
+        }
         Command::RecoverCore => {
             lifecycle.execute_lower(Command::RecoverCore).await?;
             Ok(ApplicationCommandOutcome::RecoverPrevious)

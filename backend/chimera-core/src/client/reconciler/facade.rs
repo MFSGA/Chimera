@@ -41,6 +41,9 @@ pub trait RuntimeReconciler: Send + Sync {
     async fn stop_core(&self) -> anyhow::Result<()>;
     async fn shutdown(&self) -> anyhow::Result<()>;
     async fn reconcile(&self) -> anyhow::Result<()>;
+    async fn interrupt_connections(
+        &self,
+    ) -> anyhow::Result<Option<chimera_contracts::runtime::Degradation>>;
     async fn patch_application_config(
         &self,
         patch: chimera_config::application::ChimeraAppConfigPatch,
@@ -135,6 +138,12 @@ impl<W: Send + 'static> RuntimeReconciler for ActorClient<W, ProxyHandle> {
             return self.recover_startup().await;
         }
         self.execute(Command::Reconcile).await
+    }
+
+    async fn interrupt_connections(
+        &self,
+    ) -> anyhow::Result<Option<chimera_contracts::runtime::Degradation>> {
+        ActorClient::interrupt_connections(self).await
     }
 
     async fn patch_application_config(

@@ -67,6 +67,9 @@ pub enum Command<P> {
         reason: String,
     },
     Reconcile,
+    InterruptConnections {
+        reply: tokio::sync::oneshot::Sender<Option<chimera_contracts::runtime::Degradation>>,
+    },
     /// The exact upstream checked bytes, handed from the only lifecycle
     /// mailbox into the existing CoreFacade mutation executor. No rebuild.
     ApplyChecked {
@@ -136,6 +139,7 @@ pub fn runtime_trigger<P>(command: &Command<P>) -> &'static str {
         Command::StopCore => "Stop",
         Command::Shutdown => "Shutdown",
         Command::Reconcile => "Retry",
+        Command::InterruptConnections { .. } => "InterruptConnections",
         Command::ReconcileSource | Command::ApplyChecked { .. } => "SourceCommitted",
         Command::MaintainServiceRelease => "ServiceRelease",
         Command::StartupReconcile { .. } => "Startup",

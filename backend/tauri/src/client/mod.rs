@@ -1058,6 +1058,13 @@ mod tests {
             Ok(())
         }
 
+        async fn capture_interruption_source(
+            &self,
+        ) -> anyhow::Result<Option<chimera_core::actor_v2::api::ApiClient>> {
+            self.events.lock().unwrap().push("capture-interruption");
+            Ok(None)
+        }
+
         async fn stop(&self) -> anyhow::Result<()> {
             self.events.lock().unwrap().push("stop");
             Ok(())
@@ -1242,6 +1249,31 @@ mod tests {
             .is_err()
         );
         assert_eq!(client.inner.shared.application().snapshot().version, before);
+    }
+
+    #[tokio::test]
+    async fn same_proxy_mode_does_not_commit_or_rebuild() {
+        let (client, events) = recording_client(false).await;
+        let before = client.inner.clash_config.snapshot();
+        let result = client
+            .inner
+            .shared
+            .set_proxy_mode(before.state.overrides.mode())
+            .await
+            .unwrap();
+        let wire = serde_json::to_value(result).unwrap();
+        assert_eq!(wire["commits"], serde_json::json!([]));
+        assert_eq!(client.inner.clash_config.snapshot().version, before.version);
+        assert!(!events.lock().unwrap().contains(&"rebuild"));
+        assert_eq!(
+            events
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|event| **event == "capture-interruption")
+                .count(),
+            usize::from(before.state.break_connection.on_mode_change)
+        );
     }
 
     #[tokio::test]

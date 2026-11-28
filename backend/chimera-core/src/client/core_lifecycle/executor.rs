@@ -28,6 +28,7 @@ pub trait LifecycleHost: Send + Sync {
     type ExtensionState: Send;
     fn application_config(&self) -> ChimeraAppConfig;
     fn core(&self) -> &dyn CoreLifecyclePort;
+    fn mode_interruption_enabled(&self) -> anyhow::Result<bool>;
     fn installer(&self) -> &dyn BinaryInstaller;
     fn service_recovery(&self) -> &parking_lot::Mutex<ServiceRecovery>;
     fn progress(&self) -> &parking_lot::Mutex<RuntimeProgress>;
@@ -73,6 +74,23 @@ pub async fn execute<H: LifecycleHost + ?Sized>(
     command: Command<H::SystemProxy>,
     extension_state: &mut H::ExtensionState,
 ) -> anyhow::Result<()> {
+    // Reference's explicit interruption does not invalidate a confirmed
+    // runtime selection or start another apply/recovery round.
+    if let Command::InterruptConnections { reply } = command {
+        let failure = if host.mode_interruption_enabled()? {
+            crate::client::reconciler::apply::CheckedConnectionEffect {
+                change: crate::client::reconciler::committed::SelectionChange::Mode,
+                replaced: Some(false),
+                prior: host.core().capture_interruption_source().await,
+            }
+            .finish()
+            .await
+        } else {
+            None
+        };
+        let _ = reply.send(failure);
+        return Ok(());
+    }
     host.clear_round_effects();
     host.progress().lock().clear_pending();
     // Retain selection only for the exact checked apply or ref's prepared

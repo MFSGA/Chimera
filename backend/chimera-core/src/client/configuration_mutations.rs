@@ -46,10 +46,24 @@ impl super::ChimeraClient {
         &self,
         patch: ClashGuardOverridesPatch,
     ) -> anyhow::Result<MutationOutcome<()>> {
-        let outcome = self
-            .configuration_mutations()?
-            .patch_overrides(patch)
-            .await?;
+        anyhow::ensure!(!self.shutdown().is_cancelled(), "client is shutting down");
+        let current = self.get_clash_config()?;
+        let outcome = if patch
+            .mode
+            .is_some_and(|mode| mode == current.overrides.mode())
+            && {
+                use struct_patch::Status as _;
+                let mut remaining = patch.clone();
+                remaining.mode = None;
+                remaining.is_empty()
+            } {
+            let failure = self.runtime_reconciler()?.interrupt_connections().await?;
+            MutationOutcome::from_parts((), failure.into_iter().collect())
+        } else {
+            self.configuration_mutations()?
+                .patch_overrides(patch)
+                .await?
+        };
         self.refresh_stream_log_level().await;
         self.request_proxy_refresh();
         Ok(outcome)
