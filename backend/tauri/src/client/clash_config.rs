@@ -398,26 +398,6 @@ impl ChimeraClient {
         Ok(())
     }
 
-    pub(crate) async fn patch_clash_overrides(
-        &self,
-        overrides: ClashConfigOverrides,
-    ) -> Result<()> {
-        let report = self
-            .inner
-            .clash_config
-            .patch_overrides(self, overrides, true)
-            .await?;
-        for degradation in &report.degradations {
-            tracing::warn!(
-                code = %degradation.code,
-                message = %degradation.message,
-                "Clash overrides committed with degraded follow-up"
-            );
-        }
-        self.refresh_stream_log_level().await;
-        Ok(())
-    }
-
     pub(crate) async fn patch_running_clash_overrides(
         &self,
         overrides: ClashConfigOverrides,

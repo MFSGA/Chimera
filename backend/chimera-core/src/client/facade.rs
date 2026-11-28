@@ -759,6 +759,141 @@ mod tests {
         }
     }
 
+    async fn assert_hotkey_dispatch_uses_composed_ports(client: &ChimeraClient) {
+        use crate::client::{
+            configuration_mutations::ConfigurationMutations,
+            hotkey::ports::{HotkeyAction, MockWindowControl},
+        };
+        use chimera_config::{
+            application::ChimeraAppConfigPatch,
+            clash::config::{
+                ClashConfigPatch,
+                overrides::{ClashGuardOverridesPatch, Mode},
+            },
+        };
+        use chimera_contracts::runtime::{
+            Degradation, DegradationPhase, DegradationReason, MutationOutcome,
+        };
+
+        #[derive(Default)]
+        struct RecordingMutations {
+            app: parking_lot::Mutex<Vec<ChimeraAppConfigPatch>>,
+            clash: parking_lot::Mutex<Vec<ClashConfigPatch>>,
+            overrides: parking_lot::Mutex<Vec<ClashGuardOverridesPatch>>,
+        }
+        #[async_trait::async_trait]
+        impl ConfigurationMutations for RecordingMutations {
+            async fn patch_application(
+                &self,
+                patch: ChimeraAppConfigPatch,
+            ) -> Result<MutationOutcome<()>> {
+                self.app.lock().push(patch);
+                // A source commit with a deferred side effect must not cause a retry.
+                Ok(MutationOutcome::from_parts(
+                    (),
+                    vec![Degradation {
+                        phase: DegradationPhase::SystemEffect,
+                        reason: DegradationReason::LegacyConfigurationFailure {
+                            legacy_code: "test_degraded".into(),
+                        },
+                        message: "recorded degradation".into(),
+                        retryable: true,
+                    }],
+                ))
+            }
+            async fn patch_clash(&self, patch: ClashConfigPatch) -> Result<MutationOutcome<()>> {
+                self.clash.lock().push(patch);
+                Ok(MutationOutcome::from_parts((), vec![]))
+            }
+            async fn patch_overrides(
+                &self,
+                patch: ClashGuardOverridesPatch,
+            ) -> Result<MutationOutcome<()>> {
+                self.overrides.lock().push(patch);
+                Ok(MutationOutcome::from_parts((), vec![]))
+            }
+        }
+        let mutations = RecordingMutations::default();
+        let mut window = MockWindowControl::new();
+        window.expect_toggle_dashboard().once().returning(|| Ok(()));
+        assert!(
+            client
+                .dispatch_hotkey_action(HotkeyAction::OpenOrCloseDashboard, &mutations, None)
+                .await
+                .is_err()
+        );
+        client
+            .dispatch_hotkey_action(
+                HotkeyAction::OpenOrCloseDashboard,
+                &mutations,
+                Some(&window),
+            )
+            .await
+            .unwrap();
+
+        let system_proxy = client.get_app_config().unwrap().enable_system_proxy;
+        let tun = client.get_clash_config().unwrap().enable_tun_mode;
+        for action in [
+            HotkeyAction::ToggleSystemProxy,
+            HotkeyAction::EnableSystemProxy,
+            HotkeyAction::DisableSystemProxy,
+            HotkeyAction::ToggleTunMode,
+            HotkeyAction::EnableTunMode,
+            HotkeyAction::DisableTunMode,
+            HotkeyAction::ClashModeRule,
+            HotkeyAction::ClashModeGlobal,
+            HotkeyAction::ClashModeDirect,
+            HotkeyAction::ClashModeScript,
+        ] {
+            client
+                .dispatch_hotkey_action(action, &mutations, None)
+                .await
+                .unwrap();
+        }
+        assert_eq!(
+            mutations
+                .app
+                .lock()
+                .iter()
+                .map(|patch| patch.enable_system_proxy)
+                .collect::<Vec<_>>(),
+            [Some(!system_proxy), Some(true), Some(false)]
+        );
+        assert_eq!(
+            mutations
+                .clash
+                .lock()
+                .iter()
+                .map(|patch| patch.enable_tun_mode)
+                .collect::<Vec<_>>(),
+            [Some(!tun), Some(true), Some(false)]
+        );
+        assert_eq!(
+            mutations
+                .overrides
+                .lock()
+                .iter()
+                .map(|patch| patch.mode)
+                .collect::<Vec<_>>(),
+            [
+                Some(Mode::Rule),
+                Some(Mode::Global),
+                Some(Mode::Direct),
+                Some(Mode::Script)
+            ]
+        );
+        #[cfg(not(target_os = "linux"))]
+        {
+            assert!(
+                client
+                    .dispatch_hotkey_action(HotkeyAction::EnableTransparentProxy, &mutations, None)
+                    .await
+                    .is_err()
+            );
+            assert_eq!(mutations.clash.lock().len(), 3);
+        }
+    }
+
     #[tokio::test]
     async fn shared_facade_owns_real_handles_and_weak_reference_does_not_extend_lifetime() {
         let temp = tempfile::tempdir().unwrap();
@@ -850,6 +985,7 @@ mod tests {
             core.status().host
         );
         assert!(client.traffic_summary().await.is_err());
+        assert_hotkey_dispatch_uses_composed_ports(&client).await;
         let weak = client.downgrade();
         let clone = weak.upgrade().unwrap();
         drop(client);
