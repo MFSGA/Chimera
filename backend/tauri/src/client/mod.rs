@@ -227,7 +227,11 @@ impl ChimeraClient {
             .get_or_init(|| {
                 self.build_rpc(
                     if cfg!(any(windows, target_os = "linux", target_os = "macos")) {
-                        &[chimera_rpc_protocol::ShellCapability::Presentation]
+                        &[
+                            chimera_rpc_protocol::ShellCapability::Presentation,
+                            chimera_rpc_protocol::ShellCapability::Clipboard,
+                            chimera_rpc_protocol::ShellCapability::Lifecycle,
+                        ]
                     } else {
                         &[]
                     },
@@ -265,7 +269,13 @@ impl ChimeraClient {
             provided,
         )?;
         #[cfg(any(windows, target_os = "linux", target_os = "macos"))]
-        rpc.mark_native_linked(["set_tray_icon", "set_widget_icon"]);
+        rpc.mark_native_linked([
+            "set_tray_icon",
+            "set_widget_icon",
+            "copy_clash_env",
+            "quit_application",
+            "restart_application",
+        ]);
         Ok(rpc)
     }
 

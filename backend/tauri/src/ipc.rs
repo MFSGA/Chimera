@@ -1560,6 +1560,80 @@ pub async fn save_window_size_state(
     Ok(())
 }
 
+// Shell-only actions use the same permission and audit boundary as icon setters.
+async fn native_shell_action(
+    client: &ChimeraClient,
+    window: &str,
+    method: &str,
+    action: impl FnOnce() -> anyhow::Result<()> + Send + 'static,
+) -> Result {
+    use chimera_rpc::{
+        error::application_error_for,
+        registry::{RpcCaller, RpcCompletion},
+    };
+    client
+        .rpc()?
+        .call_native(method, RpcCaller::desktop(window), move |visibility| {
+            Ok(Box::pin(async move {
+                RpcCompletion::unreported(
+                    action()
+                        .map(|_| serde_json::Value::Null)
+                        .map_err(|error| application_error_for(visibility, error)),
+                )
+            }))
+        })
+        .await
+        .map_err(|error| anyhow::anyhow!(error.message))?;
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn copy_clash_env(
+    app_handle: AppHandle,
+    client: State<'_, ChimeraClient>,
+    window: tauri::Window,
+    env_type: crate::utils::proxy_env::CopyEnvOption,
+) -> Result {
+    let port = client.clash_info().port;
+    native_shell_action(&client, window.label(), "copy_clash_env", move || {
+        use tauri_plugin_clipboard_manager::ClipboardExt;
+        app_handle
+            .clipboard()
+            .write_text(crate::utils::proxy_env::proxy_env_text(port, &env_type))?;
+        Ok(())
+    })
+    .await
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn quit_application(
+    app_handle: AppHandle,
+    client: State<'_, ChimeraClient>,
+    window: tauri::Window,
+) -> Result {
+    native_shell_action(&client, window.label(), "quit_application", move || {
+        crate::utils::help::quit_application(&app_handle);
+        Ok(())
+    })
+    .await
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn restart_application(
+    app_handle: AppHandle,
+    client: State<'_, ChimeraClient>,
+    window: tauri::Window,
+) -> Result {
+    native_shell_action(&client, window.label(), "restart_application", move || {
+        crate::utils::help::restart_application(&app_handle);
+        Ok(())
+    })
+    .await
+}
+
 #[tauri::command]
 #[specta::specta]
 pub async fn create_main_window(windows: State<'_, crate::window::WindowManager>) -> Result<()> {

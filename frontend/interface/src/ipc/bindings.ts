@@ -723,6 +723,12 @@ export const commands = {
     ),
   createMainWindow: () =>
     typedError<null, string>(__TAURI_INVOKE('create_main_window')),
+  copyClashEnv: (envType: CopyEnvOption) =>
+    typedError<null, string>(__TAURI_INVOKE('copy_clash_env', { envType })),
+  quitApplication: () =>
+    typedError<null, string>(__TAURI_INVOKE('quit_application')),
+  restartApplication: () =>
+    typedError<null, string>(__TAURI_INVOKE('restart_application')),
   createLegacyWindow: () =>
     typedError<null, string>(__TAURI_INVOKE('create_legacy_window')),
   /**  The invoking webview can only report its own readiness. */
@@ -2202,6 +2208,8 @@ export type ConvergenceHealth =
   | 'waiting_dependency'
   | 'blocked'
   | 'recovery_required';
+
+export type CopyEnvOption = 'shell' | 'cmd' | 'pwsh';
 
 /**  The active core's controller endpoint without its private credential. */
 export type CoreControllerInfo =
