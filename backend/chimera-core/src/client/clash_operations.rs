@@ -32,6 +32,13 @@ pub struct ClashPatchPlan {
     pub break_on_mode_change: bool,
 }
 
+/// Host inputs that select the checked source transaction.
+pub struct ClashPatchContext<'a> {
+    pub application: &'a chimera_config::application::ChimeraAppConfig,
+    pub service_connected: bool,
+    pub checked_gate: bool,
+}
+
 impl ClashConfigClient {
     /// The shared source client admits the candidate and the Actor settles
     /// its exact checked proposal. Only legacy file persistence remains here.
@@ -74,8 +81,11 @@ impl ClashConfigClient {
         })
     }
 
-    pub async fn patch_typed_config_with<Check, CheckFuture, Apply, ApplyFuture, Save>(
+    /// The ref typed candidate admission owns the snapshot, validation and
+    /// commit route. Host code supplies only runtime and mirror operations.
+    pub async fn patch_validated_with<Check, CheckFuture, Apply, ApplyFuture, Save>(
         &self,
+        context: ClashPatchContext<'_>,
         patch: ClashConfigPatch,
         check: Check,
         apply: Apply,
@@ -91,7 +101,20 @@ impl ClashConfigClient {
         let before = self.get_snapshot().await?;
         let mut next = before.state.clone();
         next.apply(patch.clone());
+        validate_clash_for_application(&next, context.application)?;
         let reaches_runtime = should_reconcile_clash_patch(&before.state, &next, &patch);
+        let checked = context.checked_gate
+            && checked_clash_patch_eligible(
+                &patch,
+                &before.state,
+                context.application,
+                context.service_connected,
+            );
+        if context.checked_gate && (checked || !reaches_runtime) {
+            return self
+                .commit_native_candidate_with(before, next, checked, false, save_legacy)
+                .await;
+        }
         self.commit_candidate_with(before, next, reaches_runtime, check, apply, save_legacy)
             .await
     }
@@ -823,7 +846,12 @@ mod tests {
         patch.hosts = Some(hosts.clone());
 
         let report = client
-            .patch_typed_config_with(
+            .patch_validated_with(
+                ClashPatchContext {
+                    application: &Default::default(),
+                    service_connected: false,
+                    checked_gate: false,
+                },
                 patch,
                 |_candidate| async {
                     panic!("an inactive DNS draft must not request a core candidate check");
@@ -887,7 +915,12 @@ mod tests {
         // unchanged, rather than publishing half of the requested takeover.
         let rejected_original = before.state.clone();
         let error = client
-            .patch_typed_config_with(
+            .patch_validated_with(
+                ClashPatchContext {
+                    application: &Default::default(),
+                    service_connected: false,
+                    checked_gate: false,
+                },
                 patch.clone(),
                 move |candidate| {
                     let original = rejected_original.clone();
@@ -919,7 +952,12 @@ mod tests {
         let preflight = client.clone();
         let applying = client.clone();
         let report = client
-            .patch_typed_config_with(
+            .patch_validated_with(
+                ClashPatchContext {
+                    application: &Default::default(),
+                    service_connected: false,
+                    checked_gate: false,
+                },
                 patch,
                 move |candidate| async move {
                     assert_eq!(preflight.get_typed().dns_control, ControlSource::Profile);
@@ -983,7 +1021,12 @@ mod tests {
         patch.enable_tun_mode = Some(true);
 
         let report = client
-            .patch_typed_config_with(
+            .patch_validated_with(
+                ClashPatchContext {
+                    application: &Default::default(),
+                    service_connected: false,
+                    checked_gate: false,
+                },
                 patch,
                 move |candidate| async move {
                     check_events.lock().unwrap().push((
@@ -1027,6 +1070,56 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn invalid_transparent_capture_is_rejected_before_source_admission() {
+        use chimera_config::{
+            application::ChimeraAppConfig,
+            clash::config::{TransparentProxyMode, clash_strategy::PortStrategy},
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let client = ClashConfigClient::new(
+            Utf8PathBuf::from_path_buf(dir.path().join("clash-config.yaml")).unwrap(),
+            ClashConfig::default(),
+            Arc::new(RecordingBridge {
+                mirrored_tun: Arc::new(Mutex::new(None)),
+            }),
+        )
+        .await
+        .unwrap();
+        let before = client.get_snapshot().await.unwrap();
+        let mut patch = ClashConfig::new_empty_patch();
+        patch.transparent_proxy.mode = Some(TransparentProxyMode::Tproxy);
+        patch.tproxy_port = Some(Some(PortStrategy::new_allow_fallback(7894)));
+        patch.enable_tun_mode = Some(true);
+        let app = ChimeraAppConfig {
+            enable_service_mode: false,
+            ..Default::default()
+        };
+        for checked_gate in [false, true] {
+            let error = client
+                .patch_validated_with(
+                    ClashPatchContext {
+                        application: &app,
+                        service_connected: false,
+                        checked_gate,
+                    },
+                    patch.clone(),
+                    |_| async { panic!("invalid candidate must not reach runtime check") },
+                    || async { panic!("invalid candidate must not apply runtime") },
+                    || panic!("invalid candidate must not save mirror"),
+                )
+                .await
+                .unwrap_err();
+            assert!(
+                error
+                    .downcast_ref::<chimera_config::clash::config::TransparentProxyValidationError>(
+                    )
+                    .is_some()
+            );
+            assert_eq!(client.get_snapshot().await.unwrap().version, before.version);
+        }
+    }
+
+    #[tokio::test]
     async fn rejected_clash_candidate_keeps_source_and_never_applies_core() {
         let dir = tempfile::tempdir().unwrap();
         let path = Utf8PathBuf::from_path_buf(dir.path().join("clash-config.yaml")).unwrap();
@@ -1044,7 +1137,12 @@ mod tests {
         let mut patch = ClashConfig::new_empty_patch();
         patch.enable_tun_mode = Some(true);
         let error = client
-            .patch_typed_config_with(
+            .patch_validated_with(
+                ClashPatchContext {
+                    application: &Default::default(),
+                    service_connected: false,
+                    checked_gate: false,
+                },
                 patch,
                 |candidate| async move {
                     assert!(candidate.enable_tun_mode);
@@ -1085,7 +1183,12 @@ mod tests {
         let mut patch = ClashConfig::new_empty_patch();
         patch.enable_tun_mode = Some(true);
         let report = client
-            .patch_typed_config_with(
+            .patch_validated_with(
+                ClashPatchContext {
+                    application: &Default::default(),
+                    service_connected: false,
+                    checked_gate: false,
+                },
                 patch,
                 |_candidate| async { Ok(()) },
                 || async { anyhow::bail!("injected Core refusal after commit") },
@@ -1120,7 +1223,12 @@ mod tests {
         let mut patch = ClashConfig::new_empty_patch();
         patch.enable_tun_mode = Some(true);
         let error = client
-            .patch_typed_config_with(
+            .patch_validated_with(
+                ClashPatchContext {
+                    application: &Default::default(),
+                    service_connected: false,
+                    checked_gate: false,
+                },
                 patch,
                 move |_candidate| async move {
                     let mut other = writer.get_typed();
@@ -1173,7 +1281,12 @@ mod tests {
         let mut patch = ClashConfig::new_empty_patch();
         patch.enable_tun_mode = Some(true);
         let error = client
-            .patch_typed_config_with(
+            .patch_validated_with(
+                ClashPatchContext {
+                    application: &Default::default(),
+                    service_connected: false,
+                    checked_gate: false,
+                },
                 patch,
                 move |candidate| async move {
                     assert!(candidate.enable_tun_mode);
@@ -1213,7 +1326,12 @@ mod tests {
         let mut patch = ClashConfig::new_empty_patch();
         patch.enable_tun_mode = Some(true);
         let report = client
-            .patch_typed_config_with(
+            .patch_validated_with(
+                ClashPatchContext {
+                    application: &Default::default(),
+                    service_connected: false,
+                    checked_gate: false,
+                },
                 patch,
                 |_candidate| async { Ok(()) },
                 move || async move {
@@ -1490,7 +1608,12 @@ mod tests {
         let mut patch = ClashConfig::new_empty_patch();
         patch.web_ui_list = Some(vec!["https://dashboard.example".into()]);
         let report = client
-            .patch_typed_config_with(
+            .patch_validated_with(
+                ClashPatchContext {
+                    application: &Default::default(),
+                    service_connected: false,
+                    checked_gate: false,
+                },
                 patch,
                 |_candidate| async {
                     panic!("source-only update must not check Core");
@@ -1538,20 +1661,27 @@ impl super::ChimeraClient {
     }
 }
 
+/// Cross-domain admission shared by the facade preflight and the exact
+/// candidate passed to the source owner.
+pub fn validate_clash_for_application(
+    candidate: &ClashConfig,
+    application: &chimera_config::application::ChimeraAppConfig,
+) -> Result<()> {
+    candidate.validate_transparent_proxy(application.core, cfg!(target_os = "linux"))?;
+    anyhow::ensure!(
+        candidate.transparent_proxy.mode
+            == chimera_config::clash::config::TransparentProxyMode::Disabled
+            || application.enable_service_mode,
+        "transparent capture requires Service mode"
+    );
+    Ok(())
+}
+
 impl super::ChimeraClient {
     pub fn validate_clash_candidate(&self, patch: &ClashConfigPatch) -> Result<()> {
         let mut candidate = self.get_clash_config()?;
         candidate.apply(patch.clone());
-        let app = self.get_app_config()?;
-        candidate.validate_transparent_proxy(app.core, cfg!(target_os = "linux"))?;
-        anyhow::ensure!(
-            candidate.transparent_proxy.mode
-                == chimera_config::clash::config::TransparentProxyMode::Disabled
-                || app.enable_service_mode,
-            "transparent capture requires Service mode"
-        );
-
-        Ok(())
+        validate_clash_for_application(&candidate, &self.get_app_config()?)
     }
 }
 

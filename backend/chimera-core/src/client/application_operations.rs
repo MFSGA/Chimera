@@ -21,13 +21,7 @@ impl ChimeraClient {
         )
         .map_err(anyhow::Error::msg)?;
         let clash = self.get_clash_config()?;
-        clash.validate_transparent_proxy(candidate.core, cfg!(target_os = "linux"))?;
-        anyhow::ensure!(
-            clash.transparent_proxy.mode
-                == chimera_config::clash::config::TransparentProxyMode::Disabled
-                || candidate.enable_service_mode,
-            "transparent capture requires Service mode"
-        );
+        super::clash_operations::validate_clash_for_application(&clash, &candidate)?;
         Ok((before, candidate))
     }
 

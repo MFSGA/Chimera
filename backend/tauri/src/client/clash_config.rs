@@ -15,7 +15,6 @@ use chimera_config::clash::config::{
 };
 use chimera_ipc::api::status::CoreState;
 use serde_yaml::Mapping;
-use struct_patch::Patch;
 
 use crate::{
     config::{core::Config, runtime::ClashConfigOverrides},
@@ -109,24 +108,15 @@ impl ClashConfigClient {
         patch: ClashConfigPatch,
     ) -> Result<ClashCommitReport> {
         let expected_sources = owner.committed_runtime_source_versions();
-        if owner.inner.checked_gate.is_some() {
-            let app = owner.get_app_config()?;
-            let service_connected = crate::core::service::ipc::get_ipc_state().is_connected();
-            // The same committed source snapshot decides DNS/Hosts ownership
-            // and the exact expected CAS version; do not re-read independently.
-            let before = self.get_snapshot().await?;
-            let mut next = before.state.clone();
-            next.apply(patch.clone());
-            let checked =
-                checked_clash_patch_eligible(&patch, &before.state, &app, service_connected);
-            if checked || !should_reconcile_clash_patch(&before.state, &next, &patch) {
-                return self
-                    .commit_native_candidate(before, next, checked, false)
-                    .await;
-            }
-        }
+        let application = owner.get_app_config()?;
+        let service_connected = crate::core::service::ipc::get_ipc_state().is_connected();
         let candidate_patch = patch.clone();
-        self.patch_typed_config_with(
+        self.patch_validated_with(
+            ClashPatchContext {
+                application: &application,
+                service_connected,
+                checked_gate: owner.inner.checked_gate.is_some(),
+            },
             patch,
             |candidate| owner.check_clash_runtime_candidate(candidate),
             || {
@@ -461,7 +451,6 @@ async fn update_core_config(client: &ChimeraClient) -> Result<()> {
 }
 
 use chimera_core::client::clash_operations::{
-    ClashCommitReport, ClashPatchPlan, apply_mapping_to_typed_clash, checked_clash_patch_eligible,
+    ClashCommitReport, ClashPatchContext, ClashPatchPlan, apply_mapping_to_typed_clash,
     checked_raw_clash_patch_eligible, patch_changes_mixed_port, plan_clash_patch,
-    should_reconcile_clash_patch,
 };
