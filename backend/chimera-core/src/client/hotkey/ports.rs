@@ -25,14 +25,15 @@ const SUPER_KEYS: &[&str] = &[
     "alt",
 ];
 
-/// The current desktop composition has no transparent-proxy shortcut dispatch.
+/// Transparent capture is a Linux-only action.
 pub fn action_available(action: HotkeyAction) -> bool {
-    !matches!(
-        action,
-        HotkeyAction::ToggleTransparentProxy
-            | HotkeyAction::EnableTransparentProxy
-            | HotkeyAction::DisableTransparentProxy
-    )
+    cfg!(target_os = "linux")
+        || !matches!(
+            action,
+            HotkeyAction::ToggleTransparentProxy
+                | HotkeyAction::EnableTransparentProxy
+                | HotkeyAction::DisableTransparentProxy
+        )
 }
 
 /// What has to change at the OS level to go from one binding set to another.

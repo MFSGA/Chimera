@@ -36,3 +36,40 @@ fn equivalent_platform_spellings_cannot_be_bound_to_different_actions() {
         HotkeyParseError::DuplicateAccelerator { .. }
     ));
 }
+
+#[test]
+fn transparent_capture_switch_preserves_mode_and_existing_listener() {
+    use chimera_config::clash::config::{
+        ClashConfig, TransparentProxyMode,
+        clash_strategy::port::{PortStrategy, PortStrategyKind},
+    };
+    let mut config = ClashConfig::default();
+    config.tproxy_port = None;
+    let patch = super::switch_patch(&config, true);
+    assert_eq!(
+        patch.transparent_proxy.mode,
+        Some(TransparentProxyMode::Tproxy)
+    );
+    assert_eq!(
+        patch.tproxy_port,
+        Some(Some(PortStrategy {
+            kind: PortStrategyKind::Fixed,
+            start_port: 7894
+        }))
+    );
+    config.tproxy_port = Some(PortStrategy::new_allow_fallback(7895));
+    assert!(super::switch_patch(&config, true).tproxy_port.is_none());
+    config.transparent_proxy.mode = TransparentProxyMode::Redir;
+    let keep = super::switch_patch(&config, true);
+    assert_eq!(
+        keep.transparent_proxy.mode,
+        Some(TransparentProxyMode::Redir)
+    );
+    assert!(keep.tproxy_port.is_none());
+    let disable = super::switch_patch(&config, false);
+    assert_eq!(
+        disable.transparent_proxy.mode,
+        Some(TransparentProxyMode::Disabled)
+    );
+    assert!(disable.tproxy_port.is_none());
+}

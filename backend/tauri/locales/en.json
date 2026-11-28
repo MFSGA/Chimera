@@ -40,6 +40,7 @@
     "proxy_action": {
       "enabled": "Enabled",
       "disabled": "Disabled"
-    }
+    },
+    "transparent_proxy": "Transparent Proxy"
   }
 }

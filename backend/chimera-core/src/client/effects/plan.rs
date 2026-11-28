@@ -37,6 +37,7 @@ pub struct ApplicationEffectInputs {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ApplicationEffectFields {
     pub enable_system_proxy: bool,
+    pub enable_service_mode: bool,
     pub system_proxy_bypass: String,
     pub enable_proxy_guard: bool,
     pub proxy_guard_interval: u64,
@@ -80,6 +81,7 @@ impl From<&ChimeraAppConfig> for ApplicationEffectFields {
     fn from(app: &ChimeraAppConfig) -> Self {
         Self {
             enable_system_proxy: app.enable_system_proxy,
+            enable_service_mode: app.enable_service_mode,
             system_proxy_bypass: app.system_proxy_bypass.clone(),
             enable_proxy_guard: app.enable_proxy_guard,
             proxy_guard_interval: app.proxy_guard_interval,
@@ -198,6 +200,9 @@ impl ApplicationEffectInputs {
                 mode: self.clash.mode,
                 system_proxy: app.enable_system_proxy,
                 tun: self.clash.enable_tun_mode,
+                transparent_proxy: self.clash.transparent_proxy.mode
+                    != TransparentProxyMode::Disabled,
+                service_mode: app.enable_service_mode,
                 text: app.enable_tray_text,
                 traffic: app.enable_tray_traffic,
             },
@@ -280,6 +285,8 @@ pub struct TrayPartDesired {
     pub mode: Mode,
     pub system_proxy: bool,
     pub tun: bool,
+    pub transparent_proxy: bool,
+    pub service_mode: bool,
     pub text: bool,
     pub traffic: bool,
 }
@@ -594,6 +601,7 @@ mod tests {
         ApplicationEffectInputs {
             app: ApplicationEffectFields {
                 enable_system_proxy: false,
+                enable_service_mode: false,
                 system_proxy_bypass: "localhost".to_owned(),
                 enable_proxy_guard: false,
                 proxy_guard_interval: 30,
@@ -1393,6 +1401,27 @@ mod tests {
     }
 
     #[test]
+    fn transparent_capture_and_service_changes_refresh_tray_state() {
+        let before = inputs();
+        let mut after = inputs();
+        after.clash.transparent_proxy.mode = TransparentProxyMode::Tproxy;
+        after.app.enable_service_mode = true;
+        let plan = ApplicationEffectPlan::diff(&before, &after);
+        assert!(
+            plan.effects()
+                .contains(&tray_effect(TrayRefresh::Part, &after))
+        );
+        assert!(after.tray_view().part.transparent_proxy);
+        assert!(after.tray_view().part.service_mode);
+        let mut service_only = before.clone();
+        service_only.app.enable_service_mode = true;
+        assert_eq!(
+            ApplicationEffectPlan::diff(&before, &service_only).effects(),
+            [tray_effect(TrayRefresh::Part, &service_only)]
+        );
+    }
+
+    #[test]
     fn runtime_apply_kind_ignores_core_and_service_mode() {
         let app = ChimeraAppConfig::default();
         let switched = ChimeraAppConfig {
@@ -1413,7 +1442,7 @@ mod tests {
         assert_eq!(
             ApplicationEffectPlan::diff(&before, &after).effects(),
             [tray_effect(TrayRefresh::Full, &after)],
-            "the tray menu must receive the new core while service mode stays out"
+            "the tray menu must receive the new core and service mode"
         );
     }
 }
@@ -1459,6 +1488,7 @@ pub fn requested_owners(
         || patch.enable_tray_text.is_some()
         || patch.enable_tray_traffic.is_some()
         || patch.enable_system_proxy.is_some()
+        || patch.enable_service_mode.is_some()
     {
         kinds.push(EffectKind::Tray);
     }

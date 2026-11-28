@@ -40,6 +40,7 @@
     "proxy_action": {
       "enabled": "有効",
       "disabled": "無効"
-    }
+    },
+    "transparent_proxy": "透過プロキシ"
   }
 }

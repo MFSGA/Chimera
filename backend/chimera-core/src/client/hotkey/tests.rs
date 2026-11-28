@@ -77,6 +77,19 @@ fn parse_rejects_malformed_unknown_empty_segment_and_unmodified_bindings() {
 }
 
 #[test]
+fn transparent_capture_shortcuts_are_available_only_on_linux() {
+    for action in [
+        "toggle_transparent_proxy",
+        "enable_transparent_proxy",
+        "disable_transparent_proxy",
+    ] {
+        let binding = format!("{action},Control+Q");
+        let result = HotkeyBindings::parse(&[binding], &AnyAccelerator);
+        assert_eq!(result.is_ok(), cfg!(target_os = "linux"));
+    }
+}
+
+#[test]
 fn parser_rejects_duplicate_canonical_accelerators() {
     let error = HotkeyBindings::parse(
         &entries(&["enable_tun_mode,Control+Q", "disable_tun_mode,Control+Q"]),
