@@ -195,6 +195,7 @@
   "settings_chimera_window_close_editor": "編輯器視窗",
   "settings_chimera_window_close_destroy": "銷毀視窗（節省記憶體）",
   "settings_chimera_window_close_hide": "隱藏視窗（快速重開）",
+  "settings_chimera_window_close_tray_menu": "WebView 系統匣選單",
   "settings_chimera_window_close_inherit": "跟隨預設方式",
   "settings_chimera_window_close_description": "隱藏會保留 WebView 以便快速重開；銷毀會釋放對應資源。",
   "settings_chimera_tray_menu_mode": "托盤菜單模式",

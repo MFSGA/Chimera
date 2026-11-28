@@ -30,7 +30,7 @@ const DEFAULT_SETTINGS = {
   tray_menu: 'inherit',
 } satisfies WindowCloseSettings;
 
-type WindowKind = 'main' | 'editor';
+type WindowKind = Exclude<keyof WindowCloseSettings, 'global'>;
 
 const changeOf = (
   kind: WindowKind,
@@ -41,6 +41,8 @@ const changeOf = (
       return { main: behavior };
     case 'editor':
       return { editor: behavior };
+    case 'tray_menu':
+      return { tray_menu: behavior };
   }
 };
 
@@ -96,10 +98,11 @@ function WindowCloseRow<V extends string>({
 
 /**
  * Follows ref's per-kind override editor, with Chimera's retained Legacy
- * window sharing the main policy. No tray-menu control is shown until the
- * WebView tray menu uses WindowManager too.
+ * window sharing the main policy. The tray override is shown for WebView mode.
  */
-export default function WindowCloseBehaviorCards() {
+export default function WindowCloseBehaviorCards({
+  showTrayMenu = false,
+}: { showTrayMenu?: boolean } = {}) {
   const { value, upsert, isPending } = useSetting('window_close');
   const settings = { ...DEFAULT_SETTINGS, ...value };
 
@@ -118,6 +121,13 @@ export default function WindowCloseBehaviorCards() {
     { kind: 'editor', label: m.settings_chimera_window_close_editor() },
   ];
 
+  if (showTrayMenu) {
+    kinds.push({
+      kind: 'tray_menu',
+      label: m.settings_chimera_window_close_tray_menu(),
+    });
+  }
+
   return (
     <>
       <WindowCloseRow
@@ -131,7 +141,7 @@ export default function WindowCloseBehaviorCards() {
       {kinds.map(({ kind, label }) => (
         <WindowCloseRow
           key={kind}
-          slot={`window-close-behavior-${kind}`}
+          slot={`window-close-behavior-${kind.replace('_', '-')}`}
           label={label}
           value={settings[kind]}
           messages={overrides}

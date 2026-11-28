@@ -195,6 +195,7 @@
   "settings_chimera_window_close_editor": "エディターウィンドウ",
   "settings_chimera_window_close_destroy": "破棄（メモリ節約）",
   "settings_chimera_window_close_hide": "非表示（高速で再表示）",
+  "settings_chimera_window_close_tray_menu": "WebView トレイメニュー",
   "settings_chimera_window_close_inherit": "既定の動作に従う",
   "settings_chimera_window_close_description": "非表示にすると WebView を保持してすばやく再表示できます。破棄するとリソースを解放します。",
   "settings_chimera_tray_menu_mode": "トレイメニューの表示方法",

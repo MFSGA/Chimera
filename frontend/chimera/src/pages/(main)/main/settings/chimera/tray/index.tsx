@@ -1,11 +1,13 @@
+import { useSetting } from '@chimera/interface';
 import { createFileRoute } from '@tanstack/react-router';
 import { PageTitle } from '@/components/page-title';
-import { isMacOS } from '@/consts';
+import { isMacOS, OS } from '@/consts';
 import * as m from '@/paraglide/messages';
 import TrayIconConfig from '../_modules/tray-icon-config';
 import TrayProxiesSelector from '../_modules/tray-proxies-selector';
 import WindowCloseBehaviorCards from '../_modules/window-close-behavior';
 import { SettingsGroup, SettingsLabel } from '../../_modules/settings-card';
+import TrayMenuModeSelector from './_modules/tray-menu-mode';
 
 export const Route = createFileRoute('/(main)/main/settings/chimera/tray/')({
   component: RouteComponent,
@@ -18,6 +20,8 @@ export const Route = createFileRoute('/(main)/main/settings/chimera/tray/')({
 });
 
 function RouteComponent() {
+  const { value: menuMode } = useSetting('tray_menu_mode');
+  const webview = OS !== 'linux' && menuMode === 'webview';
   return (
     <>
       <PageTitle legacySlot="settings-title" />
@@ -25,14 +29,15 @@ function RouteComponent() {
         <div data-slot="tray-settings-container">
           <SettingsLabel>{m.settings_chimera_tray()}</SettingsLabel>
           <SettingsGroup>
-            <TrayProxiesSelector />
-            {!isMacOS && <TrayIconConfig />}
+            {OS !== 'linux' && <TrayMenuModeSelector />}
+            {!webview && <TrayProxiesSelector />}
           </SettingsGroup>
+          {!isMacOS && <TrayIconConfig />}
         </div>
         <div data-slot="window-settings-container">
           <SettingsLabel>{m.settings_chimera_window_close()}</SettingsLabel>
           <SettingsGroup>
-            <WindowCloseBehaviorCards />
+            <WindowCloseBehaviorCards showTrayMenu={webview} />
           </SettingsGroup>
         </div>
       </div>

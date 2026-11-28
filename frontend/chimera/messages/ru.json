@@ -195,6 +195,7 @@
   "settings_chimera_window_close_editor": "Окна редактора",
   "settings_chimera_window_close_destroy": "Уничтожить окно (экономия памяти)",
   "settings_chimera_window_close_hide": "Скрыть окно (быстрее открыть снова)",
+  "settings_chimera_window_close_tray_menu": "Меню WebView-трея",
   "settings_chimera_window_close_inherit": "Как задано по умолчанию",
   "settings_chimera_window_close_description": "При скрытии WebView остается загруженным для быстрого повторного открытия. При уничтожении ресурсы освобождаются.",
   "settings_chimera_tray_menu_mode": "Режим меню трея",
