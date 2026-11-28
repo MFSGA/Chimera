@@ -21,7 +21,10 @@ use tauri::{
     tray::{MouseButton, TrayIcon, TrayIconBuilder, TrayIconEvent},
 };
 
-use chimera_config::{application::ClashCore, clash::config::overrides::Mode};
+use chimera_config::{
+    application::{ClashCore, TrayMenuMode},
+    clash::config::overrides::Mode,
+};
 
 use crate::{
     client::{
@@ -42,12 +45,14 @@ struct TrayState<R: Runtime> {
 
 struct Attached<R: Runtime> {
     menu: Menu<R>,
+    mode: TrayMenuMode,
 }
 
 impl<R: Runtime> Clone for Attached<R> {
     fn clone(&self) -> Self {
         Self {
             menu: self.menu.clone(),
+            mode: self.mode,
         }
     }
 }
@@ -59,6 +64,20 @@ impl<R: Runtime> TrayState<R> {
             queue: Mutex::new(TrayQueue::default()),
             display: Mutex::new(TrayDisplay::new()),
         }
+    }
+}
+
+// Tauri does not emit tray click events on Linux. Keep an accessible native
+// menu there even if a configuration was synchronized from another host.
+fn effective_menu_mode(mode: TrayMenuMode) -> TrayMenuMode {
+    #[cfg(all(windows, feature = "e2e"))]
+    if std::env::var("CHIMERA_E2E_TRAY_QUIT").as_deref() == Ok("1") {
+        return TrayMenuMode::Native;
+    }
+    if cfg!(target_os = "linux") {
+        TrayMenuMode::Native
+    } else {
+        mode
     }
 }
 
@@ -176,7 +195,7 @@ impl Tray {
             app_handle,
             match refresh {
                 TrayRefresh::Full => TrayWork::REBUILD,
-                TrayRefresh::Part => TrayWork::PART,
+                TrayRefresh::Part => TrayWork::PART | TrayWork::PROXIES,
             },
         )
     }
@@ -213,7 +232,7 @@ impl Tray {
             }
         };
         let mut attached = state.display.lock().attached();
-        let result = Self::attach(app_handle, menu, &mut attached);
+        let result = Self::attach(app_handle, &view, menu, &mut attached);
         state.display.lock().published(match (&result, attached) {
             (Ok(()), Some(attached)) => Publication::Complete { attached, section },
             (_, attached) => Publication::Interrupted { attached },
@@ -223,26 +242,30 @@ impl Tray {
 
     fn attach(
         app_handle: &AppHandle<tauri::Wry>,
+        view: &TrayView,
         menu: Menu<tauri::Wry>,
         attached: &mut Option<Attached<tauri::Wry>>,
     ) -> Result<()> {
-        let tray = match app_handle.tray_by_id(TRAY_ID) {
-            Some(tray) => {
-                if cfg!(target_os = "linux") {
-                    if let Some(previous) = attached.as_ref() {
-                        refill_menu(&previous.menu, &menu)?;
-                    } else {
-                        tray.set_menu(Some(menu.clone()))?;
-                        *attached = Some(Attached { menu });
-                    }
-                } else {
-                    tray.set_menu(Some(menu.clone()))?;
-                    *attached = Some(Attached { menu });
-                }
-                tray
+        let menu_mode = effective_menu_mode(view.menu.menu_mode);
+        let use_native_menu = menu_mode == TrayMenuMode::Native;
+        let menu_mode_changed = attached.as_ref().is_some_and(|held| held.mode != menu_mode);
+        let tray = if menu_mode_changed {
+            tracing::debug!("tray menu mode changed, recreating tray icon");
+            drop(app_handle.remove_tray_by_id(TRAY_ID));
+            *attached = None;
+            None
+        } else {
+            app_handle.tray_by_id(TRAY_ID)
+        };
+        if use_native_menu {
+            if let Some(windows) = app_handle.try_state::<crate::window::WindowManager>() {
+                windows.close(crate::consts::TRAY_MENU_WINDOW_LABEL);
             }
+        }
+
+        let mut refill = Ok(());
+        let tray = match tray {
             None => {
-                *attached = None;
                 let mut builder = TrayIconBuilder::with_id(TRAY_ID);
                 #[cfg(all(windows, feature = "e2e"))]
                 {
@@ -251,18 +274,45 @@ impl Tray {
                 if let Some(icon) = app_handle.default_window_icon().cloned() {
                     builder = builder.icon(icon);
                 }
+                if use_native_menu {
+                    builder = builder.menu(&menu).on_menu_event(Self::on_menu_item_event);
+                }
                 let tray = builder
-                    .menu(&menu)
                     .show_menu_on_left_click(false)
-                    .on_menu_event(Self::on_menu_item_event)
                     .on_tray_icon_event(Self::on_system_tray_event)
                     .build(app_handle)?;
-                *attached = Some(Attached { menu });
+                *attached = Some(Attached {
+                    menu,
+                    mode: menu_mode,
+                });
+                tray
+            }
+            Some(tray) => {
+                if cfg!(target_os = "linux") {
+                    match attached.as_ref().map(|held| held.menu.clone()) {
+                        Some(previous_menu) if use_native_menu => {
+                            refill = refill_menu(&previous_menu, &menu);
+                        }
+                        Some(_) => {}
+                        None => {
+                            *attached = Some(Attached {
+                                menu,
+                                mode: menu_mode,
+                            });
+                        }
+                    }
+                } else {
+                    tray.set_menu(use_native_menu.then(|| menu.clone()))?;
+                    *attached = Some(Attached {
+                        menu,
+                        mode: menu_mode,
+                    });
+                }
                 tray
             }
         };
         tray.set_visible(true)?;
-        Ok(())
+        refill
     }
 
     pub fn update_part(app_handle: &AppHandle<tauri::Wry>) -> Result<()> {
@@ -372,13 +422,42 @@ impl Tray {
     }
 
     pub fn on_system_tray_event(tray_icon: &TrayIcon, event: TrayIconEvent) {
-        if let TrayIconEvent::Click {
-            button: MouseButton::Left,
-            button_state: tauri::tray::MouseButtonState::Up,
-            ..
-        } = event
-        {
-            resolve::create_window(tray_icon.app_handle());
+        match event {
+            TrayIconEvent::Click {
+                button: MouseButton::Left,
+                button_state: tauri::tray::MouseButtonState::Up,
+                ..
+            } => {
+                let app_handle = tray_icon.app_handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    resolve::create_window(&app_handle);
+                });
+            }
+            TrayIconEvent::Click {
+                button: MouseButton::Right,
+                button_state: tauri::tray::MouseButtonState::Up,
+                position,
+                ..
+            } if tray_icon
+                .app_handle()
+                .try_state::<TrayState<tauri::Wry>>()
+                .is_some_and(|state| {
+                    state
+                        .display
+                        .lock()
+                        .attached()
+                        .is_some_and(|held| held.mode == TrayMenuMode::Webview)
+                }) =>
+            {
+                let app_handle = tray_icon.app_handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    crate::log_err!(
+                        crate::window::kinds::show_tray_menu_window(&app_handle, position),
+                        "failed to show webview tray menu"
+                    );
+                });
+            }
+            _ => {}
         }
     }
 }
@@ -391,10 +470,9 @@ struct LiveTray<'a> {
 impl TrayTarget for LiveTray<'_> {
     type Menu = Attached<tauri::Wry>;
     fn observe(&self) -> (Paint<Self::Menu>, bool) {
-        (
-            self.state.display.lock().paint(),
-            self.app_handle.tray_by_id(TRAY_ID).is_some(),
-        )
+        let paint = self.state.display.lock().paint();
+        let icon = self.app_handle.tray_by_id(TRAY_ID).is_some();
+        (paint, icon)
     }
     fn run(&mut self, step: Step) -> ControlFlow<()> {
         let result = match step {
@@ -440,6 +518,22 @@ fn refill_menu(previous_menu: &Menu<tauri::Wry>, menu: &Menu<tauri::Wry>) -> Res
 mod tests {
     use super::*;
     use chimera_config::application::ClashCore;
+
+    #[test]
+    fn tray_menu_mode_respects_platform_click_support() {
+        assert_eq!(
+            effective_menu_mode(TrayMenuMode::Native),
+            TrayMenuMode::Native
+        );
+        assert_eq!(
+            effective_menu_mode(TrayMenuMode::Webview),
+            if cfg!(target_os = "linux") {
+                TrayMenuMode::Native
+            } else {
+                TrayMenuMode::Webview
+            }
+        );
+    }
 
     #[test]
     fn script_mode_menu_item_is_only_defined_for_the_clash_premium_core() {
